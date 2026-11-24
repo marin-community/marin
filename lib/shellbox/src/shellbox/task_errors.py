@@ -13,9 +13,11 @@ DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
 DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
 DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
 MACHINE_TERMINATED = "MachineTerminated"
-# Shellbox raises its Daytona v2 failures under these names, never the SDK's generic class names
-# (ConnectionError, RateLimitError), which other libraries share. The Daytona-prefixed names above
-# remain for trial results persisted by the v0 SDK.
+MACHINE_UNAVAILABLE = "MachineUnavailable"
+# The Daytona v2 machine factory raises its provisioning failures under these names and
+# MachineUnavailable, not the SDK's generic class names (ConnectionError, RateLimitError), which
+# other libraries share. The Daytona-prefixed names above remain for trial results persisted by
+# the v0 SDK.
 DAYTONA_CAPACITY_EXHAUSTED = "DaytonaCapacityExhausted"
 DAYTONA_COMMAND_STOPPED = "DaytonaCommandStopped"
 DAYTONA_PROVISIONING_ERROR = "DaytonaProvisioningError"
@@ -31,6 +33,7 @@ SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
         DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
         MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
+        MACHINE_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
         DAYTONA_CAPACITY_EXHAUSTED: ErrorCategory.INFRASTRUCTURE,
         DAYTONA_COMMAND_STOPPED: ErrorCategory.INFRASTRUCTURE,

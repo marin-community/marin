@@ -131,6 +131,9 @@ def test_a_record_from_a_daytona_v0_run_reads_without_its_image_build_setting(tm
     Path(path).write_text(json.dumps(stored))
 
     assert read_record(path).evaluation.curated.settings == settings
+    # Campaign settings do not come from records, so they still reject the key.
+    with pytest.raises(ValueError, match="image_build"):
+        TaskMachineSettings.model_validate({"image_build": "declarative"})
 
 
 def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):

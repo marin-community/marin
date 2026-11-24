@@ -9,7 +9,8 @@ from daytona.v2 import LimitExceededError
 from rolloutengine.models import GradedRolloutInterrupted, Rollout, RolloutOperation
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from shellbox.backends.daytona.machine import DaytonaCapacityExhausted
+from shellbox.backends.daytona.errors import DaytonaCapacityExhausted
+from shellbox.machine import MachineUnavailable
 from skyrl_train.rollouts.machines import MachineOperation, TaskMachineError
 from skyrl_train.rollouts.task_worker import _failed_rollout
 from tests.cpu.task_specs import lowered_task, text_task
@@ -26,7 +27,7 @@ from tests.cpu.task_specs import lowered_task, text_task
             {"provider_status_code": 429, "provider_error_code": "LIMIT_EXCEEDED", "provider_retry_after_seconds": 30},
         ),
         (
-            ConnectionError("Lost the connection to Daytona"),
+            MachineUnavailable("Lost the connection to Daytona"),
             ProviderConnectionError("Connection reset by peer"),
             {},
         ),

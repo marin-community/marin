@@ -37,17 +37,16 @@ from daytona.v2 import (
 )
 from daytona.v2 import ConnectionError as ProviderConnectionError
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.errors import DaytonaCapacityExhausted, DaytonaProvisioningError
 from shellbox.backends.daytona.images import ImageRequest, PruneAction, ensure_image, image_name, prune_images
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
-    DaytonaCapacityExhausted,
     DaytonaCommandStopped,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     DaytonaOutputUnavailable,
-    DaytonaProvisioningError,
     _create_sandbox,
     _delete_sandbox,
     _SandboxClaim,
@@ -64,6 +63,7 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     UnsupportedMachineSpec,
 )
 
@@ -499,8 +499,8 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(no_retry_wait, fail
     [
         (LimitExceededError("image limit reached", status_code=429), DaytonaCapacityExhausted),
         (RateLimitError("too many requests", status_code=429), DaytonaCapacityExhausted),
-        (ProviderConnectionError("Connection reset by peer"), ConnectionError),
-        (ClientTimeoutError("Request timed out", status_code=408), ConnectionError),
+        (ProviderConnectionError("Connection reset by peer"), MachineUnavailable),
+        (ClientTimeoutError("Request timed out", status_code=408), MachineUnavailable),
         (DaytonaError("invalid image reference", status_code=400), DaytonaProvisioningError),
     ],
     ids=["limit", "throttled", "lost-connection", "timed-out", "refused"],
@@ -535,6 +535,30 @@ def test_daytona_machine_close_raises_a_refused_deletion_under_a_shellbox_type(t
         assert caught.value.__cause__ is refusal
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("refusal", ["throttle", "limit"])
+def test_image_preparation_waits_out_a_throttle_but_not_a_full_limit(no_retry_wait, refusal):
+    class ThrottledOnce(LocalImages):
+        refusals = 0
+
+        async def get(self, name_or_id, *, wait=None):
+            if not self.refusals:
+                self.refusals += 1
+                if refusal == "limit":
+                    raise LimitExceededError("image limit reached", status_code=429)
+                raise RateLimitError("too many requests", status_code=429, retry_after_seconds=1)
+            return await super().get(name_or_id, wait=wait)
+
+    client = LocalDaytona()
+    client.images = ThrottledOnce()
+    client.images.add(image_name(RegistryImage("fixture:tag")), "fixture:tag")
+    prepare = DaytonaMachineFactory(lambda: client).prepare(MachineSpec(source=RegistryImage("fixture:tag")))
+    if refusal == "limit":
+        with pytest.raises(DaytonaCapacityExhausted):
+            asyncio.run(prepare)
+    else:
+        assert asyncio.run(prepare) == image_name(RegistryImage("fixture:tag"))
 
 
 def test_daytona_refused_creation_skips_the_name_search():
@@ -1848,7 +1872,7 @@ class FailingImages(LocalImages):
 def test_daytona_failed_image_closes_client_without_starting_sandbox() -> None:
     client = LocalDaytona()
     client.images = FailingImages(failures=2)
-    with pytest.raises(RuntimeError, match="manifest unknown"):
+    with pytest.raises(DaytonaProvisioningError, match="manifest unknown"):
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     # A failed image is submitted once more before the failure stands.
     assert len(client.images.submitted) == 2

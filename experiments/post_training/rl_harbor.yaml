@@ -23,6 +23,7 @@ job:
     - PhaseCancellationError
     - TimeoutError
     - ConnectionError
+    - MachineUnavailable
     - DaytonaCapacityExhausted
     - TmuxExecTimeoutError
     - DaytonaOutputUnavailable

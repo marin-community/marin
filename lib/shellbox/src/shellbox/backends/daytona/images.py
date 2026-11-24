@@ -23,6 +23,7 @@ from daytona import AsyncDaytonaV2Client, DaytonaConflictError, DaytonaError, Da
 from daytona.v2 import Image
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.errors import DaytonaProvisioningError
 from shellbox.backends.daytona.transient import is_ambiguous_daytona_error, retry_backoff, retry_transient
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
@@ -143,7 +144,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
         if image.status == READY_IMAGE_STATUS:
             return name
         if resubmitted:
-            raise RuntimeError(f"Daytona image {name} is {image.status}: {image.error}")
+            raise DaytonaProvisioningError(f"Daytona image {name} is {image.status}: {image.error}")
         resubmitted = True
         await _submit_once(client, request, backoff)
 

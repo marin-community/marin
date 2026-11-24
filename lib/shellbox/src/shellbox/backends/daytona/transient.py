@@ -7,7 +7,8 @@ import logging
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
-from daytona import DaytonaConnectionError, DaytonaError, DaytonaTimeoutError
+from daytona import DaytonaConnectionError, DaytonaError, DaytonaRateLimitError, DaytonaTimeoutError
+from daytona.v2 import LimitExceededError
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -39,15 +40,19 @@ def retry_backoff() -> ExponentialBackoff:
 
 
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
-    """Repeat a provider request that failed in transit. The request must be safe to run twice."""
+    """Repeat a provider request that failed in transit or was throttled. The request must be safe to run twice.
+
+    A throttled request waits for the provider's retry hint; a full limit is not a throttle and raises at once.
+    """
     backoff = retry_backoff()
     for _ in range(TRANSIENT_RETRIES):
         try:
             return await request()
         except DaytonaError as error:
-            if not is_transient_daytona_error(error):
+            throttled = isinstance(error, DaytonaRateLimitError) and not isinstance(error, LimitExceededError)
+            if not throttled and not is_transient_daytona_error(error):
                 raise
-            delay = backoff.next_interval()
+            delay = max(backoff.next_interval(), (error.retry_after_seconds or 0) if throttled else 0)
             logger.warning("Retrying a Daytona request after %s: delay=%.3f", type(error).__name__, delay)
             await sleep(delay)
     return await request()

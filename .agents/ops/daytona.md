@@ -150,8 +150,11 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
   --older-than-days 14
 ```
 
-Pass the specs of every campaign that still runs in the account, then rerun with
-`--delete` after reviewing the list.
+`trial_driver image-specs` emits keep specs only for Harbor job configs; curated
+evaluations and RL have no spec emitter, so prune their accounts by age alone
+between campaigns. Run `prune --delete` only while no campaign is launching: a
+trial whose image is deleted after its preflight fails its create with
+`DaytonaProvisioningError`. Review the list, then rerun with `--delete`.
 
 `shellbox-daytona-usage` reads the project's limits and live use: the
 organization's concurrent-sandbox, image, volume and snapshot limits, the

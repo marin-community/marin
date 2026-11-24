@@ -382,14 +382,6 @@ class TaskMachineSettings(BaseModel):
     storage_mb: int | None = Field(default=None, gt=0)
     startup_timeout: float = Field(default=600, gt=0)
 
-    @model_validator(mode="before")
-    @classmethod
-    def read_daytona_v0_records(cls, value: Any) -> Any:
-        # Records of Daytona v0 runs chose how images were built; v2 has one image path.
-        if isinstance(value, dict) and "image_build" in value:
-            value = {key: item for key, item in value.items() if key != "image_build"}
-        return value
-
 
 class EvaluationOverrides(BaseModel):
     """Run policy supplied by a suite or campaign."""
@@ -525,11 +517,22 @@ class CuratedRef(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def read_initial_native_records(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
         # Initial native smoke records encoded the settings as JSON inside record.json.
-        if isinstance(value, dict) and "settings_json" in value:
+        if "settings_json" in value:
             value = dict(value)
             value["settings"] = json.loads(value.pop("settings_json"))
-        return value
+        # Records of Daytona v0 runs chose how images were built; v2 has one image path. Campaign
+        # settings, which do not pass through here, still reject the key.
+        settings = value.get("settings")
+        if not isinstance(settings, dict):
+            return value
+        machine = settings.get("task_machine")
+        if not isinstance(machine, dict) or "image_build" not in machine:
+            return value
+        machine = {key: item for key, item in machine.items() if key != "image_build"}
+        return {**value, "settings": {**settings, "task_machine": machine}}
 
 
 class EvalRef(BaseModel):

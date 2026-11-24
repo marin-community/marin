@@ -14,6 +14,7 @@ retry:
     - SandboxBuildFailedError
     - TrialTimeoutError
     - ConnectionError
+    - MachineUnavailable
     - DaytonaCapacityExhausted
     - TmuxBatchProtocolError
     - TmuxSessionEndedError
