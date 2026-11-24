@@ -5,7 +5,6 @@
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -25,7 +24,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
@@ -50,8 +49,6 @@ JUDGE_ENDPOINT = "EVALUATION_JUDGE_ENDPOINT"
 JUDGE_API_KEY = "EVALUATION_JUDGE_API_KEY"
 DAYTONA_API_KEY = "DAYTONA_API_KEY"
 """The worker secret holding the Daytona eval-org key; launchers resolve it from ``DAYTONA_EVAL_API_KEY``."""
-DAYTONA_API_URL = "DAYTONA_API_URL"
-DAYTONA_TARGET = "DAYTONA_TARGET"
 DAYTONA_EGRESS = ("app.daytona.io", "*.app.daytona.io")
 MACHINE_BACKENDS = frozenset({Backend.LOCAL, Backend.DOCKER, Backend.DAYTONA})
 MODEL_REQUEST_RETRIES = 8
@@ -159,12 +156,8 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
 
 
 def daytona_connection(api_key: str) -> DaytonaConnection:
-    """The Daytona account for ``api_key``, with the API URL and target forwarded to evaluation jobs."""
-    return DaytonaConnection(
-        api_key=api_key,
-        api_url=os.environ.get(DAYTONA_API_URL, DEFAULT_DAYTONA_API_URL),
-        target=os.environ.get(DAYTONA_TARGET),
-    )
+    """The Daytona account for ``api_key``."""
+    return DaytonaConnection(api_key=api_key)
 
 
 def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
