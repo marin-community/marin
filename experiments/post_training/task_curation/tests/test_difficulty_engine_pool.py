@@ -70,3 +70,4 @@ def test_pool_publishes_real_engine_config_after_warmup(tmp_path, monkeypatch):
     assert receipt["endpoint_name"] == "/serve/replacement"
     assert receipt["engine"]["extra_metric_families"] == []
     assert receipt["warm_throughput"]["output_tokens"] == 32768
+    assert receipt["configured_priority_bands"] == {"gpu_workers": "interactive", "cpu_broker": "production"}

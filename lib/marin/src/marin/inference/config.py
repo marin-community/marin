@@ -372,6 +372,8 @@ class BrokerConfig:
     broker_ready_timeout_seconds: float = 900.0
     max_retries_failure: int = 1
     max_retries_preemption: int = 10
+    # None inherits the GPU worker priority; persistent CPU brokers can override it.
+    priority: int | None = None
 
     def __post_init__(self) -> None:
         worker_timeout = self.worker.request_timeout_seconds

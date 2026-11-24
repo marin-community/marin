@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import httpx
 from finestore.rl.difficulty import SOLVER_MODELS, Solver
-from iris.rpc.proto_display import priority_band_value
+from iris.rpc.proto_display import priority_band_name, priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.serving_config import inference_config_for_model
@@ -135,7 +135,11 @@ def pool_config(solver: Solver) -> RemoteInferenceConfig:
     return replace(
         config,
         engine=replace(config.engine, gpu_release=VLLM_GPU_RELEASE, startup_timeout_seconds=7200),
-        broker=BrokerConfig(max_retries_failure=POOL_FAILURE_RETRIES, max_retries_preemption=POOL_PREEMPTION_RETRIES),
+        broker=BrokerConfig(
+            max_retries_failure=POOL_FAILURE_RETRIES,
+            max_retries_preemption=POOL_PREEMPTION_RETRIES,
+            priority=priority_band_value("production"),
+        ),
         iris=replace(
             config.iris,
             max_retries_failure=POOL_FAILURE_RETRIES,
@@ -211,6 +215,8 @@ def run_pool(solver: Solver, registry: str) -> None:
     configure_coreweave_s3()
     shape = ENGINE_SHAPES[solver]
     config = pool_config(solver)
+    broker = config.broker
+    assert broker is not None and broker.priority is not None
     LOGGER.info("DIFFICULTY_ENGINE_START %s", json.dumps({"solver": solver, "shape": asdict(shape)}))
     # remote_inference stages uncached HF weights through a CPU child at this
     # root's regional placement before reserving any accelerator workers.
@@ -232,6 +238,10 @@ def run_pool(solver: Solver, registry: str) -> None:
             "warm_throughput": measurement,
             "effective_serving": asdict(ready.effective_serving),
             "requested_config": asdict(pool_model(solver)),
+            "configured_priority_bands": {
+                "gpu_workers": priority_band_name(config.iris.priority),
+                "cpu_broker": priority_band_name(broker.priority),
+            },
             "engine": engine,
             "vllm_gpu_release": asdict(VLLM_GPU_RELEASE),
             "ready_at": datetime.now(UTC).isoformat(),

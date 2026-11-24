@@ -1088,7 +1088,7 @@ def _start_brokered_inference(
                 max_concurrency=_BROKER_ACTOR_MAX_CONCURRENCY,
                 max_restarts=0,
                 max_task_retries=0,
-                priority=iris.priority,
+                priority=iris.priority if broker.priority is None else broker.priority,
             ),
         )
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]

@@ -2911,6 +2911,12 @@ instead fails the owner, whose retry rebuilds the pool and publishes a new
 receipt. A heartbeat without a worker registration does not establish readiness.
 Check the models endpoint as well as the Iris job state when diagnosing a pool.
 
+Use production priority for the CPU owners, brokers and pooled controller.
+Their accelerator workers remain at interactive priority. A production CPU
+workload can otherwise evict an interactive owner and discard its whole GPU
+tree while the reserved accelerators sit idle during replacement startup.
+Pool receipts record broker and worker priorities separately.
+
 Choose one fresh registry URI for a generation. Launch each self-hosted solver
 root against that same URI, with a unique job name:
 
@@ -2918,7 +2924,7 @@ root against that same URI, with a unique job name:
 uv run iris --cluster=marin job run \
   --job-name atlas-difficulty-engines-small-GENERATION \
   --target-cluster=cw-us-east-08a --cpu 4 --memory 16GB --disk 64GB \
-  --priority interactive --timeout 259200 --max-retries 3 --no-wait \
+  --priority production --timeout 259200 --max-retries 3 --no-wait \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   --secret HF_TOKEN env:HF_TOKEN -- python -m \
   experiments.post_training.task_curation.difficulty.engine_pool \

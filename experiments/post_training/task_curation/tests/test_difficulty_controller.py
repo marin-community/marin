@@ -42,7 +42,8 @@ def controller_credentials(monkeypatch):
         monkeypatch.setenv(name, "fixture-" + name)
 
 
-def test_controller_resolves_versioned_credentials_before_external_submission(tmp_path, monkeypatch):
+@pytest.mark.parametrize("serving_pool", [None, "registry"])
+def test_controller_resolves_versioned_credentials_before_external_submission(tmp_path, monkeypatch, serving_pool):
     requested = []
     monkeypatch.setenv("DAYTONA_DATA_API_KEY", "fixture-data-account")
 
@@ -63,15 +64,31 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
         for index, value in enumerate(command):
             if value == "--secret" and command[index + 1] in {"DAYTONA_DATA_API_KEY", "DAYTONA_RL_API_KEY"}:
                 resolved[command[index + 1]] = resolve_secret_spec(command[index + 2]).value
-        accepted.write_text(json.dumps({"job_name": command[command.index("--job-name") + 1], "daytona": resolved}))
+        accepted.write_text(
+            json.dumps(
+                {
+                    "job_name": command[command.index("--job-name") + 1],
+                    "daytona": resolved,
+                    "priority": command[command.index("--priority") + 1],
+                    "failure_retries": command[command.index("--max-retries") + 1],
+                    "unlimited_gpu_hours": "--unlimited-gpu-hours" in command,
+                }
+            )
+        )
 
     monkeypatch.setattr(controller.subprocess, "run", scheduler_submit)
-    controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800)
+    controller.launch_controller(
+        "ledger", "applet", False, frozenset(), "generation", None if serving_pool else 800, serving_pool=serving_pool
+    )
     assert requested == [
         "projects/hai-gcp-models/secrets/DAYTONA_RL_API_KEY/versions/1",
     ]
     assert json.loads(accepted.read_text())["job_name"].startswith("atlas-difficulty-reconciler-controller-")
     assert json.loads(accepted.read_text())["daytona"]["DAYTONA_DATA_API_KEY"] == "fixture-data-account"
+    submitted = json.loads(accepted.read_text())
+    assert submitted["priority"] == ("production" if serving_pool else "interactive")
+    assert submitted["failure_retries"] == ("3" if serving_pool else "0")
+    assert submitted["unlimited_gpu_hours"] == bool(serving_pool)
 
 
 @pytest.mark.parametrize("default_parent", [False, True], ids=["controller-launch", "reproduce-default-parent"])

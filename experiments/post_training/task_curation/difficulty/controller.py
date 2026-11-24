@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.difficulty_report import list_iris_
 
 LOGGER = logging.getLogger(__name__)
 CONTROLLER_INTERVAL = 60
+CONTROLLER_FAILURE_RETRIES = 3
 CONTROLLER_JOB_PREFIX = "atlas-difficulty-reconciler-controller-"
 REFRESH_TOKEN_ENV = "DIFFICULTY_MARINA_REFRESH"
 CONTROLLER_SECRET_NAMES = (
@@ -168,6 +169,10 @@ def launch_controller(
     command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
     if serving_pool is not None:
         command[command.index("--target-cluster=cw-rno2a")] = "--target-cluster=cw-us-east-08a"
+        command[command.index("--priority") + 1] = "production"
+        command[command.index("--max-retries") + 1] = str(CONTROLLER_FAILURE_RETRIES)
+        command[command.index("--memory") + 1] = "16GB"
+        command[command.index("--disk") + 1] = "64GB"
     # Task tokens can delegate an elevated child profile only when the parent holds it.
     command.extend(["--container-profile", job_pb2.ContainerProfile.Name(job_pb2.CONTAINER_PROFILE_PRIVILEGED)])
     command.extend(["--egress-policy", job_pb2.EgressPolicy.Name(job_pb2.EGRESS_POLICY_CLUSTER)])

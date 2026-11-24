@@ -20,6 +20,7 @@ from fray.client import JobHandle
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
+from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.runner import _inference_session
 from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.broker import InferenceBroker
@@ -1058,7 +1059,10 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 
 
 @pytest.mark.parametrize("instances", [1, 2])
-def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp_path, instances) -> None:
+@pytest.mark.parametrize("broker_priority", [None, priority_band_value("production")])
+def test_remote_inference_brokers_single_and_multiple_instances(
+    monkeypatch, tmp_path, instances, broker_priority
+) -> None:
     # The broker task holds the dashboard-only Parallel key beside ordinary worker credentials.
     (tmp_path / "PARALLEL_API_KEY").write_text("parallel-key")
     (tmp_path / "HF_TOKEN").write_text("hf-token")
@@ -1133,6 +1137,7 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp
     )
 
     iris = IrisConfig(
+        priority=priority_band_value("interactive"),
         worker_resources=ResourceConfig.with_tpu("v6e-4", regions=["us-east5"], zone="us-east5-a"),
         worker_environment=create_environment(
             extras=["tpu"],
@@ -1146,7 +1151,7 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp
             engine=VllmEngineConfig(),
             iris=iris,
             instances=instances,
-            broker=BrokerConfig(),
+            broker=BrokerConfig(priority=broker_priority),
             capability_origin="https://iris.example",
         )
     ) as session:
@@ -1165,8 +1170,12 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
     assert [config.max_restarts for config in client.actor_configs] == [0]
+    assert [config.priority for config in client.actor_configs] == [
+        iris.priority if broker_priority is None else broker_priority
+    ]
     assert len(client.submissions) == instances
     for worker_request in client.submissions:
+        assert worker_request.priority == iris.priority
         assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
         assert worker_request.environment.secrets["HF_TOKEN"] == "hf-token"
