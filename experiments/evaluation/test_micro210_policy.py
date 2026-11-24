@@ -194,10 +194,8 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
         Micro210Model("s3://test/latest", identity, "test/tokenizer", revision)
 
 
-<<<<<<< HEAD
 @pytest.mark.parametrize("profile", list(ServingProfileName))
 @pytest.mark.parametrize("manifest_override", [None, ".marinskyrl-model-manifest.json"])
-=======
 def test_route_rebinding_keeps_the_policy_hash_and_protocol_frozen(tmp_path, monkeypatch, policy_reference):
     """A per-model route changes where the run executes and nothing about the protocol."""
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
@@ -257,7 +255,6 @@ def test_default_policy_references_pin_immutable_hugging_face_revisions():
         assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
->>>>>>> 5aaf8ba75b ([eval] Bind the Micro210 execution route to the model, not the protocol)
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
     tmp_path, monkeypatch, policy_reference, profile, manifest_override
 ):
