@@ -20,6 +20,7 @@ from finestore.layout import (
     FORMAT_VERSION,
     SUPPORTED_MANIFEST_FEATURES,
     ArchiveMetadata,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     FormatVersionError,
@@ -97,6 +98,7 @@ class CommitDelta:
     expected_epoch: int | None = None
     epoch_update: int | None = None
     cache_history_floor: int = 0
+    commit_info: CommitInfo | None = None
 
 
 def _empty_manifest() -> Manifest:
@@ -266,6 +268,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             "tables": tables,
             "sealed": sealed,
             "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
+            "commit_info": delta.commit_info,
         }
     )
 

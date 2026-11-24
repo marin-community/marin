@@ -20,7 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
-from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
+from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta, read_snapshot
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _compact_shards, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
@@ -1687,3 +1687,17 @@ def test_compaction_prepared_under_an_older_epoch_is_rejected(archive_root):
         )
         assert result.written == 0
         assert ReadView(root).list_shards("samples") == shards_before
+
+
+def test_transaction_author_and_message_are_recorded_only_on_their_commit(archive_root):
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="ana", message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+        first = read_snapshot(FineStoreLayout(archive_root)).manifest
+        with store.transaction() as transaction:
+            transaction.table("tasks").add({"task_id": "b", "n": 2})
+        second = read_snapshot(FineStoreLayout(archive_root)).manifest
+    assert (first.commit_info.author, first.commit_info.message) == ("ana", "fix a")
+    # The next manifest is copied from this one and must not inherit its author.
+    assert second.commit_info is None

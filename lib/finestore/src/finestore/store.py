@@ -13,7 +13,8 @@ import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Protocol
 
@@ -38,6 +39,7 @@ from finestore.layout import (
     RESERVED_COLUMNS,
     BlobColumns,
     BlobTables,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     KeyRange,
@@ -96,6 +98,14 @@ class PrimaryKeyConflict(ValueError):
 
 class TransactionTooLarge(ValueError):
     """A transaction exceeded its configured in-memory byte limit."""
+
+
+def _commit_info(author: str | None, message: str | None) -> CommitInfo | None:
+    if author is None and message is None:
+        return None
+    if author is None or message is None:
+        raise ValueError("a commit needs both author and message, or neither")
+    return CommitInfo(author=author, message=message, created_at=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
@@ -315,18 +325,23 @@ class DataStore:
         """Pin a snapshot using one HEAD read."""
         return ReadView(self.root)
 
-    def transaction(self, *, max_bytes: int | None = None) -> Transaction:
-        """Create a transaction bounded by actual Arrow buffer bytes."""
+    def transaction(
+        self, *, max_bytes: int | None = None, author: str | None = None, message: str | None = None
+    ) -> Transaction:
+        """Create a transaction bounded by actual Arrow buffer bytes.
+
+        ``author`` and ``message`` are recorded in the commit's manifest when both are given.
+        """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
         if transaction_limit <= 0:
             raise ValueError("max_bytes must be positive")
-        return Transaction(self, max_bytes=transaction_limit)
+        return Transaction(self, max_bytes=transaction_limit, commit_info=_commit_info(author, message))
 
-    def unbounded_transaction(self) -> Transaction:
+    def unbounded_transaction(self, *, author: str | None = None, message: str | None = None) -> Transaction:
         """Create a transaction without an Arrow buffer byte limit."""
         self.raise_if_failed()
-        return Transaction(self, max_bytes=None)
+        return Transaction(self, max_bytes=None, commit_info=_commit_info(author, message))
 
     def flush(self) -> CommitToken | None:
         """Commit all buffers with one HEAD update, or return ``None`` when empty."""
@@ -362,7 +377,7 @@ class DataStore:
                     table._restore(pending)
                 raise
 
-    def _commit_transaction(self, rows: dict[str, list[ArrowRow]]) -> CommitToken:
+    def _commit_transaction(self, rows: dict[str, list[ArrowRow]], *, commit_info: CommitInfo | None) -> CommitToken:
         with self._commit_lock:
             additions = {}
             for name, pending_rows in rows.items():
@@ -377,7 +392,7 @@ class DataStore:
                 if snapshot.token is None:
                     return self._commits.commit(CommitDelta())
                 return snapshot.token
-            return self._commits.commit(_addition_delta(additions))
+            return self._commits.commit(replace(_addition_delta(additions), commit_info=commit_info))
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -595,11 +610,12 @@ class TransactionTable:
 class Transaction:
     """A set of retained Arrow rows and objects published through one commit token."""
 
-    def __init__(self, store: DataStore, *, max_bytes: int | None) -> None:
+    def __init__(self, store: DataStore, *, max_bytes: int | None, commit_info: CommitInfo | None) -> None:
         self._store = store
         self._base = store.read_view()
         self._rows: dict[str, list[ArrowRow]] = {}
         self._objects: dict[str, bytes] = {}
+        self._commit_info = commit_info
         self._max_bytes = max_bytes
         self._buffer_bytes = 0
         self._closed = False
@@ -651,7 +667,7 @@ class Transaction:
             if self.token is None:
                 raise RuntimeError("transaction closed without committing")
             return self.token
-        self.token = self._store._commit_transaction(self._rows)
+        self.token = self._store._commit_transaction(self._rows, commit_info=self._commit_info)
         self._closed = True
         return self.token
 
