@@ -1115,11 +1115,11 @@ def compute_matrix(
             matrix.extend(scope_legs(scope, None, repo_root, source_build=source_build))
             continue
 
-        selected = list(direct_tests.get(scope, []))
+        selected = set(direct_tests.get(scope, []))
         if affected:
             for test_file, dependencies in dependencies_by_test_file(scope, repo_root, known).items():
-                if test_file not in selected and dependencies & affected:
-                    selected.append(test_file)
+                if dependencies & affected:
+                    selected.add(test_file)
 
         if selected:
             matrix.extend(scope_legs(scope, sorted(selected), repo_root, source_build=source_build))
