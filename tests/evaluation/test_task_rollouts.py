@@ -1566,6 +1566,46 @@ async def test_reuse_asks_the_model_for_a_row_whose_prompt_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
+async def test_reuse_reads_source_responses_concurrently_and_asks_the_model_where_none_completed(
+    tmp_path, run_config, monkeypatch
+):
+    config = run_config.model_copy(update={"source_limit": None, "concurrency": 3})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    replies = ScriptedModel(dict.fromkeys(COLORS, "red"))
+
+    async def unreachable_for_one_row(request):
+        if request.messages[-1]["content"] == "colors/1":
+            raise ConnectionError("no endpoint")
+        return await replies(request)
+
+    with pytest.raises(EvaluationInfrastructureError):
+        await run_evaluation((strict,), source, config, unreachable_for_one_row, machine_factories={})
+    model = ScriptedModel({"colors/1": "Red"})
+    # Each of the 9 attempts reads one source result blob, and a read returns only once 3 reads are in flight.
+    # Reads made one at a time, as on the event loop, break the barrier at its timeout and fail the run.
+    barrier = threading.Barrier(config.concurrency, timeout=10)
+    read_blob = ReadView.read_blob
+
+    def read_blob_with_source_latency(view, name):
+        if view.root == source and name != RUN_OBJECT:
+            barrier.wait()
+        return read_blob(view, name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ReadView, "read_blob", read_blob_with_source_latency)
+        await run_evaluation((lenient,), output, config, model, machine_factories={}, reuse_from=source)
+
+    assert model.asked == {"colors/1": 3}
+    evidence = terminal_evidence(output).values()
+    assert {attempt["outcome"] for attempt, _ in evidence} == {"graded"}
+    assert Counter(
+        (stored_text(raw), raw[REUSED_FROM_RUN] is not None, attempt["completion_tokens"]) for attempt, raw in evidence
+    ) == {("red", True, 0): 6, ("Red", False, 1): 3}
+
+
+@pytest.mark.asyncio
 async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run_config):
     config = run_config.model_copy(update={"source_limit": None})
     strict = publish_colors_corpus(tmp_path, "strict")

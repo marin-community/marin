@@ -916,18 +916,9 @@ async def run_evaluation(
             lambda transaction: transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
         )
 
-        queue: asyncio.Queue[
-            tuple[
-                EvaluationCase,
-                EvaluationProtocol,
-                Selection,
-                int,
-                int,
-                ModelTurn | None,
-                tuple[dict[str, str], ModelTurn] | None,
-            ]
-            | None
-        ] = asyncio.Queue(maxsize=config.concurrency * 2)
+        queue: asyncio.Queue[tuple[EvaluationCase, EvaluationProtocol, Selection, int, int, ModelTurn | None] | None] = (
+            asyncio.Queue(maxsize=config.concurrency * 2)
+        )
         failures = 0
 
         async def produce() -> None:
@@ -973,13 +964,6 @@ async def run_evaluation(
                             and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
                         ):
                             continue
-                        generation = isinstance(case.item.operation, ChatGeneration | TextGeneration)
-                        retry_turn = _grading_retry_turn(reader, old) if generation else None
-                        stored = (
-                            responses.response(protocol.benchmark, case.item.source_row, trial)
-                            if responses is not None and generation and retry_turn is None
-                            else None
-                        )
                         await queue.put(
                             (
                                 case,
@@ -987,8 +971,11 @@ async def run_evaluation(
                                 decision.record,
                                 trial,
                                 0 if old is None else old.retry + 1,
-                                retry_turn,
-                                stored,
+                                (
+                                    _grading_retry_turn(reader, old)
+                                    if isinstance(case.item.operation, ChatGeneration | TextGeneration)
+                                    else None
+                                ),
                             )
                         )
                 if records:
@@ -1001,8 +988,16 @@ async def run_evaluation(
         async def consume() -> None:
             nonlocal failures
             while (work := await queue.get()) is not None:
-                case, protocol, selection, trial, retry, retry_turn, stored = work
+                case, protocol, selection, trial, retry, retry_turn = work
                 task = case.task
+                # Each lookup reads a source result blob; a worker thread lets the reads of concurrent attempts overlap.
+                stored = (
+                    await asyncio.to_thread(responses.response, protocol.benchmark, case.item.source_row, trial)
+                    if responses is not None
+                    and retry_turn is None
+                    and isinstance(case.item.operation, ChatGeneration | TextGeneration)
+                    else None
+                )
                 seed = protocol.trials.seed_for(trial) if config.seed is None else config.seed + trial
                 attempt = Attempt(
                     dataset=selection.dataset,
