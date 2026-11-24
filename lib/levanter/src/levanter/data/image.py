@@ -266,7 +266,7 @@ class ImageTextConversationProcessor(BatchProcessor[ConversationDict, ImageTextD
         return 2
 
 
-def image_caption_to_conversation(record: Dict[str, Any]) -> ConversationDict:
+def image_caption_to_conversation(record: ImageCaptionDict) -> ConversationDict:
     """Represent an image-caption pair as a user image and assistant caption."""
     return {
         "messages": [
@@ -465,7 +465,7 @@ class ImageTextIODatasetConfig(ImageTextTaskConfig):
         fingerprint = Hasher.hash(processor.metadata)
         cache_dir = prefix_join(self.cache_dir, split)
         return build_or_load_cache(
-            prefix_join(cache_dir, f"processor-inputs-v2/{fingerprint}"), source, processor, options=cache_options
+            prefix_join(cache_dir, f"processor-inputs/{fingerprint}"), source, processor, options=cache_options
         )
 
 
