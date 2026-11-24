@@ -199,6 +199,11 @@ class SourceOrigin(StrEnum):
     PAFITIS = "pafitis"
 
 
+def huggingface_dataset_url(repo: str, revision: str) -> str:
+    """The canonical tree URL of one pinned Hugging Face dataset revision."""
+    return f"https://huggingface.co/datasets/{repo}/tree/{revision}"
+
+
 class DatasetRelease(CatalogRecord):
     """Exact dataset used for training, independently of upstream provenance."""
 
@@ -212,7 +217,7 @@ class DatasetRelease(CatalogRecord):
         if host == "huggingface.co" or self.repo.startswith("open-athena/"):
             if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
                 raise ValueError("Hugging Face current_release requires an immutable commit")
-            if self.url != f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}":
+            if self.url != huggingface_dataset_url(self.repo, self.revision):
                 raise ValueError("Hugging Face current_release URL must match its repository and revision")
         return self
 

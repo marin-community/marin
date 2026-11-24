@@ -414,8 +414,8 @@ the deprecation reason. A source without a `pipeline` is `Inventory` unless it
 carries the `atlas-admitted` tag: `Atlas-admitted` records the Atlas's admission
 of a source whose import path on main is still pending. An Atlas-admitted record
 declares its pinned release, its stage-0 license receipt (resolved under its
-declared `intended_use`) and its restriction tier in
-`datasets/atlas_admissions.py`; the receipts live beside it in
+declared `intended_use`) and its typed restriction tier - open on every record
+here - in `datasets/atlas_admissions.py`; the receipts live beside it in
 `datasets/atlas_license_receipts.json`. The Atlas's canonical and retained
 prebuilt readers and the remaining receipt bindings land with the ingestion
 PRs; until then an Atlas-admitted source is never treated as runnable here.

@@ -21,7 +21,7 @@ from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 ATLAS_ADMITTED_IDS = Path(__file__).with_name("atlas_available_ids.json")
-"""The Atlas Available id set at the R40 cut this PR ports (2026-11-24)."""
+"""The Atlas Available id set the embedded receipts resolved against; refresh both together."""
 
 
 def test_every_atlas_available_source_is_declared():
@@ -53,7 +53,7 @@ def test_an_atlas_admitted_record_with_a_stale_pin_fails_closed():
         ),
     )
     with pytest.raises(ValueError, match="must match the configured dataset pin"):
-        stale.current_release
+        _ = stale.current_release
 
 
 def test_a_record_without_its_receipt_fails_closed():

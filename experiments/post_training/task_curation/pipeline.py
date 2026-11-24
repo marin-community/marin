@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
+from finestore.rl.curation import huggingface_dataset_url
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -143,7 +144,7 @@ class HfSource:
 
     @property
     def url(self) -> str:
-        return f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+        return huggingface_dataset_url(self.repo, self.revision)
 
 
 @dataclass(frozen=True)
@@ -223,7 +224,7 @@ class HarborRepoSource:
 
     @property
     def url(self) -> str:
-        return f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+        return huggingface_dataset_url(self.repo, self.revision)
 
     @property
     def files(self) -> tuple[str, ...]:

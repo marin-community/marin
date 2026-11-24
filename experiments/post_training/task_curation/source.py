@@ -122,9 +122,9 @@ class SourceReference:
 
 
 EXCLUDED_TAG = "excluded"
+"""The source tag that keeps a declared source out of admission."""
 ATLAS_ADMITTED_TAG = "atlas-admitted"
 """The Atlas admits this source; the import path that would run it on main is still pending."""
-"""The source tag that keeps a declared source out of admission."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -278,19 +278,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def dataset(self) -> PinnedReference | None:
         return self.config.dataset if self.config is not None else self.info.dataset
-
-    @property
-    def pipeline_reference(self) -> PipelineReference:
-        if self.pipeline is None or self.config is None:
-            raise ValueError(f"Source {self.info.id} has no registered conversion pipeline")
-        dataset = self.dataset
-        return PipelineReference(
-            name=self.name,
-            version=self.version,
-            source=dataset.name if dataset else None,
-            revision=dataset.revision if dataset else None,
-            files=list(self.files),
-        )
 
     @property
     def current_release(self) -> DatasetRelease:
