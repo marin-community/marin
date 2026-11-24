@@ -5,6 +5,23 @@ November 23, 2026 (PST).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
+Corrected observed diagnostic `2026.11.24.2` executes source `40723ba125`.
+At 05:02 UTC on November 24, its coordinator and all five GPU tasks were
+running with zero failures or preemptions. The same 40-H100 workload retains
+32 learner GPUs and eight vLLM GPUs, BATCH priority, zero automatic retries
+and two-hour execution caps. Explicit delivery of the existing W&B key passed
+the earlier validation boundary, and normal logging is syncing. The accepted
+coordinator and GPU source bundles matched all 4,640 frozen source files.
+Actual pod resources and security settings matched the reviewed request, and
+the staged coordinator hash matched its frozen source. Ray formed and vLLM
+initialization began.
+No new learner update, restore, native shutdown sample or updated-policy
+generation was verified at that check. The five-second natural process-exit
+deadline is unchanged; this diagnostic does not qualify the full
+loop or the matched 25-update comparison.
+[Corrected observed diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.2-coordinator-8a56842f)
+· [W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/02o09b9k)
+
 Full-model run `2026.11.23.1` from `ab3e704c55`, with the deterministic
 compiler profile and observer disabled, passed initial and step-one finite-state
 checks on all four native learners; model and Adam fingerprints changed and step-1/version-1

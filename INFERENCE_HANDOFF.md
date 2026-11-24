@@ -404,6 +404,23 @@ one-H100 lifecycle and delivery qualification above remains bound to its own
 source and fixture.
 [Observed full-model startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.1-coordinator-227e2e97)
 
+Corrected diagnostic `2026.11.24.2`, executing source `40723ba125`, was
+submitted at 04:52 UTC on November 24. At the 05:02 UTC check, the coordinator
+and all five GPU tasks were running with zero failures or preemptions. The
+40-H100 allocation retains 32 learner GPUs and eight for the existing vLLM
+group, BATCH priority, zero automatic retries and two-hour execution caps.
+The launcher now explicitly delivers the existing W&B key; the unchanged
+logger authenticated and began syncing the run. The accepted coordinator and
+GPU source bundles matched all 4,640 frozen source files. Actual pod resources
+and security settings matched the reviewed request, and the staged coordinator
+hash matched its frozen source. The run formed its Ray cluster and began vLLM
+initialization. No new learner update, restore, native shutdown sample or
+updated-policy generation was verified at that check. This remains a diagnostic
+of the full-model shutdown failure. The five-second natural process-exit
+deadline remains unchanged.
+[Corrected observed diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.2-coordinator-8a56842f)
+· [W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/02o09b9k)
+
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed
