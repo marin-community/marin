@@ -16,7 +16,9 @@ def likelihood_metrics(
     *,
     is_greedy: tuple[bool, ...] = (),
 ) -> dict[str, float]:
-    """Grade saved model likelihoods using the shared native harness comparison policy."""
+    """Grade saved per-request model likelihoods using the shared native harness comparison policy."""
+    if isinstance(operation, ChoiceLikelihood):
+        scores = operation.choice_scores(scores)
     metrics = {}
     for metric in protocol.likelihood_metrics:
         if metric.scoring == "log_likelihood":

@@ -37,7 +37,12 @@ from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
-from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
+from rolloutengine.likelihood import (
+    InvalidLikelihoodRequest,
+    LikelihoodScore,
+    LikelihoodScorer,
+    LikelihoodTransportError,
+)
 from rolloutengine.models import (
     GradedRolloutInterrupted,
     MachineRuntimeSpec,
@@ -61,6 +66,7 @@ from taskcompendium.evaluation.selection import (
     EvaluationTokenizer,
     Selection,
     select_cases,
+    user_turn_context,
     wire_messages,
 )
 from taskcompendium.evaluation.spec import (
@@ -68,6 +74,7 @@ from taskcompendium.evaluation.spec import (
     ChoiceLikelihood,
     ContinuationLikelihood,
     EvaluationProtocol,
+    LikelihoodContext,
     MetricKind,
     TextGeneration,
 )
@@ -311,10 +318,18 @@ async def _score_likelihood(
     attempt: Attempt,
     timeout: float | None,
     evidence: TaskEvidence,
+    tokenizer: EvaluationTokenizer | None,
+    chat_template_kwargs: Mapping[str, bool | str],
 ) -> Outcome:
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
+    contexts = tuple(request.context for request in requests)
+    user_turn = isinstance(operation, ChoiceLikelihood) and operation.context_format is LikelihoodContext.USER_TURN
+    if user_turn:
+        if tokenizer is None:
+            raise ValueError("User-turn likelihood contexts require the run's pinned tokenizer")
+        contexts = tuple(user_turn_context(tokenizer, context, chat_template_kwargs) for context in contexts)
     results = []
     failure_evidence = None
     permanent_error = None
@@ -322,8 +337,8 @@ async def _score_likelihood(
     error = None
     try:
         async with asyncio.timeout(timeout):
-            for request in requests:
-                results.append(await scorer(request.context, request.continuation, seed=attempt.seed))
+            for context, request in zip(contexts, requests, strict=True):
+                results.append(await scorer(context, request.continuation, seed=attempt.seed))
     except InvalidLikelihoodRequest as failure:
         outcome = Outcome.INVALID_TASK
         error = str(failure)
@@ -348,10 +363,18 @@ async def _score_likelihood(
         else {}
     )
     primary = metrics.get(protocol.primary_metric)
+    complete = outcome is Outcome.GRADED and len(results) == len(requests)
+    choice_scores = (
+        operation.choice_scores(tuple(result.loglikelihood for result in results))
+        if isinstance(operation, ChoiceLikelihood) and complete
+        else None
+    )
     raw = {
         **saved_task_fields(case.task, evidence),
         "item": case.item.model_dump(mode="json"),
         "scores": [dataclasses.asdict(result) for result in results],
+        "choice_scores": choice_scores,
+        "rendered_contexts": list(contexts) if user_turn else None,
         "outcome": outcome,
         "error": error,
         "failure_evidence": failure_evidence,
@@ -360,14 +383,14 @@ async def _score_likelihood(
         task=protocol.benchmark,
         doc_id=case.task.id,
         kind=SampleKind.MULTIPLE_CHOICE if isinstance(operation, ChoiceLikelihood) else SampleKind.GENERATION,
-        prompt_text=requests[0].context,
+        prompt_text=contexts[0],
         choices=(
             [
                 Choice(
                     label=str(index),
                     text=choice,
-                    loglikelihood=results[index].loglikelihood if index < len(results) else None,
-                    is_greedy=results[index].is_greedy if index < len(results) else None,
+                    loglikelihood=_choice_loglikelihood(operation, results, choice_scores, index),
+                    is_greedy=(results[index].is_greedy if not operation.terms and index < len(results) else None),
                 )
                 for index, choice in enumerate(operation.choices)
             ]
@@ -375,9 +398,7 @@ async def _score_likelihood(
             else None
         ),
         model_choice=(
-            max(range(len(results)), key=lambda index: results[index].loglikelihood)
-            if outcome is Outcome.GRADED and results and isinstance(operation, ChoiceLikelihood)
-            else None
+            max(range(len(choice_scores)), key=choice_scores.__getitem__) if choice_scores is not None else None
         ),
         target_choice=operation.gold[0] if isinstance(operation, ChoiceLikelihood) else None,
         target_text=operation.request.continuation if isinstance(operation, ContinuationLikelihood) else None,
@@ -405,6 +426,20 @@ async def _score_likelihood(
     if permanent_error is not None:
         raise permanent_error
     return outcome
+
+
+def _choice_loglikelihood(
+    operation: ChoiceLikelihood,
+    results: list[LikelihoodScore],
+    choice_scores: tuple[float, ...] | None,
+    index: int,
+) -> float | None:
+    """A choice's folded score, or its own request's score while an untermed attempt is partial."""
+    if choice_scores is not None:
+        return choice_scores[index]
+    if operation.terms or index >= len(results):
+        return None
+    return results[index].loglikelihood
 
 
 async def _score_generation(
@@ -707,7 +742,15 @@ async def run_evaluation(
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout, config.task_evidence
+                        case,
+                        protocol,
+                        likelihood,
+                        store,
+                        attempt,
+                        config.limits.attempt_timeout,
+                        config.task_evidence,
+                        tokenizer,
+                        config.chat_template_kwargs,
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue

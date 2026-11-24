@@ -33,6 +33,7 @@ from experiments.evaluation.benchmarks import (
     question_answering,
     reasoning,
     simpleqa,
+    spp,
     supergpqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
@@ -77,6 +78,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             nupa,
             supergpqa,
             physics_verified,
+            spp,
         )
         for benchmark in family.benchmarks()
     ]

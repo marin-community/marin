@@ -110,6 +110,22 @@ The compiler adds a space before each choice, matching lm-eval-harness's
 default target delimiter. A nonzero `FewshotPolicy` reproduces lm-eval-harness
 demonstration sampling.
 
+Two `ChoiceLikelihood` fields cover likelihood protocols that score a chat
+model or combine several prompts per item. Build the operation in a read
+function when you need either; `importers/evalchemy/spp.py` uses both.
+
+- `context_format=LikelihoodContext.USER_TURN` renders each request's context
+  as one user message with the served model's chat template, its generation
+  prompt and the run's `chat_template_kwargs`. The corpus stays model-agnostic.
+- `terms` maps several requests to each choice. Choice `i` scores the sum over
+  `terms[i]` of the log-sum-exp of each group's request log-likelihoods. A group
+  pools alternative spellings of one answer, such as `"A"` and `" A"`. Summing
+  groups combines prompt variants, such as every cyclic option order, so a
+  fixed preference for one letter or position cancels.
+
+Grading, `model_choice` and the archived per-choice log-likelihoods use the
+folded scores. Ties select the first choice, as before.
+
 For a chat benchmark, a converter turns a source row into a `TaskSpec`: the user
 message, the scorer packaged with the row's private answer, and the source row
 as evidence. MMLU-Redux's, from `importers/evalchemy/mmlu_redux.py`:

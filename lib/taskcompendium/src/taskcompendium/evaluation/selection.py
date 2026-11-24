@@ -34,7 +34,17 @@ class EvaluationTokenizer(Protocol):
 
     def apply_chat_template(
         self, conversation: list[dict[str, Any]], *, tokenize: bool, add_generation_prompt: bool, **kwargs: Any
-    ) -> list[int]: ...
+    ) -> str | list[int]: ...
+
+
+def user_turn_context(tokenizer: EvaluationTokenizer, text: str, chat_template_kwargs: Mapping[str, bool | str]) -> str:
+    """Render ``text`` as one user message followed by the served model's generation prompt."""
+    rendered = tokenizer.apply_chat_template(
+        [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True, **chat_template_kwargs
+    )
+    if not isinstance(rendered, str):
+        raise TypeError("The tokenizer returned token ids for an untokenized chat template")
+    return rendered
 
 
 class SelectionStatus(StrEnum):

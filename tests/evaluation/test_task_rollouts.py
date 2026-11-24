@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import math
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +19,7 @@ from fray.local_backend import LocalClient
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity, run_evaluation
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.likelihood import VllmLikelihood
+from rolloutengine.likelihood import LikelihoodScore, VllmLikelihood
 from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -33,6 +34,7 @@ from taskcompendium.evaluation.spec import (
     ContinuationLikelihood,
     EvaluationItem,
     EvaluationProtocol,
+    LikelihoodContext,
     LikelihoodMetric,
     LikelihoodNormalization,
     LikelihoodRequest,
@@ -1085,3 +1087,108 @@ async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_
     )
     saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")
+
+
+class UserTurnTokenizer(CharacterTokenizer):
+    def __init__(self):
+        self.template_kwargs = []
+
+    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
+        assert not tokenize and add_generation_prompt
+        self.template_kwargs.append(kwargs)
+        (message,) = conversation
+        return f"<{message['role']}>{message['content']}<assistant>"
+
+
+@dataclass
+class TableScorer:
+    """Score each rendered (context, continuation) pair from a fixed probability table."""
+
+    probabilities: dict[tuple[str, str], float]
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def __call__(self, context, continuation, *, seed):
+        self.calls.append((context, continuation))
+        return LikelihoodScore(math.log(self.probabilities[context, continuation]), False, 1)
+
+
+def rotated_choice_item(task):
+    # Two option orders; the first pools the "A" and " A" spellings of option 0.
+    requests = (("x", "A"), ("x", " A"), ("y", "B"), ("x", "B"), ("y", "A"))
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=ChoiceLikelihood(
+            choices=("first", "second"),
+            requests=tuple(LikelihoodRequest(context=context, continuation=letter) for context, letter in requests),
+            gold=(0,),
+            context_format=LikelihoodContext.USER_TURN,
+            terms=(((0, 1), (2,)), ((3,), (4,))),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_choices(tmp_path, run_config):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "rows.jsonl").write_text(json.dumps({"question": "x"}) + "\n")
+    recipe = SourceRecipe(
+        name="rotated",
+        version="1",
+        source=SourceFiles("rotated", "pinned", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+    )
+    protocol = EvaluationProtocol(
+        benchmark="rotated",
+        version="1",
+        operation="choice_likelihood",
+        sampling=None,
+        trials=TrialPolicy(count=1, seed=None),
+        metrics=(Metric(name="acc", kind=MetricKind.BINARY, higher_is_better=True),),
+        primary_metric="acc",
+        summary=SummaryKind.MEAN,
+        expected_population=1,
+        likelihood_metrics=(LikelihoodMetric(name="acc", normalization=LikelihoodNormalization.RAW),),
+    )
+    corpus = str(tmp_path / "corpus")
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            publish_evaluation_corpus(recipe, protocol, rotated_choice_item, context, str(source), corpus)
+    finally:
+        client.shutdown()
+    tokenizer = UserTurnTokenizer()
+    scorer = TableScorer(
+        {
+            ("<user>x<assistant>", "A"): 0.2,
+            ("<user>x<assistant>", " A"): 0.1,
+            ("<user>y<assistant>", "B"): 0.3,
+            ("<user>x<assistant>", "B"): 0.4,
+            ("<user>y<assistant>", "A"): 0.2,
+        }
+    )
+    config = run_config.model_copy(update={"chat_template_kwargs": {"enable_thinking": False}})
+    output = str(tmp_path / "results")
+    async with openai.AsyncOpenAI(api_key="test", base_url="http://fixture.test/v1") as unused:
+        await run_evaluation(
+            (corpus,),
+            output,
+            config,
+            ChatModel(unused, "fixture", 16),
+            machine_factories={},
+            tokenizer=tokenizer,
+            likelihood=scorer,
+        )
+
+    assert {context for context, _ in scorer.calls} == {"<user>x<assistant>", "<user>y<assistant>"}
+    assert tokenizer.template_kwargs == [{"enable_thinking": False}] * 5
+    (sample,) = [sample_from_archive_row(row) for row in ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE)]
+    # Pooling spellings lets option 0 win (0.3 * 0.3 > 0.4 * 0.2); unpooled it would lose (0.2 * 0.3).
+    assert sample.metrics == {"acc": 1}
+    assert sample.model_choice == 0
+    assert [choice.loglikelihood for choice in sample.choices] == pytest.approx([math.log(0.09), math.log(0.08)])
+    assert sample.prompt_text == "<user>x<assistant>"
