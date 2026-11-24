@@ -129,7 +129,7 @@ type GraderReportSection = Literal["training", "evaluation", "evaluation_duratio
 
 
 def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
-    """Update the run report for one evaluation step or training attempt on a best-effort basis."""
+    """Update report sections for a training execution or evaluation, logging failures."""
     path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
         report = {"training": {}, "evaluation": {}}
