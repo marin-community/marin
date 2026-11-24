@@ -95,10 +95,6 @@ def driver_command(arguments: argparse.Namespace, base_url: str) -> list[str]:
         str(arguments.max_retries),
         "--priority",
         arguments.priority,
-        "--sync-package",
-        "marin-core",
-        "--sync-package",
-        "marin-taskforge",
         "--extra",
         "cpu",
         # By reference only: Iris delivers these as secret files and records this argv
