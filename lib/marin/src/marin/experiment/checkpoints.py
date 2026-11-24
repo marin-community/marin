@@ -19,7 +19,9 @@ model vocab. Two inputs are resolved here rather than left implicit:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
+from typing import Any
 
 import draccus
 from fray.types import ResourceConfig
@@ -123,6 +125,26 @@ class HfToLevanterCheckpoint:
     model: LmConfig
 
 
+def _omit_encoded_defaults(config: object, encoded: Any) -> Any:
+    if isinstance(encoded, dict):
+        if is_dataclass(config) and not isinstance(config, type):
+            omitted = default_fields_omitted_from_fingerprint(config)
+            values = {item.name: getattr(config, item.name) for item in fields(config)}
+            return {
+                name: _omit_encoded_defaults(values[name], value) if name in values else value
+                for name, value in encoded.items()
+                if name not in omitted
+            }
+        if isinstance(config, Mapping):
+            return {
+                key: _omit_encoded_defaults(config[key], value) if key in config else value
+                for key, value in encoded.items()
+            }
+    if isinstance(encoded, list) and isinstance(config, list | tuple):
+        return [_omit_encoded_defaults(item, value) for item, value in zip(config, encoded, strict=True)]
+    return encoded
+
+
 def hf_to_levanter(
     hf_id: str,
     *,
@@ -143,8 +165,7 @@ def hf_to_levanter(
     tokenizer = tokenizer or hf_id
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
-    omitted = default_fields_omitted_from_fingerprint(model_config)
-    model_config_json = {key: value for key, value in draccus.encode(model_config).items() if key not in omitted}
+    model_config_json = _omit_encoded_defaults(model_config, draccus.encode(model_config))
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:
