@@ -330,7 +330,9 @@ class DataStore:
     ) -> Transaction:
         """Create a transaction bounded by actual Arrow buffer bytes.
 
-        ``author`` and ``message`` are recorded in the commit's manifest when both are given.
+        When both are given, ``author`` and ``message`` are recorded in the manifest of the commit
+        this transaction publishes. A transaction without rows on a non-empty archive publishes no
+        commit, so it records nothing.
         """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
@@ -390,7 +392,7 @@ class DataStore:
             if not additions:
                 snapshot = self._commits.snapshot()
                 if snapshot.token is None:
-                    return self._commits.commit(CommitDelta())
+                    return self._commits.commit(CommitDelta(commit_info=commit_info))
                 return snapshot.token
             return self._commits.commit(replace(_addition_delta(additions), commit_info=commit_info))
 
