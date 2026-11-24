@@ -189,6 +189,7 @@ class ModelServeConfig(BaseModel):
     limit_mm_per_prompt: str | None
     tool_call_parser: str | None
     reasoning_parser: str | None
+    levanter_expert_parallel_size: int | None = Field(default=None, exclude_if=lambda value: value is None)
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
     # Omitted when unset so that adding this setting leaves earlier records' config digests unchanged.
