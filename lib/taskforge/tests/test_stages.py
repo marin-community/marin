@@ -168,9 +168,9 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     assert bundle.envs.created[0].closed
 
 
-@pytest.mark.parametrize("source_images", [False, True])
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_source_task_author_works_in_the_tasks_container_when_admitted(
-    workpiece: Workpiece, source_images: bool
+    workpiece: Workpiece, admitted: bool
 ) -> None:
     assert workpiece.submission is not None
     image = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
@@ -183,20 +183,21 @@ async def test_source_task_author_works_in_the_tasks_container_when_admitted(
     )
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     setup = config(harness)
-    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": source_images}))
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": [image] if admitted else []}))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     await author(ctx, source, setup, bundle)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments)
     (requested,) = bundle.envs.requested
-    if source_images:
+    if admitted:
         assert requested == environment
     else:
         assert (requested.docker_image, requested.working_directory) == (GRADER_BASE_IMAGE, "/workspace")
     assert harness.session is not None
     system = harness.session.messages[0].content
-    assert ("task's own container" in system) is source_images
+    # The prompt describes the machine the author got: its image and the directory its shell starts in.
+    assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, admitted)
 
 
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:

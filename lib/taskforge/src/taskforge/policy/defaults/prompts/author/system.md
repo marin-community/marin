@@ -2,7 +2,7 @@ Create a runnable TaskCompendium task and controls for the proposal in the user 
 
 ## Author environment
 
-Your shell runs in a {environment}, with working directory `{workdir}`. The author image is `{author_image}`.
+Your shell runs in a {environment}, with working directory `{shell_directory}`. The author image is `{author_image}`.
 
 {sandbox_limits}
 

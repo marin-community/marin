@@ -92,19 +92,25 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
 SOURCE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
 
 
+SOURCE_GRADER_IMAGE = "ghcr.io/marin-community/source-grader@sha256:" + "d" * 64
+OTHER_IMAGE = "registry.example.com/other@sha256:" + "c" * 64
+
+
 @pytest.mark.parametrize(
-    "source_images,grader_image,admitted",
+    "source_images,task_image,grader_image,refused",
     [
-        (False, SOURCE_IMAGE, False),
-        (True, SOURCE_IMAGE, True),
-        (True, "registry.example.com/other@sha256:" + "c" * 64, False),
+        ((), SOURCE_IMAGE, SOURCE_IMAGE, "grader image"),
+        ((SOURCE_IMAGE,), SOURCE_IMAGE, SOURCE_IMAGE, None),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, SOURCE_GRADER_IMAGE, None),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, OTHER_IMAGE, "grader image"),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), OTHER_IMAGE, SOURCE_GRADER_IMAGE, "task image"),
     ],
 )
-def test_source_images_admit_a_grader_only_in_the_tasks_own_image(
-    source_images: bool, grader_image: str, admitted: bool
+def test_source_images_admit_only_the_source_tasks_own_images(
+    source_images: tuple[str, ...], task_image: str, grader_image: str, refused: str | None
 ) -> None:
     task = arithmetic_task(
-        environment_requirements=requirements(image=SOURCE_IMAGE, workdir="/testbed"),
+        environment_requirements=requirements(image=task_image, workdir="/testbed"),
         grader=ScriptGrader(
             argv=("sh", "-c", "echo 1"),
             reward=StdoutReward(),
@@ -113,10 +119,12 @@ def test_source_images_admit_a_grader_only_in_the_tasks_own_image(
             timeout=1,
         ),
     )
-    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits(), source_images=source_images)
+    settings = LoweringSettings(
+        GRADING_MACHINE, GRADING_MACHINE, rollout_limits(), source_images=frozenset(source_images)
+    )
     factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
-    if not admitted:
-        with pytest.raises(InvalidTaskSpec, match="grader image must be"):
+    if refused is not None:
+        with pytest.raises(InvalidTaskSpec, match=f"{refused} must be"):
             lower_with_settings(task, settings, factories)
         return
     lowered = lower_with_settings(task, settings, factories)

@@ -13,12 +13,15 @@ import httpx
 import pytest
 from experiments.taskforge import run_taskforge
 from iris.cluster.types import JobName
+from rolloutengine.test_support import arithmetic_task
 from shellbox.backends.iris.machine import IrisMachineFactory
+from taskcompendium.models import GraderMachine, ScriptGrader, StdoutReward
 
 from taskforge import wiring
-from taskforge.driver import eligible, inputs, proposal_bucket, proposal_key
+from taskforge.driver import eligible, inputs, proposal_bucket, proposal_key, seed, source_images
+from taskforge.lowering import requirements
 from taskforge.model.proposal import Environment, TaskProposal, Verification
-from taskforge.policy import load_policy
+from taskforge.policy import GRADER_BASE_IMAGE, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
@@ -178,3 +181,31 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         wiring.endpoint_source("http://fixed/v1", "/user/relay", "secret-token", "glm-5.3", pool)
     with pytest.raises(ValueError, match="exactly one"):
         wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)
+
+
+def test_source_images_are_the_source_tasks_own_task_and_grader_images(tmp_path: Path) -> None:
+    task_image = "ghcr.io/example/swe-task@sha256:" + "a" * 64
+    grader_image = "ghcr.io/example/swe-grader@sha256:" + "b" * 64
+    grader = ScriptGrader(
+        argv=("bash", "/tests/test.sh"),
+        reward=StdoutReward(),
+        placement=GraderMachine(environment=requirements(image=grader_image, workdir="/testbed")),
+        answer_path=None,
+        timeout=600,
+    )
+    policy = load_policy(DEFAULTS_DIR)
+    for name, grading, expected in (
+        ("separate", grader, (task_image, grader_image)),
+        (
+            "pinned",
+            grader.model_copy(update={"placement": GraderMachine(environment=requirements(image=GRADER_BASE_IMAGE))}),
+            (task_image,),
+        ),
+    ):
+        path = tmp_path / f"{name}.task.json"
+        task = arithmetic_task(
+            environment_requirements=requirements(image=task_image, workdir="/testbed"), grader=grading
+        )
+        path.write_text(task.model_dump_json())
+        workpiece = seed(str(path), policy)
+        assert workpiece is not None and source_images(workpiece) == tuple(sorted(expected))

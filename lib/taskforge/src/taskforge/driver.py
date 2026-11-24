@@ -35,8 +35,9 @@ from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
-from taskforge.policy import Policy, load_policy, parse_overlay
+from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, parse_overlay
 from taskforge.report import report
+from taskforge.resources.sandbox.factories import grading_environment
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import endpoint_source, install, runtime
 
@@ -174,6 +175,19 @@ def source_controls(task_path: str, task: TaskSpec) -> tuple[Control, ...]:
     return controls
 
 
+def source_images(seed: Workpiece) -> tuple[str, ...]:
+    """The container images a task from another source brings, for ``sandbox.source_images``; none for a proposal.
+
+    These are the task's and its grader's own images; the pinned image needs no admission.
+    """
+    if seed.proposal is not None or seed.submission is None:
+        return ()
+    task = seed.submission.task
+    grader = grading_environment(task)
+    images = {task.environment_requirements.docker_image, None if grader is None else grader.docker_image}
+    return tuple(sorted(image for image in images if image not in (None, GRADER_BASE_IMAGE)))
+
+
 def first_stage(seed: Workpiece) -> Stage:
     """Validate a task from another source before any author revises it; author a proposal."""
     return Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
@@ -185,6 +199,7 @@ async def one(args: argparse.Namespace) -> None:
     initial = seed(args.proposals, policy)
     if initial is None:
         return
+    policy = policy.overlaid({"sandbox.source_images": list(source_images(initial))})
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")

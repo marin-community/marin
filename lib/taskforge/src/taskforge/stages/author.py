@@ -36,8 +36,8 @@ from taskforge.resources.execution import close_resource
 from taskforge.stages.summary import validation_path
 
 
-def system_prompt(policy: Policy) -> str:
-    """Render the author reference from the current task and control schemas."""
+def system_prompt(policy: Policy, machine: EnvironmentRequirements) -> str:
+    """Render the author reference from the current task and control schemas, for the author's ``machine``."""
     reference = json.dumps(
         {"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()},
         sort_keys=True,
@@ -50,9 +50,14 @@ def system_prompt(policy: Policy) -> str:
             EnvironmentRequirements(docker_image=None, command_semantics=CommandSemantics.SHELL_SIMULATOR),
         )
     )
-    image = policy.setting("author.image", str)
+    image = machine.docker_image
     workdir = policy.setting("author.workdir", str)
-    rule = "author.source_image_rule" if policy.setting("sandbox.source_images", bool) else "author.image_rule"
+    sources = policy.setting("sandbox.source_images", tuple)
+    rule = (
+        policy.prompt("author.source_image_rule").render(images=", ".join(f"`{source}`" for source in sources))
+        if image in sources
+        else policy.prompt("author.image_rule").template
+    )
     environment = (
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
@@ -61,7 +66,8 @@ def system_prompt(policy: Policy) -> str:
         environment=environment,
         author_image=image or "none (ShellSim)",
         workdir=workdir,
-        image_rule=policy.prompt(rule).render(workdir=workdir),
+        shell_directory=machine.working_directory or workdir,
+        image_rule=rule,
         output_chars=policy.setting("tools.output_chars", int),
         grader_environments=json.dumps(environments, sort_keys=True),
         sandbox_limits=sandbox_limits(policy),
@@ -106,18 +112,17 @@ def opening_prompt(workpiece: Workpiece, policy: Policy) -> str:
 
 
 def author_requirements(workpiece: Workpiece, policy: Policy) -> EnvironmentRequirements:
-    """The author's machine: the task's own container when ``sandbox.source_images`` admits it, else ``author.image``.
+    """The author's machine: the task's own container when it is a source image, else ``author.image``.
 
     A task from another source names the image its repository and tests live in, so the author works in
-    the same environment, setup included, that the solver and grader get.
+    the same environment, setup included, that the solver and grader get. Only a source task's images are
+    in ``sandbox.source_images``, so a generated task's author always gets ``author.image``.
     """
     submission = workpiece.submission
-    if (
-        policy.setting("sandbox.source_images", bool)
-        and submission is not None
-        and submission.task.environment_requirements.docker_image is not None
+    if submission is not None and submission.task.environment_requirements.docker_image in policy.setting(
+        "sandbox.source_images", tuple
     ):
-        return submission.task.environment_requirements
+        return host_requirements(submission.task.environment_requirements)
     return requirements(
         image=policy.setting("author.image", str) or None,
         packages=policy.setting("author.packages", tuple),
@@ -128,7 +133,8 @@ def author_requirements(workpiece: Workpiece, policy: Policy) -> EnvironmentRequ
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
-    env = await resources.envs.create(host_requirements(author_requirements(workpiece, policy)))
+    machine = author_requirements(workpiece, policy)
+    env = await resources.envs.create(host_requirements(machine))
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
@@ -160,7 +166,10 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
             await ctx.emit(WriteFiles(tuple(writes)))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(
-                (Message(Role.SYSTEM, system_prompt(policy)), Message(Role.USER, opening_prompt(workpiece, policy))),
+                (
+                    Message(Role.SYSTEM, system_prompt(policy, host_requirements(machine))),
+                    Message(Role.USER, opening_prompt(workpiece, policy)),
+                ),
                 tuple(tool.schema for tool in tools.values()),
             )
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)

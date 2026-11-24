@@ -230,15 +230,16 @@ class LoweringSettings:
     """Machine settings and budgets shared by every lowering of a run.
 
     Attributes:
-        source_images: Let a grader run in the task's own container image, as a task from another source
-            provides it, besides the pinned image and ShellSim. Policy ``sandbox.source_images``.
+        source_images: The container images a task from another source brings, from policy
+            ``sandbox.source_images``, which the driver sets from the source task. Its task and grader
+            machines may use them besides the pinned image and ShellSim; empty for generated tasks.
     """
 
     task_machine: MachineSettings
     verifier_machine: MachineSettings
     limits: RolloutLimits
     judge_model: str = ""
-    source_images: bool = False
+    source_images: frozenset[str] = frozenset()
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -262,24 +263,25 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         settings,
         limits,
         policy.setting("judge.model", str),
-        policy.setting("sandbox.source_images", bool),
+        frozenset(policy.setting("sandbox.source_images", tuple)),
     )
 
 
-def check_grader_image(task: TaskSpec, settings: LoweringSettings) -> None:
-    """Refuse a grader image other than the pinned one, ShellSim, or, with ``source_images``, the task's own."""
+def check_images(task: TaskSpec, settings: LoweringSettings) -> None:
+    """Refuse a container image the run does not admit: the pinned one, ShellSim, or a source task's own.
+
+    A generated task's own image is left to the machine factory, as before source images existed; a task
+    from another source must stay on its source's images.
+    """
+    admitted = (GRADER_BASE_IMAGE, *sorted(settings.source_images))
     grader = grading_environment(task)
-    if grader is None or grader.docker_image in (None, GRADER_BASE_IMAGE):
-        return
-    task_image = task.environment_requirements.docker_image
-    if settings.source_images and grader.docker_image == task_image:
-        return
-    allowed = (
-        f"{GRADER_BASE_IMAGE}, the task's image {task_image},"
-        if settings.source_images and task_image
-        else GRADER_BASE_IMAGE
-    )
-    raise InvalidTaskSpec(f"grader image must be {allowed} or null for ShellSim; got {grader.docker_image}")
+    if grader is not None and grader.docker_image not in (None, *admitted):
+        raise InvalidTaskSpec(
+            f"grader image must be {' or '.join(admitted)}, or null for ShellSim; got {grader.docker_image}"
+        )
+    image = task.environment_requirements.docker_image
+    if settings.source_images and image not in (None, *admitted):
+        raise InvalidTaskSpec(f"task image must be {' or '.join(admitted)}, or null for ShellSim; got {image}")
 
 
 def lower_with_settings(
@@ -301,7 +303,7 @@ def lower_with_settings(
         connection = JudgeConnection(
             "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
         )
-    check_grader_image(task, settings)
+    check_images(task, settings)
     timeout = verifier_timeout(task.grader)
     if judge is not None:
         timeout = max(timeout, settings.limits.model_turn_timeout or 0)
