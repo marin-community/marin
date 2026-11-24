@@ -118,9 +118,9 @@ continuations and have no generation output budget.
 Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
 `judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
 secret references. The standard
-FinanceBench, OlympiadBench, EconEvals and IMO-AnswerBench definitions use Together and record its model alias
-as provider-managed. IMO-AnswerBench's published scores used Gemini 2.5 Pro as the judge, so its scores
-are comparable only between runs that share a judge. A provider alias does not establish the exact weights served.
+FinanceBench, OlympiadBench, EconEvals and IMO-Bench definitions use Together and record its model alias
+as provider-managed. IMO-Bench's published scores used Gemini 2.5 Pro as the judge, so IMO-AnswerBench and
+IMO-ProofBench scores are comparable only between runs that share a judge. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
 The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
 supplies its separately pinned hosted judge through `--policy-finalization-config`.

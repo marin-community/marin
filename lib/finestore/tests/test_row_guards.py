@@ -4,6 +4,7 @@
 import threading
 
 import pytest
+from finestore.commit import CommitConflict
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore, RowConflict
@@ -54,6 +55,17 @@ def test_guarded_absent_key_conflicts_with_a_concurrent_insert(archive_root):
             other.table("tasks").add({"task_id": "n", "status": "active"})
         transaction.table("tasks").add({"task_id": "n", "status": "disabled"})
         with pytest.raises(RowConflict):
+            transaction.commit()
+
+
+def test_guard_rejects_a_concurrent_drop_of_the_table(archive_root):
+    _seed(archive_root, [{"task_id": "a", "status": "active"}])
+    with _open(archive_root, "alice") as alice, _open(archive_root, "bob") as bob:
+        transaction = alice.transaction(author="alice", message="check a")
+        assert transaction.read("tasks", [("a",)])
+        with bob.transaction(author="bob", message="drop tasks") as other:
+            other.drop_table("tasks")
+        with pytest.raises(CommitConflict, match="dropped or replaced"):
             transaction.commit()
 
 

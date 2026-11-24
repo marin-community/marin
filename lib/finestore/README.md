@@ -36,24 +36,24 @@ manifest of the commit the transaction publishes holds them as `commit_info`, wi
 commit's sequence and publication time, and `ReadView.commit_info` returns the record of
 the pinned commit. `author=` defaults to the user who launched the process, as
 `rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
-submitting user. FineStore stores the author as given and does not verify it. A
-transaction without rows on a non-empty archive publishes no commit and records
-nothing.
+submitting user. FineStore stores the author as given and does not verify it.
+On a non-empty archive, a transaction with no writes returns the checked
+commit token without publishing a new commit.
 
 `transaction.read(table, keys)` returns the newest rows for those primary keys from
-the transaction's pinned snapshot. It also guards the keys: if another writer commits
-any of them after that snapshot, whether the key existed or not, the commit raises
-`RowConflict` instead of replacing the newer row. Rows the transaction writes without
-reading them are not checked. `store.update(table, keys, edit, message=...)`
+the transaction's pinned snapshot. It also guards the keys, as `require_unchanged`
+guards a whole table: if another writer commits any of them after that snapshot,
+whether the key existed or not, the commit raises `RowConflict` instead of replacing
+the newer row. A drop or replacement of the table raises `CommitConflict`. Rows the
+transaction writes without reading them are not checked. `store.update(table, keys, edit, message=...)`
 is the read-modify-write form for `OnConflict.SUPERSEDE` tables. It reads the rows,
 writes `edit(row)` for each, and on `RowConflict` backs off and runs `edit` again on the
 newer rows, so `edit` must be safe to repeat.
 
-The transaction buffers its rows and object bytes in memory. Each participating
-table produces one level-zero Parquet shard. FineStore writes every shard and an
-immutable full manifest before it conditionally advances `HEAD`. Until that final
-write succeeds, none of the transaction is visible. A caller should split a
-transaction when its payload would exceed a safe process-memory bound.
+Appends to registered tables and named object writes retain their Arrow buffers
+in memory. Each appended table produces one level-zero Parquet shard. FineStore
+writes every shard and an immutable full manifest before it conditionally advances
+`HEAD`. Until that final write succeeds, none of the transaction is visible.
 
 Ordinary table appends use the same commit path. `store.flush()` atomically publishes
 the currently claimed buffers from all registered tables. `table.flush()` publishes
@@ -65,8 +65,56 @@ A flush uploads each new shard, writes a manifest, and publishes it with one
 compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
 onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
 so commits to one root are serialized; writers that need more aggregate commit
-throughput should write to separate roots. A flush raises `CommitConflict` only after
-losing the compare-and-swap for an hour.
+throughput should write to separate roots. A flush retries compare-and-swap conflicts
+for up to an hour.
+
+## Transactional table changes
+
+A transaction can create, rename, or drop tables. Use a private table to stream
+a rebuild, then rename it into place and write its completion marker:
+
+```python
+from finestore.layout import TableMetadata, TableNameConflict
+
+with store.transaction(base=source_view) as transaction:
+    transaction.require_unchanged("source")
+    table = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+    table.extend(rebuilt_rows)
+    transaction.rename_table("scratch", "results", on_conflict=TableNameConflict.REPLACE)
+    transaction.write_object("build-complete", b"done")
+```
+
+The temporary name is visible inside the transaction. Readers see one final
+namespace after the `HEAD` update. A rename moves the manifest references and
+keeps the shard paths. Renaming to an occupied name raises unless the caller
+sets `TableNameConflict.REPLACE`. Dropping an existing table removes it from
+the final namespace. A created table can be published empty.
+
+Created tables write Arrow batches up to the transaction's byte budget. An
+unbounded transaction uses the store buffer budget for these batches. A single
+row may exceed the budget. The commit checks names changed by DDL and any
+extra names passed to `require_unchanged`. Concurrent content changes fail
+with `CommitConflict`. Physical compaction can proceed while data is staged.
+
+An abandoned transaction can leave unreferenced shards under `data/_staged/`.
+Published tables can reference paths there, so reclamation must account for
+active staging transactions and retained snapshots.
+
+Renaming, dropping, or replacing a previously published table advances its incarnation.
+Append handles registered under an earlier incarnation fail with
+`CommitConflict`. Flush buffered appends before changing a table in the same store.
+After the change, call `store.table(...)` to register a fresh handle. If another
+store changed a registered table, reopen before writing to it. Pinned reads retain
+their earlier view.
+
+The first publication of a table uses the existing manifest format. An
+incarnation change requires the `table-incarnations-v1` manifest feature.
+Upgrade readers such as Marina's EvalDash before writers that drop or replace
+existing tables.
+
+Pass `expected=view.table_version(table)` to `finestore.admin.drop_table` when
+an earlier operation, such as a backup, relied on an exact file set. A drop
+that removes an active table clears the seal.
 
 ## Reads
 

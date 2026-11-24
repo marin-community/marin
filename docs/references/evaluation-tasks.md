@@ -15,7 +15,7 @@ remain separate work; this path produces no headline score or legacy
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
-| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
+| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, resume, and reuse of stored model responses |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
@@ -361,6 +361,42 @@ source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at
 `phase="started"` have no terminal result. Exhausted infrastructure
 failures preserve evidence and raise `EvaluationInfrastructureError`.
+
+## Regrade stored model responses
+
+A grader correction publishes a new corpus, which an existing result root
+cannot resume. To grade the model responses that a run already stored on the
+new corpus, pass the run's result root as `--responses-from`:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.task_driver --local \
+  --responses-from scratch/eval-run \
+  --dataset "$NEW_CORPUS_ROOT" \
+  --config run-config.json --endpoint-file endpoint.txt \
+  --output scratch/eval-run-regraded
+```
+
+A generation attempt then takes the latest completed model response that the
+source run stored for the same benchmark, source row, and trial, provided the
+attempt sends the identical request: the same messages and sampling options,
+including the trial seed. The new corpus's response policy selects the graded
+text from the stored channels. Every other attempt asks the endpoint, so the
+command takes `--config` and an endpoint as any run does. The run
+configuration must keep the source run's model identity. Judged tasks call the
+judge again, so judge variation also changes grades.
+
+Raw evidence names the source root, its run identity, and the evidence blob in
+`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
+that reuses its own response after a grading failure does. `evaluation/run.json`
+lists each source in `response_sources` with its root, run identity, and
+`driver_revision`, so a regraded root differs from a fresh run on the same
+corpus without opening the evidence. Only model identity is checked, so the
+recorded revision is how to tell that responses stored under another driver
+revision were graded under the current one. The sources are not part of the
+run identity. A resume keeps the sources already recorded and adds a new one.
+Without `--local`, the run goes to Iris as usual, and the source root must be
+shared object storage as well.
 
 ## Summary semantics
 

@@ -1,17 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google DeepMind's IMO-AnswerBench, graded by the paper's AnswerAutoGrader prompt.
+"""Google DeepMind's IMO-AnswerBench and IMO-ProofBench, graded by the paper's autograder prompts.
 
-Data and prompt are from "Towards Robust Mathematical Reasoning" (Luong et al., EMNLP 2025,
-arXiv:2511.01846), CC BY 4.0. The prompt is the appendix A.5 text, transcribed from the paper's
-LaTeX source as Markdown, plus one rule that marks hedged answers incorrect. The solver sees only
-the problem statement.
+Data and prompts are from "Towards Robust Mathematical Reasoning" (Luong et al., EMNLP 2025,
+arXiv:2511.01846), CC BY 4.0. The prompts are the appendix A.5 AnswerAutoGrader and B.5
+ProofAutoGrader texts, transcribed from the paper's LaTeX source as Markdown; the answer grader
+adds one rule that marks hedged answers incorrect. Each solver sees only the problem statement.
 """
 
 from typing import Any
 
-from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
+from verifyit.spec import JudgeCompletionPolicy, JudgeSamplingParams, JudgeSpec
 
 from taskcompendium.convert.answers import answer_task, nonempty_text, source_defect, source_evidence
 from taskcompendium.evaluation.corpus import chat_item
@@ -74,11 +74,61 @@ Model Solution: {candidate}
 Golden Answer: {reference}
 """  # noqa: E501 - source prompt plus the Hedged Answers rule
 
+PROOF_GRADER_TEMPLATE = """You are an expert grader for the International Mathematics Olympiad (IMO). Your task is to evaluate a proposed solution strictly and rigorously. Keep in mind the standards at the IMO are extremely high: only arguments that are logically sound, complete, and precise should be rewarded.
+
+### General Scoring Rubric
+Scores are assigned on a 0-7 scale. The general guidelines are:
+* **7 Points (Correct):** The solution is complete, correct, and fully rigorous. If the submission contains incorrect attempts or lines of reasoning but ultimately presents a complete and correct solution, it should still be awarded full points; the presence of earlier, discarded work does not detract from the final correct proof.
+* **6 Points (Almost Correct):** The solution is almost correct with a sound core argument, but contains minor errors in calculation or small gaps in logic. Missing proofs for major components, unjustified claims, or sketchy arguments are **not** eligible for 6 points.
+* **1 Point (Partial Progress):** The solution demonstrates substantial progress explicitly mentioned in the grading guidelines. Initial observations, reformulating the problem without making substantive headway, or proving partial results not mentioned in the grading guidelines are generally **not** eligible for this score.
+* **0 Points (Incorrect):** The solution doesn't make substantial progress that is a key step in the full solution or is fundamentally flawed. All partial progress without key results or lacking rigor also fall in this category.
+
+### Input Data and Interpretation
+You are provided with the following:
+1. **Problem Statement:** The IMO problem.
+2. **Ground Truth Solution:** A reference solution. Assume this solution is correct. It demonstrates one valid approach.
+3. **Specific Grading Guidelines:** Criteria for awarding credit for this specific problem. These guidelines take precedence over the General Scoring Rubric, especially for partial credit.
+4. **Proposed Solution:** The student submission.
+
+### Evaluation Process
+You must follow this structured process:
+1. **Analyze References:** Meticulously read and understand the problem and Ground Truth Solution check the Specific Grading Guidelines. Identify the key steps for a complete solution and the criteria for partial credit.
+2. **Step-by-Step Verification:** Verify the logical validity and rigor of every step. Identify all flaws, gaps, assumptions, and errors. **Make sure you fully understand every piece of logic behind each step of the proposed solution, you must be careful for solutions that 'pretend' to be correct.**
+3. **Assess Progress:** Determine the extent of non-trivial progress made.
+4. **Score Determination:** Compare the findings against the Specific Grading Guidelines and the General Rubric to determine the final score.
+
+### Output Requirements
+You must provide your final score in the format <points>N out of 7</points>. Ensure the `<points>` block is used **only once**, as your answer will be parsed based on the first <points> </points> block that appears in your whole response.
+
+---
+**PROBLEM STATEMENT**
+{question}
+
+**GROUND-TRUTH SOLUTION**
+{reference}
+
+**SPECIFIC GRADING GUIDELINES**
+{guidelines}
+
+**PROPOSED SOLUTION**
+{candidate}
+---
+
+Present your detailed thought process and formal justification based on the scoring rubric and grading guidelines, and finally present your final score in the format below.
+
+[Select one of the following options]
+<points>7 out of 7</points>
+<points>6 out of 7</points>
+<points>1 out of 7</points>
+<points>0 out of 7</points>
+"""  # noqa: E501 - exact source prompt
+
+PROOF_POINTS = (7, 6, 1, 0)
 ANSWERBENCH_CATEGORIES = frozenset({"Algebra", "Combinatorics", "Geometry", "Number theory"})
 
 
 def answer_judge_spec(problem: str, answer: str) -> JudgeSpec:
-    """AnswerAutoGrader: the verdict is the box after the judge's <thinking> block."""
+    """Score the boxed verdict, ignoring the judge's thinking block."""
     return JudgeSpec(
         question=problem,
         references=(answer,),
@@ -99,6 +149,31 @@ def answer_judge_spec(problem: str, answer: str) -> JudgeSpec:
     )
 
 
+def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
+    """Score a <points> line as 7, 6, 1 or 0 points out of 7."""
+    # Guidelines are literal LaTeX inside a format template; braces must survive formatting.
+    template = PROOF_GRADER_TEMPLATE.replace("{guidelines}", guidelines.replace("{", "{{").replace("}", "}}"))
+    return JudgeSpec(
+        question=problem,
+        references=(solution,),
+        # Use the judge deployment selected by the evaluation launcher.
+        model="",
+        rubric="labels",
+        prompt_template=template,
+        exact_gate=False,
+        label_scores={f"<points>{points} out of 7</points>": points / 7 for points in PROOF_POINTS},
+        label_scan="lines",
+        # GLM-5.3-Flash reasons for up to ~85K tokens on IMO-ProofBench proofs, some past 450 s, and
+        # can reason without end at temperature 0. Together returns 503s under load.
+        sampling=JudgeSamplingParams(),
+        max_completion_tokens=131072,
+        completion_policy=JudgeCompletionPolicy.CONTENT,
+        request_timeout=900,
+        transport_attempts=6,
+        transport_budget=1200,
+    )
+
+
 def answerbench_row_selected(data: dict[str, Any], _context: ConversionContext) -> bool:
     """Drop rows outside the four categories: answerbench_v2's algebra-036 has shifted columns."""
     return data.get("Category") in ANSWERBENCH_CATEGORIES
@@ -112,9 +187,37 @@ def convert_answerbench(row: RawRow, _context: ConversionContext) -> TaskSpec | 
     return task.model_copy(update={"tags": ("eval", "source:imobench", "benchmark:IMO-AnswerBench")})
 
 
+def convert_proofbench(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    problem, solution, guidelines = (
+        nonempty_text(row.data.get(column)) for column in ("Problem", "Solution", "Grading guidelines")
+    )
+    if problem is None or solution is None or guidelines is None:
+        return source_defect("missing_field", "IMO-ProofBench rows require Problem, Solution and Grading guidelines")
+    task = answer_task(
+        row, prompt=problem, spec=proof_judge_spec(problem, solution, guidelines), evidence=dict(row.data)
+    )
+    return task.model_copy(update={"tags": ("eval", "source:imobench", "benchmark:IMO-ProofBench")})
+
+
 def answerbench_item(task: TaskSpec) -> EvaluationItem:
     """Judge the final answer and report per-category accuracy."""
     evidence = source_evidence(task)
     return chat_item(task, response_selection="final_only").model_copy(
         update={"groups": {"problem_id": evidence["Problem ID"], "category": evidence["Category"]}}
+    )
+
+
+def proofbench_item(task: TaskSpec) -> EvaluationItem:
+    """Judge the final proof; group by subset (Basic, Advanced), level, category and source."""
+    evidence = source_evidence(task)
+    return chat_item(task, response_selection="final_only").model_copy(
+        update={
+            "groups": {
+                "problem_id": evidence["Problem ID"],
+                "subset": evidence["Problem ID"].split("-")[1],
+                "level": evidence["Level"],
+                "category": evidence["Category"],
+                "source": evidence["Source"],
+            }
+        }
     )
