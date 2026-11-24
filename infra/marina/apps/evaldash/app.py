@@ -364,7 +364,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
 
     The single definition of that shape, so the run list is identical whichever store produced it.
     """
-    attempt = _rl_attempt(record)
+    attempt = record.rl_attempt
     return {
         "run_id": record.run_id,
         "group_id": record.group_id,
@@ -387,24 +387,20 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "error": record.error,
         "tasks": [task.name for task in record.evaluation.tasks],
         "jobs": dict(record.jobs),
-        "rl_run_id": attempt.get("run_id"),
-        "rl_attempt_id": attempt.get("attempt_id"),
-        "rl_step": attempt.get("step"),
+        "rl_run_id": attempt.run_id if attempt is not None else None,
+        "rl_attempt_id": attempt.attempt_id if attempt is not None else None,
+        "rl_step": getattr(attempt, "step", None),
     }
-
-
-def _rl_attempt(record: EvalRunRecord) -> dict:
-    return record.model_dump(include={"rl_attempt"}).get("rl_attempt") or {}
 
 
 def _matches_rl_attempt(record: EvalRunRecord, run_ids: tuple[str, ...], attempt_id: str | None) -> bool:
     if not run_ids and attempt_id is None:
         return True
-    ref = _rl_attempt(record)
+    ref = record.rl_attempt
     return (
-        bool(ref)
-        and (not run_ids or ref.get("run_id") in run_ids)
-        and (attempt_id is None or ref.get("attempt_id") == attempt_id)
+        ref is not None
+        and (not run_ids or ref.run_id in run_ids)
+        and (attempt_id is None or ref.attempt_id == attempt_id)
     )
 
 

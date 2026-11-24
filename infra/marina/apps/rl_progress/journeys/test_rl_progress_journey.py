@@ -48,6 +48,10 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     }
     second.pop("issue")
     publish(second)
+    publish(
+        progress_record()
+        | {"run_id": record["native_run_id"], "attempt_id": "legacy-native", "label": "Earlier native attempt"}
+    )
     route = urlencode({"run": record["run_id"], "attempt": record["attempt_id"]})
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{route}", wait_until="domcontentloaded")
     dialog = journey.page.get_by_role("dialog")
@@ -120,9 +124,9 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     journey.page.reload(wait_until="domcontentloaded")
     expect(dialog).to_be_visible()
     expect(dialog).to_contain_text("family/small/mean: 0.6250")
-    expect(journey.page.locator("#attempts > tr")).to_have_count(1)
+    expect(journey.page.locator("#attempts > tr")).to_have_count(2)
     response = journey.page.request.get(api)
-    assert response.ok and len(response.json()["runs"]) == 2
+    assert response.ok and len(response.json()["runs"]) == 3
     journey.page.keyboard.press("Escape")
     publish(record | {"run_id": "journey/mochi", "label": "Mochi fixture", "model": "mochi"})
     journey.click("Refresh")
@@ -161,7 +165,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             ],
         }
 
-    def link(run, base, delta):
+    def link(run, base, delta, *, overlap=True):
         return progress_record()["gate_result"] | {
             "attempt_ids": [run],
             "control_commit": commits[base],
@@ -169,17 +173,18 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             "invariants": [
                 {
                     "name": "eval_lite/shared_tasks",
-                    "value": 18,
+                    "value": 18 if overlap else 15,
                     "limit": 18,
                     "comparator": ">=",
-                    "holds": True,
-                    "replicate": 0,
+                    "holds": overlap,
+                    "replicate": None,
                 },
             ],
             "comparisons": [
                 Comparison(metric=metric, role="slice", delta=delta, n_run=1, n_control=1).model_dump(mode="json")
                 for metric in (overall, family)
             ],
+            "verdict": "pass" if overlap else "invalid",
         }
 
     for i, (revision, raw) in enumerate(zip(revisions, (0.5, 0.4, 0.7, 0.75), strict=True)):
@@ -188,13 +193,16 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             "artifact_uri": f"s3://example/control/learning-medium-{commits[i]}-r0/{revision}",
             "evaluation_data_identity": f"panel@{revisions[min(i, 2)]}",
             "evaluation_protocol_identity": "protocol-a" if i < 2 else "protocol-b",
-            "gate_result": link(name, i - 1, 0.1) if i in (1, 2) else None,
+            "gate_result": link(name, i - 1, 0.1, overlap=i != 3) if i else None,
         }
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
     retry = attempt("control-0-retry", revisions[0], 1, 0.7) | {
         "artifact_uri": f"s3://example/control/learning-medium-{commits[0]}-r0-retry1/{revisions[0]}",
+        "branch": "control-proof",
+        "dirty": False,
+        "source_revision": commits[0],
         "evaluation_data_identity": f"panel@{revisions[0]}",
         "evaluation_protocol_identity": "protocol-a",
     }
@@ -224,6 +232,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
     expect(chart.locator("circle.history-global > title").last).to_contain_text("Experiment global 55.0%")
     expect(chart.locator("circle.history-global > title").first).to_contain_text("Global 60.0%")
     expect(chart.locator("circle.history-global > title").nth(2)).to_contain_text("Global 70.0%")
+    expect(chart.locator("circle.history-global > title").nth(3)).to_contain_text("Global 75.0%")
     expect(chart.locator("line.history-global > title").first).to_contain_text("50.0%\u201370.0%")
     expect(chart.get_by_role("link", name="unknown-base · 80.0%")).to_be_visible()
     expect(journey.page.get_by_role("group", name=family, exact=True).locator("line.history-chain")).to_have_count(1)

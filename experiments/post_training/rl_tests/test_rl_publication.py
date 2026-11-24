@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary, RunIndexIdentity
+from finestore.rl.rl_progress import AttemptSummary, Invariant, RunIndexIdentity, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -346,6 +346,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 run_id=attempt.run_id,
                 attempt_id=attempt_id,
                 issue=73 if index == 0 else None,
+                base_preset_revision=preset.revision if index == 0 else None,
                 index=(
                     RunIndexIdentity(
                         run_id=logical_id,
@@ -356,7 +357,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         branch="fixture",
                         source_revision="fixture",
                         dirty=False,
-                        base_preset_revision=preset.revision,
                     )
                     if index == 0
                     else None
@@ -400,6 +400,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     earlier = publication.build_record(str(sources[0]), newer, table=preset_table(newer), attempt=saved_attempt)
     assert earlier.status == "succeeded"
     assert earlier.evaluation_data_identity == rows["native-0"]["evaluation_data_identity"]
+    insufficient_overlap = report.model_copy(
+        update={
+            "verdict": Verdict.INVALID,
+            "invariants": (Invariant(name="eval_lite/shared_tasks", value=9, limit=18, holds=False),),
+        }
+    )
+    control = publication.build_record(
+        str(sources[0]), preset, table=table, attempt=saved_attempt, report=insufficient_overlap
+    )
+    assert control.status == "succeeded" and not control.failed_facts
+    assert control.gate_result.invariants[0].replicate is None
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -436,6 +447,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
 
     run_ids = ("eval-initial-policy", "eval-terminal-policy")
+    monkeypatch.setattr("marina.client.marina_request", unavailable_catalog)
     for index in range(2):
 
         @click.command()
@@ -653,7 +665,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
     )
     assert command.exit_code == 0, (command.output, command.exception)
-    assert json.loads(command.output)["served_records"] == [[receipt["config"]["run"]["id"], "native-0"]]
+    assert json.loads(command.output)["served_records"] == [[logical_id, "native-0"]]
     after = stored()
     assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]

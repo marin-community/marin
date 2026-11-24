@@ -49,7 +49,7 @@ class Invariant(BaseModel):
     limit: bool | int | float
     comparator: Literal["<=", ">=", "=="] | None = None
     holds: bool
-    replicate: int = 0
+    replicate: int | None = 0
 
 
 class Comparison(BaseModel):
@@ -86,8 +86,8 @@ class GateResult(BaseModel):
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
-    control_commit: Identity | None = None
-    control_revision: Identity | None = None
+    control_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GradingLatency(TypedDict):
@@ -141,7 +141,6 @@ class RunIndexIdentity(BaseModel):
     branch: str | None
     source_revision: Identity
     dirty: bool
-    base_preset_revision: Identity | None = None
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     submitted_at: str | None = None
 

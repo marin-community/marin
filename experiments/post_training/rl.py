@@ -39,7 +39,7 @@ from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
+from marin.rl.cli import BASE_PRESET_REVISION_ENV, RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     SkyRLModelSource,
@@ -120,6 +120,7 @@ def _run_rl(
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
         issue = rl_publication.reserve_issue(config.output.export_root, issue)
+        base_revision = os.environ.get(BASE_PRESET_REVISION_ENV) if index is not None else None
         write_attempt(
             config.output.export_root,
             AttemptRecord(
@@ -127,6 +128,7 @@ def _run_rl(
                 attempt_id=config.attempt_id,
                 issue=issue,
                 index=index,
+                base_preset_revision=base_revision or None,
             ),
         )
     return run_skyrl(config, forward_env=forward_env)
@@ -448,6 +450,10 @@ if len(revisions) == 1:
 """
     try:
         base = git_output(["merge-base", source_revision, "origin/main"], cwd=root, timeout=4)
+    except (OSError, RuntimeError):
+        logger.debug("Git could not resolve the main merge base for preset %s", preset)
+        return None
+    try:
         snapshot = subprocess.run(
             [
                 "git",
@@ -482,8 +488,8 @@ if len(revisions) == 1:
                 timeout=30,
             )
             return result.stdout.strip() or None
-    except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as error:
-        logger.debug("Main preset revision unavailable for %s (%s)", preset, type(error).__name__)
+    except (OSError, subprocess.SubprocessError, tarfile.TarError) as error:
+        logger.debug("Could not load preset %s from main commit %s (%s)", preset, base, type(error).__name__)
         return None
 
 
@@ -617,18 +623,15 @@ def _submit_from_launcher(
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
     index: RunIndexIdentity = context.meta["rl_index"]
-    index = index.model_copy(
-        update={
-            "submitted_at": submitted_at,
-            "base_preset_revision": _base_preset_revision(module, index.model, index.preset, index.source_revision),
-        }
-    )
+    base_preset_revision = _base_preset_revision(module, index.model, index.preset, index.source_revision)
+    index = index.model_copy(update={"submitted_at": submitted_at})
     runs = _from_handles(handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
     }
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
-    job = submit_or_run(module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: metadata}, argv=argv)
+    environment = {**os.environ, RUN_INDEX_ENV: metadata, BASE_PRESET_REVISION_ENV: base_preset_revision or ""}
+    job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {
             "name": step.name,
@@ -643,7 +646,7 @@ def _submit_from_launcher(
         "coordinator_job_id": str(job),
         "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
         "submitted_at": submitted_at,
-        "base_preset_revision": index.base_preset_revision,
+        "base_preset_revision": base_preset_revision,
         "runs": submitted,
     }
     _print_status(result)

@@ -76,6 +76,17 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "format_version": 2,
         "native_run_id": "native/test/control",
         "base_preset_revision": "2026.11.01",
+        "gate_result": (
+            changed["gate_result"]
+            | {
+                "control_commit": "abcdef0123",
+                "control_revision": "2026.11.01",
+                "comparisons": [
+                    *changed["gate_result"]["comparisons"],
+                    changed["gate_result"]["comparisons"][0] | {"metric": "eval/family/small/mean", "role": "slice"},
+                ],
+            }
+        ),
     }
     assert publish(history) == history
     assert publish(changed) == changed

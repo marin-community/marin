@@ -76,9 +76,12 @@ The `Marin - Release RL Progress` workflow runs on main pushes that change the
 app. Its manual dispatch defaults to inspection. The `rl-progress` CI job runs
 the packaged API and `marina journey rl_progress` browser owner.
 
-Deploy the shared runtime with format-2 `AttemptSummary` support before using
-the history publisher. The app package continues to serve format-1 writes
-during the runtime rollout.
+Release the run index runtime with format-1 `AttemptSummary` support before
+releasing the history app package. Confirm both the history app package and
+the runtime support format 2 before using the history publisher. The
+history app package accepts format-1 publisher writes and preserves saved
+history. Republishing an indexed attempt adds its native ID for older
+EvalDash backlinks.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
 current private revision, then release with its exact `--base-version`. Verify

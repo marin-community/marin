@@ -27,7 +27,7 @@ from iris.resources.state import JobState
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.cli import RUN_INDEX_ENV
+from marin.rl.cli import BASE_PRESET_REVISION_ENV, RUN_INDEX_ENV
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
@@ -846,11 +846,17 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
     git_output = snowball.git_output
+    source_ref = git_output(["rev-parse", "HEAD"], cwd=recipe.REPO_ROOT)
+    historical_ref = git_output(["rev-parse", "--verify", "HEAD^"], cwd=recipe.REPO_ROOT, check=False)
+    historical_ref = historical_ref or git_output(["rev-parse", "HEAD^{tree}"], cwd=recipe.REPO_ROOT)
+    monkeypatch.setattr(
+        Provenance, "capture", lambda *args, **kwargs: Provenance("tree-one", source_ref, False, "branch", "test")
+    )
 
     def historical_source(args, cwd, **kwargs):
         if args[0] == "merge-base":
-            assert args[-1] == "origin/main"
-            return "HEAD"
+            assert args == ["merge-base", source_ref, "origin/main"]
+            return historical_ref
         return git_output(args, cwd, **kwargs)
 
     monkeypatch.setattr(snowball, "git_output", historical_source)
@@ -866,11 +872,17 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 
     fake_publication(monkeypatch, publish, "https://progress.test")
     followers = []
+
+    def archive_history(argv, **kwargs):
+        if argv[:2] == ["git", "archive"]:
+            assert argv[2] == historical_ref
+        return subprocess.run(argv, **kwargs)
+
     monkeypatch.setattr(
         snowball,
         "subprocess",
         SimpleNamespace(
-            run=subprocess.run,
+            run=archive_history,
             SubprocessError=subprocess.SubprocessError,
             DEVNULL=subprocess.DEVNULL,
             STDOUT=subprocess.STDOUT,
@@ -880,7 +892,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 
     def native_prepared(**kwargs):
         run_id = launch["run"]["id"]
-        index = RunIndexIdentity.model_validate(json.loads(kwargs["environment"].env_vars[RUN_INDEX_ENV])[run_id])
+        environment = kwargs["environment"].env_vars
+        index = RunIndexIdentity.model_validate(json.loads(environment[RUN_INDEX_ENV])[run_id])
         launch["run"].update(attempt_id="native-indexed", coordinator_iris_job_id=str(job))
         other_config = {
             **launch,
@@ -898,6 +911,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
                 attempt_id="native-indexed",
                 config=launch,
                 index=index,
+                base_preset_revision=environment[BASE_PRESET_REVISION_ENV],
                 metrics_started_at=None if early_failure else receipt["result"]["started_at"],
                 elapsed_excluding_eval_seconds=None if early_failure else 123.0,
                 result=(

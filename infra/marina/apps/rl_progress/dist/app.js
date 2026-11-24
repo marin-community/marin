@@ -16,7 +16,7 @@ const grafanaLink = (run) => run.grafana_url && /^https:\/\/grafana\.oa\.dev\//.
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
 const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
-const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
+const invariant = (row) => `${row.replicate == null ? 'Group' : `r${row.replicate}`} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 function groupedRuns(records = runs) {
@@ -35,9 +35,12 @@ function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attemp
 function selectedFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
   const runId = params.get('run');
-  const attempts = groupedRuns().get(runId) ?? runs.filter((run) => run.native_run_id === runId)
-    .sort((a, b) => attemptTime(b) - attemptTime(a));
-  return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
+  if (!runId) return null;
+  const attempts = groupedRuns().get(runId) ?? [];
+  const aliases = runs.filter((run) => run.native_run_id === runId);
+  const attemptId = params.get('attempt');
+  if (attemptId != null) return [...attempts, ...aliases].find((run) => run.attempt_id === attemptId) ?? null;
+  return attempts[0] ?? aliases.sort((a, b) => attemptTime(b) - attemptTime(a))[0] ?? null;
 }
 
 function addField(list, title, value) {

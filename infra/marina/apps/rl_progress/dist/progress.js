@@ -35,7 +35,7 @@ function controlSets(runs) {
     for (const run of [...set.rows].sort((a, b) => time(b).localeCompare(time(a)))) {
       if (run.status !== 'succeeded' || latestByOutput.has(run.artifact_uri)) continue;
       if (report?.attempt_ids.length && !report.attempt_ids.includes(run.attempt_id)) continue;
-      if (!report && run.branch && run.branch !== 'main') continue;
+      if (!report && (run.dirty || (run.branch && run.branch !== 'main' && !sameCommit(run.source_revision, set.commit)))) continue;
       latestByOutput.set(run.artifact_uri, run);
     }
     const rows = [...latestByOutput.values()];

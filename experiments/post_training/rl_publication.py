@@ -200,7 +200,10 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         verdict=report.verdict,
         effect=report.effect,
         reason=report.reason,
-        invariants=list(report.invariants),
+        invariants=[
+            fact.model_copy(update={"replicate": None}) if fact.name.endswith("/shared_tasks") else fact
+            for fact in report.invariants
+        ],
         comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
@@ -266,7 +269,7 @@ def build_record(
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
-    if index is not None and index.base_preset_revision is None:
+    if index is not None and attempt.base_preset_revision is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
@@ -280,7 +283,7 @@ def build_record(
         model=index.model if index is not None else launch.model_name or table.model,
         preset=preset.name,
         preset_revision=index.preset_revision if index is not None else None,
-        base_preset_revision=index.base_preset_revision if index is not None else None,
+        base_preset_revision=attempt.base_preset_revision,
         control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
         evaluation_protocol_identity=evaluation_protocol_id,
@@ -436,7 +439,6 @@ def _with_evaldash_links(summary: AttemptSummary, service_url: str | None) -> At
     try:
         from marina import client  # noqa: PLC0415
 
-        run_ids = list(dict.fromkeys((summary.run_id, summary.native_run_id or summary.run_id)))
         rows = client.marina_request(
             service_url or client.DEFAULT_MARINA_URL,
             "GET",
@@ -449,21 +451,23 @@ def _with_evaldash_links(summary: AttemptSummary, service_url: str | None) -> At
             },
             timeout=4,
         )
-        if not isinstance(rows, list):
-            raise ValueError("EvalDash did not return a run list")
-        links = list(summary.evaldash_run_ids or ())
-        links.extend(
-            row["run_id"]
-            for row in rows
-            if isinstance(row, dict)
-            and row.get("rl_run_id") in run_ids
-            and row.get("rl_attempt_id") == summary.attempt_id
-            and isinstance(row.get("run_id"), str)
-        )
-        return summary.model_copy(update={"evaldash_run_ids": list(dict.fromkeys(links))}) if links else summary
     except (ImportError, OSError, ValueError, RuntimeError) as error:
         logger.debug("EvalDash lookup unavailable for %s (%s)", summary.attempt_id, type(error).__name__)
+        rows = None
+    if not isinstance(rows, list):
         return summary.model_copy(update={"evidence": [*summary.evidence, "EvalDash catalog lookup was unavailable."]})
+    run_ids = (summary.run_id, summary.native_run_id or summary.run_id)
+    links = list(summary.evaldash_run_ids or ())
+    links.extend(
+        row["run_id"]
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("rl_run_id") in run_ids
+        and row.get("rl_attempt_id") == summary.attempt_id
+        and isinstance(row.get("run_id"), str)
+        and row["run_id"]
+    )
+    return summary.model_copy(update={"evaldash_run_ids": list(dict.fromkeys(links))}) if links else summary
 
 
 def publish_runs(
