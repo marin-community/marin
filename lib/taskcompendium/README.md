@@ -582,10 +582,7 @@ The package transfers neither the candidate pickle nor the decoder to grading. V
 must use the pinned scientific environment; synthetic local tests establish the
 transfer and scoring behavior, not full benchmark or container validation.
 
-This module is not registered as a runnable evaluation. Preparing the real images
-and visual grader packages, validating references, and official Pi/EvalDash integration
-remain tracked in
-[issue #11592](https://github.com/marin-community/marin/issues/11592).
+The [curated evaluation catalog](../../experiments/evaluation/README.md#scienceagentbench-verified) registers the paired deterministic and visual runs.
 
 ## Development
 

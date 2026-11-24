@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ScienceAgentBench Verified paired knowledge conditions and task 66 integration pilot."""
+"""ScienceAgentBench Verified paired knowledge conditions."""
 
 import ast
 import json
@@ -26,7 +26,7 @@ from taskcompendium.importers.scienceagentbench import (
     read_verified_annotations,
     scienceagentbench_task,
 )
-from taskcompendium.importers.scienceagentbench_assets.visual_judge import COMPLETIONS, MODEL, VENICE_MODEL
+from taskcompendium.importers.scienceagentbench_assets.visual_judge import COMPLETIONS
 from taskcompendium.importers.scienceagentbench_grading import deterministic_grader, papyrus_grader, visual_grader
 from taskcompendium.models import (
     CommandSemantics,
@@ -40,14 +40,12 @@ from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
-from experiments.evaluation.benchmarks.harbor import harbor_protocol
+from experiments.evaluation.benchmarks.harbor import harbor_protocol, pi_install
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RowSelector, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-NAME = "scienceagentbench-verified-66-knowledge-off"
-PILOT_VERSION = "2026.11.24.1"
-PANEL_VERSION = "2026.11.24.1"
+PANEL_VERSION = "2026.11.24.2"
 UNRUN_TASK_IDS = frozenset({78})
 IMAGES = Path(__file__).resolve().parents[1] / "images"
 VISUAL = IMAGES / "scienceagentbench-visual"
@@ -99,8 +97,9 @@ AGENT_TIMEOUT = 3600
 VERIFIER_TIMEOUT = 1800
 REPLAY_TIMEOUT = 900
 
+PI = PiAgent(version="0.87.0", setup_timeout=360)
 AGENT = AgentEpisode(
-    harness=PiAgent(version="0.87.0", setup_timeout=360),
+    harness=PI,
     max_input_tokens=65536,
     limits=EpisodeLimits(
         max_turns=None,
@@ -111,10 +110,6 @@ AGENT = AgentEpisode(
         attempt_timeout=14400,
     ),
 )
-
-
-def pilot_row(data, _context: ConversionContext) -> bool:
-    return data["instance_id"] == 66
 
 
 def panel_row(data, _context: ConversionContext) -> bool:
@@ -129,10 +124,14 @@ def visual_row(data, context: ConversionContext) -> bool:
     return panel_row(data, context) and published_evaluator(VerifiedAnnotation.model_validate(data)).visual
 
 
-def software_image(directory: Path) -> DockerBuildContext:
+def software_image(directory: Path, *, agent: PiAgent | None = None) -> DockerBuildContext:
+    dockerfile = (directory / "Dockerfile").read_text()
+    if agent is not None:
+        dockerfile += pi_install(agent)
     return DockerBuildContext(
-        files=tuple(
-            inline_resource(name, (directory / name).read_bytes()) for name in ("Dockerfile", "requirements.lock")
+        files=(
+            inline_resource("Dockerfile", dockerfile.encode()),
+            inline_resource("requirements.lock", (directory / "requirements.lock").read_bytes()),
         )
     )
 
@@ -163,9 +162,7 @@ def cartopy_files(feature: str, context: ConversionContext) -> tuple[TaskResourc
     return tuple(files)
 
 
-def convert(
-    row: RawRow, context: ConversionContext, *, condition: KnowledgeCondition, judge_model: str = MODEL
-) -> TaskSpec:
+def convert(row: RawRow, context: ConversionContext, *, condition: KnowledgeCondition) -> TaskSpec:
     annotation = VerifiedAnnotation.model_validate(row.data)
     published = published_evaluator(annotation)
     inputs = dataset_files(annotation)
@@ -176,7 +173,7 @@ def convert(
     else:
         actor_dir = IMAGES / "scienceagentbench-pi"
     actor = EnvironmentRequirements(
-        docker_build=software_image(actor_dir),
+        docker_build=software_image(actor_dir, agent=PI),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         working_directory=WORKING_DIRECTORY,
         setup_commands=tuple(
@@ -213,7 +210,6 @@ def convert(
         package = visual_grader(
             annotation,
             judge_prompt=published_judge_prompt(context),
-            judge_model=judge_model,
             evaluator_program=b"import gpt4_visual_judge\n" + loader,
             environment=grader,
             replay_environment=actor,
@@ -290,14 +286,13 @@ def item(task: TaskSpec) -> EvaluationItem:
 
 
 def benchmark_source(
-    name: str, condition: KnowledgeCondition, count: int, *, select: RowSelector = panel_row, judge_model: str = MODEL
+    name: str, condition: KnowledgeCondition, count: int, *, select: RowSelector
 ) -> RlDataSource[EvaluationCorpusRecipe]:
-    version = PILOT_VERSION if name == NAME else PANEL_VERSION
     recipe = CurationRecipe(
         name=name,
-        version=version,
+        version=PANEL_VERSION,
         intended_use=IntendedUse.EVAL,
-        convert=partial(convert, condition=condition, judge_model=judge_model),
+        convert=partial(convert, condition=condition),
         # The largest task references 910,657,346 bytes before its software and verifier helpers.
         resource_budget_bytes=1024**3,
         source=HfSource(
@@ -309,7 +304,8 @@ def benchmark_source(
             select=select,
         ),
         inputs={
-            **({**BASEMAP_SOURCES, **GLACIER_SOURCES} if name != NAME else {}),
+            **BASEMAP_SOURCES,
+            **GLACIER_SOURCES,
             "prompt": UrlSource(
                 "https://raw.githubusercontent.com/OSU-NLP-Group/ScienceAgentBench/"
                 "c26e151ed601ba109dc4d35e057ff8e73fec469d/" + PROMPT_FILE,
@@ -320,12 +316,12 @@ def benchmark_source(
         },
     )
     protocol = harbor_protocol(
-        name, version, count, max_output_tokens=16384, requires_judge=select is not deterministic_row, trials=1
+        name, PANEL_VERSION, count, max_output_tokens=16384, requires_judge=select is not deterministic_row, trials=1
     )
     return RlDataSource(
         info=SourceInfo(
             id=name,
-            title=f"ScienceAgentBench Verified {condition.value}" + (" task 66" if name == NAME else ""),
+            title=f"ScienceAgentBench Verified {condition.value}",
             origin="ScienceAgentBench",
             family="scientific-programming",
             tags=("eval", "agent"),
@@ -339,11 +335,6 @@ def benchmark_source(
 def benchmarks() -> list[EvaluationBenchmark]:
     return fixed_benchmarks(
         [
-            benchmark_source(NAME, KnowledgeCondition.OFF, 1, select=pilot_row),
-            *(
-                benchmark_source(f"scienceagentbench-verified-{condition.value}", condition, 102 - len(UNRUN_TASK_IDS))
-                for condition in KnowledgeCondition
-            ),
             *(
                 benchmark_source(
                     f"scienceagentbench-verified-deterministic-{condition.value}",
@@ -359,7 +350,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     condition,
                     64,
                     select=visual_row,
-                    judge_model=VENICE_MODEL,
                 )
                 for condition in KnowledgeCondition
             ),

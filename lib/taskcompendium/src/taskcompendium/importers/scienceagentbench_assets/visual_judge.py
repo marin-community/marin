@@ -24,8 +24,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from pydantic import ValidationError
 
-MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
-VENICE_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
+MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
 COMPLETIONS = 3
 REQUEST_TIMEOUT = 120.0
 MAX_OUTPUT_TOKENS = 1000
@@ -52,27 +51,20 @@ def score_figure(
     All three separate single-completion requests must succeed before returning
     an average. Retries belong to the caller.
     """
-    openrouter = str(client.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
-    if model == MODEL:
-        request_model = "minimax/minimax-m3" if openrouter else model
-        route, prompt_price, completion_price = "deepinfra/fp8", 0.28, 1.1
-    elif model == VENICE_MODEL and openrouter:
-        request_model = model
-        route, prompt_price, completion_price = "venice/fp8", 0.21, 1.9
-    else:
-        raise RuntimeError(f"Unsupported ScienceAgentBench visual judge for this endpoint: {model}")
+    if model != MODEL:
+        raise RuntimeError(f"Unexpected ScienceAgentBench visual judge: {model}")
     provider = {
-        "only": [route],
+        "only": ["venice/fp8"],
         "allow_fallbacks": False,
         "data_collection": "deny",
-        "max_price": {"prompt": prompt_price, "completion": completion_price},
+        "max_price": {"prompt": 0.21, "completion": 1.9},
     }
     texts = []
     scores = []
     for _ in range(COMPLETIONS):
         response = client.with_options(timeout=REQUEST_TIMEOUT, max_retries=0).chat.completions.create(
-            model=request_model,
-            extra_body={"provider": provider} if openrouter else None,
+            model=model,
+            extra_body={"provider": provider},
             messages=[
                 {
                     "role": "user",

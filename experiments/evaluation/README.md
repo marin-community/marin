@@ -79,9 +79,6 @@ uv run python -m experiments.evaluation.cli launch \
   --federated_cluster cw-rno2a --limit 2
 ```
 
-A curated batch can use the same hosted-judge flags when every selected protocol requires a judge.
-The judge config pins the revision, and graders request the model by its repository name.
-
 Curated evaluations that need an external judge declare its deployment and model
 identity in `judge`, its URL in `judge_endpoint`, and ordered secret references in
 `judge_api_key`. Records omit secret references and resolved credentials.

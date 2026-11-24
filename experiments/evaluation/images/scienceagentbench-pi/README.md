@@ -1,6 +1,6 @@
 # ScienceAgentBench Pi actor
 
-The shared linux/amd64 image contains Pi 0.87.0, Node 22, and the pinned Python scientific stack. The EvalDash task uses the Dockerfile and `requirements.lock` as its build context. Daytona identifies the private snapshot by those files and the requested resources. A fresh actor and clean replay can reuse that snapshot across tasks and knowledge conditions.
+The shared linux/amd64 image contains the pinned Python scientific stack and Pi 0.87.0. The catalog appends the shared Marin Pi installer, which supplies Node and checks the Pi version. The EvalDash task uses the resulting Dockerfile and `requirements.lock` as its build context. Daytona identifies the private snapshot by those files and the requested resources. A fresh actor and clean replay can reuse that snapshot across tasks and knowledge conditions.
 
 The runner selects the files for the task’s released dataset directory and verifies each SHA-256 before upload. The image exposes `/setup_files/datasets` at `/testbed/benchmark/datasets`. Sandbox setup checks the files at those working paths before Pi starts or the submitted program runs. Evaluators, reference results, and judge credentials belong in the grading stage.
 

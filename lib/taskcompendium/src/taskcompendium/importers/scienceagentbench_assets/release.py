@@ -6,10 +6,7 @@
 import hashlib
 import http.cookiejar
 import io
-import json
 import subprocess
-import sys
-import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -122,20 +119,3 @@ def copy_local_member(path: Path, member: str, digest: str, output: BinaryIO, si
                 output.write(chunk)
         if proc.wait() or copied != size or checksum.hexdigest() != digest:
             raise ValueError(f"Unexpected contents for {member}")
-
-
-def main():
-    members = json.loads(Path(sys.argv[1]).read_text())
-    with Archive() as stream, zipfile.ZipFile(stream) as archive:
-        for member, destination, digest in members:
-            path = Path(destination)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=path.parent) as staging:
-                staged = Path(staging) / "member"
-                with staged.open("wb") as output:
-                    copy_member(archive, member, digest, output, archive.getinfo(member).file_size)
-                staged.replace(path)
-
-
-if __name__ == "__main__":
-    main()

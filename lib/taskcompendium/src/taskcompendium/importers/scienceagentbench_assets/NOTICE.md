@@ -12,7 +12,7 @@ The visual-judge request and score extraction follow `gpt4_visual_judge.py` at
 the same pinned source revision. Missing score markers retain their official
 zero score; transport failures and missing completions propagate separately.
 
-The mixed panel uses MiniMax-M3-MXFP8. The visual-only panel uses
+The visual panel uses
 Qwen3-VL-235B-A22B-Instruct on Venice FP8 through OpenRouter.
 The upstream evaluator uses GPT-4o. Marin sends three single-completion requests
 per figure and retains the original prompt, image order, and task thresholds.
