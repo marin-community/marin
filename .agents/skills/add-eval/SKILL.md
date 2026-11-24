@@ -36,12 +36,6 @@ evaluation use. A fixed multi-turn conversation can be the context for a
 generation task, as in `experiments/evaluation/benchmarks/multichallenge.py`.
 If each attempt needs a live agent loop, use the curated TaskSpec and
 RolloutEngine path described in the [evaluation task reference](../../../docs/references/evaluation-tasks.md).
-For a live-agent comparison, check the native verifier on an empty change and
-a known passing change when available. Compare the same task IDs with the
-reference and record the harness version, effective context and reply limits,
-and reasoning settings seen by the model. When diagnosing a gap, distinguish
-a truncated coding reply from a truncated compaction summary. Report graded
-coverage and any carried-forward attempts with the score.
 
 ## Implement
 

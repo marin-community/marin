@@ -264,19 +264,6 @@ environment. Source program builders prepare tests and apply the benchmark
 execution timer. A completion receipt distinguishes finished tests from an early
 process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
 
-### SWE-bench Science
-
-`swebench-science` selects the upstream unrestricted 96 tasks.
-`swebench-science-hosted114` adds 18 reviewed opt-in tasks. Both use Pi 0.87.0
-at `xhigh` with a 65,536-token context cap and a 16,384-token reply cap,
-subject to the served model's limits. The 96-task selection also supports Mini-SWE-Agent.
-
-The solver exports its patch with the release's collection hook. A fresh
-digest-pinned verifier applies the patch and runs its native private tests.
-The catalog uses 10 GiB of solver storage on Daytona and a local Shellbox verifier.
-The [adoption issue](https://github.com/marin-community/marin/issues/12108)
-records the license decisions, verifier controls and model comparisons.
-
 ## Published corpus and raw results
 
 | Corpus file | Contract |
