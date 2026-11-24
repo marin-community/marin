@@ -15,7 +15,15 @@ pytest.importorskip("shellsim")
 
 import shellsim
 from shellbox.backends.shellsim.machine import INTERRUPT_GRACE, ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, ShellStatus
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    MachineOutputLimitExceeded,
+    MachineResourceExhausted,
+    MachineSpec,
+    PackageSpec,
+    ShellStatus,
+)
 from shellbox.transfer import download_files
 
 UNSUPPORTED_COMMAND = "unsupported-native-command-with-a-long-name-for-output-truncation-testing"
@@ -397,6 +405,21 @@ def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path)
 
             followup = await shell.execute("cat /workspace/numbers.txt")
             assert (followup.exit_code, followup.output) == (0, b"1\n2\n")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+def test_output_exhaustion_keeps_strict_factory_semantics_and_has_a_specific_type():
+    async def check():
+        assert ShellSimMachineFactory().output == 128 * 1024 * 1024
+        machine = await ShellSimMachineFactory(output=64).create(MachineSpec(PackageSpec()))
+        try:
+            with pytest.raises(MachineResourceExhausted) as caught:
+                await machine.run(Command(("seq", "1000")))
+            assert isinstance(caught.value, MachineOutputLimitExceeded)
+            assert machine.simulation.terminated
         finally:
             await machine.close()
 

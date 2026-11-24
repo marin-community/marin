@@ -634,7 +634,10 @@ class ScriptGrader(BaseModel):
     def validate_grader(self) -> "ScriptGrader":
         _require_grader_environment(self.environment)
         if self.judge is not None:
-            validate_judge_spec(self.judge)
+            try:
+                validate_judge_spec(self.judge)
+            except InvalidTask as error:
+                raise ValueError(str(error)) from error
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
         if self.answer_path is not None:
