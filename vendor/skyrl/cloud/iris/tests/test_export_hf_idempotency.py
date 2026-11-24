@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ from connectrpc.errors import ConnectError
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
+from huggingface_hub import RepoFile
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
@@ -87,17 +89,41 @@ def export_run(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "call", convert)
 
     class Hub:
+        def __init__(self):
+            self.commits = {}
+
         def create_repo(self, **kwargs):
             assert kwargs["private"] is True
 
-        def upload_folder(self, **kwargs):
+        def model_info(self, _repo_id):
+            return SimpleNamespace(private=True)
+
+        def upload_folder(self, *, folder_path, path_in_repo, revision, allow_patterns, **_kwargs):
             if failures:
                 failures.pop()
                 raise RuntimeError("Hub unavailable")
-            assert kwargs["revision"] == "release"
-            assert (Path(kwargs["folder_path"]) / "model.safetensors").is_file()
-            assert Path(kwargs["folder_path"]).is_relative_to(staging)
-            uploads.append(kwargs["path_in_repo"])
+            assert revision == "release"
+            folder = Path(folder_path)
+            assert (folder / "model.safetensors").is_file()
+            assert folder.is_relative_to(staging)
+            files = {}
+            for file in folder.iterdir():
+                if file.is_file() and any(fnmatchcase(file.name, pattern) for pattern in allow_patterns):
+                    files[(Path(path_in_repo) / file.name).as_posix()] = file.read_bytes()
+            commit = f"commit-{len(self.commits)}"
+            self.commits[commit] = files
+            uploads.append(path_in_repo)
+            return SimpleNamespace(oid=commit)
+
+        def get_paths_info(self, _repo_id, paths, *, revision, **_kwargs):
+            files = self.commits[revision]
+            return [RepoFile(path=path, size=len(files[path]), oid="blob", lfs=None) for path in paths if path in files]
+
+        def hf_hub_download(self, _repo_id, filename, *, revision, **_kwargs):
+            target = tmp_path / "hub" / revision / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(self.commits[revision][filename])
+            return str(target)
 
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", Hub)
 
@@ -229,12 +255,19 @@ def test_gpu_job_without_a_complete_export_never_submits_upload(export_run, monk
     assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
 
 
-def test_completed_object_store_export_needs_no_job(export_run):
+@pytest.mark.parametrize(
+    ("completed", "expected_events"),
+    [(False, ["gpu", "gpu-finished"]), (True, [])],
+    ids=["fresh", "completed"],
+)
+def test_object_store_export_without_hub_repo_never_submits_publication(export_run, completed, expected_events):
     run = export_run
-    run.save()
+    if completed:
+        run.save()
     spec = replace(run.spec, request=replace(run.spec.request, hf_hub_repo_id=None))
     export_hf_checkpoint.submit_requested_export(spec, ["convert"])
-    assert run.events == []
+    assert run.events == expected_events
+    assert run.submissions == []
     assert read_hf_export_request(spec.request.checkpoint_path).status is HFExportStatus.COMPLETE
 
 

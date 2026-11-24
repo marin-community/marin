@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExitCodeReward, ScriptGrader
+from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
@@ -265,7 +265,11 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
     for index, duration in enumerate((1.0, 3.0, 5.0, 101.0, None)):
         turn_count = 1 if duration == 101.0 else 2
         task = text_task(str(index)).model_copy(
-            update={"grader": ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT, reward=ExitCodeReward())}
+            update={
+                "grader": ScriptGrader(
+                    argv=("true",), placement=GraderMachine(environment=NATIVE_ENVIRONMENT), reward=ExitCodeReward()
+                )
+            }
         )
         inputs.append(
             task_input(

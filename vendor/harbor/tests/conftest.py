@@ -1,13 +1,86 @@
 """Shared pytest fixtures for harbor tests."""
 
 import asyncio
+import json
 import subprocess
 import sys
 import tempfile
+import threading
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
+
+@dataclass
+class TelemetryCapture:
+    endpoint: str
+    _batches: list[dict] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    hold_terminal_for: str | None = None
+    terminal_received: threading.Event = field(default_factory=threading.Event)
+    release_terminal: threading.Event = field(default_factory=threading.Event)
+
+    def accept(self, batch: dict) -> None:
+        with self._lock:
+            self._batches.append(batch)
+
+    @property
+    def records(self) -> list[tuple[dict, dict]]:
+        with self._lock:
+            return [
+                (batch["resource"], record)
+                for batch in self._batches
+                for record in batch["records"]
+            ]
+
+
+@pytest.fixture
+def telemetry_capture():
+    import zstandard
+    from rigging import telemetry
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.headers.get("Content-Encoding") == "zstd":
+                body = zstandard.ZstdDecompressor().decompress(body)
+            batch = json.loads(body)
+            capture.accept(batch)
+            if any(
+                record["name"] == "job_terminal"
+                and record["attributes"]["harbor_job_uid"] == capture.hold_terminal_for
+                for record in batch["records"]
+            ):
+                capture.terminal_received.set()
+                assert capture.release_terminal.wait(5)
+            response = json.dumps(
+                {"batch_id": batch["batch_id"], "status": "accepted"}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, *_args):
+            pass
+
+    telemetry.shutdown(0.1)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    capture = TelemetryCapture(f"http://127.0.0.1:{server.server_port}/v1/telemetry")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield capture
+    finally:
+        capture.release_terminal.set()
+        telemetry.shutdown(0.1)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def pytest_addoption(parser):

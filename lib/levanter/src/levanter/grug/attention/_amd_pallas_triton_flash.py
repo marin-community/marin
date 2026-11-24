@@ -16,7 +16,9 @@ Forward, dQ and dK/dV are separate ``pallas_call``s in the FlashAttention-2 layo
   key and value gradients without raising.
 - Blocks entirely inside the allowed band skip the mask computation.
 - Grouped-query attention indexes the shared K/V head per query head instead of materializing repeated K/V. The
-  dK/dV program owns one KV head and accumulates over its query-head group.
+  dK/dV program owns one KV head and accumulates over its query-head group one head at a time, so the group size
+  need not be a power of two: Triton needs power-of-two sizes only for the tiles a kernel loads, and every load
+  here is a ``(block, head_dim)`` tile.
 - bf16 inputs, f32 softmax statistics and accumulators, and the log-sum-exp kept in base 2.
 
 Segment semantics: each maximal run of equal segment IDs is one document, the packed-data convention. A segment
@@ -88,10 +90,8 @@ def _validate(q: jax.Array, k: jax.Array, v: jax.Array, block_sizes: TritonFlash
             f"gpu_pallas_triton_flash needs self-attention shapes, got q={q.shape} k={k.shape} v={v.shape}"
         )
     num_kv_heads = k.shape[2]
-    if num_q_heads % num_kv_heads != 0 or not _is_power_of_two(num_q_heads // num_kv_heads):
-        raise ValueError(
-            f"gpu_pallas_triton_flash needs a power-of-two GQA ratio, got Hq={num_q_heads} Hkv={num_kv_heads}"
-        )
+    if num_q_heads % num_kv_heads != 0:
+        raise ValueError(f"gpu_pallas_triton_flash needs Hq divisible by Hkv, got Hq={num_q_heads} Hkv={num_kv_heads}")
     if not _is_power_of_two(head_dim) or head_dim < 16:
         raise ValueError(f"gpu_pallas_triton_flash needs a power-of-two head_dim >= 16, got {head_dim}")
     for name, size in dataclasses.asdict(block_sizes).items():

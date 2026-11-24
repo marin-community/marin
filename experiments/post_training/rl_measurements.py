@@ -157,12 +157,31 @@ RUN_INPUTS_FILENAME = "run_inputs.json"
 GRADER_ERROR_LIMIT = 0.01
 
 
+class RunOptions(BaseModel, frozen=True):
+    checkpoints: presets.CheckpointPolicy
+    checkpoint_every: int | None
+    export: presets.CheckpointPolicy
+    priority: str
+
+    @classmethod
+    def from_preset(cls, preset: presets.Preset) -> RunOptions:
+        return cls(
+            checkpoints=preset.checkpoints,
+            checkpoint_every=preset.checkpoint_every,
+            export=preset.export,
+            priority=preset.recipe.layout.priority,
+        )
+
+
 class RunInputs(BaseModel, frozen=True):
     preset_name: str
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: presets.StoredInitializer | None = None
+    resume: presets.StoredResume | None = None
     requirements: tuple[str, ...] = ()
+    options: RunOptions | None = None
+    sft_preset: str | None = None
 
 
 def run_inputs(
@@ -171,6 +190,10 @@ def run_inputs(
     tasks: str | None = None,
     init: presets.StoredInitializer | None = None,
     requirements: Sequence[str] = (),
+    *,
+    resume: presets.StoredResume | None = None,
+    options: RunOptions | None = None,
+    sft_preset: str | None = None,
 ) -> RunInputs:
     values = recipe.override_document(tuple(settings))
     return RunInputs(
@@ -178,7 +201,10 @@ def run_inputs(
         settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),
         tasks=tasks.removeprefix(recipe.SELECTION_PREFIX + "/") if tasks else None,
         init=init,
+        resume=resume,
         requirements=tuple(dict.fromkeys(requirements)),
+        options=options,
+        sft_preset=sft_preset,
     )
 
 
@@ -275,7 +301,7 @@ def _session_invariants(
     counts = Counter(row["task_id"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/answers_complete", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded or (preset.checkpoint_every and evaluation.held_out):
+    if _checks_task_coverage(preset, evaluation):
         coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
@@ -287,6 +313,12 @@ def _session_invariants(
             )
         )
     return result
+
+
+def _checks_task_coverage(preset: presets.Preset, evaluation: presets.Evaluation) -> bool:
+    return evaluation == preset.guarded or (
+        evaluation.held_out and isinstance(preset.recipe.layout.workload, presets.Training)
+    )
 
 
 @dataclass(frozen=True)
@@ -391,7 +423,7 @@ def read_measurements(
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
-        quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
+        quality = evaluation.held_out and _checks_task_coverage(preset, evaluation)
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         )
@@ -410,7 +442,7 @@ def read_measurements(
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
-        if preset.checkpoint_every:
+        if preset.checkpoint_every or evaluation.every:
             scheduled = set(range(evaluation.every, preset.updates, evaluation.every)) if evaluation.every else set()
             sessions.extend(
                 (f"{evaluation.name}/step-{step}", all_scores.filter(pc.equal(all_scores["step"], step)), step)

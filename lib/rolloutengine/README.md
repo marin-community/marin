@@ -27,6 +27,9 @@ result = await engine.run_task(spec, model)
   providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
   behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
   Without interactive tools, `ShellHarness` answers an ordinary conversation and finishes after one response.
+  `rolloutengine.agents.terminus` runs Harbor's Terminus-2 agent as an `AgentHarness`.
+  `rolloutengine.agents.pi` runs Harbor's installed Pi agent in the task machine, with its model requests
+  relayed to the harness.
   `AssistantPrefixHarness` continues the final assistant text once. Select it explicitly for unfinished assistant
   messages; it can advertise final tool schemas but cannot execute tools.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the

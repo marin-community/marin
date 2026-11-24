@@ -15,10 +15,10 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from itertools import repeat
 from typing import Protocol
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -45,13 +45,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 
-class BatchPolicy(StrEnum):
-    """How committed groups are assigned to training batches; the two coincide at ``max_staleness_steps=0``."""
-
-    FULL_BATCH = "full_batch"
-    ROLLING = "rolling"
-
-
 @dataclass(frozen=True)
 class RolloutBufferConfig:
     """Batch shape, generation concurrency, and selection rules of one training run.
@@ -66,6 +59,7 @@ class RolloutBufferConfig:
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
+    groups_per_family: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
@@ -98,6 +92,7 @@ class RolloutLease:
     lease_id: str
     policy_step: int
     batch_id: int
+    family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -212,9 +207,11 @@ class RowFacts:
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
             loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
-            shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
-            if batch.get("reward_shaping_components") is not None
-            else None,
+            shaping_components=(
+                tuple(dict(values) for values in batch["reward_shaping_components"])
+                if batch.get("reward_shaping_components") is not None
+                else None
+            ),
             shaping_response_tokens=tuple(int(np.count_nonzero(mask)) for mask in masks),
             loop_incidence=tuple(bool(spans) for spans in batch.get("reward_shaping_loop_spans") or [[]] * count),
             reasoning_span_violations=tuple(batch.get("reasoning_span_violations") or [0] * count),
@@ -230,23 +227,27 @@ class RowFacts:
             passes=tuple(get_trajectory_passes(batch)),
             rollout_passes=tuple(rollout_successes(batch["rewards"], results)),
             scalar_values=tuple(None if isinstance(reward, list) else float(reward) for reward in batch["rewards"]),
-            verifier_present=tuple(result is not None for result in results)
-            if results is not None
-            else (False,) * count,
-            verifier_task_pass=tuple(
-                None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
-                for result in results
-            )
-            if results is not None
-            else (None,) * count,
+            verifier_present=(
+                tuple(result is not None for result in results) if results is not None else (False,) * count
+            ),
+            verifier_task_pass=(
+                tuple(
+                    None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
+                    for result in results
+                )
+                if results is not None
+                else (None,) * count
+            ),
             graded=tuple(index in graded for index in range(count)),
             verifier_scores=tuple(scores) if scores is not None else None,
-            verifier_agents=tuple(
-                agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
-                for result in results
-            )
-            if results is not None
-            else None,
+            verifier_agents=(
+                tuple(
+                    agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
+                    for result in results
+                )
+                if results is not None
+                else None
+            ),
             data_sources=tuple(batch["data_sources"]) if batch.get("data_sources") is not None else None,
             env_metrics=tuple(batch["env_metrics"]) if "env_metrics" in batch else None,
             env_classes=tuple(batch["env_classes"]) if "env_classes" in batch else None,
@@ -379,6 +380,7 @@ class AdmittedRollout:
     sample_count: int
     response_tokens: int
     row_facts: RowFacts | None = None
+    grader_stats: GraderStats | None = None
 
 
 @dataclass(frozen=True)
@@ -561,6 +563,7 @@ class RolloutBuffer:
         self.config = config
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
+        self._family_order = collections.deque(config.groups_per_family)
         self._leases: dict[str, RolloutLease] = {}
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
@@ -587,15 +590,33 @@ class RolloutBuffer:
     async def acquire_lease(self) -> RolloutLease:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
-            await self._changed.wait_for(lambda: self._lease_batch() is not None)
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, self._lease_batch())
+            while (batch_id := self._lease_batch()) is None:
+                await self._changed.wait()
+            family = self._lease_family(batch_id) if self.config.groups_per_family else None
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, family)
             self._leases[lease.lease_id] = lease
             return lease
+
+    def _lease_family(self, batch_id: int) -> str:
+        occupied = collections.Counter(
+            lease.family for lease in self._leases.values() if lease.batch_id == batch_id and lease.family is not None
+        )
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._ready if group.batch_id == batch_id)
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._admitted[batch_id])
+        for _ in range(len(self._family_order)):
+            family = self._family_order[0]
+            self._family_order.rotate(-1)
+            if occupied[family] < self.config.groups_per_family[family]:
+                return family
+        raise RuntimeError(f"No group slot remains for this family in rollout batch {batch_id}")
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
-            lease = self._leases.pop(lease_id)
+            lease = self._leases[lease_id]
+            if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
+                raise ValueError("Committed prompt family does not match its rollout lease")
+            del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
             if verdict.grader_stats is not None:
                 self._grader_stats.merge(verdict.grader_stats)
@@ -674,7 +695,14 @@ class RolloutBuffer:
                 for rollout in self._admitted[self._policy_step]:
                     self._dispose(rollout, "consumed")
                 stats = self._stats.pop(self._policy_step)
-                selection = BatchSelection(stats.metrics(self.config.dynamic_sampling), stats.judged)
+                metrics = stats.metrics(self.config.dynamic_sampling)
+                if self.config.groups_per_family:
+                    counts = collections.Counter(
+                        group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
+                    )
+                    if counts != self.config.groups_per_family:
+                        raise RuntimeError(f"Rollout batch does not meet {GROUPS_PER_FAMILY_KEY}")
+                selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
                 raise RuntimeError(
@@ -730,6 +758,13 @@ class RolloutBuffer:
         async with self._changed:
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
+            if self.config.groups_per_family:
+                occupied = collections.Counter((row.batch_id, row.prompt.get(FAMILY_COLUMN)) for row in snapshot.ready)
+                if any(
+                    family is None or count > self.config.groups_per_family.get(family, 0)
+                    for (_, family), count in occupied.items()
+                ):
+                    raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
 

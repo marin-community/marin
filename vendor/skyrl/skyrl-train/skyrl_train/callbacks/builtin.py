@@ -23,6 +23,7 @@ import contextlib
 import json
 import math
 import os
+import time
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
+from skyrl_train.telemetry import TelemetryConfig, iris_resources
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -305,51 +307,91 @@ class BestCheckpointCallback(TrainerCallback):
         return control
 
 
+def _harbor_telemetry_config() -> dict[str, str] | None:
+    config = TelemetryConfig.from_environment()
+    job_id = iris_resources().get("job_id")
+    if not (config.endpoint and config.run_id and config.execution_uid and job_id):
+        return None
+    return {
+        "endpoint": config.endpoint,
+        "root_run_uid": config.run_id,
+        "execution_uid": config.execution_uid,
+        "serving_job_id": job_id,
+    }
+
+
 @register_callback("harbor_evaluation")
 class HarborEvaluationCallback(TrainerCallback):
     """Evaluate frozen policy weights through Harbor before checkpoint selection."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
+    def __init__(
+        self,
+        *,
+        cohorts: list[dict],
+        timeout: float,
+        minimum_coverage: float,
+        daytona_api_key_env: str,
+        minimum_native_coverage: float,
+    ):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
-        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
-        # before the trainer acquires resources.
         for cohort in self.cohorts:
             kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
-            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
-                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
+            # Reject unknown image build modes before the trainer allocates GPUs.
+            DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
+        self.minimum_native_coverage = minimum_native_coverage
         self.daytona_api_key_env = daytona_api_key_env
 
-    async def collect_evaluation(self, state, *, trainer, pool):
-        client = trainer.inference_engine_client
-        if not client.enable_http_endpoint:
-            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
+    def _evaluation_cohorts(
+        self, step: int, export_path: str, *, model_name: str, api_base: str
+    ) -> list[dict]:
         cohorts = deepcopy(self.cohorts)
         for cohort in cohorts:
             job = cohort["job"]
-            job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
-            job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
+            job["job_name"] = f"step-{step}-{cohort['name']}"
+            job["jobs_dir"] = join_resource_path(export_path, "inline_harbor")
             for agent in job["agents"]:
-                agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
-                agent["model_alias"] = f"openai/{client.model_name}"
-                agent.setdefault("kwargs", {})["api_base"] = (
-                    f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
-                )
+                agent["model_name"] = f"openai/{export_path}/step-{step}"
+                agent["model_alias"] = f"openai/{model_name}"
+                agent.setdefault("kwargs", {})["api_base"] = api_base
+        return cohorts
+
+    async def collect_evaluation(self, state, *, trainer, pool):
+        started_at = time.perf_counter()
+        client = trainer.inference_engine_client
+        if not client.enable_http_endpoint:
+            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
+        cohorts = self._evaluation_cohorts(
+            state.global_step,
+            trainer.cfg.trainer.export_path,
+            model_name=client.model_name,
+            api_base=f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1",
+        )
         environment = os.environ.copy()
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
+        if telemetry := _harbor_telemetry_config():
+            for cohort in cohorts:
+                cohort["job"]["telemetry"] = telemetry
         async with asyncio.timeout(self.timeout):
             results = await collect_harbor(cohorts, pool, environment)
-        return {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
+        metrics = {
+            f"eval/harbor/{name}/{key}": value
+            for name, result in results.items()
+            for key, value in result.items()
+        }
+        metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at
+        return metrics
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        metrics["eval/selection_eligible"] = 1.0
+        # The counts cover the primary evaluation until Harbor results are added below.
+        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
             prefix = f"eval/harbor/{name}/"

@@ -114,7 +114,7 @@ def test_admin_can_use_elevated_profile(service, profile):
 def test_non_admin_can_use_unprivileged_profile(service, profile):
     """RESTRICTED/DEFAULT/SANDBOX/UNSPECIFIED need no authorization.
 
-    SANDBOX is un-gated on purpose: gVisor gives in-guest capabilities while
+    SANDBOX is un-gated on purpose: the sandbox runtime gives in-guest capabilities while
     isolating the host, so it is safe to hand out without the admin role.
     """
     resp = _as("user", "alice", service.launch_job, _launch("/alice/job", profile), None)
@@ -123,7 +123,7 @@ def test_non_admin_can_use_unprivileged_profile(service, profile):
 
 @pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, SANDBOX])
 def test_gvisor_profiles_rejected_on_accelerator_task(service, profile):
-    """gVisor cannot pass a GPU/TPU through, so an accelerator task is rejected."""
+    """The sandbox runtime gets no GPU/TPU, so an accelerator task is rejected."""
     req = _launch("/alice/job", profile)
     req.resources.device.gpu.count = 1
     with pytest.raises(ConnectError) as exc:

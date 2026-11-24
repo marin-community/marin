@@ -21,6 +21,14 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
+from skyrl_train.config.rollout_validation import (
+    FAMILY_COLUMN,
+    GROUPS_PER_FAMILY_KEY,
+    BatchPolicy,
+    minimum_family_pool_sizes,
+    validate_family_pools,
+    validate_groups_per_family,
+)
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
@@ -33,7 +41,6 @@ from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
-    BatchPolicy,
     Admission,
     AdmittedRollout,
     BufferSnapshot,
@@ -187,6 +194,7 @@ class TrainingContext:
         )
         batch_size = config.trainer.train_batch_size
         max_sample_batches = int(dynamic_sampling.max_sample_batches)
+        groups_per_family = validate_groups_per_family(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
             max_in_flight=config.trainer.rollout_buffer.max_in_flight,
@@ -194,7 +202,17 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
+            groups_per_family=groups_per_family,
         )
+        families: dict[str, str] = {}
+        if groups_per_family:
+            if not isinstance(dataset, PromptDataset) or FAMILY_COLUMN not in dataset.dataframe.column_names:
+                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in the training rows")
+            column = dataset.dataframe.with_format(None)[FAMILY_COLUMN]
+            families = {dataset.uid(index): family for index, family in enumerate(column)}
+            validate_family_pools(
+                groups_per_family, collections.Counter(families.values()), buffer_config.max_staleness_steps
+            )
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -218,6 +236,8 @@ class TrainingContext:
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
+                families=families,
+                family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -412,7 +432,9 @@ class TrainingContext:
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
+                        prompt = await self._uids_released.wait_for(
+                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
+                        )
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.

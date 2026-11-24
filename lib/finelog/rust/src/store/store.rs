@@ -5668,6 +5668,28 @@ mod tests {
         table.cleanup();
     }
 
+    /// The scan types strings as `Utf8View`, which DataFusion's pruning rewrite
+    /// of a prefix `LIKE` cannot compare with its `Utf8` bounds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn string_filters_run_beside_time_pruning() {
+        let table = TimeBoundedTable::new("column_bounds_like", false).await;
+        table
+            .assert_pruning_keeps_rows(&[
+                ("worker_id LIKE 'w-%'", 3),
+                ("worker_id LIKE 'w-2'", 1),
+                ("worker_id LIKE 'w-%' AND timestamp_ms >= 2000", 2),
+                // The optimizer turns `starts_with` into a prefix `LIKE`.
+                ("starts_with(worker_id, 'w-') AND timestamp_ms >= 2000", 2),
+                (
+                    "(worker_id LIKE 'w-1%' OR worker_id LIKE 'w-3%') AND timestamp_ms >= 2000",
+                    2,
+                ),
+                ("worker_id LIKE 'w-1%' OR timestamp_ms >= 3000", 3),
+            ])
+            .await;
+        table.cleanup();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn segments_without_column_bounds_are_always_scanned() {
         let table = TimeBoundedTable::new("column_bounds_absent", false).await;

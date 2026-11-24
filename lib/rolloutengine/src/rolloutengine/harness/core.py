@@ -17,15 +17,31 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
+OUTPUT_LIMIT_OPTION_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    """Check whether the model options can belong to the same conversation."""
+    return {key: value for key, value in previous.items() if key not in OUTPUT_LIMIT_OPTION_KEYS} == {
+        key: value for key, value in current.items() if key not in OUTPUT_LIMIT_OPTION_KEYS
+    }
+
 
 class HarnessCleanup(Protocol):
-    """The attempt's cleanup scope: it closes resources after the record is committed and graded."""
+    """The attempt's cleanup scope: it stops the agent before grading and releases what grading may use after it.
+
+    Each close runs within ``RolloutLimits.cleanup_timeout``. A failure does not change the recorded turns or the
+    grade. ``Rollout.metrics`` counts it, and ``run_task`` also adds it to the grade diagnostics.
+    """
 
     def push(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
-        """Run ``close`` when the attempt ends, within ``RolloutLimits.cleanup_timeout``.
+        """Run ``close`` when the harness ends, before grading; for example, to stop the agent."""
+        ...
 
-        A failure does not change the recorded turns or the grade. ``Rollout.metrics`` counts it, and
-        ``run_task`` also adds it to the grade diagnostics.
+    def push_after_grading(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        """Run ``close`` after grading, before the machines close.
+
+        This is for state that a grader may check, such as the terminal in which the agent left a service running.
         """
         ...
 
@@ -71,12 +87,17 @@ class ModelSession(Protocol):
         ...
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
+        ``options`` supplies the full options for the request. Only the output limits may change.
         """
         ...
 

@@ -187,11 +187,13 @@ function clearHistory() {
         @remove="removeConversation"
         @clear="clearHistory"
       />
-      <main class="flex min-w-0 flex-1 flex-col">
-        <div class="flex shrink-0 items-center gap-1 border-b border-surface-border px-4">
+      <main class="@container flex min-w-0 flex-1 flex-col">
+        <!-- Breakpoints here use the main column width (@container), not the viewport,
+             because the history panel takes part of the screen from md up. -->
+        <div class="flex shrink-0 items-center gap-1 border-b border-surface-border px-2 @lg:px-4">
           <button
             v-if="mode !== 'compare'"
-            class="mr-1 rounded-lg px-2 py-1 text-text-muted transition-colors hover:text-text md:hidden"
+            class="mr-1 shrink-0 rounded-lg px-2 py-1 text-text-muted transition-colors hover:text-text md:hidden"
             :class="{ 'bg-surface-sunken text-text': showHistory }"
             title="Conversation history"
             @click="showHistory = !showHistory"
@@ -200,23 +202,24 @@ function clearHistory() {
               <path d="M4 6h16M4 12h16M4 18h10" />
             </svg>
           </button>
-          <button
-            v-for="tab in ['chat', 'compare', 'completion'] as const"
-            :key="tab"
-            class="border-b-2 px-3 py-2 text-sm capitalize transition-colors"
-            :class="
-              mode === tab
-                ? 'border-accent font-semibold text-text'
-                : 'border-transparent text-text-muted hover:text-text-secondary'
-            "
-            @click="pickMode(tab)"
-          >
-            {{ tab }}
-          </button>
-          <div class="ml-auto"></div>
+          <div class="flex min-w-0 flex-1 overflow-x-auto">
+            <button
+              v-for="tab in ['chat', 'compare', 'completion'] as const"
+              :key="tab"
+              class="shrink-0 border-b-2 px-1.5 py-2 text-sm capitalize transition-colors @lg:px-3"
+              :class="
+                mode === tab
+                  ? 'border-accent font-semibold text-text'
+                  : 'border-transparent text-text-muted hover:text-text-secondary'
+              "
+              @click="pickMode(tab)"
+            >
+              {{ tab }}
+            </button>
+          </div>
           <button
             v-if="mode === 'chat'"
-            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
             :class="{ 'text-accent': shareState === 'copied', 'text-status-danger': shareState === 'failed' }"
             :disabled="!active.messages.length || shareState === 'sharing'"
             :aria-label="shareLabel"
@@ -229,11 +232,11 @@ function clearHistory() {
               <circle cx="18" cy="19" r="3" />
               <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" />
             </svg>
-            <span class="hidden sm:inline">{{ shareLabel }}</span>
+            <span class="hidden @4xl:inline">{{ shareLabel }}</span>
           </button>
           <button
             v-if="mode === 'chat' && info?.feedback"
-            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
             :disabled="!active.messages.length || chatView?.busy"
             title="Save a private report about a poor response to Marin storage"
             @click="reportDialog?.open()"
@@ -241,9 +244,10 @@ function clearHistory() {
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 22V4m0 0h12l-2 4 2 4H4" />
             </svg>
-            <span class="hidden sm:inline">Report issue</span>
+            <span class="hidden @4xl:inline">Report issue</span>
           </button>
-          <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+          <!-- In narrower columns, max tokens lives in the More options panel instead. -->
+          <label class="hidden shrink-0 items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary @3xl:flex">
             Max tokens
             <input
               v-model.number="params.maxTokens"
@@ -256,15 +260,16 @@ function clearHistory() {
             />
           </label>
           <button
-            class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
+            class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
             title="More options"
+            :aria-expanded="showParams"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
             </svg>
-            <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
+            <span class="hidden @3xl:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
         <div

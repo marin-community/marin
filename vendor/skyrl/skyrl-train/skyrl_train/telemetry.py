@@ -177,7 +177,8 @@ def _iris_execution_uid() -> str | None:
     return None
 
 
-def _iris_resources() -> dict[str, str]:
+def iris_resources() -> dict[str, str]:
+    """Read Iris resource identifiers from the current process environment."""
     task_with_attempt = os.environ.get("IRIS_TASK_ID")
     resources: dict[str, str] = {}
     if task_with_attempt:
@@ -231,7 +232,7 @@ def _ray_resources() -> dict[str, str]:
 
 def _resources(config: TelemetryConfig, role: str) -> dict[str, str]:
     resources = {
-        **_iris_resources(),
+        **iris_resources(),
         **_ray_resources(),
         "host": socket.gethostname(),
         "run_id": config.run_id or "",

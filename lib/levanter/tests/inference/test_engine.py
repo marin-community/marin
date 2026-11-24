@@ -5,10 +5,12 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import pytest
 from haliax import Axis
 
 import levanter.inference.engine as engine_module
-from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -87,3 +89,26 @@ def test_auto_page_sizing_uses_explicit_axis_resources(monkeypatch):
 
     assert service.config.max_pages is not None
     assert service.config.max_pages == service.config.max_seqs * service.config.max_pages_per_seq
+
+
+@pytest.mark.parametrize("max_rounds", [6, 32])
+def test_generate_decodes_through_short_context_limit(max_rounds):
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=10,
+                max_pages=4,
+                page_size=4,
+                max_rounds=max_rounds,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        result = engine.generate([Request([1], request_id=0, decode_params=params, n_generations=1)])
+    assert result.tokens == [[3] * 9]
