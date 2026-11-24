@@ -637,17 +637,17 @@ def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
         except BaseException:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             raise
-        if process.returncode:
-            raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
     return stdout
 
 
-def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
-    """Run one native step and return its last nonempty stdout line."""
+def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
+    """Run one native step and decode JSON from its last nonempty stdout line."""
     started = monotonic()
     try:
         output = _run_native_process(command, env=env, timeout=timeout).strip()
@@ -658,22 +658,19 @@ def _native_output(operation: str, command: list[str], *, env: dict[str, str], t
     logger.info("%s took %.2f s", operation, monotonic() - started)
     if not output:
         raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
-    return output.splitlines()[-1]
-
-
-def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
-    output = _native_output(operation, command, env=env, timeout=timeout)
     try:
-        return json.loads(output)
+        return json.loads(output.splitlines()[-1])
     except ValueError as error:
         raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
 def _native_json(operation: str, program: str, *args: str, timeout: int = 120):
     env = skyrl_cpu_environment()
+    for key in ("PYTHONIOENCODING", "PYTHONOPTIMIZE"):
+        env.pop(key, None)
     # Resolve and verify the frozen CPU venv before starting the composition deadline.
-    probe = skyrl_cpu_command("python", "-I", "-c", "import sys; print(sys.executable)")
-    path = _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
+    probe = skyrl_cpu_command("python", "-I", "-c", "import json,sys; print(json.dumps(sys.executable))")
+    path = _native_command_json("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
     interpreter = Path(path)
     expected = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv" / "bin"
     if interpreter.parent.resolve() != expected.resolve() or not interpreter.is_file():

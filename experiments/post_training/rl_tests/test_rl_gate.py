@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import fcntl
 import json
 import math
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic, sleep
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -557,6 +559,44 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
+@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
+def test_native_failure_stops_build_child(tmp_path, exit_early):
+    lock = tmp_path / "build.lock"
+    lock.touch()
+    child = (
+        "import fcntl,sys,time\n"
+        "with open(sys.argv[1], 'r+') as lock:\n"
+        "    fcntl.flock(lock, fcntl.LOCK_EX)\n"
+        "    print('ready', flush=True)\n"
+        "    time.sleep(8)\n"
+    )
+    wrapper = (
+        "import subprocess,sys\n"
+        "worker = subprocess.Popen([sys.executable, '-I', '-c', *sys.argv[1:3]],\n"
+        "                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)\n"
+        "assert worker.stdout.readline().strip() == 'ready'\n"
+        "print('build child ready', file=sys.stderr, flush=True)\n"
+        "sys.exit(7) if sys.argv[3] == 'True' else worker.wait()\n"
+    )
+    failure = "exited with status 7" if exit_early else "timed out after 2 s"
+    with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
+        gate._native_command_json(
+            "Prepare test environment",
+            [sys.executable, "-I", "-c", wrapper, child, str(lock), str(exit_early)],
+            env=gate.skyrl_cpu_environment(),
+            timeout=2,
+        )
+    deadline = monotonic() + 2
+    with lock.open("r+") as stream:
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert monotonic() < deadline, "native build child still holds the lock"
+                sleep(0.02)
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -690,7 +730,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if diagnostic == "bootstrap" and "import sys; print(sys.executable)" in command:
+                    if diagnostic == "bootstrap" and "import json,sys; print(json.dumps(sys.executable))" in command:
                         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                     if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
                         if diagnostic == "timeout":
