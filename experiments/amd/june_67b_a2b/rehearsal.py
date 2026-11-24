@@ -44,6 +44,7 @@ from levanter.trainer import TrainerConfig
 from rigging.log_setup import configure_logging
 
 from experiments.amd.june_67b_a2b.launch_2x_bs import AmdLaunchConfig2xBS, build_2x_bs_run_config
+from experiments.amd.june_67b_a2b.launch_env import check_launch_env
 from experiments.amd.june_67b_a2b.model import MOE_IMPLEMENTATION
 from experiments.amd.june_67b_a2b.train import GrugRunConfig, GrugTrainerConfig, _run_grug_local
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
@@ -374,6 +375,7 @@ def main() -> None:
     if args.distributed:
         # Before any JAX call that starts the backend; without explicit ids JAX gives each process one GPU.
         DistributedConfig(local_device_ids=list(range(args.local_devices))).initialize()
+    check_launch_env(jax.process_count())
     config = PHASES[args.phase](args)
     logger.info("phase %s run %s optimizer %s", args.phase, args.run_id, config.optimizer)
     _run_grug_local(config)

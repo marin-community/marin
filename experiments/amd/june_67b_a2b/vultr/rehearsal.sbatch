@@ -8,10 +8,10 @@
 #   sbatch -A openathena-ihodes -N2 -t 2:30:00 -J snowball-e2e -o logs/e2e/%x-%j.out \
 #     experiments/amd/june_67b_a2b/vultr/rehearsal.sbatch
 # PHASES (default "K D C R") picks phases; TAG names the runs (default: the job id); C_RUN renames the cooldown run.
+# STEPS overrides every phase's last step (a short smoke run: PHASES=R STEPS=30).
 set -uo pipefail
 cd "$SLURM_SUBMIT_DIR" || exit 1
-ROOT=$PWD
-WORK=/work/openathena-ihodes/asartran
+source experiments/amd/june_67b_a2b/vultr/launch_env.sh
 DATA=$WORK/snowball-data/snowball_v2_subset20
 VAL=$WORK/snowball-data/validation
 OUT=$WORK/e2e-rehearsal/runs
@@ -19,35 +19,7 @@ TAG=${TAG:-$SLURM_JOB_ID}
 PHASES=${PHASES:-K D C R}
 MAX_RESTARTS=${MAX_RESTARTS:-3}
 mkdir -p "$OUT" logs/e2e
-
-pp=$ROOT
-for d in "$ROOT"/lib/*/src; do pp=$pp:$d; done
-export PYTHONPATH=$pp
-PY=$WORK/rocm-extra-test/.venv/bin/python
-
-# Checkpoints keep many files open at once; 1024 is too low.
-ulimit -n 1048576 || ulimit -n "$(ulimit -Hn)"
-
-export RAGGED_DOT_IMPL=triton XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=none
-export LD_LIBRARY_PATH=$(echo "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep -v '^/opt/rocm' | paste -sd: -)
-# Pensando ANP RCCL net plugin; only the plugin is exposed, not the rest of the system ROCm 7.2 libraries.
-export NCCL_NET_PLUGIN=librccl-anp.so NCCL_IB_TC=104 NCCL_MIN_NCHANNELS=32 HSA_FORCE_FINE_GRAIN_PCIE=1 \
-  NCCL_GDR_FLUSH_DISABLE=1 NCCL_GDRCOPY_ENABLE=0 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IGNORE_CPU_AFFINITY=1 \
-  RCCL_GDR_FLUSH_GPU_MEM_NO_RELAXED_ORDERING=0
-ANP_DIR=/tmp/$USER/anp-$SLURM_JOB_ID
-srun --ntasks-per-node=1 bash -c "mkdir -p $ANP_DIR && ln -sf /opt/rocm-7.2.0/lib/librccl-anp.so $ANP_DIR/"
-export LD_LIBRARY_PATH=$ANP_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-# Tree+LL all-reduces across nodes can read a peer's input before it is written (2x loss on some steps).
-export NCCL_PROTO=${NCCL_PROTO:-Simple}
-export NCCL_DEBUG=${NCCL_DEBUG:-WARN} NCCL_DEBUG_SUBSYS=INIT,NET
-export XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1
-export TRITON_CACHE_DIR=/tmp/$USER/triton-$SLURM_JOB_ID XDG_CACHE_HOME=/tmp/$USER/xdg-$SLURM_JOB_ID
-# /home is over quota; keep W&B's files on /work.
-export WANDB_API_KEY=$(cat $WORK/secrets/wandb_api_key) WANDB_ENTITY=marin-community WANDB_RESUME=allow
-export WANDB_DIR=$WORK/e2e-rehearsal/wandb WANDB_CACHE_DIR=$WORK/e2e-rehearsal/wandb-cache \
-  WANDB_CONFIG_DIR=$WORK/e2e-rehearsal/wandb-config WANDB_DATA_DIR=$WORK/e2e-rehearsal/wandb-data
-mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$WANDB_DATA_DIR"
-BASE_XLA_FLAGS="--xla_gpu_enable_command_buffer="
+BASE_XLA_FLAGS=$XLA_FLAGS
 # Bitwise resume comparison needs deterministic reductions in K and R.
 DET_XLA_FLAGS="$BASE_XLA_FLAGS --xla_gpu_deterministic_ops=true"
 
@@ -61,10 +33,9 @@ run_phase() {
   local attempt=0 rc=0
   while :; do
     echo "=== $name attempt $attempt start $(date -u +%FT%T)"
-    XLA_FLAGS="$flags" srun --ntasks-per-node=1 --gpus-per-node=8 --kill-on-bad-exit=1 \
-      --output="logs/e2e/$name-%t.log" \
+    XLA_FLAGS="$flags" srun_with_startup_retry "logs/e2e/$name" \
       $PY -m experiments.amd.june_67b_a2b.rehearsal --log-dir "logs/e2e/$name-jsonlogs" --data-root "$DATA" \
-        --validation-root "$VAL" --output-root "$OUT" "$@"
+        --validation-root "$VAL" --output-root "$OUT" ${STEPS:+--steps "$STEPS"} "$@"
     rc=$?
     echo "=== $name attempt $attempt exit $rc end $(date -u +%FT%T)"
     for t in 0 1; do mv -f "logs/e2e/$name-$t.log" "logs/e2e/$name-$t.attempt$attempt.log" 2>/dev/null; done
