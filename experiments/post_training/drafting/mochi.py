@@ -10,7 +10,7 @@ import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
@@ -19,6 +19,7 @@ from time import monotonic
 
 import requests
 from datasets import Dataset, load_from_disk
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, lower
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.inference.config import InferenceModelConfig, ServingGeometry
@@ -139,7 +140,7 @@ def activation_cache_key(teacher_identity: str, prepared: ArtifactStep, recipe: 
         recipe.extraction_taps,
         recipe.teacher_replicas,
     )
-    return hashlib.sha256(json.dumps(asdict(inputs), sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(canonical_json(inputs).encode()).hexdigest()
 
 
 def cached_recipe(recipe: DraftRecipe, sample: Sample) -> DraftRecipe:
@@ -320,6 +321,27 @@ def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaun
     )
 
 
+def _cache_activations(
+    teacher: str,
+    recipe: DraftRecipe,
+    launch: IrisVllmLaunch,
+    dataset: Dataset,
+    root: StoragePath,
+    scratch: Path,
+) -> StoragePath:
+    with ExitStack() as teacher_runtime, iris_vllm_followers(launch):
+
+        def populate(cache: StoragePath) -> None:
+            logger.info("Caching Mochi teacher activations in %s", cache)
+            hidden = scratch / HIDDEN_STATES_DIR
+            hidden.mkdir()
+            start_iris_vllm_followers(launch)
+            server = teacher_runtime.enter_context(_teacher_environment(teacher, recipe, launch, hidden))
+            _cache_rows(server.server_url, dataset, cache, recipe)
+
+        return get_or_build_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW, populate=populate)
+
+
 def train_mochi(
     *,
     teacher: str,
@@ -364,17 +386,7 @@ def train_mochi(
         if root.scheme not in ("s3", "gs"):
             raise ValueError(f"Mochi needs a temporary object-storage bucket, got {root}")
 
-        with ExitStack() as teacher_runtime, iris_vllm_followers(launch):
-
-            def populate(cache: StoragePath) -> None:
-                logger.info("Caching Mochi teacher activations in %s", cache)
-                hidden = scratch / HIDDEN_STATES_DIR
-                hidden.mkdir()
-                start_iris_vllm_followers(launch)
-                server = teacher_runtime.enter_context(_teacher_environment(teacher, recipe, launch, hidden))
-                _cache_rows(server.server_url, dataset, cache, recipe)
-
-            cache = get_or_build_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW, populate=populate)
+        cache = _cache_activations(teacher, recipe, launch, dataset, root, scratch)
         logger.info("Training on Mochi teacher activations in %s", cache)
         ready = replace(draft, run=partial(_train_cached, cache=CachedPrefill(scratch, cache, split)))
         StepRunner().run([lower(ready)])

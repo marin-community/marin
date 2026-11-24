@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 30 * 60.0
 _POLL_SECONDS = 1.0
+_MAX_POLL_SECONDS = 30.0
 _MASTER_PORT = 29500
 _VLLM_HOST_IP_ENV = "VLLM_HOST_IP"
 _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
@@ -61,11 +62,9 @@ class VllmCoordinatorActor:
             if self._state is _GangState.WAITING:
                 self._state = _GangState.STARTED
 
-    def startup_decision(self) -> bool | None:
+    def state(self) -> _GangState:
         with self._lock:
-            if self._state is _GangState.WAITING:
-                return None
-            return self._state is _GangState.STARTED
+            return self._state
 
     def request_shutdown(self) -> None:
         with self._lock:
@@ -187,26 +186,26 @@ def wait_for_iris_vllm_start(launch: IrisGangIdentity) -> bool:
     if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not wait for follower startup")
     client = _coordinator_client(launch.coordinator_name)
-    decision: bool | None = None
+    state = _GangState.WAITING
 
-    def refresh_decision() -> bool:
-        nonlocal decision
-        decision = client.startup_decision()
+    def refresh_state() -> bool:
+        nonlocal state
+        state = client.state()
         return True
 
-    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=30.0)
-    while decision is None:
-        _wait_until(refresh_decision, error_message="Timed out contacting the vLLM leader")
-        if decision is None:
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=_MAX_POLL_SECONDS)
+    while state is _GangState.WAITING:
+        _wait_until(refresh_state, error_message="Timed out contacting the vLLM leader")
+        if state is _GangState.WAITING:
             time.sleep(polling.next_interval())
-    return decision
+    return state is _GangState.STARTED
 
 
 def wait_for_iris_vllm_shutdown(
     launch: IrisGangIdentity,
     check_alive: Callable[[], None],
     *,
-    maximum_poll_seconds: float = 30.0,
+    maximum_poll_seconds: float = _MAX_POLL_SECONDS,
 ) -> None:
     """Keep a follower alive until the leader requests final shutdown."""
     if launch.task_index == 0:
@@ -355,7 +354,7 @@ def _wait_until(
                 return False
             raise
 
-    ExponentialBackoff(initial=_POLL_SECONDS, maximum=30.0).wait_until_or_raise(
+    ExponentialBackoff(initial=_POLL_SECONDS, maximum=_MAX_POLL_SECONDS).wait_until_or_raise(
         retry_transient_actor_error,
         timeout=Duration.from_seconds(_TIMEOUT_SECONDS),
         error_message=error_message,

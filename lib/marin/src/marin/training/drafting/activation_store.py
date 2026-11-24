@@ -34,7 +34,7 @@ def get_or_build_activation_cache(
     """Return a completed generation, building it under a shared lease on a miss."""
     marker = conditional_object(str(root / "complete.json"))
 
-    def completed(entry: VersionedBytes | None) -> StoragePath | None:
+    def reusable_generation(entry: VersionedBytes | None) -> StoragePath | None:
         if entry is None:
             return None
         record = _ActivationGeneration(**json.loads(entry.data))
@@ -42,21 +42,21 @@ def get_or_build_activation_cache(
             return root / record.generation
         return None
 
-    if path := completed(marker.read()):
+    if path := reusable_generation(marker.read()):
         return path
 
     root.mkdirs()
     lease = create_lock(str(root / "populate.lock"))
     backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
     while not lease.try_acquire():
-        if path := completed(marker.read()):
+        if path := reusable_generation(marker.read()):
             return path
         sleep(backoff.next_interval())
 
     try:
         with lease_refresh(lease):
             previous = marker.read()
-            if path := completed(previous):
+            if path := reusable_generation(previous):
                 return path
             # The oldest file determines the usable window. A new generation
             # lets retries finish without extending the lifetime of old rows.
