@@ -626,24 +626,25 @@ def _native_diagnostic(error: OSError | subprocess.CalledProcessError | subproce
 
 
 def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int) -> str:
-    with subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        env=env,
-        start_new_session=True,
-    ) as process:
+    # File-backed output lets the wrapper exit even when a build child still has its streams open.
+    with (
+        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stdout,
+        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stderr,
+        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env, start_new_session=True) as process,
+    ):
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
-            if process.returncode:
-                raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
-        except BaseException:
+            returncode = process.wait(timeout=timeout)
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, command)
+        except BaseException as error:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+                stderr.seek(0)
+                error.stderr = stderr.read()
             raise
-    return stdout
+        stdout.seek(0)
+        return stdout.read()
 
 
 def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):

@@ -572,13 +572,15 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
     )
     wrapper = (
         "import subprocess,sys\n"
-        "worker = subprocess.Popen([sys.executable, '-I', '-c', *sys.argv[1:3]],\n"
-        "                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)\n"
+        "worker = subprocess.Popen([sys.executable, '-I', '-c', *sys.argv[1:3]], stdout=subprocess.PIPE, text=True)\n"
         "assert worker.stdout.readline().strip() == 'ready'\n"
         "print('build child ready', file=sys.stderr, flush=True)\n"
-        "sys.exit(7) if sys.argv[3] == 'True' else worker.wait()\n"
+        "if sys.argv[3] == 'True':\n"
+        "    sys.exit(7)\n"
+        "worker.wait()\n"
     )
     failure = "exited with status 7" if exit_early else "timed out after 2 s"
+    deadline = monotonic() + 6
     with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
         gate._native_command_json(
             "Prepare test environment",
@@ -586,7 +588,6 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
             env=gate.skyrl_cpu_environment(),
             timeout=2,
         )
-    deadline = monotonic() + 2
     with lock.open("r+") as stream:
         while True:
             try:
@@ -595,6 +596,7 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
             except BlockingIOError:
                 assert monotonic() < deadline, "native build child still holds the lock"
                 sleep(0.02)
+    assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
 @pytest.mark.parametrize(
