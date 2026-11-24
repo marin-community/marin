@@ -7,14 +7,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 
 import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import NetworkPolicy
-from skyrlrecipe.declared import EvaluationProfile
+from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND, EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 from taskcompendium.importers.harbor.config import EnvironmentConfig, read_task_config
 from taskcompendium.importers.harbor.package import JobSettings, lower_package
@@ -38,17 +40,17 @@ CHECKPOINT_DAYTONA_TTL = 90
 AGENT_SETUP_TIMEOUT = 360
 AGENT_TIMEOUT = 600
 CLEANUP_TIMEOUT = 30
-CHECKPOINT_HARNESS = "terminus-2"
-CHECKPOINT_HARNESS_OPTIONS = {"max_main_turns": 32, "setup_timeout": AGENT_SETUP_TIMEOUT}
+CHECKPOINT_HARNESS_OPTIONS = MappingProxyType({"max_main_turns": 32, "setup_timeout": AGENT_SETUP_TIMEOUT})
 CHECKPOINT_PROFILE = EvaluationProfile(
     n_samples_per_prompt=1,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, max_generate_length=CHECKPOINT_REPLY_TOKENS),
 )
-_COHORT_DATASETS = {
-    "bfcl_parity": BFCL_PARITY_PI,
-    "swebench_verified": SWEBENCH_VERIFIED_MINI_SWE,
-    "openthoughts_tblite": OT_TBLITE_3TRIAL,
-}
+_BFCL = "bfcl_parity"
+_SWEBENCH = "swebench_verified"
+_TBLITE = "openthoughts_tblite"
+_COHORT_DATASETS = MappingProxyType(
+    {_BFCL: BFCL_PARITY_PI, _SWEBENCH: SWEBENCH_VERIFIED_MINI_SWE, _TBLITE: OT_TBLITE_3TRIAL}
+)
 
 
 @dataclass(frozen=True)
@@ -79,16 +81,16 @@ def checkpoint_cohorts() -> tuple[CheckpointCohort, ...]:
     """Load the pinned members and the run policy for each cohort."""
     packages = yaml.safe_load(Path(__file__).with_name("rl_checkpoint_cohorts.yaml").read_text())
     return (
-        CheckpointCohort("bfcl_parity", tuple(packages["bfcl_parity"]), 1800, verifier_timeout=300),
+        CheckpointCohort(_BFCL, tuple(packages[_BFCL]), 1800, verifier_timeout=300),
         CheckpointCohort(
-            "swebench_verified",
-            tuple(packages["swebench_verified"]),
+            _SWEBENCH,
+            tuple(packages[_SWEBENCH]),
             4500,
             verifier_timeout=3000,
         ),
         CheckpointCohort(
-            "openthoughts_tblite",
-            tuple(packages["openthoughts_tblite"]),
+            _TBLITE,
+            tuple(packages[_TBLITE]),
             5200,
             verifier_timeout_cap=3600,
         ),
@@ -97,7 +99,7 @@ def checkpoint_cohorts() -> tuple[CheckpointCohort, ...]:
 
 def _machine(environment: EnvironmentConfig, network: NetworkPolicy) -> MachineRuntimeSpec:
     return MachineRuntimeSpec(
-        backend="daytona-eval",
+        backend=DAYTONA_EVAL_BACKEND,
         network=network,
         cpus=environment.cpus,
         memory_mb=environment.memory_mb,
@@ -139,7 +141,7 @@ def _rollout_spec(
         verifier_machine = _machine(verifier, NetworkPolicy.ALLOW if verifier.allow_internet else NetworkPolicy.DENY)
     return TaskRolloutSpec(
         task=task,
-        harness=CHECKPOINT_HARNESS,
+        harness=TERMINUS_HARNESS,
         task_machine=_machine(config.environment, lowered.episode.network),
         verifier_machine=verifier_machine,
         limits=RolloutLimits(

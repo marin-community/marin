@@ -2476,6 +2476,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
 
 @pytest.mark.parametrize("relay", ["ready", "failed", "unsupported"])
 async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(relay):
+    relay_port = 9000
     relay_commands = []
     verifier_users = []
 
@@ -2532,10 +2533,10 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
                 return HttpResponse(200, b"{}")
 
             async with asyncio.TaskGroup() as group:
-                service = serve_http(self.machine, handler, port=9000, task_group=group)
+                service = serve_http(self.machine, handler, port=relay_port, task_group=group)
                 if relay == "ready":
                     async with service as base_url:
-                        assert base_url == "http://127.0.0.1:9000"
+                        assert base_url == f"http://127.0.0.1:{relay_port}"
                 else:
                     error = ValueError if relay == "failed" else UnsupportedMachineSpec
                     with pytest.raises(error, match=r"Relay startup failed|require persistent process sessions"):

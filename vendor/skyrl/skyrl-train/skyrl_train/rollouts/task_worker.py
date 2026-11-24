@@ -31,6 +31,7 @@ from rolloutengine.models import (
     ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
+    Model,
     ModelRequest,
     ModelTurn,
     RolloutContractError,
@@ -125,7 +126,7 @@ async def _tokenize(
     result = await inference.tokenize({"json": body, "headers": {}})
     if "error" in result:
         code = result["error"].get("code")
-        raise PromptTokenizationError(code if type(code) is int else None)
+        raise PromptTokenizationError(code if isinstance(code, int) else None)
     return result
 
 
@@ -214,6 +215,38 @@ async def _model_turn(
     )
 
 
+def _daytona_diagnostics(error: DaytonaError) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {"provider_sdk_call": "unknown"}
+    status = error.status_code
+    if isinstance(status, int) and 100 <= status <= 599:
+        diagnostics["provider_status_code"] = status
+    rate_limits = {
+        name.lower(): int(value)
+        for name, value in (error.headers or {}).items()
+        if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
+        and isinstance(value, str)
+        and value.isascii()
+        and value.isdecimal()
+        and len(value) <= 12
+    }
+    if rate_limits:
+        diagnostics["provider_rate_limits"] = rate_limits
+    # A compound provider operation can span several SDK calls. The SDK may suppress the cause's traceback.
+    nested_error: BaseException | None = error
+    seen = set()
+    while nested_error is not None and id(nested_error) not in seen:
+        seen.add(id(nested_error))
+        traceback = nested_error.__traceback__
+        while traceback is not None:
+            frame = traceback.tb_frame
+            call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
+            if call in DAYTONA_DIAGNOSTIC_CALLS:
+                diagnostics["provider_sdk_call"] = ".".join(call)
+            traceback = traceback.tb_next
+        nested_error = nested_error.__cause__ or nested_error.__context__
+    return diagnostics
+
+
 def _failed_rollout(
     interruption: GradedRolloutInterrupted,
     lowered: TaskRolloutSpec,
@@ -242,36 +275,8 @@ def _failed_rollout(
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
-        provider_error = error.__cause__
-        if isinstance(provider_error, DaytonaError):
-            if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
-                diagnostics["provider_status_code"] = provider_error.status_code
-            rate_limits = {
-                name.lower(): int(value)
-                for name, value in (provider_error.headers or {}).items()
-                if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-                and isinstance(value, str)
-                and value.isascii()
-                and value.isdecimal()
-                and len(value) <= 12
-            }
-            if rate_limits:
-                diagnostics["provider_rate_limits"] = rate_limits
-            # This identifies an SDK call, not the HTTP phase of a compound operation.
-            diagnostics["provider_sdk_call"] = "unknown"
-            nested_error: BaseException | None = provider_error
-            seen = set()
-            while nested_error is not None and id(nested_error) not in seen:
-                seen.add(id(nested_error))
-                traceback = nested_error.__traceback__
-                while traceback is not None:
-                    frame = traceback.tb_frame
-                    call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
-                    if call in DAYTONA_DIAGNOSTIC_CALLS:
-                        diagnostics["provider_sdk_call"] = ".".join(call)
-                    traceback = traceback.tb_next
-                # The SDK translates HTTP errors with `raise ... from None`.
-                nested_error = nested_error.__cause__ or nested_error.__context__
+        if isinstance(error.__cause__, DaytonaError):
+            diagnostics.update(_daytona_diagnostics(error.__cause__))
     if isinstance(error, TimeoutError):
         exception_type = {
             RolloutOperation.ATTEMPT: "TrialTimeoutError",
@@ -334,7 +339,27 @@ def _failed_rollout(
     )
 
 
-def _confirmed_agent_result(result: TrainingRollout) -> TrainingRollout:
+async def _run_task_attempt(engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, attempt_id: str) -> TrainingRollout:
+    try:
+        result = training_rollout(await engine.run_task(spec, model, run_id=attempt_id), spec)
+    except GradedRolloutInterrupted as interruption:
+        result = _failed_rollout(interruption, spec)
+    task = spec.task
+    if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+        # Before group grading, so a malformed rollout never enters a GenRM comparison.
+        result = reject_malformed_reasoning(result)
+    if (
+        isinstance(task.grader, NoGrader)
+        and result.grade.status == Outcome.UNAVAILABLE
+        and result.failure is None
+        and result.steps
+        and not any(step.transition.grade is not None for step in result.steps)
+    ):
+        return replace(result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics))
+    return result
+
+
+def _reject_unconfirmed_cleanup(result: TrainingRollout) -> TrainingRollout:
     if not result.grade.diagnostics.get("cleanup_errors"):
         return result
     grade = replace(
@@ -509,27 +534,11 @@ class TaskRolloutWorker:
                 self.training_machine_slots if phase == "train" and lowered.task_machine is not None else nullcontext()
             )
             while True:
-                try:
-                    async with machine_slots, self.task_slots:
-                        result = training_rollout(await engine.run_task(lowered, model, run_id=attempt_id), lowered)
-                except GradedRolloutInterrupted as interruption:
-                    result = _failed_rollout(interruption, lowered)
-                if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
-                    # Before group grading, so a malformed rollout never enters a GenRM comparison.
-                    result = reject_malformed_reasoning(result)
-                if (
-                    isinstance(task.grader, NoGrader)
-                    and result.grade.status == Outcome.UNAVAILABLE
-                    and result.failure is None
-                    and result.steps
-                    and not any(step.transition.grade is not None for step in result.steps)
-                ):
-                    result = replace(
-                        result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
-                    )
+                async with machine_slots, self.task_slots:
+                    result = await _run_task_attempt(engine, lowered, model, attempt_id)
                 if not external_agent:
                     return result
-                result = _confirmed_agent_result(result)
+                result = _reject_unconfirmed_cleanup(result)
                 if self.task_health_export is not None and phase == "train":
                     if receipt := attempt_receipt(
                         attempt_id, lowered, result, task_digest=None if identity is None else identity.task_digest

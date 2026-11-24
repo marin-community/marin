@@ -53,7 +53,8 @@ from rolloutengine.models import RolloutEnded
 logger = logging.getLogger(__name__)
 
 TEMPLATES = Path(__file__).parent / "templates"
-SESSION_NAME = "terminus-2"
+TERMINUS_HARNESS = "terminus-2"
+SESSION_NAME = TERMINUS_HARNESS
 VLLM_CONTEXT_SAFETY_BUFFER = 8
 """Tokens that Harbor keeps free below the server's ``max_model_len``, against off-by-one prompt renderings."""
 MAX_COMMAND_DURATION = 60

@@ -13,6 +13,8 @@ from pydantic import AfterValidator, Field, NonNegativeInt, PlainSerializer, Pos
 from .model import FrozenMap, NumberMap, Section, SectionMap, thaw, unset_field
 from .sampling import EvalSamplingParams
 
+DAYTONA_EVAL_BACKEND = "daytona-eval"
+
 
 class TeacherModel(Section):
     path: str

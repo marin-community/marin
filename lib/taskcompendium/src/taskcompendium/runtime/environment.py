@@ -25,7 +25,10 @@ _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 
 
 def environment_identity(requirements: EnvironmentRequirements) -> tuple[str | None, str | None]:
-    """Identify the image and the ordered setup commands in an attempt receipt."""
+    """Return the image identity and space-separated setup command digests.
+
+    Each is None when the task has no corresponding image or setup commands.
+    """
     image = requirements.docker_image
     if requirements.docker_build is not None:
         image = "build:sha256:" + canonical_sha256(requirements.docker_build.model_dump(mode="json"))

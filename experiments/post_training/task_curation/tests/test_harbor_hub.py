@@ -120,16 +120,9 @@ def test_acquisition_preserves_native_archives_and_resumes_downloads(tmp_path, r
     assert registry.requests == {"one": 1, "two": 2}
 
 
-def test_acquisition_rejects_modified_package_without_publishing_archive(tmp_path, registry):
-    registry.archive = registry.modified_archive
-    output = tmp_path / "output"
-    with pytest.raises(ValueError):
-        harbor_hub.acquire_release(RELEASE, StoragePath(str(output)), REFS[:1])
-    assert not output.exists()
-
-
-def test_acquisition_rejects_archive_with_an_unverified_file(tmp_path, registry):
-    registry.archive = registry.archive_with_extra_file
+@pytest.mark.parametrize("extra_file", [False, True], ids=["modified-file", "extra-file"])
+def test_acquisition_rejects_unverified_archive_without_publishing(tmp_path, registry, extra_file):
+    registry.archive = registry.archive_with_extra_file if extra_file else registry.modified_archive
     output = tmp_path / "output"
     with pytest.raises(ValueError):
         harbor_hub.acquire_release(RELEASE, StoragePath(str(output)), REFS[:1])

@@ -206,7 +206,7 @@ def create_ray_wrapped_inference_engines_from_config(
         # engine, so flag-off engine init is byte-identical to today (G1). When > 1 it is
         # threaded into vllm.LLM / AsyncEngineArgs as a native EngineArgs kwarg. DCP rides
         # the TP GPUs and is NOT part of any GPU/placement math (G4). Reaches both the
-        # Training entrypoints use this shared config-assembly seam (G5).
+        # Training entrypoints share this config assembly.
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),
@@ -689,7 +689,6 @@ class BasePPOExp:
 
 @ray.remote(num_cpus=1, max_retries=0)
 def skyrl_entrypoint(cfg: DictConfig):
-    # The trainer runs in a separate Ray task.
     exp = BasePPOExp(cfg)
     exp.run()
 

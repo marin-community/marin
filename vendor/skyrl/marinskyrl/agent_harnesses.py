@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 from rolloutengine.agents.model_relay import PromptTokenizer
 from rolloutengine.agents.pi.agent import PiOptions, PiThinking, PiThinkingFormat, pi_harness
-from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
+from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS, TerminusOptions, TerminusParser, terminus_harness
 from rolloutengine.harness.core import Harness
 
 PI_HARNESS = "pi"
-TERMINUS_HARNESS = "terminus-2"
 
 
 class PiSettings(BaseModel):

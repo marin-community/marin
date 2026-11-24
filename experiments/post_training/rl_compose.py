@@ -48,6 +48,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
@@ -58,7 +59,6 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_checkpoint_eval import (
     CHECKPOINT_DAYTONA_TTL,
-    CHECKPOINT_HARNESS,
     CHECKPOINT_HARNESS_OPTIONS,
     CHECKPOINT_PROFILE,
     CHECKPOINT_REPLY_TOKENS,
@@ -470,6 +470,28 @@ def _refuse_judged(summary: dict, filename: str) -> None:
         raise click.BadParameter("task selections must contain no AI-judge-graded tasks")
 
 
+def _checkpoint_session_patch(config: RecipePatch) -> RecipePatch:
+    budget = config.context_budget
+    assert budget is not None
+    if CHECKPOINT_REPLY_TOKENS >= budget.effective_serving_window_tokens:
+        raise click.BadParameter("Checkpoint reply tokens must leave room for input in the serving window")
+    daytona = {
+        "eval_api_key_env": DAYTONA_EVAL_API_KEY_ENV,
+        "eval_ttl_minutes": CHECKPOINT_DAYTONA_TTL,
+        "eval_image_build": "declarative",
+    }
+    if get_path(config.to_skyrl(), "environment.task_sessions.daytona.api_key_env") is MISSING:
+        daytona.update(api_key_env=DAYTONA_EVAL_API_KEY_ENV, ttl_minutes=CHECKPOINT_DAYTONA_TTL)
+    return RecipePatch(
+        environment=sections.Environment(
+            task_sessions={
+                "daytona": daytona,
+                "agent_harnesses": {TERMINUS_HARNESS: dict(CHECKPOINT_HARNESS_OPTIONS)},
+            }
+        )
+    )
+
+
 def run_spec(
     preset: presets.Preset,
     *,
@@ -570,27 +592,7 @@ def run_spec(
                 schedule=workload.additional_schedule,
             )
     if preset.checkpoint_evaluation:
-        budget = config.context_budget
-        assert budget is not None
-        if CHECKPOINT_REPLY_TOKENS >= budget.effective_serving_window_tokens:
-            raise click.BadParameter("Checkpoint reply tokens must leave room for input in the serving window")
-        daytona = {
-            "eval_api_key_env": DAYTONA_EVAL_API_KEY_ENV,
-            "eval_ttl_minutes": CHECKPOINT_DAYTONA_TTL,
-            "eval_image_build": "declarative",
-        }
-        if get_path(authored, "environment.task_sessions.daytona.api_key_env") is MISSING:
-            daytona.update(api_key_env=DAYTONA_EVAL_API_KEY_ENV, ttl_minutes=CHECKPOINT_DAYTONA_TTL)
-        config = config.merge(
-            RecipePatch(
-                environment=sections.Environment(
-                    task_sessions={
-                        "daytona": daytona,
-                        "agent_harnesses": {CHECKPOINT_HARNESS: CHECKPOINT_HARNESS_OPTIONS},
-                    }
-                )
-            )
-        )
+        config = config.merge(_checkpoint_session_patch(config))
         for cohort in preset.checkpoint_evaluation:
             evaluation_data.append(
                 (cohort.name, (ArtifactDataSource(checkpoint_tasks(cohort), relative_path=CHECKPOINT_TASKS_FILENAME),))

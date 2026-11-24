@@ -73,7 +73,10 @@ async def test_terminus_main_turn_limit_keeps_the_last_command():
 
     assert without_stream(model.requests) == recorded_requests(recorded["model"])[:1]
     assert [len(conversation.steps) for conversation in rollout.conversations] == [1]
-    assert any("send-keys" in command.get("command", "") for command in machine.commands)
+    command = next(
+        command for command in recorded_commands(recorded["machine"]) if "send-keys" in command.get("command", "")
+    )
+    assert command in machine.commands
 
 
 async def test_terminus_reply_cut_after_its_context_summary_ends_its_attempt():

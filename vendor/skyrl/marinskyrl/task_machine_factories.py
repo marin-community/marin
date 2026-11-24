@@ -10,14 +10,12 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
+from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND
 
-DAYTONA_EVAL_BACKEND = "daytona-eval"
 
-
-def _daytona_factory(api_key_env: str, ttl: int, image_build: DaytonaImageBuild) -> DaytonaMachineFactory:
-    api_key = os.environ[api_key_env]
+def _daytona_factory(api_key: str, ttl: int, image_build: DaytonaImageBuild) -> DaytonaMachineFactory:
     if not api_key:
-        raise ValueError(f"Missing Daytona credential: {api_key_env}")
+        raise ValueError("Daytona requires a nonempty API key")
 
     def client() -> AsyncDaytona:
         return AsyncDaytona(DaytonaConfig(api_key=api_key))
@@ -33,10 +31,12 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     daytona = task_sessions.get("daytona")
     if daytona is not None:
         image_build = DaytonaImageBuild(daytona.get("image_build", DaytonaImageBuild.SNAPSHOT))
-        factories[Backend.DAYTONA] = _daytona_factory(daytona.api_key_env, int(daytona.ttl_minutes), image_build)
-        if eval_key := daytona.get("eval_api_key_env"):
+        factories[Backend.DAYTONA] = _daytona_factory(
+            os.environ[daytona.api_key_env], int(daytona.ttl_minutes), image_build
+        )
+        if evaluation_key_env := daytona.get("eval_api_key_env"):
             factories[DAYTONA_EVAL_BACKEND] = _daytona_factory(
-                eval_key,
+                os.environ[evaluation_key_env],
                 int(daytona.get("eval_ttl_minutes", daytona.ttl_minutes)),
                 DaytonaImageBuild(daytona.get("eval_image_build", image_build)),
             )

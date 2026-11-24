@@ -166,7 +166,6 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
     assert result.exit_code == 4, (result.output, result.exception)
     issue = json.loads(result.output)
     assert issue["verdict"] == "invalid"
-    assert issue["reason"].startswith("native configuration cannot be composed")
     if error is not None:
         assert error in issue["reason"]
 

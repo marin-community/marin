@@ -20,7 +20,7 @@ HARNESS_SOURCES = {
 # what an episode is graded on; bump the harness's revision in EPISODE_HARNESS_REVISIONS and update its pin.
 PINNED = {
     "shell": ("2026.11.23.1", "1b77535d3f21ef3ec4fc91d6a2d7c161acb990b6b5ada1a0a23b1f02c8bce2e9"),
-    "terminus-2": ("2026.11.23.1", "5cbfef72b3da4fbd5d81514d8249db9352d458ad5b6b887332afe56eae3db364"),
+    "terminus-2": ("2026.11.23.1", "8c4a6367cd3443f5e1df83aa456af04d64e9b4350cc0c9465672d7eb8edb5da8"),
     "pi": ("2026.11.23.1", "f86690872306389cbcbb5697ae410dc0b5c28a40ad2c2ef83439970de5cdda38"),
     "mini-swe-agent": ("2026.11.23.1", "c34f776312ed1608f2cfdf1ad8fa7504397bfc5c2ddc8b482fd8663657d122d4"),
 }
