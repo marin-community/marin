@@ -26,7 +26,9 @@ import ray
 import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
+from megatron.core.models.common.embeddings.rope_utils import apply_rotary_pos_emb
 from megatron.core.transformer.module import Float16Module
+from megatron.core.transformer.transformer_config import TransformerConfig
 from omegaconf import OmegaConf, open_dict
 from ray.util.placement_group import placement_group
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -41,6 +43,7 @@ from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.models.grug_megatron import packed_rotary_pos_emb
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
 from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.training_batch import TrainingInputBatch
@@ -77,6 +80,37 @@ from tests.gpu.grug_serving import (
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
 from tests.gpu.utils import init_worker_with_type, import_worker
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
+
+
+@pytest.mark.parametrize("cp_size", [1, 2, 4])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("rotary_interleaved", [False, True])
+@pytest.mark.parametrize("frequency_layout", ["max_length", "packed"])
+def test_packed_rope_matches_megatron(cp_size, dtype, rotary_interleaved, frequency_layout):
+    # CPU tensors need the Megatron environment, which the Grug nightly provides.
+    lengths = torch.tensor([8, 24, 40], dtype=torch.int32)
+    cumulative = torch.cat((torch.zeros(1, dtype=torch.int32), lengths.cumsum(0, dtype=torch.int32)))
+    frequency_count = int(lengths.max() if frequency_layout == "max_length" else lengths.sum())
+    generator = torch.Generator().manual_seed(17)
+    freqs = torch.randn(frequency_count, 1, 1, 8, generator=generator)
+    config = TransformerConfig(
+        num_layers=1,
+        hidden_size=32,
+        num_attention_heads=2,
+        apply_rope_fusion=False,
+        rotary_interleaved=rotary_interleaved,
+    )
+    for rank in range(cp_size):
+        group = SimpleNamespace(size=lambda: cp_size, rank=lambda rank=rank: rank)
+        x = torch.randn(int(lengths.sum()) // cp_size, 2, 16, generator=generator, dtype=dtype, requires_grad=True)
+        actual = packed_rotary_pos_emb(x, freqs, config=config, cu_seqlens=cumulative, cp_group=group)
+        expected = apply_rotary_pos_emb(x, freqs, config=config, cu_seqlens=cumulative, cp_group=group)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        upstream = torch.randn(x.shape, generator=generator, dtype=dtype)
+        (actual_grad,) = torch.autograd.grad(actual, (x,), upstream)
+        (expected_grad,) = torch.autograd.grad(expected, (x,), upstream)
+        torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
+
 
 
 def _spot_check_name(suffix: str) -> str:

@@ -32,7 +32,7 @@ from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 from megatron.core.extensions.transformer_engine import TEColumnParallelGroupedLinear, TEColumnParallelLinear, TENorm
 from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
-from megatron.core.models.common.embeddings.rope_utils import _apply_rotary_pos_emb_bshd, apply_rotary_pos_emb
+from megatron.core.models.common.embeddings.rope_utils import apply_rotary_pos_emb
 from megatron.core.models.gpt.gpt_model import GPTModel
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
@@ -77,11 +77,8 @@ def packed_rotary_pos_emb(t, freqs, *, config, cu_seqlens, cp_group):
     if freqs.size(0) == t.shape[0] * cp_size:
         # The frequencies cover every packed position, not one document's worth.
         position = position + cu_seqlens[:-1][document]
-    return _apply_rotary_pos_emb_bshd(
-        t.unsqueeze(1),
-        freqs[position],
-        rotary_interleaved=config.rotary_interleaved,
-        multi_latent_attention=config.multi_latent_attention,
+    return apply_rotary_pos_emb(
+        t.unsqueeze(1), freqs[position], config=config, cu_seqlens=None, cp_group=cp_group
     ).squeeze(1)
 
 

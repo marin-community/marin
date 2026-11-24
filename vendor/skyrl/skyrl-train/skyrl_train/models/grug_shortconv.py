@@ -42,47 +42,41 @@ def causal_short_conv(
     lengths = cu_seqlens[1:] - cu_seqlens[:-1]
     chunk_size = (lengths // global_chunks).repeat_interleave(chunks_per_document)
     num_chunks = chunk_size.numel()
-    chunk_start = torch.cumsum(chunk_size, 0) - chunk_size
-    # This rank's chunks in local order, and each one's index among its document's global chunks.
-    local_slot = torch.arange(num_chunks, device=device) % chunks_per_document
-    global_index = torch.where(local_slot == 0, cp_rank, global_chunks - 1 - cp_rank)
-
-    # The last ``halo`` tokens of every local chunk, right-aligned and zero-filled when the chunk is shorter.
-    back = torch.arange(halo, 0, -1, device=device)
-    tail_source = (chunk_start + chunk_size)[:, None] - back
-    tail_valid = back <= chunk_size[:, None]
-    tails = x[tail_source.clamp(min=0)] * tail_valid[..., None, None].to(x.dtype)
-    if cp_size > 1:
-        gathered = torch.stack(distributed_nn.all_gather(tails.contiguous(), group=cp_group))
-    else:
-        gathered = tails.unsqueeze(0)
-
-    # History slot j of a chunk is the token ``halo - j`` positions before the chunk's first token.
-    steps_back = back[None, :].expand(num_chunks, halo)
-    source_global = global_index[:, None] - (steps_back + chunk_size[:, None] - 1) // chunk_size[:, None]
-    from_end = (steps_back - 1) % chunk_size[:, None]
-    in_document = source_global >= 0
-    source_global = source_global.clamp(min=0)
-    if cp_size > 1:
-        first_half = source_global < cp_size
-        source_rank = torch.where(first_half, source_global, global_chunks - 1 - source_global)
-        source_slot = torch.where(first_half, 0, 1)
-    else:
-        source_rank = torch.zeros_like(source_global)
-        source_slot = torch.zeros_like(source_global)
-    document = torch.arange(num_chunks, device=device)[:, None] // chunks_per_document
-    history = gathered[source_rank, document * chunks_per_document + source_slot, halo - 1 - from_end]
-    history = history * in_document[..., None, None].to(x.dtype)
-
     # One sequence of [history, chunk] per chunk, so a single valid convolution never mixes chunks.
     chunk_of_token = torch.repeat_interleave(torch.arange(num_chunks, device=device), chunk_size)
     token_position = torch.arange(x.shape[0], device=device) + (chunk_of_token + 1) * halo
-    history_position = (chunk_start + torch.arange(num_chunks, device=device) * halo)[:, None] + torch.arange(
-        halo, device=device
-    )
     joined = x.new_zeros((x.shape[0] + num_chunks * halo, *x.shape[1:]))
     joined = joined.index_copy(0, token_position, x)
-    joined = joined.index_copy(0, history_position.reshape(-1), history.reshape(-1, *x.shape[1:]))
+
+    if cp_size > 1:
+        chunk_start = torch.cumsum(chunk_size, 0) - chunk_size
+        # This rank's chunks in local order, and each one's index among its document's global chunks.
+        local_slot = torch.arange(num_chunks, device=device) % chunks_per_document
+        global_index = torch.where(local_slot == 0, cp_rank, global_chunks - 1 - cp_rank)
+
+        # The last halo tokens of each chunk, right-aligned and zero-filled for short chunks.
+        back = torch.arange(halo, 0, -1, device=device)
+        tail_source = (chunk_start + chunk_size)[:, None] - back
+        tail_valid = back <= chunk_size[:, None]
+        tails = torch.where(tail_valid[..., None, None], x[tail_source.clamp(min=0)], 0)
+        gathered = torch.stack(distributed_nn.all_gather(tails.contiguous(), group=cp_group))
+
+        # History slot j is the token halo - j positions before the chunk's first token.
+        steps_back = back[None, :].expand(num_chunks, halo)
+        source_global = global_index[:, None] - (steps_back + chunk_size[:, None] - 1) // chunk_size[:, None]
+        from_end = (steps_back - 1) % chunk_size[:, None]
+        in_document = source_global >= 0
+        source_global = source_global.clamp(min=0)
+        first_half = source_global < cp_size
+        source_rank = torch.where(first_half, source_global, global_chunks - 1 - source_global)
+        source_slot = torch.where(first_half, 0, 1)
+        document = torch.arange(num_chunks, device=device)[:, None] // chunks_per_document
+        history = gathered[source_rank, document * chunks_per_document + source_slot, halo - 1 - from_end]
+        history = torch.where(in_document[..., None, None], history, 0)
+        history_position = (chunk_start + torch.arange(num_chunks, device=device) * halo)[:, None] + torch.arange(
+            halo, device=device
+        )
+        joined = joined.index_copy(0, history_position.reshape(-1), history.reshape(-1, *x.shape[1:]))
     kernel = weight.flip(0).T.unsqueeze(1).float()
     convolved = F.conv1d(joined.permute(1, 2, 0).float(), kernel, groups=x.shape[-1]).permute(2, 0, 1)
     return convolved[token_position - halo].to(x.dtype)
