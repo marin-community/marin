@@ -205,7 +205,8 @@ The publishing presets also save grader diagnostics in
 training rollouts and each named evaluation by environment and task source.
 Success rates use verified responses and are null when no verdict is available.
 Open **Grader stats** from the published attempt's details to see coverage,
-failure counts and grading latency alongside success rates.
+failure counts and grading latency alongside success rates. The trainer logs
+reporting errors and continues, so an attempt may have a partial or missing report.
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and

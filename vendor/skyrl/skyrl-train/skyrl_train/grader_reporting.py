@@ -6,11 +6,13 @@
 import json
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from statistics import mean
 from typing import Literal, TypedDict
 
 import numpy as np
+from loguru import logger
 from finestore.rl.rl_progress import GRADER_REPORT_FILENAME
 from marinskyrl.resource_locator import join_resource_path
 from rolloutengine.models import RolloutOperation
@@ -127,12 +129,14 @@ type GraderReportSection = Literal["training", "evaluation", "evaluation_duratio
 
 
 def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
-    """Update the run report for one evaluation step or training attempt."""
+    """Update the run report for one evaluation step or training attempt on a best-effort basis."""
     path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
-        report = json.loads(io.read_bytes(path))
-    except FileNotFoundError:
         report = {"training": {}, "evaluation": {}}
-    for section, value in sections.items():
-        report.setdefault(section, {})[key] = value
-    io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
+        with suppress(FileNotFoundError):
+            report = json.loads(io.read_bytes(path))
+        for section, value in sections.items():
+            report.setdefault(section, {})[key] = value
+        io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
+    except Exception:
+        logger.exception("Failed to update grader report at {} for {}", path, key)

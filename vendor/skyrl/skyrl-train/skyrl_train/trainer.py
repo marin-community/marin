@@ -580,11 +580,13 @@ class RayPPOTrainer:
         if getattr(self, "_shutdown_complete", False):
             return
         try:
-            await self.context.close()
             await self._drain_checkpoint_upload()
         finally:
-            await self._teardown()
-            self._shutdown_complete = True
+            try:
+                await self.context.close()
+            finally:
+                await self._teardown()
+                self._shutdown_complete = True
 
     @staticmethod
     def _start_exit_watchdog(timeout: int = 120) -> None:
