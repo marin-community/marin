@@ -182,6 +182,68 @@ def test_census_inputs_bind_the_declarations_receipt(tmp_path):
     assert inputs["source_revision"] == plan.source_revision
 
 
+def test_declarations_step_binds_the_document_consumers_read(tmp_path, monkeypatch):
+    """The declarations step's receipt reference is the sealed document itself.
+
+    Every downstream consumer (census inputs, admission check, QC plan, catalog
+    staging, exposure) reads the reference as the {source_id: declaration} mapping;
+    binding the stage's receipt envelope instead feeds them the wrong document.
+    """
+    plan = fixture_plan()
+    built = release_graph(plan)
+    document_ref = {"uri": str(tmp_path / "declarations.json"), "sha256": "c" * 64}
+    envelope_ref = {"uri": str(tmp_path / "declarations-receipt.json"), "sha256": "d" * 64}
+
+    def fake_execute(stage, config):
+        assert stage == "declarations"
+        return {
+            "kind": f"atlas-{plan.release_id}-declarations",
+            "release_id": plan.release_id,
+            "declarations": document_ref,
+            "receipt": envelope_ref,
+            "dry_run": False,
+            "sql_writes": 0,
+        }
+
+    monkeypatch.setattr(release_graph_module, "_execute_stage", fake_execute)
+    receipt = built.stages["declarations"].run({})
+    assert receipt.receipt == ArtifactRef(**document_ref)
+
+
+def test_text_scan_regions_read_the_compose_handoff(tmp_path):
+    """The scan handoff is the composition handoff document reference.
+
+    The scan region and merge builders read the compose proof's handoff key (the
+    pattern curriculum_load uses); the compose proof carries no 'receipt' key, so
+    the default receipt extraction could never satisfy this input.
+    """
+    plan = fixture_plan()
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    handoff = {"uri": "s3://bucket/handoff.json", "sha256": "c" * 64}
+    _write_dep(
+        built.stages["curriculum_compose"],
+        prefix,
+        "curriculum_compose",
+        plan.release_id,
+        handoff,
+        handoff=handoff,
+    )
+    inputs = _materialized_inputs(built.stages["text_scan_region[alpha]"], prefix)
+    assert inputs["handoff"] == handoff
+    region_receipt = {"uri": "s3://bucket/region-alpha.json", "sha256": "d" * 64}
+    _write_dep(
+        built.stages["text_scan_region[alpha]"],
+        prefix,
+        "text_scan_region",
+        plan.release_id,
+        region_receipt,
+    )
+    merge_inputs = _materialized_inputs(built.stages["text_scans"], prefix)
+    assert merge_inputs["handoff"] == handoff
+    assert merge_inputs["region_receipts"] == [region_receipt]
+
+
 def test_census_inputs_node_seals_one_row_per_declared_source(tmp_path):
     release_root = str(tmp_path / "release")
     plan = fixture_plan(

@@ -815,7 +815,9 @@ class StageSpec:
 
 
 _STAGE_SPECS: dict[str, StageSpec] = {
-    "declarations": StageSpec("declarations", "declarations", declarations_stage.__name__, (), False),
+    "declarations": StageSpec(
+        "declarations", "declarations", declarations_stage.__name__, (), False, receipt_key="declarations"
+    ),
     "admission_check": StageSpec(
         "admission_check", "admission_check", admission_check_stage.__name__, ("declarations",), False
     ),
@@ -1296,7 +1298,7 @@ def _text_scan_region_step(plan: ReleasePlan, compose: ArtifactStep, region: str
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
-            "handoff": _resolved_receipt(ctx, compose),
+            "handoff": _resolved_proof(ctx, compose)["handoff"],
             "output_root": stage_output_root(plan, "text-scans"),
             "slice_output_root": None,
             "regions": tuple(plan.scan_regions),
@@ -1327,7 +1329,7 @@ def _text_scan_merge_step(
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
-            "handoff": _resolved_receipt(ctx, compose),
+            "handoff": _resolved_proof(ctx, compose)["handoff"],
             "output_root": stage_output_root(plan, "text-scans"),
             "slice_output_root": None,
             "regions": tuple(plan.scan_regions),
