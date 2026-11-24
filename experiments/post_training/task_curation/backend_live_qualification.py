@@ -97,6 +97,33 @@ def canonical_id(source_id: str) -> str:
     return canonical_source_id(source_id)
 
 
+def adopt_sealed_survey(uri: str, sha256: str, inputs: "ValidationInputs", revision: str):
+    """Read back a sealed survey built elsewhere at the same revision from the same manifest.
+
+    The offline census is deterministic: a survey sealed in-region at the expected revision
+    and manifest is byte-equivalent to a local rebuild, so the write adopts it instead of
+    re-running the 600k-task build on a host that lacks the privileged disk pool. Every
+    binding the builder would have established is re-verified here before adoption.
+    """
+    from taskcompendium.backend_requirements import BackendSurvey  # noqa: PLC0415 — beside its only use
+
+    payload = StoragePath(uri).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != sha256:
+        raise ValueError(f"sealed survey digest mismatch: {uri}")
+    survey = BackendSurvey.model_validate_json(payload)
+    if survey.git_revision != revision:
+        raise ValueError(f"sealed survey binds revision {survey.git_revision}, expected {revision}")
+    if survey.snapshot_id != inputs.snapshot_id:
+        raise ValueError(f"sealed survey binds snapshot {survey.snapshot_id}, expected {inputs.snapshot_id}")
+    covered = {canonical_id(source.source_id) for source in survey.sources}
+    if covered != {canonical_id(target) for target in inputs.targets}:
+        raise ValueError(f"sealed survey covers {len(covered)} sources, expected exactly the release targets")
+    measured = sum(source.task_count for source in survey.sources)
+    if measured != inputs.expected_task_count:
+        raise ValueError(f"sealed survey measures {measured} tasks, expected {inputs.expected_task_count}")
+    return survey
+
+
 def run_validation(
     inputs: ValidationInputs,
     *,
@@ -107,6 +134,7 @@ def run_validation(
     disk_pool_root: Path | None = None,
     revision_command: tuple[str, ...] = ("git", "rev-parse", "HEAD"),
     revision: str | None = None,
+    adopted_survey: dict | None = None,
     feeds: tuple | None = None,
 ) -> dict:
     """Assemble the validation receipt; ``dry_run`` verifies with zero writes.
@@ -148,8 +176,11 @@ def run_validation(
                 alert_feeds,
             )
             return proof
-        builder = survey_builder if survey_builder is not None else _default_survey_builder
-        survey = builder(manifest, revision, disk_pool_root)
+        if adopted_survey is not None:
+            survey = adopt_sealed_survey(adopted_survey["uri"], adopted_survey["sha256"], inputs, revision)
+        else:
+            builder = survey_builder if survey_builder is not None else _default_survey_builder
+            survey = builder(manifest, revision, disk_pool_root)
         covered = {canonical_id(source.source_id) for source in survey.sources}
         measured = sum(source.task_count for source in survey.sources)
         if covered != {canonical_id(target) for target in inputs.targets}:
@@ -236,6 +267,12 @@ def main() -> None:
         "records its disk-pool evidence from this pool",
     )
     parser.add_argument(
+        "--adopt-survey",
+        help="Adopt a sealed backend-survey document (URI) built at the same revision and manifest "
+        "in-region, instead of rebuilding the offline census on this host",
+    )
+    parser.add_argument("--adopt-survey-sha256", help="SHA-256 of the adopted survey document")
+    parser.add_argument(
         "--revision",
         help="The workspace revision, stated directly; a materialized job workspace carries no "
         "git metadata, so the revision command cannot run there",
@@ -251,6 +288,7 @@ def main() -> None:
         repo_root=repo_root,
         disk_pool_root=args.local_disk_root,
         revision=args.revision,
+        adopted_survey={"uri": args.adopt_survey, "sha256": args.adopt_survey_sha} if args.adopt_survey else None,
     )
     label = "BACKEND-VALIDATION-DRY-RUN" if args.mode == "dry-run" else "BACKEND-VALIDATION-SEALED"
     print(f"{label} {json.dumps(receipt)}", flush=True)

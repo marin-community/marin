@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.backend_live_qualification import (
     MANIFEST_KIND,
     REMOTE_BACKEND_NAMES,
     ValidationInputs,
+    adopt_sealed_survey,
     read_manifest,
     run_validation,
 )
@@ -223,3 +224,98 @@ def test_write_refuses_a_moved_checkout(tmp_path):
             survey_builder=_fake_survey_builder,
             feeds=_feeds(tmp_path),
         )
+
+
+def test_adopted_survey_must_match_the_revision_targets_and_counts(tmp_path):
+    """The adoption path re-verifies every binding the builder would establish."""
+    revision = "c" * 40
+    from shellbox.machine import Backend  # noqa: PLC0415 — the fixture needs the production backend set
+    from shellbox.requirements import Requirement  # noqa: PLC0415
+    from taskcompendium.backend_requirements import (  # noqa: PLC0415
+        BackendSurvey,
+        backend_schema_sha256,
+    )
+
+    def _sealed_survey_document(rev: str) -> dict:
+        profile = {
+            "cpus": None,
+            "memory_mb": None,
+            "storage_mb": None,
+            "gpus": 0,
+            "network": "deny",
+            "cleanup_timeout": 120.0,
+            "startup_timeout": 900.0,
+            "user": None,
+        }
+        backends = {backend.value for backend in Backend} | {"iris"}
+        source_backends = {
+            backend: {
+                "support": "supported",
+                "task_counts": {"supported": 15},
+                "roles": {},
+                "blockers": {},
+                "not_applicable": {},
+                "validation_errors": {},
+            }
+            for backend in backends
+        }
+        matrix = [
+            {
+                "backend": backend,
+                "requirement": requirement.value,
+                "support": "unsupported",
+                "evidence": [],
+                "note": "fixture",
+            }
+            for backend in sorted(backends)
+            for requirement in Requirement
+        ]
+        return {
+            "version": 1,
+            "catalog_root": "s3://catalog/production",
+            "snapshot_id": "assembly-test-v1",
+            "generated_at": "2026-11-23T00:00:00+00:00",
+            "git_revision": rev,
+            "schema_sha256": backend_schema_sha256(),
+            "runtime_defaults": {"agent": profile, "grader": profile},
+            "matrix": matrix,
+            "deployment_limits": {},
+            "deployment_classes": {},
+            "sources": [
+                {
+                    "source_id": SOURCE,
+                    "basis": "converted_spec_census",
+                    "task_count": 15,
+                    "inputs": {},
+                    "demands": {},
+                    "resource_ranges": {},
+                    "backends": source_backends,
+                    "role_backend_assignments": {},
+                    "grading_environment": None,
+                }
+            ],
+        }
+
+    inputs = _inputs(tmp_path, _manifest_document(revision))
+    document = _sealed_survey_document(revision)
+    document["snapshot_id"] = inputs.snapshot_id
+    survey = BackendSurvey.model_validate(document)
+    survey_path = tmp_path / "survey.json"
+    survey_path.write_text(survey.model_dump_json())
+    digest = hashlib.sha256(survey_path.read_bytes()).hexdigest()
+    adopted = adopt_sealed_survey(str(survey_path), digest, inputs, revision)
+    assert adopted.git_revision == revision
+    with pytest.raises(ValueError, match="binds revision"):
+        adopt_sealed_survey(str(survey_path), digest, inputs, "d" * 40)
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(survey.model_dump_json() + " ")
+    digest = hashlib.sha256(survey_path.read_bytes()).hexdigest()
+    inputs = _inputs(tmp_path, _manifest_document(revision))
+    adopted = adopt_sealed_survey(str(survey_path), digest, inputs, revision)
+    assert adopted.git_revision == revision
+    with pytest.raises(ValueError, match="binds revision"):
+        adopt_sealed_survey(str(survey_path), digest, inputs, "d" * 40)
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(json.dumps(document) + " ")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        adopt_sealed_survey(str(tampered), digest, inputs, revision)
