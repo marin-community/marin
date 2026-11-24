@@ -211,6 +211,8 @@ with the user-level reduce function holding the GIL.
 
 Workers that failed and got reassigned show in the task table with `Worker ... failed: Request timed out`. The replacement worker starts fresh (low memory) and must re-pull a task — if no tasks remain queued, it idles.
 
+In a dedicated pipeline's final stage, the coordinator releases idle workers as the queue drains but keeps one available while shards remain unfinished. If an in-flight worker dies, its shard returns to the queue after the heartbeat timeout and the idle worker can pick it up. The retained worker consumes one worker slot until the stage finishes; a shared pool keeps its workers for later pipelines.
+
 ### Misleading Diagnostics
 
 **"Terminated by user"** does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to determine the real cause.

@@ -10,7 +10,7 @@ from loguru import logger
 from transformers import PreTrainedTokenizerBase
 from marinskyrl.runtime_options import PREFERENCE_PAIR_ENV_CLASS
 
-from skyrl_train.dataset.dataset import PromptDataset, read_prompt_files
+from skyrl_train.dataset.dataset import dataset_num_proc, PromptDataset, read_prompt_files
 from skyrl_train.task_inputs import PreferenceInput, TrajectoryMetadata
 
 
@@ -119,12 +119,17 @@ class PreferencePairDataset(PromptDataset):
             if "env_class" in self.dataframe.column_names:
                 self.dataframe = self.dataframe.remove_columns("env_class")
             budget = self.max_prompt_length + self.max_completion_length
+            prompt_key = self.prompt_key
 
             def validate(row):
                 pair = tokenized_pair(row, max_sequence_length=budget)
-                return {self.prompt_key: pair.prompt_ids}
+                return {prompt_key: pair.prompt_ids}
 
-            self.dataframe = self.dataframe.map(validate, num_proc=self.num_workers, desc="Validating tokenized pairs")
+            self.dataframe = self.dataframe.map(
+                validate,
+                num_proc=dataset_num_proc(len(self.dataframe), self.num_workers),
+                desc="Validating tokenized pairs",
+            )
             logger.info("Loaded {} tokenized preference pairs without retokenization or filtering", len(self.dataframe))
             return
         super()._read_files_and_tokenize()
@@ -151,9 +156,13 @@ class PreferencePairDataset(PromptDataset):
                     return False
             return True
 
-        self.dataframe = self.dataframe.map(normalize, num_proc=self.num_workers, desc="Normalizing completions")
+        self.dataframe = self.dataframe.map(
+            normalize, num_proc=dataset_num_proc(len(self.dataframe), self.num_workers), desc="Normalizing completions"
+        )
         before = len(self.dataframe)
-        self.dataframe = self.dataframe.filter(fits, num_proc=self.num_workers, desc="Filtering preference pairs")
+        self.dataframe = self.dataframe.filter(
+            fits, num_proc=dataset_num_proc(len(self.dataframe), self.num_workers), desc="Filtering preference pairs"
+        )
         logger.info(
             "Preference-pair dataset kept {} of {} rows within the {}-token completion budget",
             len(self.dataframe),

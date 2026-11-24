@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import sqlite3
 import threading
 import time
@@ -18,6 +19,7 @@ import jsonschema
 from transformers import PreTrainedTokenizerBase
 
 from experiments.tool_normalization.pool_manifest import PoolManifestError, fetch_credential
+from experiments.tool_normalization.relay import resolve_relay_base_url
 from experiments.tool_normalization.review_encoding import ENCODING_INSTRUCTIONS, encode_payload
 
 RETRY_BACKOFF_BASE_SECONDS = 2.0
@@ -32,6 +34,10 @@ class TransientRequestError(RuntimeError):
 
 class PermanentRequestError(RuntimeError):
     """Failure a retry cannot resolve (auth, missing endpoint, deterministic overflow)."""
+
+
+class LengthDeferred(ValueError):
+    """The request exceeds the prompt or output token budget."""
 
 
 class CapacityUnavailable(RuntimeError):
@@ -52,9 +58,13 @@ class ModelConfig:
     request_timeout: int
     capacity_file: Path
     ledger: Path
-    # Pool manifest entries as (base_url, api_key_file, api_key_ref) triples; empty on
-    # the single-endpoint relay path. Requests round-robin across entries and rotate on
-    # per-entry registry 404/connect/5xx (2026-11-24 serving handoff contract).
+    max_attempts: int
+    stop_file: Path
+    deadline_unix: float
+    relay_job: str | None
+    # Pool manifest entries as (base_url, api_key_file, api_key_ref) triples; empty on the
+    # relay path. Requests round-robin across entries and rotate on per-entry registry
+    # 404/connect/5xx (2026-11-24 serving handoff contract).
     pool_entries: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self):
@@ -102,6 +112,27 @@ def refresh_pool_key(config: ModelConfig) -> None:
     _POOL_KEY_REFRESHES[key_ref] = used + 1
 
 
+def parse_model_config(values: dict) -> ModelConfig:
+    """Normalize paths from a serialized model configuration."""
+    values = values.copy()
+    for key in ("api_key_file", "capacity_file", "ledger", "stop_file"):
+        values[key] = Path(values[key])
+    return ModelConfig(**values)
+
+
+def check_allocation(config: ModelConfig, deadline: float) -> None:
+    if config.stop_file.exists() or time.time() >= deadline:
+        raise CapacityUnavailable("Request stopped or allocation deadline reached")
+
+
+def retry_pause(config: ModelConfig, seconds: float) -> None:
+    resume_at = time.time() + seconds
+    while time.time() < resume_at:
+        check_allocation(config, config.deadline_unix)
+        time.sleep(max(0.0, min(1.0, resume_at - time.time())))
+    check_allocation(config, config.deadline_unix)
+
+
 def initialize_ledger(config: ModelConfig) -> None:
     """Create the admission ledger before concurrent workers start."""
     config.ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +174,10 @@ def complete(
     *,
     reasoning_effort: str,
 ) -> dict:
-    """Make one receipt-bound request, retrying transient relay failures with capped backoff until success."""
+    """Make a receipt-bound request with bounded retries and allocation cancellation."""
+    if config.max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    check_allocation(config, config.deadline_unix)
     # Trace delimiters are data, not the serving model's own special control tokens.
     encoded_payload = json.dumps(payload, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
     messages = [
@@ -164,7 +198,7 @@ def complete(
             messages, tokenize=True, return_dict=True, add_generation_prompt=True, **template_options
         )["input_ids"]
     if len(prompt_ids) + config.output_tokens > config.context_tokens:
-        raise ValueError("length_deferred: full request and output reserve exceed served context")
+        raise LengthDeferred("length_deferred: full request and output reserve exceed served context")
     body = {
         "model": config.model,
         "cache_salt": config.generation,
@@ -182,9 +216,7 @@ def complete(
             "json_schema": {"name": "conversion", "strict": True, "schema": schema},
         },
     }
-    # Retry-safe: the model client re-POSTs the same request on transport failures; the
-    # stage directory holds the last attempt's request/receipt/response evidence.
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=False)
     request_file = directory / "request.json"
     request_file.write_text(json.dumps(body, ensure_ascii=False, indent=2))
     identity = str(directory.resolve())
@@ -201,18 +233,19 @@ def complete(
         "content": "",
         "reasoning": "",
         "usage": None,
+        "attempts": [],
     }
     raw_file = directory / "response.sse"
     terminal = False
     backoff = RETRY_BACKOFF_BASE_SECONDS
     blank_retries = 0
     try:
-        while True:
+        for attempt in range(config.max_attempts):
+            check_allocation(config, config.deadline_unix)
+            terminal = False
             # Reset per-attempt state; partial artifacts from a failed attempt must not survive.
-            base_url, key_file = _select_entry(config)
             receipt.update(
                 {
-                    "base_url": base_url,
                     "http_status": None,
                     "finish_reason": None,
                     "done": False,
@@ -221,9 +254,23 @@ def complete(
                     "usage": None,
                 }
             )
-            raw_file.unlink(missing_ok=True)
+            raw_file = directory / f"response-{attempt + 1}.sse"
+            if config.pool_entries:
+                # Pool mode: rotate entries per attempt (retry lands on the next validated
+                # entry). Relay mode: keep receipt["base_url"], which the retry path may
+                # have re-resolved after a relay move.
+                base_url, key_file = _select_entry(config)
+                receipt["base_url"] = base_url
+            else:
+                base_url, key_file = receipt["base_url"], config.api_key_file
+            attempt_receipt = {"base_url": receipt["base_url"], "started_at_unix": time.time()}
+            receipt["attempts"].append(attempt_receipt)
+            request_deadline = min(config.deadline_unix, time.time() + config.request_timeout)
             try:
-                with raw_file.open("xb") as raw, httpx.Client(timeout=config.request_timeout, trust_env=False) as client:
+                with (
+                    raw_file.open("xb") as raw,
+                    httpx.Client(timeout=min(30.0, request_deadline - time.time()), trust_env=False) as client,
+                ):
                     (directory / "post-started.json").write_text(json.dumps({"at": time.time()}))
                     with client.stream(
                         "POST",
@@ -258,6 +305,7 @@ def complete(
                             terminal = True
                             raise PermanentRequestError(f"endpoint returned HTTP {response.status_code}")
                         for line in response.iter_lines():
+                            check_allocation(config, request_deadline)
                             raw.write((line + "\n").encode())
                             raw.flush()
                             if not line.startswith("data:"):
@@ -276,6 +324,8 @@ def complete(
                                 if choice.get("finish_reason"):
                                     receipt["finish_reason"] = choice["finish_reason"]
                                     terminal = True
+                                    if receipt["finish_reason"] == "length":
+                                        raise LengthDeferred("length_deferred: model exhausted the output token budget")
                 if not receipt["done"] or receipt["finish_reason"] != "stop":
                     raise TransientRequestError("Incomplete model result")
                 if config.pool_entries and not receipt["content"].strip() and receipt["reasoning"].strip():
@@ -315,17 +365,29 @@ def complete(
                     raise
                 (directory / "value.json").write_text(json.dumps(value, ensure_ascii=False, indent=2))
                 return value
-            except PermanentRequestError:
+            except (PermanentRequestError, CapacityUnavailable, LengthDeferred):
                 raise
-            except Exception:
-                # Relay errors, upstream outages, timeouts, malformed streams, and incomplete
-                # results: wait and retry. Only PermanentRequestError (auth, missing endpoint,
-                # deterministic overflow) fails fast; everything else retries until success so a
-                # transient fault can never leak an uncertain lease or defer a row.
+            except (httpx.HTTPError, TransientRequestError, json.JSONDecodeError, jsonschema.ValidationError):
+                if attempt + 1 >= config.max_attempts:
+                    raise
                 pause = backoff * (1.0 + random.uniform(-RETRY_JITTER_FRACTION, RETRY_JITTER_FRACTION))
-                time.sleep(pause)
+                retry_pause(config, pause)
+                if config.relay_job is not None:
+                    receipt["base_url"] = resolve_relay_base_url(
+                        config.api_key_file.read_text().strip(), config.relay_job
+                    )
                 backoff = min(RETRY_BACKOFF_CAP_SECONDS, backoff * 2)
+            finally:
+                attempt_receipt.update(
+                    completed_at_unix=time.time(),
+                    finish_reason=receipt["finish_reason"],
+                    http_status=receipt["http_status"],
+                    raw_file=raw_file.name,
+                    raw_sha256=hashlib.sha256(raw_file.read_bytes()).hexdigest() if raw_file.exists() else None,
+                )
     finally:
+        if raw_file.exists():
+            shutil.copyfile(raw_file, directory / "response.sse")
         receipt["completed_at_unix"] = time.time()
         receipt["raw_sha256"] = hashlib.sha256(raw_file.read_bytes()).hexdigest() if raw_file.exists() else None
         receipt["lease_state"] = "terminal" if terminal else "uncertain"

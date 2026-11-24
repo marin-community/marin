@@ -10,7 +10,6 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
-HARBOR_EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
@@ -230,6 +229,25 @@ class Machine(Protocol):
     async def download(self, source: str, target: Path) -> None: ...
 
     async def close(self) -> None: ...
+
+
+class ProcessScope(Protocol):
+    """A machine-owned command boundary separate from setup and verifier work.
+
+    Scoped commands may leave background descendants. ``terminate`` closes
+    admission and waits until every descendant is gone, or raises. It is safe
+    to call repeatedly. Ordinary machine commands remain outside the scope.
+    """
+
+    async def run(self, command: Command) -> Result: ...
+
+    async def terminate(self) -> None: ...
+
+
+class ProcessScopeMachine(Machine, Protocol):
+    """A machine that can reject or create a scoped command boundary."""
+
+    async def open_process_scope(self) -> ProcessScope: ...
 
 
 class MachineFactory(Protocol):

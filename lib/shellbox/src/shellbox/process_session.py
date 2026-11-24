@@ -13,6 +13,26 @@ from shellbox.machine import MachineTerminated
 logger = logging.getLogger(__name__)
 _CLEANUPS: set[asyncio.Task[None]] = set()
 
+# Killed descendants can remain as zombies until their parent reaps them.
+PROCESS_GROUP_ABSENT_EXIT_CODE = 3
+PROBE_PROCESS_GROUP_COMMAND = f"""
+group=$1
+[ -r /proc/1/stat ] || exit 1
+for path in /proc/[0-9]*/stat; do
+    record=
+    if ! {{ while IFS= read -r line; do record=$record$line; done; }} < "$path"; then
+        [ ! -e "$path" ] || exit 1
+        continue
+    fi
+    [ "$record" ] || continue
+    record=${{record##*) }}
+    set -- $record
+    [ "$#" -ge 3 ] || exit 1
+    [ "$3" != "$group" ] || [ "$1" = Z ] || exit 0
+done
+exit {PROCESS_GROUP_ABSENT_EXIT_CODE}
+"""
+
 
 class ClosableResource(Protocol):
     async def close(self) -> None: ...

@@ -149,6 +149,7 @@ def _resolves(address: tuple[str, int], name: str, transport: str = "udp") -> bo
         pytest.param("exfil.attacker.example", False, id="unlisted"),
     ],
 )
+@pytest.mark.requires_linux_loopback
 def test_task_dns_filter_resolves_only_allowlisted_and_internal_names(
     make_filters, filter_port, transport, name, resolves
 ):
@@ -158,6 +159,7 @@ def test_task_dns_filter_resolves_only_allowlisted_and_internal_names(
     assert _resolves((_nameserver(resolv_conf), filter_port), name, transport) == resolves
 
 
+@pytest.mark.requires_linux_loopback
 def test_task_dns_filters_are_per_task_and_removed_on_stop(tmp_path, make_filters, filter_port):
     host_conf = tmp_path / "host-resolv.conf"
     host_conf.write_text(
@@ -184,6 +186,7 @@ def test_task_dns_filters_are_per_task_and_removed_on_stop(tmp_path, make_filter
     assert _resolves((second_address, filter_port), "pypi.org")
 
 
+@pytest.mark.requires_linux_loopback
 def test_restarted_worker_restores_an_adopted_tasks_filter(make_filters, filter_port):
     """An adopted container's resolv.conf names the old filter's address, so the new worker must serve it."""
     previous = make_filters()

@@ -21,7 +21,7 @@ from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep import model as hero
 
-_MESH_AXES = ("replica_dcn", "data", "context", "expert", "model")
+_MESH_AXES = ("replica_dcn", "data", "expert", "context", "model")
 
 
 def mesh_of(devices, shape):
@@ -88,7 +88,7 @@ def test_routed_moe_matches_independent_routing_per_context_shard():
             return np.asarray(out), drops
 
         context_mesh = mesh_of(devices, (1, 1, 2, 2, 1))
-        reference_mesh = mesh_of(devices, (1, 1, 1, 2, 1))
+        reference_mesh = mesh_of(devices, (1, 1, 2, 1, 1))
         # Expert-parallel group `c` on the context mesh holds sequence shard `c` of all rows. The
         # reference mesh runs each of those shards on its own.
         out, drops = routed(context_mesh, x, seq_sharded=True)
@@ -119,7 +119,7 @@ def test_qb_threshold_matches_across_token_layouts():
             return {k: np.asarray(v) for k, v in stats.items() if k.startswith("qb_beta")}
 
         context_mesh = mesh_of(devices, (1, 1, 2, 2, 1))
-        reference_mesh = mesh_of(devices, (1, 2, 1, 2, 1))
+        reference_mesh = mesh_of(devices, (1, 2, 2, 1, 1))
         for estimator in (hero.QbEstimator.TOPK, hero.QbEstimator.HIST):
             config = moe_config(qb_estimator=estimator, qb_hist_bins=64)
             reference = thresholds(reference_mesh, config, context_blocks_as_rows(x), seq_sharded=False)
@@ -183,7 +183,7 @@ def test_shared_and_routed_gradients_match_across_context_degree():
             return param_grads, token_grad
 
         reference, reference_token_grad = gradients(
-            mesh_of(devices, (1, 2, 1, 2, 1)),
+            mesh_of(devices, (1, 2, 2, 1, 1)),
             context_blocks_as_rows(x),
             context_blocks_as_rows(cotangent),
             seq_sharded=False,
@@ -242,7 +242,7 @@ def test_parameter_context_sharding_preserves_placement_and_numerics():
                 "grads": [np.asarray(leaf) for leaf in jax.tree.leaves(grads)],
             }
 
-        reference = run(mesh_of(devices, (1, 2, 1, 2, 1)), seq_sharded=False)
+        reference = run(mesh_of(devices, (1, 2, 2, 1, 1)), seq_sharded=False)
         context = run(mesh_of(devices, (1, 1, 2, 2, 1)), seq_sharded=True)
 
         # Four experts over expert=2 alone, then over expert=2 x context=2.

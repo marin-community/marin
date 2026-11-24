@@ -7,6 +7,7 @@ import asyncio
 import os
 import select
 import signal
+import sys
 import tempfile
 from pathlib import Path
 
@@ -43,6 +44,19 @@ def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory
     with pytest.raises(local.SandboxUnavailable):
         local.LocalMachineFactory(bwrap=factory.bwrap)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_factory_reports_keeper_exec_failure(factory, tmp_path):
+    wrapper = tmp_path / "bwrap"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "arguments = ['/shellbox-missing-shell' if arg == '/bin/sh' else arg for arg in sys.argv[1:]]\n"
+        f"os.execv({str(factory.bwrap)!r}, [{str(factory.bwrap)!r}, *arguments])\n"
+    )
+    wrapper.chmod(0o755)
+    with pytest.raises(local.SandboxUnavailable, match="shellbox-missing-shell"):
+        local.LocalMachineFactory(bwrap=wrapper)
 
 
 def test_namespace_setup_failure_is_infrastructure_error_and_machine_remains_usable(factory, monkeypatch):

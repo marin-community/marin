@@ -30,6 +30,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 
 _WANDB_STEP_METRIC = "trainer/global_step"
+# Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
 
 
@@ -57,6 +58,8 @@ class WandbNodeLogger:
                 x_primary=False,
                 x_update_finish_state=False,
                 x_label=x_label,
+                finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                finish_timeout_raises=True,
             ),
         )
         self.wandb = run
@@ -100,6 +103,8 @@ class Tracking:
                     mode="shared",  # mainly for multi-node training's systems metrics aggregation
                     x_primary=True,
                     x_label=f"node-{current_node_ip}",
+                    finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                    finish_timeout_raises=True,
                 ),
             )
             run_id = run.id

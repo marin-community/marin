@@ -5,17 +5,20 @@
 
 from dataclasses import dataclass, replace
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
     TASKS_FILE,
     TASKTROVE_REPO,
+    archive_file,
     archive_resource,
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
+from experiments.post_training.task_curation.environment_fidelity import UnlowerableRecipe, environment_unused
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
@@ -38,10 +41,25 @@ class TaskTroveConverter:
         reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
         if reason is not None:
             return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
-        converted = self.convert(row, context)
+        try:
+            converted = self.convert(row, context)
+        except UnlowerableRecipe as error:
+            return ImportRejection(
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_unlowerable", detail=str(error)
+            )
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
+        # Reply-only conversions have no agent machine. Keep the archive as oracle
+        # evidence, while enforcing environment fidelity for tasks that use a machine.
+        reply_only = (
+            task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
+        )
+        substituted = None if reply_only else environment_unused(task, archive_file(row.data, DOCKERFILE))
+        if substituted is not None:
+            return ImportRejection(
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted
+            )
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.
         oracle = task.resources.oracle + tuple(

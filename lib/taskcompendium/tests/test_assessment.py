@@ -453,3 +453,156 @@ def test_assessment_summarizes_large_evidence_without_dropping_task(context, tmp
     else:
         changes = evidence["normalize"]["normalization_changes"]
         assert "old old" in json.dumps(changes["items"][0]["original"])
+
+
+@dataclass(frozen=True)
+class StringifiedEvidenceTransport:
+    """GLM intermittently serializes evidence_ids as the array's bare body (a string with the
+    enclosing brackets or edge quotes lost), the shape of the retained 2026-11-04 failures."""
+
+    root: str
+    shape: str
+
+    def __call__(self, requests):
+        result = AssessmentTransport(self.root)(requests)
+        observations = []
+        for observation in result.observations:
+            row = json.loads(observation.output)
+            if "response" in row:
+                function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+                verdict = json.loads(function["arguments"])
+                ids = [*verdict["evidence_ids"], "curation"]
+                if self.shape == "bare":
+                    verdict["evidence_ids"] = json.dumps(ids)[2:]  # drop the leading ["
+                else:
+                    verdict["evidence_ids"] = json.dumps(ids)
+                function["arguments"] = json.dumps(verdict)
+                observation = replace(observation, output=json.dumps(row))
+            observations.append(observation)
+        return replace(result, observations=observations)
+
+
+@pytest.mark.parametrize("shape", ["bare", "json_string"])
+def test_assessment_repairs_stringified_evidence_ids_and_records_the_coercion(context, tmp_path, shape):
+    curated = curated_source(
+        context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many?", "Answer": "2"}]
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=AssessmentSampling(admitted=1),
+        output_root=str(inputs),
+    )
+    judgments = tmp_path / "judgments"
+    grade_assessment(
+        context,
+        curated_root=str(curated),
+        inputs_root=str(inputs),
+        rubric=ASSESSMENT_RUBRIC,
+        model=AssessmentModel("fixture", "revision"),
+        submit=StringifiedEvidenceTransport(str(tmp_path), shape),
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(judgments),
+    )
+    rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["status"], row["coercions"]) == ("reviewed", ["evidence_ids"])
+    assert row["evidence_ids"][-1] == "curation" and len(row["evidence_ids"]) == 2
+
+
+def test_assessment_publishes_below_the_unavailable_threshold(context, tmp_path):
+    """A single recorded unavailable verdict out of 51 stays under the 2% threshold; the raw
+    provider error survives in the grade instead of failing the campaign."""
+    curated = curated_source(
+        context,
+        tmp_path,
+        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in range(60)],
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=AssessmentSampling(admitted=51),
+        output_root=str(inputs),
+    )
+    sample = assessment_inputs(str(inputs)).sample
+    assert len(sample) == 51
+    (tmp_path / sample[0].task_id).touch()
+    judgments = tmp_path / "judgments"
+    grade_assessment(
+        context,
+        curated_root=str(curated),
+        inputs_root=str(inputs),
+        rubric=ASSESSMENT_RUBRIC,
+        model=AssessmentModel("fixture", "revision"),
+        submit=AssessmentTransport(str(tmp_path)),
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(judgments),
+    )
+    rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert Counter(row["status"] for row in rows) == Counter({"reviewed": 50, "unavailable": 1})
+    unavailable = next(row for row in rows if row["status"] == "unavailable")
+    assert "provider unavailable" in unavailable["explanation"]
+    assert all(row["coercions"] == [] for row in rows)
+
+
+@dataclass(frozen=True)
+class CrossClaimStringifiedTransport:
+    """The cohort's ID-mismatch trap crossed with the truncation shape: one response answers
+    request A while claiming task B with stringified evidence_ids. B's grade must not inherit
+    the coercion mark from A's discarded answer."""
+
+    root: str
+
+    def __call__(self, requests):
+        result = AssessmentTransport(self.root)(requests)
+        observations = []
+        ids = sorted({request["custom_id"] for request in requests})
+        claimed = ids[1] if len(ids) > 1 else None
+        for request, observation in zip(requests, result.observations, strict=True):
+            schema = request["body"]["tools"][0]["function"]["parameters"]
+            cross_claim = (
+                claimed is not None and request["custom_id"] == ids[0] and "const" not in schema["properties"]["task_id"]
+            )
+            if cross_claim:
+                row = json.loads(observation.output)
+                function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+                verdict = json.loads(function["arguments"])
+                verdict["task_id"] = claimed
+                verdict["evidence_ids"] = json.dumps(verdict["evidence_ids"])
+                function["arguments"] = json.dumps(verdict)
+                observation = replace(observation, output=json.dumps(row))
+            observations.append(observation)
+        return replace(result, observations=observations)
+
+
+def test_assessment_cross_claimed_coercion_does_not_stick_to_the_other_task(context, tmp_path):
+    curated = curated_source(
+        context,
+        tmp_path,
+        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in (2, 3)],
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=AssessmentSampling(admitted=2),
+        output_root=str(inputs),
+    )
+    judgments = tmp_path / "judgments"
+    grade_assessment(
+        context,
+        curated_root=str(curated),
+        inputs_root=str(inputs),
+        rubric=ASSESSMENT_RUBRIC,
+        model=AssessmentModel("fixture", "revision"),
+        submit=CrossClaimStringifiedTransport(str(tmp_path)),
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(judgments),
+    )
+    rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert len(rows) == 2
+    assert all(row["status"] == "reviewed" for row in rows)
+    assert all(row["coercions"] == [] for row in rows)

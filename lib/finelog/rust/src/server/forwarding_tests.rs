@@ -72,6 +72,8 @@ struct Fixture {
     target_addr: SocketAddr,
     target_url: String,
     target_requests: Arc<RequestStats>,
+    /// The cluster the source forwards as, and the hub trusts.
+    cluster: String,
 }
 
 fn test_forwarder(
@@ -80,9 +82,20 @@ fn test_forwarder(
     target_addr: SocketAddr,
     private_pem: &str,
 ) -> Forwarder<TestTransport> {
+    cluster_forwarder(source, target_url, target_addr, private_pem, SOURCE_CLUSTER)
+}
+
+/// As [`test_forwarder`], forwarding as `cluster`.
+fn cluster_forwarder(
+    source: Arc<Store>,
+    target_url: String,
+    target_addr: SocketAddr,
+    private_pem: &str,
+    cluster: &str,
+) -> Forwarder<TestTransport> {
     let config = ForwardingConfig {
         target: target_url,
-        cluster: SOURCE_CLUSTER.to_string(),
+        cluster: cluster.to_string(),
     };
     let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
     Forwarder::with_client(source, config, minter, stats_client(target_addr))
@@ -93,10 +106,16 @@ impl Fixture {
     /// it. Each namespace's watermark is unset: a forwarder started now seeds at the tip.
     /// Call [`Self::forward_from_start`] to drain what is already written.
     async fn new(tag: &str) -> Self {
+        Self::forwarding_as(tag, SOURCE_CLUSTER).await
+    }
+
+    /// As [`Self::new`], with the source forwarding as `cluster`.
+    async fn forwarding_as(tag: &str, cluster: &str) -> Self {
         let target = disk_store(&format!("{tag}_target"));
-        let (target_addr, target_requests) =
-            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        Self::with_hub(tag, Some(target), target_addr, target_requests).await
+        let (target_addr, target_requests) = serve(Arc::clone(&target), hub_policy(cluster)).await;
+        let mut fx = Self::with_hub(tag, Some(target), target_addr, target_requests).await;
+        fx.cluster = cluster.to_string();
+        fx
     }
 
     /// As [`Self::new`], but the hub refuses every request with `invalid_argument` and
@@ -131,6 +150,7 @@ impl Fixture {
             target_addr,
             target_url: format!("http://{target_addr}"),
             target_requests,
+            cluster: SOURCE_CLUSTER.to_string(),
         }
     }
 
@@ -144,11 +164,12 @@ impl Fixture {
 
     /// A forwarder from this source to this hub, signing with `private_pem`.
     fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
-        test_forwarder(
+        cluster_forwarder(
             Arc::clone(&self.source),
             self.target_url.clone(),
             self.target_addr,
             private_pem,
+            &self.cluster,
         )
     }
 
@@ -630,6 +651,102 @@ fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
 }
 
 #[test]
+fn prepare_forward_batches_preserves_a_read_larger_than_the_string_offset_limit() {
+    let data = Arc::new(StringArray::from(vec!["x".repeat(1 << 20)]));
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(IMPLICIT_SEQ_COLUMN, DataType::Int64, false),
+        Field::new("data", DataType::Utf8, false),
+        Field::new(IMPLICIT_CLUSTER_COLUMN, DataType::Utf8, true),
+    ]));
+    // Share a small buffer across source batches. Concatenating this read would
+    // require a Utf8 array above 2 GiB, while each source batch remains valid.
+    let batches = (1..=2049)
+        .map(|seq| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![seq])),
+                    data.clone(),
+                    Arc::new(StringArray::from(vec![None::<&str>])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let shipped = prepare_forward_batches(
+        QueryResult {
+            schema,
+            batches,
+            timings: Default::default(),
+        },
+        SOURCE_CLUSTER,
+    )
+    .unwrap();
+    let mut bytes = 0;
+    for (index, (batch, seqs)) in shipped.iter().enumerate() {
+        assert!(batch.column_by_name(IMPLICIT_SEQ_COLUMN).is_none());
+        assert_eq!(seqs.values(), &[(index + 1) as i64]);
+        let body = batch.column_by_name("data").unwrap().as_string::<i32>();
+        assert_eq!(body.value(0), data.value(0));
+        bytes += body.value(0).len();
+        assert_eq!(
+            batch
+                .column_by_name(IMPLICIT_CLUSTER_COLUMN)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            SOURCE_CLUSTER
+        );
+    }
+    assert!(bytes > i32::MAX as usize);
+}
+
+#[test]
+fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
+    let column = "data";
+    let payload = "x".repeat(400);
+    let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        column,
+        DataType::Utf8,
+        false,
+    )]));
+    let batches = (0..12)
+        .map(|index| {
+            let data = format!("{index}:{payload}");
+            (
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(vec![data]))],
+                )
+                .unwrap(),
+                Int64Array::from(vec![(index + 1) * 10]),
+            )
+        })
+        .collect();
+    let max_bytes = 4096;
+    let chunks = chunk_batches_by_bytes(batches, max_bytes).unwrap();
+    assert!(chunks.len() > 1);
+    assert!(
+        chunks.len() < 12,
+        "small batches must share durable hub writes"
+    );
+    let mut received = Vec::new();
+    for (ipc, last_seq) in chunks {
+        assert!(ipc.len() <= max_bytes);
+        let batch = decode_one_record_batch(&ipc).unwrap();
+        let data = batch.column_by_name(column).unwrap().as_string::<i32>();
+        received.extend(data.iter().map(|value| value.unwrap().to_string()));
+        assert_eq!(last_seq, received.len() as i64 * 10);
+    }
+    assert_eq!(
+        received,
+        (0..12)
+            .map(|index| format!("{index}:{payload}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -861,14 +978,23 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
     fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
-    let entries = client(fx.target_addr)
+    assert_eq!(
+        hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await,
+        1,
+        "the row is readable only if `cluster` was stamped"
+    );
+}
+
+/// How many log rows the hub returns for a read scoped to `cluster`.
+async fn hub_log_count_for_cluster(fx: &Fixture, cluster: &str) -> usize {
+    client(fx.target_addr)
         .fetch_logs(
             FetchLogsRequest {
                 ..Default::default()
             }
             .with_source("/")
             .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX)
-            .with_cluster(SOURCE_CLUSTER),
+            .with_cluster(cluster),
         )
         .await
         .unwrap()
@@ -876,11 +1002,7 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
         .to_owned_message()
         .unwrap()
         .entries
-        .len();
-    assert_eq!(
-        entries, 1,
-        "the row is readable only if `cluster` was stamped"
-    );
+        .len()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1184,17 +1306,13 @@ async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
     // loop, so only rows this store's own writers produced are eligible.
     let fx = Fixture::new("loop").await;
 
-    fx.source_client
-        .push_logs(
-            PushLogsRequest {
-                entries: vec![LogEntry::default().with_data("relayed")],
-                ..Default::default()
-            }
-            .with_key("/user/job/t")
-            .with_cluster("some-other-cluster"),
-        )
-        .await
-        .unwrap();
+    push_named(
+        &fx.source_client,
+        "/user/job/t",
+        "relayed",
+        "some-other-cluster",
+    )
+    .await;
     push(&fx.source_client, "/user/job/t", &["local"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
@@ -1203,6 +1321,68 @@ async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
         fx.hub_log_rows().await,
         vec![("/user/job/t".to_string(), "local".to_string())]
     );
+}
+
+/// Write one log row under `key` that its writer has already labeled with `cluster`.
+async fn push_named(
+    client: &LogServiceClient<TestTransport>,
+    key: &str,
+    line: &str,
+    cluster: &str,
+) {
+    client
+        .push_logs(
+            PushLogsRequest {
+                entries: vec![LogEntry::default().with_data(line)],
+                ..Default::default()
+            }
+            .with_key(key)
+            .with_cluster(cluster),
+        )
+        .await
+        .unwrap();
+}
+
+/// Forward `own` (named for the forwarder's cluster), `unnamed` and `other` (named for
+/// another cluster) from a source forwarding as `cluster`, and check that the first two
+/// reach the hub under `cluster` and the third stays behind.
+async fn assert_own_and_unnamed_rows_are_forwarded(tag: &str, cluster: &str) {
+    let fx = Fixture::forwarding_as(tag, cluster).await;
+
+    push_named(&fx.source_client, "/user/job/t", "own", cluster).await;
+    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
+    push_named(
+        &fx.source_client,
+        "/user/job/t",
+        "other",
+        "some-other-cluster",
+    )
+    .await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![
+            ("/user/job/t".to_string(), "own".to_string()),
+            ("/user/job/t".to_string(), "unnamed".to_string()),
+        ]
+    );
+    assert_eq!(hub_log_count_for_cluster(&fx, cluster).await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_named_for_its_own_cluster_is_forwarded_like_an_unnamed_one() {
+    // A server may stamp its own rows with its cluster name. Those rows were produced
+    // here, so they are forwarded and keep the name; the unnamed row is stamped with it.
+    assert_own_and_unnamed_rows_are_forwarded("own", SOURCE_CLUSTER).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cluster_name_with_a_quote_is_matched_as_a_literal() {
+    // The forwarder's own name goes into the scan's SQL. A quote in it must be
+    // escaped, or the scan fails and nothing is forwarded.
+    assert_own_and_unnamed_rows_are_forwarded("quoted", "o'brien").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1985,5 +2165,68 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
         .await,
         250,
         "a hub migration under live forwarding must not duplicate or drop rows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sender_without_catalog_bounds_forwards_to_a_hub_that_has_them() {
+    // A staged deploy upgrades servers one at a time, so a sender's schema may lack
+    // a `catalog_bounds` flag the hub already has. Its registration must neither
+    // conflict nor turn the hub's flag off.
+    let fx = Fixture::new("catalog-bounds-skew").await;
+    let namespace = "iris.bounded";
+    let schema = |catalog_bounds: bool| {
+        let ts = Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false);
+        let ts = if catalog_bounds {
+            ts.with_catalog_bounds()
+        } else {
+            ts
+        };
+        Schema::new(
+            vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false), ts],
+            "id",
+        )
+    };
+    fx.target_store()
+        .register_table(namespace, schema(true), StoragePolicy::default())
+        .unwrap();
+    fx.source
+        .register_table(namespace, schema(false), StoragePolicy::default())
+        .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"iris.bounded\"").await,
+        3
+    );
+    assert!(
+        fx.target_store()
+            .get_table_schema(namespace)
+            .unwrap()
+            .column("ts")
+            .unwrap()
+            .index
+            .catalog_bounds,
+        "the sender's registration must not turn the hub's catalog bounds off"
     );
 }

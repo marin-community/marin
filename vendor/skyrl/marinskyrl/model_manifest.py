@@ -10,7 +10,7 @@ from typing import BinaryIO, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
-from marinskyrl.hf_model import (
+from .hf_model import (
     normalize_fast_tokenizer_metadata,
     validate_hf_model_weights,
     validate_portable_hf_model_files,

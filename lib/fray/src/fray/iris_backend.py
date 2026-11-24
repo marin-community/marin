@@ -704,6 +704,7 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                ports=list(request.ports),
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 max_task_failures=request.max_task_failures,
@@ -712,6 +713,7 @@ class FrayIrisClient:
                 container_profile=convert_container_profile(request.resources),
                 priority_band=request.priority,
                 timeout=request.timeout,
+                termination_grace=request.termination_grace,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

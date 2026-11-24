@@ -10,9 +10,9 @@ import importlib
 import json
 from pathlib import Path
 
+from evalrecords.records import CW_RECORDS_PREFIX, RunStatus, TaskCoverage, read_record, record_path
 from iris.cli.connect import open_iris_client
 from iris.cluster.types import JobName
-from marin.evaluation.records import CW_RECORDS_PREFIX, RunStatus, TaskCoverage, read_record, record_path
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath

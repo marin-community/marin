@@ -1,16 +1,22 @@
 """Run original Harbor trials through the engine's exact model-request contract."""
 
 import asyncio
+import hashlib
+import json
 import math
+import shlex
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from harbor.agents.installed.base import BaseInstalledAgent
+from harbor.environments.base import BaseEnvironment
 from harbor.models.trial.result import TrialResult
+from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.trial import Trial
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion
-from rolloutengine.models import LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -46,11 +52,49 @@ def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
     return GradeResult(Outcome.GRADED, score, passed=score > 0, diagnostics=diagnostics)
 
 
+async def run_task_setup(
+    environment: BaseEnvironment,
+    commands: tuple[str, ...],
+    *,
+    cwd: str | None,
+    timeout: float,
+    evidence_dir: Path,
+) -> None:
+    """Run explicitly declared setup as trusted root before model access."""
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    receipt = {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "command_sha256": [hashlib.sha256(command.encode()).hexdigest() for command in commands],
+        "completed": False,
+    }
+    try:
+        async with asyncio.timeout(timeout):
+            for index, command in enumerate(commands):
+                result = await environment.exec(
+                    f"exec /bin/sh -c {shlex.quote(command)}", cwd=cwd, user="root", timeout_sec=math.ceil(timeout)
+                )
+                (evidence_dir / f"{index}.stdout").write_text(result.stdout or "")
+                (evidence_dir / f"{index}.stderr").write_text(result.stderr or "")
+                if result.return_code != 0:
+                    raise RuntimeError(f"Declared task setup command {index} exited {result.return_code}")
+        receipt["completed"] = True
+    except BaseException as error:
+        receipt["exception_type"] = type(error).__name__
+        raise
+    finally:
+        receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
+        (evidence_dir / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 async def run_harbor_trial(
     trial: Trial,
     backend: AgentInferenceBackend,
     complete: AgentCompletion,
     evidence_dir: Path,
+    *,
+    setup_commands: tuple[str, ...],
+    setup_cwd: str | None,
+    setup_timeout: float,
 ) -> TrialResult:
     """Let Harbor own setup, verification and cleanup while the engine serves tokens."""
     if not isinstance(trial.agent, BaseInstalledAgent):
@@ -59,6 +103,18 @@ async def run_harbor_trial(
     if correlation_id is None:
         raise ValueError("Harbor training requires rollout capture to be enabled")
     evidence_dir.mkdir(parents=True, exist_ok=True)
+    if setup_commands:
+
+        async def prepare_task(_event: TrialHookEvent) -> None:
+            await run_task_setup(
+                trial.agent_environment,
+                setup_commands,
+                cwd=setup_cwd,
+                timeout=setup_timeout,
+                evidence_dir=evidence_dir / "task-setup",
+            )
+
+        trial.add_hook(TrialEvent.ENVIRONMENT_READY, prepare_task)
     trace_path = evidence_dir / "turns.jsonl"
     with backend.session(correlation_id, recorded_completion(complete, trace_path)):
         return await trial.run()
@@ -66,6 +122,8 @@ async def run_harbor_trial(
 
 class HarborTrialHarness:
     """Let Harbor finish verification after the model reaches its rollout limit."""
+
+    context_recovery = ContextRecovery.AFTER_TURN
 
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
         self.run_trial = run_trial

@@ -46,9 +46,9 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     _batch_reshard,
     _embedding_gather,
+    _global_query_scale,
     _init_weight,
     _seq_axis,
-    _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
 from experiments.grug.moe_pipeline.pipeline import (
@@ -110,8 +110,8 @@ def make_pipeline_mesh(
         )
 
     data_axis_size = jax.device_count() // fixed_axes
-    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, 1)
-    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "context", "expert", "model")
+    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, context_axis_size, 1)
+    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "expert", "context", "model")
     devices = np.asarray(jax.devices(), dtype=object).reshape(shape)
     mesh = Mesh(devices, axis_names, axis_types=(AxisType.Explicit,) * len(axis_names))
     if mesh.is_multi_process:
@@ -189,6 +189,7 @@ class GrugMoePipelineStage(eqx.Module):
         # Metadata contains global key positions; shard its query dimension like the residual.
         bounds_spec = P(BATCH_AXES, _seq_axis(get_abstract_mesh()))
         long_bounds, short_bounds, valid = (reshard(value, bounds_spec) for value in (long_bounds, short_bounds, valid))
+        global_query_scale = _global_query_scale(cfg, long_bounds, valid)
         block_metrics = []
         for local_index, block in enumerate(self.blocks):
             layer_index = self.start_layer + local_index
@@ -199,6 +200,7 @@ class GrugMoePipelineStage(eqx.Module):
                 layer_mask,
                 disable_rope=is_long,
                 is_global=is_long,
+                global_query_scale=global_query_scale,
             )
             block_metrics.append(metrics)
 
@@ -274,7 +276,7 @@ def split_transformer(
         embed_norm=model.embed_norm,
         embed_gated_norm=model.embed_gated_norm,
         output_proj=model.output_proj,
-        blocks=_unstacked_blocks(model),
+        blocks=tuple(model.stacked_blocks.unstacked()),
         final_norm=model.final_norm,
         final_gated_norm=model.final_gated_norm,
         config=model.config,

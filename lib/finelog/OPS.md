@@ -64,31 +64,90 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+SQL and FetchLogs have separate caps of two and four concurrent requests and a
+read pool sized to the available CPU count, including affinity and cgroup limits
+(`GET /api/server`: `readWorkers`). On Linux, async and blocking read workers run
+at process nice + 10, capped at 19, with all CPUs available; ingestion, cloud HTTP
+I/O, flushes, and maintenance keep the existing Tokio runtime and priority. This
+gives scheduling preference without a hard CPU reservation; non-Linux platforms
+use separate pools without changing priority.
+
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:
 
 ```bash
 gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
   --tunnel-through-iap \
-  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "read execution report|slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
 ```
 
-Large `visibility_wait_ms` means the request waited for shared storage
-maintenance before it could query. Compare the timestamps with cache eviction
-and object cleanup. Cache removals release this lock between small batches so
-queued readers can proceed. Background warming uses only immediately available
-download slots; a broad query cannot leave an unbounded queue of cache fills
-after its deadline. Maintenance reads use cached files or read directly from
-object storage. A nonzero `required_fill_bytes` counter means a caller still
+Large `visibility_wait_ms` means the request waited for a structural storage
+change before it could query. Cache eviction pins and skips individual files
+used by active scans; it does not acquire the global visibility lock. Object
+compaction also updates its accounting view without queuing a visibility writer.
+Legacy file replacement and table deletion still require that lock.
+
+Query and FetchLogs RPCs have a 30-second default budget covering admission,
+visibility waits, snapshot/provider setup, execution, and response encoding. A
+shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
+ceiling. Each object snapshot carries an absolute deadline derived from that
+same snapshot's retention policy, starting before snapshot acquisition.
+Planning consumes this lifetime; a later policy change cannot extend the read.
+Query, FetchLogs, and local forwarding reads share this bound and guard their
+optional fills against cancellation.
+Optional background warming uses immediately available download slots and is
+cancelled when the request fails or times out. After a successful response,
+admitted fills can finish within the original request deadline. The allowance
+is at most 256 MiB and 64 objects
+per query, shared across tables and repeated scans. An object larger than the
+remaining allowance is skipped; smaller later objects may still fit.
+`query_byte_limit` counts these skipped objects. This allowance covers optional
+full-object cache fills rather than all remote query
+I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
+
+Index headers and requested sections use the unified object's `read_range`
+interface: resident ranges are read under cache-file pins, and misses go
+directly to GCS/S3 without filling a whole bundle. Object-backed plans use file
+descriptors from the captured catalog without listing objects or opening
+footers and bundles. Execution checks indexes as it reaches each file.
+DataFusion keeps one current file and one lookahead open per active partition;
+file preparation stops when downstream operators finish, including after an
+unordered LIMIT has enough exact matches. Global sorts and aggregates may
+still require all candidates. The Query RPC returns one collected response.
+
+Each file's optional index reads and parsing have up to 500 ms, capped by the read deadline.
+Later files get their own optional budget; already parsed cache entries remain
+usable after it expires. Preparation reads key sections first and skips other
+sections when a segment is already excluded. Cache-local I/O and parsing use
+bounded workers whose permits remain held until the actual work finishes,
+including after async cancellation. Each store has eight cache-read workers and
+an independent pool of eight cache-fill writers, so warming cannot occupy the
+read pool. Parsed indexes have eight workers shared by the index cache. Remote
+range reads rely on DataFusion's per-query file window rather than a separate
+store-wide request cap. Already-running filesystem work may finish.
+Parsed sections share the memory-bounded index cache. Source footers needed to
+map spans or exact postings to row groups also use this range interface.
+Object-backed Parquet scans, covering projections, and maintenance reads use
+the same interface, including coalesced range requests. DataFusion retains its
+parsed-footer cache and scan-byte counters. Legacy files still use their
+recorded filesystem paths.
+Same-column substring alternatives such as
+`contains(data, 'model cache') OR contains(data, 'download complete')` combine
+their trigram masks with OR. An alternative without a supported constraint
+keeps the source scan. An unavailable, corrupt, or slow index also keeps that scan;
+indexes remain optional derived state.
+
+Maintenance reads pin cached files or read directly from object storage without
+filling misses. A nonzero `required_fill_bytes` counter means a caller still
 forces a local file; inspect the remaining `local_path` callers.
-`query_byte_limit` counts objects skipped after the query's byte allowance is
-exhausted. The last admitted object can cross the allowance.
 
 When cache eviction remains high despite little query traffic, check ingestion
 and compaction activity; both write through to the cache. Compare `write_bytes`
-with `query_fill_bytes` in the activity summaries. Match `max_lock_hold_us` in
-sweep logs and `cleanup_max_lock_hold_us` in activity summaries against slow
-requests' `visibility_wait_ms` to check whether cleanup blocks readers.
+with `query_fill_bytes` in the activity summaries. `cleanup_ms` and
+`max_batch_us` in sweep logs, and `cleanup_time_us` and `cleanup_max_batch_us`
+in activity summaries, measure file reclamation work. A nonzero
+`remaining_excess_bytes` can reflect files pinned by active scans or staged
+objects awaiting upload. These files remain candidates for a later sweep.
 
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
@@ -116,16 +175,20 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
-`EXPLAIN` itself can be slow when planning reads large trigram sections. If
-`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
-wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
-several indexed columns, Finelog checks range-constrained columns first and
-stops reading a segment's other index sections once its span mask is empty.
-Before loading trigram sections, bounded integer predicates also exclude cached
-local segments using complete Parquet min/max statistics. Missing source files
-or statistics retain the segment for the ordinary scan. The planner retains
-each segment's computed span mask through source planning, so a cache eviction
-does not cause a second index load for the same query.
+For ordinary object-backed scans, `EXPLAIN` performs no object I/O. Legacy
+filesystem scans still inspect local metadata. A required object missing when
+execution reaches it fails the query; a LIMIT that finishes earlier need not
+validate unread objects. Derived index failures retain the source scan.
+
+`read execution report` survives read failure and cancellation. Compare
+`phase`, `logical_plan_ms`, `physical_plan_ms`, and `execution_ms`, then
+`candidate_files`, `prepared_files`, `pruned_files`, and `source_opens`.
+`first_batch_ms` is the first nonempty engine result batch since context
+creation, before the unary RPC response is encoded. Source/index range byte
+and request counts describe requests through the unified interface, including
+cache hits; they do not measure only remote network traffic. Index cache hits
+and unavailable, timeout, corrupt, stale, or missing-bundle counters explain
+why pruning was declined. Several scans can share one request's counters.
 
 For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
 `key`. A time bound can therefore still require footer reads for old segments.
@@ -246,11 +309,18 @@ Source Parquet remains authoritative throughout cleanup.
 Object-backed maintenance treats all unpartitioned files at one nonterminal
 level as a sparse stream. Sequence gaps and overlapping footer ranges therefore
 cannot split a level into sub-threshold runs and strand aggregate debt. The
-planner promotes the shortest prefix reaching either the level's compressed-byte
-target or its 32-segment cap; L3 is terminal. Partitioned table specs still form
-one independent stream per exact partition. Each cycle executes at most one
-object compaction and resumes after 100 ms while progress remains, returning to
-the 30-second cadence at quiescence. Publication atomically replaces exact input
+planner promotes a level once it reaches the level's compressed-byte target or
+32 segments; L3 is terminal. An L1 or L2 job takes at most 32 inputs. An L0 job
+takes up to 512, because each job pays a fixed upload, index build, and catalog
+commit, and L0s are single flushes of a few hundred KB. Partitioned table specs
+still form one independent stream per exact partition. A cycle repeats object
+compaction while work remains, for up to 20 seconds, and resumes after 100 ms
+while progress remains, returning to the 30-second cadence at quiescence. The
+resumed cycle queues for the same `QueryServing` slots as every other table,
+so on a hub with many busy tables one visit's 20 seconds is what bounds L0
+growth. A cycle that ends with compaction work remaining skips index backfill
+and runs object collection at most once an hour, so the slot returns to the
+queue sooner. Publication atomically replaces exact input
 paths under the table's writer fence, so concurrent flushes can rebase and a
 failed commit leaves all inputs live.
 
@@ -397,7 +467,7 @@ local rebuild investigation. A time bound remains the fastest containment:
 telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
 before any secondary method runs.
 
-`finelog query` applies a client deadline just past the server's own 10s one.
+`finelog query` applies a client deadline just past the server's own 30s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 
@@ -494,7 +564,9 @@ forwarding:
 The public key in `marin.yaml` must be the public half of `forwarding.signing_key` —
 that pairing is what authenticates the sender, and a wrong key is a 401 on every
 push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
-row; keep it equal to the hub key entry's `cluster` label so reads line up.
+row; keep it equal to the hub key entry's `cluster` label so reads line up. A sender
+forwards rows whose `cluster` is empty or already its own `forwarding.cluster`, and
+skips rows naming any other cluster.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
@@ -591,6 +663,8 @@ up to four namespace turns concurrently, and starts another round immediately
 while work remains. A log turn reads up to one million rows; other tables read
 up to 200,000. Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
+Scan results remain separate Arrow batches until byte-bounded coalescing, so
+large log reads do not exceed the 2 GiB Utf8 offset limit before request chunking.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
@@ -647,6 +721,17 @@ settlement, and total milliseconds. A settlement line also reports removed
 segment, row, and byte counts. Maintenance lines report resource class, queue
 wait, run time, and the requested follow-up class. Object-backed relays use the
 `RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+An object-backed cycle of at least 5 seconds logs `slow maintenance cycle step
+breakdown` with `total_ms`, `compaction_attempts`, and `steps_ms` for
+`flush_and_publish`, `compaction`, `state_gc`, `object_collection`, `segment_bounds`,
+and `index_artifacts`. While compaction still has runs left, the cycle skips the
+`segment_bounds` and `index_artifacts` backfills. Compare it with `object compaction rewrite finished`
+(`merge_ms`, `upload_ms`) to separate merge time from the cycle's other steps.
+A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
+waited for a slot` reporting waits of many minutes, means compaction is falling
+behind flushes. Reads then open every L0 because an L0
+spans the whole key range.
 
 `slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
 for one turn, with its source cursor range, row count, chunk count, and encoded

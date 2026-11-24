@@ -165,6 +165,16 @@ def test_collect_respects_extra_exclude(workspace):
     assert "pyproject.toml" in rel
 
 
+def test_zip_with_all_files_excluded_has_no_bundle(workspace):
+    assert create_workspace_zip(workspace, exclude=re.compile(r".*")) == b""
+
+
+def test_zip_with_files_preserves_workspace_contents(workspace):
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(workspace))) as archive:
+        assert set(archive.namelist()) == {"pyproject.toml", "src/main.py"}
+        assert archive.read("src/main.py") == b"print('hello')"
+
+
 def test_extra_exclude_is_matched_literally_not_verbose(workspace):
     # DEFAULT_EXCLUDE is verbose; the merge must not extend re.VERBOSE onto the
     # caller's pattern, or literal whitespace in it would be dropped and match
@@ -195,7 +205,7 @@ def test_repository_excludes_keep_runtime_and_allow_explicit_validation_files(wo
         "vendor/harbor/src/harbor/job.py",
         "vendor/harbor/src/harbor_config/__init__.py",
         "vendor/harbor/src/harbor/cli/template-task/tests/test.sh",
-        "vendor/harbor/src/harbor/environments/apptainer/docs/workflow.md",
+        "vendor/harbor/src/harbor/cli/template-task/instruction.md",
         "lib/rigging/src/rigging/__init__.py",
         "lib/finestore/src/finestore/__init__.py",
     }

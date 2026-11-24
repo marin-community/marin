@@ -14,7 +14,6 @@ from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.remote_function import RemoteFunction
 
-from transformers import PreTrainedTokenizerBase
 from omegaconf import OmegaConf, DictConfig
 from pathlib import Path
 import ray
@@ -22,7 +21,6 @@ import ray
 import os
 import signal
 import time
-import hydra
 from loguru import logger
 import asyncio
 import multiprocessing as mp
@@ -124,7 +122,6 @@ class EntrypointSupervisor:
 def create_ray_wrapped_inference_engines_from_config(
     cfg: DictConfig,
     colocate_pg,
-    tokenizer: PreTrainedTokenizerBase,
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
@@ -219,10 +216,12 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_init_kwargs["revision"] = model_revision
     engine_kwargs = inference_engine_kwargs_from_config(
         cfg,
-        tokenizer,
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
+    if selectors:
+        engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
     if cfg.trainer.strategy == "megatron":
@@ -263,15 +262,13 @@ def create_ray_wrapped_inference_engines_from_config(
     return create_ray_wrapped_inference_engines(**engine_kwargs)
 
 
-def create_remote_inference_engines_from_config(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase):
+def create_remote_inference_engines_from_config(cfg: DictConfig):
     from skyrl_train.inference_engines.remote_inference_engine import create_remote_inference_engines  # noqa: PLC0415
 
     # TODO(tgriggs): We may want a separate config for the model name in case it's different from the name used in the OpenAI API
     return create_remote_inference_engines(
         urls=cfg.generator.remote_inference_engine_urls,
         model_name=cfg.trainer.policy.model.path,
-        engine_backend=cfg.generator.backend,
-        tokenizer=tokenizer,
         tensor_parallel_size=cfg.generator.inference_engine_tensor_parallel_size,
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
@@ -325,12 +322,11 @@ class BasePPOExp:
             inference_engines = create_ray_wrapped_inference_engines_from_config(
                 self.cfg,
                 self.colocate_pg,
-                self.tokenizer,
                 entrypoint=entrypoint,
                 operation=operation,
             )
         else:
-            inference_engines = create_remote_inference_engines_from_config(self.cfg, self.tokenizer)
+            inference_engines = create_remote_inference_engines_from_config(self.cfg)
         logger.info("Inference engines ready: mode={} count={}", engine_mode, len(inference_engines))
         return InferenceEngineClient(inference_engines, self.tokenizer, self.cfg)
 
@@ -480,7 +476,8 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
+        selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
+        if not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
@@ -495,7 +492,9 @@ class BasePPOExp:
         # reservation ordering, not from the spread strategy. Whole-node bundles
         # keep STRICT_SPREAD (one whole-node bundle per node) as before.
         strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
+        pg = _placement_group(
+            bundles, strategy=strategy, bundle_label_selector=[selector] * len(bundles) if selector else None
+        )
         get_ray_pg_ready_with_timeout(pg, timeout=timeout)
         logger.info(
             f"Reserved dedicated policy placement group (strategy={strategy}, "
@@ -788,12 +787,3 @@ def run_ray_driver(
 
 def run(cfg: DictConfig) -> None:
     run_ray_driver(cfg, skyrl_entrypoint)
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

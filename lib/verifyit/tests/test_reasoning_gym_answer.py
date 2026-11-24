@@ -63,6 +63,33 @@ def test_prose_around_the_answer_is_not_accepted_by_this_dataset(tests_dir, work
     assert grade(tests_dir, workspace).reward == 0.0
 
 
+def test_prime_factorization_prose_scores_zero_and_keeps_numeric_rewards(tests_dir, workspace):
+    entry = {
+        "answer": "5 \u00d7 167",
+        "metadata": {"source_dataset": "prime_factorization"},
+    }
+    (tests_dir / "entry.json").write_text(json.dumps(entry))
+    spec = ReasoningGymSpec(dataset="prime_factorization")
+    for candidate, expected in [
+        ("I need to find the prime factorization of 835.", 0.0),
+        ("5 \u00d7 167", 1.0),
+        ("835", 0.5),
+    ]:
+        direct = grade_reasoning_gym.grade_reasoning_gym_candidate(spec, entry, candidate)
+        answer(workspace, candidate)
+        from_file = grade(tests_dir, workspace, dataset="prime_factorization")
+        assert (direct.reward, direct.status) == (expected, Status.SCORED)
+        assert from_file == direct
+
+
+def test_prime_factorization_bad_reference_is_an_invalid_task(tests_dir, workspace):
+    entry = {"answer": "five \u00d7 167", "metadata": {"source_dataset": "prime_factorization"}}
+    (tests_dir / "entry.json").write_text(json.dumps(entry))
+    answer(workspace, "I need to find the prime factorization of 835.")
+    with pytest.raises(InvalidTask):
+        grade(tests_dir, workspace, dataset="prime_factorization")
+
+
 def test_partial_credit_from_the_scorer_is_passed_through(tmp_path, workspace):
     # simple_equations keeps reasoning-gym's default scorer, which awards a fraction when the gold
     # answer is buried in a longer response.

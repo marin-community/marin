@@ -43,6 +43,9 @@ checkpoint_export:
   hf_upload_mode: latest
 
 trainer:
+  # Best selection queues only the final export, after the last evaluation.
+  hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
+  batch_builder: driver  # driver, worker
   evaluation_runner: training # task or harbor selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring
@@ -136,18 +139,24 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
     use_torch_compile: false
     record_memory: false
-    # Limit per-peer NCCL buffers before Megatron policy process-group initialization.
-    # Null preserves NCCL's default; useful when a reference actor shares each GPU.
-    nccl_buffer_size_bytes: null
+    # Pin the standard 4-MiB SIMPLE buffer before process-group initialization.
+    # Smaller buffers can corrupt NVLSTree reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649).
+    nccl_buffer_size_bytes: &nccl_standard_buffer_bytes 4194304
   ref:
-    # Colocated Megatron reference workers retain NCCL buffers after model offload.
-    # Reduce their per-peer buffer before process-group initialization; null keeps NCCL's default.
-    nccl_buffer_size_bytes: 262144
+    # Keep the standard buffer even when reference workers share a GPU.
+    # Null delegates sizing to the process environment and NCCL config.
+    # The explicit 4-MiB buffer works around NCCL 2.30.7's NVLSTree chunk exceeding the SIMPLE FIFO slot
+    # (https://github.com/marin-community/marin/issues/11649).
+    # The NVLSTree chunk tuning in NCCL 2.32.6
+    # (https://github.com/NVIDIA/nccl/commit/b89a40883e4868c6bb44610c3c75d4a8b7a40530) is a possible path back to
+    # smaller buffers once an upgrade is validated.
+    nccl_buffer_size_bytes: *nccl_standard_buffer_bytes
     model:
       path: ${trainer.policy.model.path}
       revision: ${trainer.policy.model.revision}
@@ -175,6 +184,7 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
@@ -268,6 +278,10 @@ trainer:
     # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1
+    # How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
+    # prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
+    # prompt still offered.
+    max_unusable_groups: 3
     # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
     # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
     # n_samples_per_prompt. Elsewhere null bounds generation only by staleness.
@@ -388,9 +402,9 @@ generator:
     clear_cache: true
   # How weights reach the engines. "broadcast": trainer rank 0 sends every tensor to every engine.
   # "expert_block": each MoE expert matrix is broadcast from a Megatron rank that holds it to the vLLM
-  # workers that serve it. Needs engines that are not colocated with training, a Grug MoE on the megatron
-  # strategy at TP=1 and ETP=1, local vLLM engines at TP=1 with EP=DP>=1, the NCCL weight-sync backend and
-  # vLLM's TRITON MoE backend.
+  # workers that serve it. Needs a Grug MoE on Megatron at TP=ETP=1, local vLLM engines at TP=1 with
+  # EP=DP>=1, NCCL, and vLLM's TRITON MoE backend. Colocation is limited to one four-GPU node with
+  # policy PP=1 EP=4, one TP=PP=1 DP=EP=4 engine, and expert_block_sync.verify=true.
   weight_sync_transport: "broadcast"
   expert_block_sync:
     timeout_seconds: 600  # For creating the sync groups and for the broadcasts of each sync.
@@ -468,8 +482,11 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
+    skip_special_tokens: true
 
   eval_sampling_params:
+    seed: null
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0
     temperature: 0.0
@@ -478,6 +495,8 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
+    skip_special_tokens: true
 
   eval_n_samples_per_prompt: 1
 
@@ -557,6 +576,5 @@ trajectory_runner:
     cpus_per_worker: 8
     executor_threads: 256 # Default thread pool for blocking task operations.
     progress_timeout_seconds: 21600 # fail a worker's requests when none of them completes for this long
-    # Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads
-    # from a shared filesystem do not overlap; zero starts them all at once.
-    start_interval_seconds: 2.0
+    # Zero starts workers together; a positive interval staggers their imports and tokenizer loads.
+    start_interval_seconds: 0.0

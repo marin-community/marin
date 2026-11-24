@@ -222,6 +222,23 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
 
 
+@pytest.mark.parametrize(("setting", "expected"), [(True, "1"), (False, "0"), (None, "inherited")])
+def test_gpu_lowering_sets_nccl_symmetric_memory(setting, expected):
+    model = ModelConfig(
+        name="moe-model",
+        location="s3://models/moe",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(vllm_use_nccl_symm_mem=setting, auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(
+        model, choice, env_vars={"VLLM_USE_NCCL_SYMM_MEM": "inherited"}, priority=job_pb2.PRIORITY_BAND_INHERIT
+    )
+
+    assert lowered.iris.worker_environment.env_vars["VLLM_USE_NCCL_SYMM_MEM"] == expected
+
+
 def test_gpu_lowering_can_disable_xet_for_weight_mirror():
     model = ModelConfig(
         name="xet-rate-limited-model",
@@ -465,3 +482,18 @@ def test_pipeline_rejects_raw_topology_overrides(flag, equals):
 def test_invalid_pipeline_or_memory_settings_fail_before_submission(serve):
     with pytest.raises(ValueError):
         ServeConfig(**serve)
+
+
+def test_explicit_multihost_tpu_uses_direct_gang_serving():
+    model = ModelConfig(
+        name="multi-host-model",
+        location="gs://models/model",
+        resource_hint=ResourceHint(hbm_gb=200, memory="128g"),
+        serve=ServeConfig(tensor_parallel_size=16, max_model_len=32768, auto_overrides=False),
+    )
+    choice = MARIN_EVAL_HARDWARE.select(model, Platform.TPU, "v4-32")
+    assert choice.region == "us-central2"
+    config = inference_config_for_model(model, choice, env_vars={}, priority=0)
+    assert config.broker is None
+    assert config.iris.worker_resources.replicas == 4
+    assert config.model.tensor_parallel_size == 16

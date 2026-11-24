@@ -14,6 +14,7 @@ import pytest
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 
 
@@ -210,6 +211,7 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         constraints=(),
         ports=(),
         resources=None,
+        termination_grace=DEFAULT_TERMINATION_GRACE,
     )
     env = {
         **os.environ,

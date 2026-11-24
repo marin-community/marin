@@ -275,6 +275,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "source_key": identifier + "-key",
                 "population": "converted",
                 "intended_use": "train",
+                "basis": "matched",
                 "task_count": count,
                 "ready_count": ready,
                 "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
@@ -379,6 +380,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert source["coverage"] == {
             "example_count": 300,
             "intended_use": "train",
+            "basis": "matched",
             "top_area": {"subject_id": "D01", "node_id": "subject:D01", "name": "Mathematics", "instances": 200},
         }
         assert source["assessment"]["admitted"]["grade"] == "unknown"

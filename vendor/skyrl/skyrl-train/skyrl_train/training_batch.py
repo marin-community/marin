@@ -516,7 +516,7 @@ class TrainingBatchIterator(Iterator[Experience]):
             sequences=batch["sequences"],
             action_log_probs=batch["action_log_probs"],
             base_action_log_probs=batch["base_action_log_probs"],
-            values=batch["values"],
+            values=batch.get("values"),
             returns=batch["returns"],
             advantages=batch["advantages"],
             attention_mask=batch["attention_mask"],

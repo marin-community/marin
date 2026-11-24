@@ -11,21 +11,11 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
-from fray.client import JobHandle
-from iris.client.client import Job, iris_ctx
-from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
-from rigging.secrets import SecretSpec
-from rigging.timing import retry_with_backoff
-
-from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
-from marin.evaluation.hardware import AcceleratorChoice
-from marin.evaluation.inference_metrics import InferenceMetricWindow
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import (
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from evalrecords.eval_stats import DEFAULT_MIN_COVERAGE
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalRef,
     EvalRunRecord,
@@ -43,6 +33,19 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
+from evalrecords.rollout_results import score_curated_record
+from fray.client import JobHandle
+from iris.client.client import Job, iris_ctx
+from iris.rpc.proto_display import job_state_friendly
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import SecretSpec
+from rigging.timing import retry_with_backoff
+
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
+from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.inference_metrics import InferenceMetricWindow
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
@@ -50,6 +53,7 @@ from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import (
     InferenceBackendState,
+    InferenceStartupPhase,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -200,7 +204,7 @@ class EvaluationIdentity:
     created_at: str
     output_dir: str
     eval_ref: EvalRef
-    eval_runtime: str
+    eval_runtime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -554,7 +558,7 @@ def _run_one_evaluation(
             job_id=orchestrator_job_id,
             attributes={
                 "eval_name": evaluation.identity.eval_ref.name,
-                "eval_runtime": evaluation.identity.eval_runtime,
+                **({"eval_runtime": evaluation.identity.eval_runtime} if evaluation.identity.eval_runtime else {}),
                 "group_id": batch.group_id,
             },
         )
@@ -632,13 +636,13 @@ def run_evaluation_steps(
             (
                 float(
                     evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
-                        "timeout", EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+                        "timeout", EVALUATION_REQUEST_TIMEOUT_SECONDS
                     )
                 )
                 for evaluation in batch.evaluations
                 if evaluation.identity.eval_ref.evalchemy is not None
             ),
-            default=EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+            default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
         ),
     )
     with ExitStack() as stack:
@@ -696,6 +700,7 @@ def _inference_session(stack: ExitStack, config: RemoteInferenceConfig) -> Remot
     return retry_with_backoff(
         lambda: stack.enter_context(remote_inference(config)),
         retryable=lambda error: isinstance(error, RemoteInferenceStartupError)
+        and error.phase is InferenceStartupPhase.SERVING
         and isinstance(error.__cause__, TimeoutError),
         max_attempts=config.iris.max_retries_failure + 1,
         operation="evaluation inference startup",
@@ -706,7 +711,9 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     """Return an eval session that reaches the serving endpoint directly."""
     try:
         address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
-    except ConnectionError as exc:
+    except ConnectError as exc:
+        if exc.code != Code.NOT_FOUND:
+            raise
         raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
     endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
     return replace(
@@ -716,7 +723,12 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     )
 
 
-def _print_record(record: EvalRunRecord) -> None:
+def print_record(record: EvalRunRecord) -> None:
+    """Print a run's status, failure context, coverage and metrics.
+
+    Curated records carry no metrics; their scores are derived from the run's raw archive.
+    """
+    record = score_curated_record(record)
     print(f"{record.run_id}  [{record.status.value}]  {record.model.name} / {record.evaluation.name}")
     if record.error:
         print(f"  error: {record.error}")
@@ -728,6 +740,13 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  last {min(len(lines), _REPORT_TAIL_LINES)} log lines of the {role} child:")
             for line in lines[-_REPORT_TAIL_LINES:]:
                 print(f"    {line}")
+    print(f"  results: {record.results_path}")
+    for task, coverage in sorted(record.coverage.items()):
+        errors = ", ".join(f"{name}={count}" for name, count in sorted(coverage.errors.items()))
+        print(
+            f"  {task:<40} scored {coverage.n_scored}/{coverage.n_attempted} selected "
+            f"of {coverage.n_benchmark}" + (f"  errors: {errors}" if errors else "")
+        )
     if not record.metrics:
         print("  (no metrics)")
         return
@@ -736,22 +755,29 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
 
 
-def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> None:
-    """Wait for submitted batches and print their durable records."""
+def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
+    """Wait for submitted batches and print their durable records.
+
+    Returns whether every evaluation wrote a record with succeeded status. For one that wrote no
+    record, prints the orchestrator job's terminal state and error, which explain rejections before
+    any record exists.
+    """
     configure_coreweave_s3()
+    complete = True
     for batch in batches:
-        batch.job.wait(timeout=float("inf"), raise_on_failure=False)
+        status = batch.job.wait(timeout=float("inf"), raise_on_failure=False)
         for evaluation in batch.evaluations:
             path = record_path(batch.records_prefix, evaluation.run_id)
             try:
                 record = read_record(path)
-            except Exception:
-                logger.warning(
-                    "no readable record.json for run %s at %s",
-                    evaluation.run_id,
-                    path,
-                    exc_info=True,
-                )
+            except Exception as error:
+                complete = False
                 print(f"{evaluation.run_id}  [no record]  {batch.model_name} / {evaluation.eval_name}")
+                print(f"  job {batch.job.job_id}: {job_state_friendly(status.state)}")
+                if status.error:
+                    print(f"  error: {status.error}")
+                print(f"  record {path} is unreadable: {type(error).__name__}: {error}")
                 continue
-            _print_record(record)
+            print_record(record)
+            complete = complete and record.status is RunStatus.SUCCEEDED
+    return complete

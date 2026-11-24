@@ -73,7 +73,14 @@ from zephyr.stats import (
     _push_iris_task_status,
     configure_coordinator_telemetry,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import (
+    Aggregation,
+    CounterEntry,
+    CounterKey,
+    CounterSnapshot,
+    counters_by_name,
+    merge_counter_entries,
+)
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -244,8 +251,8 @@ class _PipelineExecution:
     # True once the final task-producing stage has been loaded, so a drained
     # queue means no further task can be dispatched for this pipeline.
     is_last_stage: bool = False
-    # Folded completed-task counters, keyed by stage, name, and aggregation.
-    completed_totals: dict[tuple[str | None, str, Aggregation], CounterEntry] = field(default_factory=dict)
+    # Folded completed-task counters, keyed by counter (scope and name) and aggregation.
+    completed_totals: dict[tuple[CounterKey, Aggregation], CounterEntry] = field(default_factory=dict)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
     progress_time_seconds: float = 0.0
@@ -304,34 +311,28 @@ class _PipelineExecution:
 
     def fold_counters(self, snapshot: CounterSnapshot) -> None:
         """Fold one completed task snapshot into bounded execution state."""
-        for name, entry in snapshot.counters.items():
-            key = (entry.stage, name, entry.aggregation)
+        for counter_key, entry in snapshot.counters.items():
+            key = (counter_key, entry.aggregation)
             accumulated = self.completed_totals.get(key)
             if accumulated is None:
-                self.completed_totals[key] = CounterEntry(
-                    entry.value,
-                    entry.aggregation,
-                    entry.stage,
-                    entry.count,
-                )
+                self.completed_totals[key] = CounterEntry(entry.value, entry.aggregation, entry.count)
             else:
                 accumulated.merge(entry)
 
-    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
-        """Return merged completed counters for this execution.
-
-        Callers wanting one stage's totals must pass ``stage`` here rather than
-        filter the result: a name recorded under several stages folds into a
-        single entry that keeps whichever stage was folded first, so a later
-        ``entry.stage`` filter would attribute every stage's total to that one
-        stage and drop the rest.
-        """
+    def completed_snapshot(self) -> CounterSnapshot:
+        """Return completed counters for this execution, still keyed by scope."""
         merged, conflicted = merge_counter_entries(
-            (name, entry)
-            for (entry_stage, name, _), entry in self.completed_totals.items()
-            if stage is None or entry_stage == stage
+            (counter_key, entry) for (counter_key, _), entry in self.completed_totals.items()
         )
-        return {k: e for k, e in merged.items() if k not in conflicted}
+        return CounterSnapshot(counters={k: e for k, e in merged.items() if k not in conflicted}, generation=0)
+
+    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
+        """Return completed counters for this execution by name.
+
+        With ``stage`` set, only that stage's counters are included. With
+        ``stage=None``, a name recorded under several scopes folds into one entry.
+        """
+        return counters_by_name(self.completed_snapshot().counters.items(), stage)
 
 
 def _aggregate_counter_snapshots(
@@ -347,10 +348,8 @@ def _aggregate_counter_snapshots(
     interrupts execution. When ``stage`` is given, only entries recorded under
     that stage label are included.
     """
-    merged, conflicted = merge_counter_entries(
-        (k, entry) for snap in snapshots for k, entry in snap.counters.items() if stage is None or entry.stage == stage
-    )
-    return {k: e.value for k, e in merged.items() if k not in conflicted}
+    entries = (item for snap in snapshots for item in snap.counters.items())
+    return {name: entry.value for name, entry in counters_by_name(entries, stage).items()}
 
 
 class ZephyrCoordinator:
@@ -602,7 +601,7 @@ class ZephyrCoordinator:
                     for (_, execution_id), snapshot in self._worker_counters.items()
                     if execution_id == run.execution_id
                 ]
-                completed = CounterSnapshot(counters=run.merged_counters(), generation=0)
+                completed = run.completed_snapshot()
                 values = _aggregate_counter_snapshots([completed, *live], stage=None)
                 snapshots.append((run.execution_id, run.progress_time_seconds, values))
         for execution_id, progress_time_seconds, counters in snapshots:
@@ -687,7 +686,7 @@ class ZephyrCoordinator:
                     {idx: att for idx, att in run.task_attempts.items() if att > 0},
                     run.stage_monotonic_start,
                     [
-                        CounterSnapshot(counters=run.merged_counters(run.stage_name), generation=0),
+                        run.completed_snapshot(),
                         *(
                             snapshot
                             for (_, execution_id), snapshot in self._worker_counters.items()
@@ -910,10 +909,9 @@ class ZephyrCoordinator:
         """True when no further task can be dispatched to this worker. Lock held.
 
         Every active execution must have loaded its last task-producing stage
-        and drained its queue, and this worker must hold nothing in flight that
-        could fail and be requeued onto it. A peer's requeued shard is picked up
-        by a restarted worker, and ``_check_worker_group`` is the failsafe
-        against the pool dying out entirely.
+        and drained its queue. Keep one idle worker while shards are in flight:
+        a replacement attempt can poll before the old attempt's heartbeat
+        expires and would otherwise exit before its shard is requeued.
         """
         active = [r for r in self._executions.values() if not r.done]
         if not active:
@@ -925,7 +923,17 @@ class ZephyrCoordinator:
             return False
         if not all(r.is_last_stage and not r.task_queue for r in active):
             return False
-        return not any(e.worker_id == worker_id for r in active for e in r.in_flight.values())
+        in_flight_workers = {e.worker_id for r in active for e in r.in_flight.values()}
+        if worker_id in in_flight_workers:
+            return False
+        if any(r.completed_shards < r.total_shards for r in active):
+            idle_workers = sum(
+                state is WorkerState.ACTIVE and worker not in in_flight_workers
+                for worker, state in self._worker_states.items()
+            )
+            if idle_workers <= 1:
+                return False
+        return True
 
     def _assert_in_flight_consistent(self, run: _PipelineExecution, worker_id: str, shard_idx: int) -> None:
         """Assert in_flight[shard_idx], if present, is owned by the reporting worker.
@@ -1128,7 +1136,7 @@ class ZephyrCoordinator:
                 only. If None, return totals derived from all registered
                 executions' completed snapshots plus in-flight snapshots,
                 applying per-key aggregation hints.
-            stage: If provided, only include entries with ``entry.stage == stage``.
+            stage: If provided, only include counters recorded under that stage.
                 If None (default), include all entries regardless of stage.
 
         Snapshots are folded with :func:`merge_counter_entries`, the same
@@ -1152,9 +1160,7 @@ class ZephyrCoordinator:
                 ]
                 return _aggregate_counter_snapshots(worker_snapshots, stage)
 
-            all_snaps = [
-                CounterSnapshot(counters=run.merged_counters(stage), generation=0) for run in self._executions.values()
-            ]
+            all_snaps = [run.completed_snapshot() for run in self._executions.values()]
             all_snaps.extend(self._worker_counters.values())
 
         return _aggregate_counter_snapshots(all_snaps, stage)
@@ -1385,9 +1391,7 @@ class ZephyrCoordinator:
             storage_cleanup_safe = self._drain_execution(run)
             with self._lock:
                 run.finish(storage_cleanup_safe=storage_cleanup_safe)
-                final_counters = _aggregate_counter_snapshots(
-                    [CounterSnapshot(counters=run.merged_counters(), generation=0)], stage=None
-                )
+                final_counters = _aggregate_counter_snapshots([run.completed_snapshot()], stage=None)
                 # Keep the final sample ordered after any periodic sample.
                 try:
                     _publish_counter_snapshot(execution_id, run.progress_time_seconds, final_counters)

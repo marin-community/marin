@@ -369,6 +369,8 @@ def _build_node_agent_daemonset(
     volumes = [
         {"name": "config", "configMap": {"name": "iris-cluster-config"}},
         {"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
+        {"name": "host-containerd", "hostPath": {"path": "/etc/containerd", "type": "Directory"}},
+        {"name": "host-nvme", "hostPath": {"path": "/mnt/local", "type": "Directory"}},
     ]
     if storage_health_env is not None:
         volume_mounts.append({"name": STORAGE_SECRET_NAME, "mountPath": STORAGE_SECRETS_DIR, "readOnly": True})
@@ -407,6 +409,23 @@ def _build_node_agent_daemonset(
                     "dnsPolicy": "ClusterFirstWithHostNet",
                     "terminationGracePeriodSeconds": 10,
                     "tolerations": [{"operator": "Exists"}],
+                    "initContainers": [
+                        {
+                            "name": "runtime-storage",
+                            "image": image,
+                            "imagePullPolicy": "Always",
+                            "command": [".venv/bin/python", "-m", "iris.cluster.node_agent.runtime_storage"],
+                            "securityContext": {"runAsUser": 0, "runAsGroup": 0},
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "32Mi"},
+                                "limits": {"cpu": "1", "memory": "128Mi"},
+                            },
+                            "volumeMounts": [
+                                {"name": "host-containerd", "mountPath": "/host-containerd"},
+                                {"name": "host-nvme", "mountPath": "/mnt/local"},
+                            ],
+                        }
+                    ],
                     "containers": [
                         {
                             "name": _NODE_AGENT_NAME,
@@ -915,11 +934,12 @@ class K8sControllerProvider:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
         Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
-        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
-        (best-effort) the IngressClass. All of these are
-        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
-        nothing. Raises
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
+        the configured sandbox RuntimeClass, the Kueue ClusterQueue and its
+        referenced ResourceFlavors, and (best-effort) the IngressClass. The 02a
+        RuntimeClass and other Iris-owned resources are provisioned by
+        `infra/pulumi`; the default gvisor class comes from CoreWeave. This
+        method creates nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -943,6 +963,10 @@ class K8sControllerProvider:
             missing.append(f"Role/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
         if self._kubectl.get_json(K8sResource.ROLE_BINDINGS, TASK_SECRET_ROLE_NAME) is None:
             missing.append(f"RoleBinding/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
+
+        runtime_class = config.kubernetes_provider.sandbox_runtime_class
+        if self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None:
+            missing.append(f"RuntimeClass/{runtime_class}")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():

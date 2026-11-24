@@ -1,5 +1,7 @@
 import os
 import re
+from collections.abc import Mapping
+from typing import Any
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 _SENSITIVE_KEY_RE = re.compile(
@@ -7,6 +9,18 @@ _SENSITIVE_KEY_RE = re.compile(
 )
 _TRUE_BOOL_VALUES = frozenset({"true", "1", "yes"})
 _FALSE_BOOL_VALUES = frozenset({"false", "0", "no"})
+_CAPABILITY_URL_RE = re.compile(r"(/proxy/t/(?:cluster=[^/?#]+/)?)[^/?#]+")
+
+
+def redact_capability_urls(value: Any) -> Any:
+    """Remove Iris bearer tokens from values persisted in job and trial configs."""
+    if isinstance(value, str):
+        return _CAPABILITY_URL_RE.sub(r"\1<redacted>", value)
+    if isinstance(value, dict):
+        return {key: redact_capability_urls(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_capability_urls(item) for item in value]
+    return value
 
 
 def parse_bool_env_value(
@@ -91,16 +105,19 @@ def sanitize_env_assignment(value: str) -> str:
     return f"{key}={redact_sensitive_value(raw_value)}"
 
 
-def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
+def resolve_env_vars(
+    env_dict: dict[str, str], *, source: Mapping[str, str] | None = None
+) -> dict[str, str]:
     """
     Resolve environment variable templates in a dictionary.
 
-    Templates like "${VAR_NAME}" are replaced with values from os.environ.
+    Templates like "${VAR_NAME}" use values from source, or os.environ when source is omitted.
     Use "${VAR_NAME:-default}" to provide a default when the variable is unset.
     Literal values are passed through unchanged.
 
     Args:
         env_dict: Dictionary with potentially templated values
+        source: Variable values to use instead of os.environ
 
     Returns:
         Dictionary with resolved values
@@ -108,6 +125,7 @@ def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
     Raises:
         ValueError: If a required environment variable is not found and no default
     """
+    environment = os.environ if source is None else source
     resolved = {}
 
     for key, value in env_dict.items():
@@ -115,8 +133,8 @@ def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
         if match:
             var_name = match.group(1)
             default = match.group(2)
-            if var_name in os.environ:
-                resolved[key] = os.environ[var_name]
+            if var_name in environment:
+                resolved[key] = environment[var_name]
             elif default is not None:
                 resolved[key] = default
             else:

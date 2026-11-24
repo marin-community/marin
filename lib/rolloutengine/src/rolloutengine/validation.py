@@ -13,6 +13,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
+    TaskSpec,
     VerifyitGrader,
     grades_with_judge,
     require_resolved_environment,
@@ -26,17 +27,37 @@ from rolloutengine.models import TaskRolloutSpec
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 
 
-def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
-    """Check the machine selections against the task's environments, resources, and grader.
+def task_machine_reason(task: TaskSpec) -> str | None:
+    """Why ``task`` runs only with a task machine, or ``None`` when it runs without one.
 
-    A workspace answer needs a task machine only when the engine grades it: nothing reads a ``NoGrader``
-    task's workspace.
+    Tool providers run on the host, so they do not need a machine. A workspace answer needs one only
+    when the engine grades it: nothing reads a ``NoGrader`` task's workspace.
     """
+    grader = task.grader
+    if task.environment_requirements.model_copy(update={"tool_providers": {}}) != EnvironmentRequirements():
+        return "Environment requirements need a selected machine"
+    if task.resources.all + task.resources.worker:
+        return "Task resources require a task machine"
+    if task.tool_bindings:
+        return "A shell binding requires a task machine"
+    if task.output_paths:
+        return "Output paths require a task machine"
+    if not isinstance(grader, NoGrader) and task.answer_type in WORKSPACE_ANSWERS:
+        return "Workspace tasks require a task machine"
+    if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts):
+        return "Artifact grading requires a task machine"
+    return None
+
+
+def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
+    """Check the machine selections against the task's environments, resources, and grader."""
     task = spec.task
     grader = task.grader
     judge = grades_with_judge(grader)
-    # The engine grades a judge on the host, so it uses no machine for the judge's environment.
-    grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not judge else None
+    host_judge = judge and isinstance(grader, VerifyitGrader)
+    grader_environment = (
+        grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not host_judge else None
+    )
     if judge:
         judge_connection(spec)
         if task.answer_type not in CONVERSATION_ANSWERS:
@@ -56,9 +77,6 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
         selections.append((spec.verifier_machine, grader_environment, task_resources + task.resources.verifier))
     for selection, requirements, resources in selections:
         if selection is None:
-            # Tool providers run on the host, so they do not need a machine.
-            if requirements.model_copy(update={"tool_providers": {}}) != EnvironmentRequirements():
-                raise ValueError("Environment requirements need a selected machine")
             continue
         if selection.backend not in machine_factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
@@ -67,13 +85,5 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
             resource.mtime_ns is not None for resource in resources
         ):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
-    if spec.task_machine is None and task_resources:
-        raise ValueError("Task resources require a task machine")
-    if spec.task_machine is None and task.tool_bindings:
-        raise ValueError("A shell binding requires a task machine")
-    if spec.task_machine is None and task.output_paths:
-        raise ValueError("Output paths require a task machine")
-    if spec.task_machine is None and not isinstance(grader, NoGrader) and task.answer_type in WORKSPACE_ANSWERS:
-        raise ValueError("Workspace tasks require a task machine")
-    if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts) and spec.task_machine is None:
-        raise ValueError("Artifact grading requires a task machine")
+    if spec.task_machine is None and (reason := task_machine_reason(task)) is not None:
+        raise ValueError(reason)

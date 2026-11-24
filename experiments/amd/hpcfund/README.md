@@ -50,7 +50,7 @@ June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and d
 
 | Hardware | Nodes | Without the flags | With the flags | Change |
 |---|---|---|---|---|
-| MI350X (`mi3508x`, this wrapper and venv) | 2 | 1.975-1.982 s | 1.715-1.717 s | -13% |
+| MI350X (`mi3508x`, this wrapper, JAX 0.11.0 and ROCm 10.0.0 venv) | 2 | 1.975-1.982 s | 1.715-1.717 s | -13% |
 | MI350X, all nine flags of the ablation below | 1 | 1.529-1.534 s | 1.526-1.529 s | none |
 | MI355X (TheRock 7.14 container, JAX 0.11.0) | 2 | 1.955-1.971 s | 1.709-1.736 s | -12% |
 
@@ -75,19 +75,17 @@ On GB200, more than one collective in flight silently corrupted training with Gr
 
 The flags were measured only with this layout on two nodes, not with cross-node FSDP or EP16.
 
-With this venv, runs with the flags sometimes crash as the processes shut down after the last step (`double free or corruption` while `jax.distributed` disconnects, or a segfault): 4 of 17 runs with some of these flags on k007-002 and k007-004, against 0 of 6 runs without them, and one more run with the flags segfaulted about 4 minutes into compilation. Output up to the crash is complete, but Slurm records the step as failed. Twenty-two flagged runs in the MI355X container exited cleanly.
-
 ## Build the venv
 
 The wrapper runs `uv run --no-sync`, so build the venv once on a login node:
 
 ```bash
-uv sync
-uv pip install --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
-    "rocm[libraries,device-gfx942,device-gfx950]==10.0.0" \
-    "jax_rocm10_plugin==0.11.0+rocm10.0.0" "jax_rocm10_pjrt==0.11.0+rocm10.0.0"
-uv pip install jax==0.11.0 jaxlib==0.11.0
+uv sync --all-packages --extra rocm --no-dev
 ```
+
+The `rocm` extra installs JAX 0.12.0 with its ROCm 10 plugin from PyPI, jax-triton 0.3.1, Triton 3.6.0, and the ROCm 10.1.0 runtime with MI300X (gfx942) and MI350X/MI355X (gfx950) device libraries from AMD's TheRock index. `--no-dev` is required: the default `dev` groups pin JAX 0.11.1, and uv rejects the combination.
+
+When jax-triton is installed, keep JAX at 0.12.0 or later. Raise `jax`, `jaxlib` and `jax-rocm10-plugin` together in the `rocm` extra: the plugin requires a PJRT package of its own version. Earlier plugins delete each compiled jax_triton kernel file on its first launch without holding a lock, so a process that launches a new kernel on several GPUs at once fails with `CustomCall failed: /tmp/tmpXXXXXXXX; No such file or directory` or hangs at the next collective.
 
 ## Known issues
 

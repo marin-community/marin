@@ -36,6 +36,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datasets.eval_policy_answer_bpb import eval_policy_answer_bpb_datasets
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
@@ -62,7 +63,7 @@ MOE_TPP = 60
 # These pin the reference budget so a candidate architecture's own param count cannot move the
 # baseline it is compared against (data-match holds these tokens; compute-match holds 6*N*tokens).
 # They are NOT recomputed from the candidate model on purpose. Regenerate deliberately only when the
-# baseline recipe itself changes, via `_active_params(_h100_ladder_model(_h100_ladder_rung(size), dense=dense))`.
+# baseline recipe itself changes, via `_active_params(h100_ladder_model(size, dense=dense, vocab_size=V16384_VOCAB))`.
 _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
     ("d512", False): 20_840_448,
     ("d512", True): 18_087_936,
@@ -79,7 +80,7 @@ _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
 # pin the compute-match budget so it holds the baseline's *true* FLOPs, not an active-param proxy, and
 # so a candidate architecture cannot move the budget it is compared against. NOT recomputed from the
 # candidate. Regenerate deliberately only when the baseline recipe changes, via
-# `_compute_flops(model_config=_h100_ladder_model(_h100_ladder_rung(size), dense=dense))[0]`.
+# `_compute_flops(model_config=h100_ladder_model(size, dense=dense, vocab_size=V16384_VOCAB))[0]`.
 _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d512", False): 1_133_066_059_776,
     ("d512", True): 1_065_420_324_864,
@@ -112,6 +113,8 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
+# Mixed precision of training; the eval and scoring code casts restored params the same way.
+MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 
 # Model geometry shared across rungs.
 SEQ_LEN = 4096
@@ -153,7 +156,7 @@ class H100LadderRung:
         return self.gpus_per_task
 
 
-def _h100_ladder_rung(size: str) -> H100LadderRung:
+def h100_ladder_rung(size: str) -> H100LadderRung:
     if size == "d512":
         return H100LadderRung(SmallShape(512, 6, 4, 1, 1), gpus_per_task=8, baseline_batch=128)
     if size == "d768":
@@ -165,13 +168,13 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
     raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
 
 
-def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelConfig:
-    """Build the ladder model at the rung's width: MoE (384 experts, top-8, pooled-wave EP), or a
+def h100_ladder_model(size: str, *, dense: bool, vocab_size: int) -> GrugModelConfig:
+    """The model that ``build_h100_ladder_run`` trains at ``size``: MoE (384 experts, top-8, pooled-wave EP), or a
     dense baseline (``dense``) of one DenseMLP(hidden, 3*hidden) SwiGLU per block."""
-    shape = rung.shape
+    shape = h100_ladder_rung(size).shape
     hidden = shape.hidden_dim
     return GrugModelConfig(
-        vocab_size=V16384_VOCAB,
+        vocab_size=vocab_size,
         dense_mlp=dense,
         hidden_dim=hidden,
         intermediate_dim=3 * hidden if dense else hidden // 2,
@@ -212,18 +215,32 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
+@dataclasses.dataclass(frozen=True)
+class TrainMix:
+    """A second flat train cache that gets ``share`` of the training tokens; the main cache gets the rest."""
+
+    cache_dir: str
+    share: float
+
+    def __post_init__(self):
+        if not 0.0 < self.share <= 1.0:
+            raise ValueError(f"mix share must be in (0, 1], got {self.share}")
+
+
 def _flat_cache_data_config(
     *,
     ctx: StepContext,
     validation,
     tokenizer: str,
     train_cache_dir: str,
+    mix: TrainMix | None = None,
 ) -> LmDataConfig:
-    """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
+    """Straight-through training on one pre-built flat cache, or two at constant shares (``mix``).
 
-    Mirrors the Harrier config's validation wiring, but trains on a single pre-tokenized cache at
-    constant weight -- no mixture phases, no simulated epoching. ``validation`` sets are folded in as
-    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``).
+    Mirrors the Harrier config's validation wiring, with constant weights -- no mixture phases, no simulated
+    epoching. ``mix`` adds a second flat cache at a constant share of the batches; it repeats from its start if it
+    runs out. ``validation`` sets are folded in as zero-weight components (built as executor deps, tokenized with the
+    same ``tokenizer``).
     """
     components = {
         "train": DatasetComponent(
@@ -234,6 +251,12 @@ def _flat_cache_data_config(
             flat_cache=True,
         )
     }
+    weights = {"train": 1.0}
+    if mix is not None:
+        components["mix"] = DatasetComponent(
+            source=None, cache_dir=mix.cache_dir, format=TextLmDatasetFormat(), tags=["mix"], flat_cache=True
+        )
+        weights = {"train": 1.0 - mix.share, "mix": mix.share}
     if ctx.is_fingerprint:
         val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
     else:
@@ -241,7 +264,7 @@ def _flat_cache_data_config(
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
-    train_weights = {"train": 1.0, **{name: 0.0 for name in val_components}}
+    train_weights = {**weights, **{name: 0.0 for name in val_components}}
     return LmDataConfig(
         tokenizer=tokenizer,
         cache_dir=None,
@@ -249,6 +272,15 @@ def _flat_cache_data_config(
         train_weights=train_weights,
         auto_build_caches=False,
     )
+
+
+def baseline_steps(size: str, dense: bool) -> int:
+    """Steps of the variant's recorded baseline at ``size``: its tokens-per-param budget at the rung's baseline batch."""
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
+    tpp = DENSE_TPP if dense else MOE_TPP
+    tokens_per_step = h100_ladder_rung(size).baseline_batch * SEQ_LEN
+    return max(1, round(tpp * _BASELINE_ACTIVE_PARAMS[(size, dense)] / tokens_per_step))
 
 
 def build_h100_ladder_run(
@@ -266,6 +298,10 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    seed: int = 0,
+    output_path: str | None = None,
+    mix: TrainMix | None = None,
+    eval_policy_answer_bpb: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -279,9 +315,8 @@ def build_h100_ladder_run(
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
 
-    rung = _h100_ladder_rung(size)
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
-    mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
+    rung = h100_ladder_rung(size)
+    model = h100_ladder_model(size, dense=dense, vocab_size=vocab_size)
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
     if rung.global_device_count % (expert_axis_size * replica_axis_size) != 0:
@@ -291,16 +326,12 @@ def build_h100_ladder_run(
         )
 
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
-    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
+    # batch). _BASELINE_ACTIVE_PARAMS is a FIXED reference (not the candidate's), so an architecture change moves
     # the candidate's FLOPs/token but never the budget it is compared against.
-    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
-        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
-    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
-    baseline_tpp = DENSE_TPP if dense else MOE_TPP
-    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
-    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+    steps_of_baseline = baseline_steps(size, dense)
+    baseline_tokens = rung.baseline_batch * steps_of_baseline * SEQ_LEN
     # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
-    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
+    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * steps_of_baseline * rung.baseline_batch
 
     batch_size = batch_size if batch_size is not None else rung.baseline_batch
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
@@ -353,18 +384,20 @@ def build_h100_ladder_run(
             tokenizer=tokenizer, tag=eval_tag, raw_prefix=_PALOMA_DETOK_RAW, version=PALOMA_DETOK_VERSION
         ).values(),
     ]
+    if eval_policy_answer_bpb:
+        validation += eval_policy_answer_bpb_datasets(tokenizer=tokenizer, seq_len=SEQ_LEN).values()
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             jax_config=dict(DEFAULT_JAX_CONFIG),
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(mp_policy),
+            mp=jmp.get_policy(MP_POLICY),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -394,7 +427,7 @@ def build_h100_ladder_run(
             ),
         )
         data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir, mix=mix
         )
         return GrugRunConfig(
             model=model,
@@ -428,13 +461,14 @@ def build_h100_ladder_run(
         build_config=build_config,
         deps=(*validation,),
         runtime_args={"train_resources": train_resources},
+        override_path=output_path,
     )
 
 
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
+def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -> None:
     """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
     python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
@@ -456,7 +490,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
         "--enable-extra-resources",
         *placement_args,
         "--priority",
-        "interactive",
+        priority,
         "--job-name",
         f"{run_id}-coord",
         "-e",
@@ -499,6 +533,32 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
     help="Override the step budget directly (else derived from --match).",
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
+@click.option(
+    "--seed",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Trainer seed (model init and data key); vary it to measure run-to-run noise.",
+)
+@click.option(
+    "--output-path",
+    default=None,
+    help="Write the run under this path (relative to the cluster prefix) instead of grug/<run-id>/<version>.",
+)
+@click.option("--mix-cache", default=None, help="Second flat train cache that gets --mix-share of the training tokens.")
+@click.option("--mix-share", type=float, default=None, help="Share of the training tokens from --mix-cache, in (0, 1].")
+@click.option(
+    "--eval-policy-answer-bpb",
+    is_flag=True,
+    help="Also score gold-answer BPB on the Eval Policy benchmarks (experiments.datasets.eval_policy_answer_bpb).",
+)
+@click.option(
+    "--priority",
+    type=click.Choice(["production", "interactive", "batch"]),
+    default="interactive",
+    show_default=True,
+    help="Iris scheduling priority for --submit.",
+)
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
     "--save-checkpoints",
@@ -525,13 +585,22 @@ def main(
     batch_size: int | None,
     num_steps: int | None,
     no_eval: bool,
+    seed: int,
+    output_path: str | None,
+    mix_cache: str | None,
+    mix_share: float | None,
+    eval_policy_answer_bpb: bool,
+    priority: str,
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
+    if (mix_cache is None) != (mix_share is None):
+        raise click.UsageError("--mix-cache and --mix-share go together")
+    mix = TrainMix(mix_cache, mix_share) if mix_cache is not None and mix_share is not None else None
     if submit:
-        _submit_to_cluster(run_id, target_cluster)  # re-execs iris; never returns
+        _submit_to_cluster(run_id, target_cluster, priority)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -541,6 +610,10 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        seed=seed,
+        output_path=output_path,
+        mix=mix,
+        eval_policy_answer_bpb=eval_policy_answer_bpb,
     )
 
 

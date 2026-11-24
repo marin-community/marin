@@ -12,14 +12,11 @@ import shutil
 import sqlite3
 import tarfile
 import time
-import urllib.request
 from collections import Counter
 from pathlib import Path
 
 import fsspec
 import numpy as np
-from iris.client.client import iris_ctx
-from iris.cluster.types import JobName
 from levanter.store.tree_store import TreeStore
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
@@ -33,13 +30,13 @@ from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
 from experiments.tool_normalization.pool_manifest import PoolPlan, refresh_pool
 from experiments.tool_normalization.preflight import classify
-from experiments.tool_normalization.scope import terminus_source
+from experiments.tool_normalization.relay import read_bulk_token, resolve_relay_base_url
+from experiments.tool_normalization.scope import excluded_terminal_source
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/ortet-24-20261112"
-RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
 MAX_REPLICAS = 24
-SECRET_FILE = Path(os.environ.get("RIGGING_SECRETS_DIR", "/run/rigging/secrets")) / "GLM_BULK_TOKEN"
 POOL_PAUSE_SECONDS = 120
+FLEET_MAX_ATTEMPTS = 12
 
 
 def giant_row_batch_size(
@@ -81,40 +78,6 @@ def pool_api_key():
         raise RuntimeError(f"GLM_POOL_API_KEY_REF {ref!r} yielded an EMPTY credential")
     os.environ["GLM_POOL_API_KEY"] = material.decode()
     return material.decode()
-
-
-def resolve_relay_base_url(token: str) -> str:
-    """Resolve the relay's registered glm-5.3 endpoint and confirm it serves the model."""
-    client = iris_ctx().client
-    if client is None:
-        raise RuntimeError("Iris client is unavailable inside the task")
-    endpoints = client.resolver_for_job(JobName.from_string(RELAY_JOB)).resolve("glm-5.3").endpoints
-    if not endpoints:
-        raise RuntimeError("The GLM relay has no registered endpoint")
-    base_url = endpoints[0].url.rstrip("/")
-    base_url = base_url if base_url.endswith("/v1") else f"{base_url}/v1"
-    request = urllib.request.Request(base_url + "/models", headers={"Authorization": "Bearer " + token})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        models = {entry["id"] for entry in json.load(response)["data"]}
-    if "glm-5.3" not in models:
-        raise RuntimeError(f"Relay does not serve glm-5.3: {sorted(models)}")
-    return base_url
-
-
-def read_bulk_token() -> str:
-    if SECRET_FILE.exists():
-        token = SECRET_FILE.read_text().strip()
-        if token:
-            return token
-    token = os.environ.get("GLM_BULK_TOKEN", "").strip()
-    if token:
-        return token
-    # Fail fast on an empty credential: a missing/empty Bearer produced the silent
-    # pool-era 401 storm (coordinator directive 2026-11-24). Never boot with one.
-    raise RuntimeError(
-        "GLM_BULK_TOKEN not provided via secret file or environment "
-        "(fail-fast: empty credentials caused the pool-era HTTP 401 storm)"
-    )
 
 
 def resume_cursor(prefix: str, predecessor: str | None, catalog_hash: str) -> tuple[dict, str, str]:
@@ -210,6 +173,14 @@ def main() -> None:
         cfg["workers"] = min(args.slots, plan.request_slots)
         request_slots = plan.request_slots
         write_capacity(request_slots)
+
+    # Shared fleet configuration keys (tool_normalization.model.ModelConfig): the request
+    # budget bounds retries, the stop file and deadline gate allocation, and the relay job
+    # only applies on the relay fallback path (pool mode rotates manifest entries instead).
+    cfg["model"]["max_attempts"] = FLEET_MAX_ATTEMPTS
+    cfg["model"]["stop_file"] = str(root / "STOP")
+    cfg["model"]["deadline_unix"] = time.time() + args.hours * 3600
+    cfg["model"]["relay_job"] = None if manifest_ref else RELAY_JOB
 
     if manifest_ref:
         pool_plan = refresh_pool(
@@ -337,7 +308,7 @@ def main() -> None:
             index = acquire_shard(source_rows, tokenizer, batch / "sources")
             selected = []
             dispositions = []
-            terminus = terminus_source(shard.get("source", ""))
+            terminus = excluded_terminal_source(shard.get("source", ""))
             for item in index:
                 source_file = batch / "sources" / item["id"] / "source.json"
                 source = json.loads(source_file.read_text())

@@ -10,7 +10,8 @@ never shares a container with the model-authored Dockerfile.
 
 1. The build job runs a pinned ``bash`` image (Iris requires ``bash`` in the task image, so the
    kaniko image itself cannot be the task image). It fetches a sha256-checked ``crane``, exports
-   the pinned kaniko debug image's ``/kaniko`` with it, and runs kaniko on the context for
+   the pinned kaniko debug image's ``/kaniko`` with it, clears the bootstrap filesystem with
+   kaniko's ``--pre-cleanup``, and runs kaniko on the context for
    linux/amd64 with ``--no-push``, writing ``image.tar`` into ``$IRIS_OUTPUT_DIR``. kaniko needs no
    daemon, mounts or privileges, only the default capabilities and egress, which CoreWeave's
    DEFAULT profile has (buildah failed there on remount; GCP gVisor has no network and GCP DEFAULT
@@ -19,8 +20,8 @@ never shares a container with the model-authored Dockerfile.
    that Iris's own uploader sidecar writes to the cluster's temporary bucket, recording the sha256.
 2. The push job runs ``image_push`` in a fresh, pinned Python image. It downloads that
    archive, checks the sha256 Iris recorded, re-fetches and checks ``crane``, and pushes
-   ``image.tar`` under a tag unique to this publish. The credential travels in the job's
-   environment as ``REGISTRY_AUTH``, which Iris redacts from job descriptions and does not log.
+   ``image.tar`` under a tag unique to this publish. The credential is the job's Iris secret
+   ``REGISTRY_AUTH``, delivered as a file, never in its environment or pod spec.
    No code from the build runs in this job; ``crane`` parsing the untrusted tarball is the
    remaining surface.
 3. The submitter reads the manifest back by that tag, takes its digest from the bytes, checks the
@@ -37,22 +38,25 @@ The builder takes the credential at construction and reads no secret store itsel
 a host without ``gcloud`` or Google credentials, such as a coordinator in an Iris task. The
 credential is the Secret Manager secret ``SECRET_NAME``, a JSON object with ``registry``, ``user``
 and ``password``. ``registry_credential_json`` reads it with ``gcloud`` and is for laptops only:
-``scripts/build_image_job.py`` parses its result in process, and whoever launches a coordinator
-job reads it at submit time and passes the JSON text in the job's environment, conventionally as
-``REGISTRY_CREDENTIAL_ENV``, from which ``build_process`` constructs the builder. That name holds
-the word "credential", so Iris redacts its value from job descriptions.
+``scripts/build_image_job.py`` parses its result in process. A coordinator job receives it as the
+Iris secret ``REGISTRY_CREDENTIAL_ENV``, a file under ``rigging.secrets.SECRETS_DIR``
+(``iris job run --secret TASKFORGE_REGISTRY_CREDENTIAL REGISTRY_CREDENTIAL_SOURCE``, which the
+submitting client resolves), and reads it with ``rigging.secrets.require_secret``.
 
-Iris copies a parent task's explicit environment into every job the task submits, so a builder in
-a coordinator task would hand that variable, with the coordinator's other secrets, to the build
-job. ``submit_job`` therefore blanks inherited variables and disables mounted-secret inheritance.
-It explicitly passes only CoreWeave storage credentials to both jobs, and the push job alone
-receives the registry credential, as ``REGISTRY_AUTH``.
+Iris copies a parent task's explicit environment into every job the task submits, and by default
+its mounted secrets too. ``submit_job`` therefore blanks inherited variables and isolates the
+secret map: both jobs receive only the CoreWeave storage credentials as Iris secrets, and the push
+job alone also receives the registry credential, as the secret ``REGISTRY_AUTH``. The exception is
+a parent that carries its CoreWeave keys as explicit environment (``iris job run -e CW_KEY_ID ...``):
+Iris copies those into both jobs' environments, where they override the secrets, and blanking them
+would leave the jobs with empty storage credentials.
 
-The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
-there is no short-lived scoped token to hand the push job instead. Exposure that remains: the
-coordinator's and the push job's pod specs carry the credential (cluster operators can read them),
-and both image jobs carry the submitter's CoreWeave storage credentials for output archives.
-The build's RUN steps can read those storage credentials.
+The default registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
+there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
+values persist in the controller database, and both image jobs carry the submitter's CoreWeave
+storage credentials, which Iris requires on every CoreWeave job and the output uploader uses. The
+build's RUN steps can read those storage credentials from the mounted secret files; a key scoped
+to the output-archive prefix would narrow that, and none exists yet.
 """
 
 import asyncio
@@ -65,6 +69,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.request import parse_http_list, parse_keqv_list
 
 import httpx
 from iris.cli.connect import connect_controller
@@ -119,11 +124,11 @@ MANIFEST_TYPES = (
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 )
-# Iris copies the submitter's HF_TOKEN and WANDB_API_KEY into every job unless overridden.
-BLANKED_ENV = ("HF_TOKEN", "WANDB_API_KEY")
 REGISTRY_CREDENTIAL_ENV = "TASKFORGE_REGISTRY_CREDENTIAL"
-"""The variable a coordinator job carries the credential JSON in; "credential" makes Iris redact it."""
+"""The Iris secret name a coordinator job receives the credential JSON under."""
 CREDENTIAL_FIELDS = ("registry", "user", "password")
+REGISTRY_CREDENTIAL_SOURCE = f"gcp-secret://projects/{SECRET_PROJECT}/secrets/{SECRET_NAME}/versions/{SECRET_VERSION}"
+"""The credential's ``rigging.secrets`` source reference, for ``iris job run --secret``."""
 
 # Runs under bash in BUILD_IMAGE. kaniko replaces the container's root filesystem while it builds,
 # so it is exec'd last; its exit code is the job's. The EXIT trap marks failures before exec.
@@ -131,7 +136,7 @@ BUILD_SCRIPT = r"""
 set -euo pipefail
 trap 'exit "$BUILD_SETUP_FAILED_EXIT"' EXIT
 K=/kaniko
-mkdir -p "$K" /tmp/kroot /app/context "$IRIS_OUTPUT_DIR"
+mkdir -p "$K/context" /tmp/kroot "$IRIS_OUTPUT_DIR"
 wget -q -O /tmp/crane.tgz "$CRANE_URL"
 echo "$CRANE_SHA256  /tmp/crane.tgz" | sha256sum -c - > /dev/null
 tar xzf /tmp/crane.tgz -C /tmp crane
@@ -139,9 +144,11 @@ tar xzf /tmp/crane.tgz -C /tmp crane
 cp -a /tmp/kroot/kaniko/. "$K/"
 mkdir -p "$K/ssl/certs"
 cp /etc/ssl/certs/ca-certificates.crt "$K/ssl/certs/"
-tar xzf "/app/$CONTEXT_FILE" -C /app/context
-SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context/$DOCKERFILE" \
-  --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" --custom-platform linux/amd64
+tar xzf "/app/$CONTEXT_FILE" -C "$K/context"
+# /kaniko is excluded from cleanup; the source context must survive bootstrap removal.
+SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context "dir://$K/context" --dockerfile "$K/context/$DOCKERFILE" \
+  --pre-cleanup --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" \
+  --custom-platform linux/amd64
 """
 
 
@@ -163,9 +170,9 @@ class RegistryCredential:
             raise ValueError(f"the registry credential is not a JSON object of strings {', '.join(CREDENTIAL_FIELDS)}")
         return cls(registry=value["registry"], user=value["user"], password=value["password"])
 
-    def docker_config(self) -> bytes:
+    def docker_config(self) -> str:
         auth = base64.b64encode(f"{self.user}:{self.password}".encode()).decode()
-        return json.dumps({"auths": {self.registry: {"auth": auth}}}).encode()
+        return json.dumps({"auths": {self.registry: {"auth": auth}}})
 
 
 def registry_credential_json() -> str:
@@ -217,6 +224,28 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
     try:
         with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
             by_tag = client.get(f"{base}/manifests/{tag}")
+            scheme, _, parameters = by_tag.headers.get("www-authenticate", "").partition(" ")
+            if by_tag.status_code == 401 and scheme.lower() == "bearer":
+                challenge = parse_keqv_list(parse_http_list(parameters))
+                realm = httpx.URL(challenge["realm"])
+                registry = httpx.URL(f"https://{credential.registry}")
+                if (
+                    (realm.scheme, realm.host, realm.port) != (registry.scheme, registry.host, registry.port)
+                    or realm.username
+                    or realm.password
+                ):
+                    raise ValueError("Registry token endpoint must share the credential's HTTPS origin")
+                authorization = client.get(realm, params={"service": challenge["service"], "scope": challenge["scope"]})
+                authorization.raise_for_status()
+                payload = authorization.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Registry token response must be a JSON object")
+                token = payload.get("token") or payload["access_token"]
+                if not isinstance(token, str) or not token:
+                    raise ValueError("Registry token response must contain a nonempty token")
+                client.auth = httpx.Auth()
+                client.headers["Authorization"] = f"Bearer {token}"
+                by_tag = client.get(f"{base}/manifests/{tag}")
             by_tag.raise_for_status()
             digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
             by_digest = client.get(f"{base}/manifests/{digest}")
@@ -245,22 +274,33 @@ def output_archive(job: Job) -> TaskOutputArchive:
 
 
 def submit_job(
-    client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str
+    client: IrisClient,
+    *,
+    name: str,
+    entrypoint: Entrypoint,
+    image: str,
+    env: dict[str, str],
+    secrets: dict[str, str],
+    target_cluster: str,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
-    Inherited environment values are blanked and mounted-secret inheritance is disabled.
-    Only the submitter's CoreWeave storage credentials and explicit ``env`` values are passed.
+    Inherited environment values are blanked and mounted-secret inheritance is disabled. The job
+    receives explicit ``env`` values, and as Iris secrets (files) only ``secrets`` and the
+    submitter's CoreWeave storage credentials. Inherited CoreWeave keys are not blanked: Iris lets
+    a CoreWeave key in the environment override the secret of the same name, so a blank would
+    replace the storage credential with an empty one.
     """
     job_info = get_job_info()
-    inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
+    inherited = {} if job_info is None else {name: "" for name in job_info.env if name not in COREWEAVE_SECRET_NAMES}
     storage = {name: value for name in COREWEAVE_SECRET_NAMES if (value := get_secret(name)) is not None}
     return client.submit(
         entrypoint=entrypoint,
         name=name,
         environment=EnvironmentSpec(
             setup_scripts=[],
-            env_vars={**inherited, **dict.fromkeys(BLANKED_ENV, ""), **storage, **env},
+            env_vars={**inherited, **env},
+            secrets={**storage, **secrets},
             secret_behavior=SecretBehavior.ISOLATE,
         ),
         resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
@@ -298,12 +338,16 @@ class IrisImageBuilder:
         self.credential = credential
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
-        return (await self.publish_with_timings(build, repository)).image
+        """Publish ``build`` under ``repository`` and return its digest-pinned reference.
 
-    async def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
-        return await asyncio.to_thread(self._publish, build, repository)
+        The reference is ``registry/repository@sha256:...``. A failed build raises ``BuildFailed``,
+        and a failure of the host or the registry raises ``ImageJobFailed``.
+        """
+        # A publish waits on Iris for up to SCHEDULING_TIMEOUT + JOB_TIMEOUT seconds; keep the loop free.
+        return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
-    def _publish(self, build: DockerBuild, repository: str) -> Published:
+    def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
+        """Publish ``build`` under ``repository``, blocking until the image is pushed and read back."""
         check_build_limits(build, BUILD_LIMITS)
         if not REPOSITORY.fullmatch(repository):
             raise ValueError(f"not an OCI repository name: {repository!r}")
@@ -335,6 +379,7 @@ class IrisImageBuilder:
                         "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
                         "DESTINATION": destination,
                     },
+                    secrets={},
                     target_cluster=self.target_cluster,
                 )
                 jobs.append(build_job)
@@ -357,8 +402,8 @@ class IrisImageBuilder:
                         image_push.ARCHIVE_URI_ENV: archive.uri,
                         image_push.ARCHIVE_SHA256_ENV: archive.sha256,
                         image_push.DESTINATION_ENV: destination,
-                        image_push.REGISTRY_AUTH_ENV: base64.b64encode(credential.docker_config()).decode(),
                     },
+                    secrets={image_push.REGISTRY_AUTH_SECRET: credential.docker_config()},
                     target_cluster=self.target_cluster,
                 )
                 jobs.append(push_job)
@@ -394,8 +439,8 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
         raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
     if status.state == JobState.SUCCEEDED:
         return
-    host_failed = status.state in HOST_JOB_STATES or any(
-        task.exit_code == BUILD_SETUP_FAILED_EXIT for task in status.tasks
-    )
+    # The controller's JobStatus carries aggregate counts only: no per-task statuses and a job-level
+    # exit code of 0, so the build's exit code is read from its one task.
+    host_failed = status.state in HOST_JOB_STATES or job.task(0).status().exit_code == BUILD_SETUP_FAILED_EXIT
     error = ImageJobFailed if host_failed else failed
     raise error(f"job {job.job_id} ended {status.state}: {status.error_message}")

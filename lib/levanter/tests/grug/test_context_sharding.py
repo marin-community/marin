@@ -21,7 +21,7 @@ from jax.sharding import AxisType, Mesh, reshard, set_mesh
 
 BATCH_AXES = ("replica_dcn", "data", "expert")
 
-_MESH_AXES = ("replica_dcn", "data", "context", "expert", "model")
+_MESH_AXES = ("replica_dcn", "data", "expert", "context", "model")
 TOKEN_AXES = (*BATCH_AXES, "context")
 
 
@@ -83,7 +83,7 @@ def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axi
             return int(overflow.sender_dropped) + int(overflow.receiver_dropped)
 
         context_drops = dropped(mesh_of((1, 1, 2, 2, 1), devices))
-        reference_drops = dropped(mesh_of((1, 1, 1, 2, 1), devices))
+        reference_drops = dropped(mesh_of((1, 1, 2, 1, 1), devices))
         assert reference_drops > 0, "capacity_factor=0.5 must actually drop assignments"
         assert context_drops == reference_drops, (context_drops, reference_drops)
 

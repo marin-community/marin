@@ -8,20 +8,19 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from harbor import TrialEvent as PublicTrialEvent
 from harbor import TrialHookEvent as PublicTrialHookEvent
 from harbor import TrialQueue as PublicTrialQueue
 from harbor.job import Job
 from harbor.models.job.config import JobConfig, RetryConfig
 from harbor.models.job.result import JobResult, JobStats
-from harbor.models.trial.config import TaskConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.config import AgentConfig, TaskConfig
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.tasks.packager import Packager
 from harbor.tasks.client import BatchDownloadResult, TaskDownloadResult
+from harbor.tasks.packager import Packager
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.queue import TrialQueue
-
 
 TASK_TOML = """\
 [task]
@@ -83,9 +82,9 @@ class TestTrialQueueIntegration:
         ]
 
         for method_name in required_methods:
-            assert hasattr(TrialQueue, method_name), (
-                f"TrialQueue missing required method: {method_name}"
-            )
+            assert hasattr(
+                TrialQueue, method_name
+            ), f"TrialQueue missing required method: {method_name}"
             method = getattr(TrialQueue, method_name)
             assert callable(method), f"{method_name} is not callable"
 
@@ -123,6 +122,7 @@ class TestTrialQueueIntegration:
     ):
         """Test that Job still wires TrialQueue the same way as before."""
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="queue-public-api-test",
             jobs_dir=tmp_path / "jobs",
             n_concurrent_trials=3,
@@ -143,6 +143,7 @@ class TestTrialQueueIntegration:
     def test_job_add_hook_delegates_to_trial_queue(self, tmp_path):
         """Test that Job hook registration delegates directly to the queue."""
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="queue-hook-delegation-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[TaskConfig(path=Path("/test/task"))],
@@ -165,6 +166,7 @@ class TestTrialQueueIntegration:
     def test_job_propagates_extra_instruction_paths_to_trial_configs(self, tmp_path):
         extra_hint = tmp_path / "extra-no-multimodal-hint.md"
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="extra-hint-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[TaskConfig(path=Path("/test/task"))],
@@ -183,9 +185,11 @@ class TestTrialQueueIntegration:
     async def test_resolve_task_configs_copies_explicit_tasks(self):
         """Test resolved trial task configs can change without changing JobConfig."""
         task = TaskConfig(name="test-org/test-task", ref="latest")
-        config = JobConfig(job_name="job", tasks=[task])
+        config = JobConfig(
+            agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]
+        )
 
-        resolved_task_configs = await Job._resolve_task_configs(config)
+        resolved_task_configs = await Job.resolve_task_configs(config)
         resolved_task_configs[0].ref = f"sha256:{'a' * 64}"
 
         assert config.tasks[0].ref == "latest"
@@ -197,6 +201,7 @@ class TestTrialQueueIntegration:
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="lock-backfill-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[task],
@@ -244,6 +249,7 @@ class TestTrialQueueIntegration:
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="lock-created-at-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[task],
@@ -285,6 +291,7 @@ class TestTrialQueueIntegration:
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="lock-mismatch-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[task],
@@ -319,6 +326,7 @@ class TestTrialQueueIntegration:
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="lock-resume-trial-name-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[task],
@@ -353,6 +361,8 @@ class TestTrialQueueIntegration:
                     task_checksum=content_hash,
                     config=existing_trial_config,
                     agent_info=AgentInfo(name="oracle", version="unknown"),
+                    finished_at=datetime.now(),
+                    completion=TrialCompletion(trajectory_present=False),
                 ).model_dump_json(indent=4)
             )
         finally:
@@ -377,6 +387,7 @@ class TestTrialQueueIntegration:
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="lock-resume-pending-trial-name-test",
             jobs_dir=tmp_path / "jobs",
             n_attempts=3,
@@ -421,6 +432,8 @@ class TestTrialQueueIntegration:
                     task_checksum=content_hash,
                     config=existing_trial_config,
                     agent_info=AgentInfo(name="oracle", version="unknown"),
+                    finished_at=datetime.now(),
+                    completion=TrialCompletion(trajectory_present=False),
                 ).model_dump_json(indent=4)
             )
         finally:
@@ -431,7 +444,10 @@ class TestTrialQueueIntegration:
             assert [
                 trial_config.trial_name
                 for trial_config in resumed_job._remaining_trial_configs
-            ] != ["original-trial-1", "original-trial-2"]
+            ] != [
+                "original-trial-1",
+                "original-trial-2",
+            ]
 
             resumed_job._init_job_lock()
             resumed_job._write_job_lock()
@@ -519,6 +535,7 @@ class TestTrialQueueIntegration:
     ):
         """Test that legacy Job hook helpers still register via TrialQueue."""
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name=f"queue-{method_name}-test",
             jobs_dir=tmp_path / "jobs",
             tasks=[TaskConfig(path=Path("/test/task"))],
@@ -541,6 +558,7 @@ class TestTrialQueueIntegration:
     def test_job_config_top_level_fields(self):
         """Test that JobConfig has top-level n_concurrent_trials, quiet, retry."""
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             n_concurrent_trials=8,
             quiet=True,
             retry=RetryConfig(max_retries=3),
@@ -554,7 +572,7 @@ class TestTrialQueueIntegration:
     @pytest.mark.unit
     def test_job_config_defaults(self):
         """Test that JobConfig has correct defaults for new fields."""
-        config = JobConfig(tasks=[], datasets=[])
+        config = JobConfig(agents=[AgentConfig(name="pi")], tasks=[], datasets=[])
         assert config.n_concurrent_trials == 4
         assert config.quiet is False
         assert config.retry.max_retries == 0
@@ -563,6 +581,7 @@ class TestTrialQueueIntegration:
     def test_job_config_serialization(self):
         """Test that JobConfig serializes/deserializes correctly."""
         config = JobConfig(
+            agents=[AgentConfig(name="pi")],
             n_concurrent_trials=8,
             quiet=True,
             tasks=[],
@@ -573,7 +592,9 @@ class TestTrialQueueIntegration:
         assert config_dict["n_concurrent_trials"] == 8
         assert config_dict["quiet"] is True
 
-        restored = JobConfig.model_validate(config_dict)
+        restored = JobConfig.model_validate(
+            {"agents": [{"name": "pi"}], **(config_dict)}
+        )
         assert restored.n_concurrent_trials == 8
         assert restored.quiet is True
 
@@ -588,13 +609,18 @@ class TestJobConfigBackwardCompat:
             warnings.simplefilter("always")
             config = JobConfig.model_validate(
                 {
-                    "orchestrator": {
-                        "n_concurrent_trials": 8,
-                        "quiet": True,
-                        "retry": {"max_retries": 3},
-                    },
-                    "tasks": [],
-                    "datasets": [],
+                    "agents": [{"name": "pi"}],
+                    **(
+                        {
+                            "orchestrator": {
+                                "n_concurrent_trials": 8,
+                                "quiet": True,
+                                "retry": {"max_retries": 3},
+                            },
+                            "tasks": [],
+                            "datasets": [],
+                        }
+                    ),
                 }
             )
             assert len(w) == 1
@@ -612,12 +638,17 @@ class TestJobConfigBackwardCompat:
             warnings.simplefilter("always")
             config = JobConfig.model_validate(
                 {
-                    "n_concurrent_trials": 16,
-                    "orchestrator": {
-                        "n_concurrent_trials": 8,
-                    },
-                    "tasks": [],
-                    "datasets": [],
+                    "agents": [{"name": "pi"}],
+                    **(
+                        {
+                            "n_concurrent_trials": 16,
+                            "orchestrator": {
+                                "n_concurrent_trials": 8,
+                            },
+                            "tasks": [],
+                            "datasets": [],
+                        }
+                    ),
                 }
             )
 
@@ -631,11 +662,16 @@ class TestJobConfigBackwardCompat:
             warnings.simplefilter("always")
             config = JobConfig.model_validate(
                 {
-                    "orchestrator": {
-                        "quiet": True,
-                    },
-                    "tasks": [],
-                    "datasets": [],
+                    "agents": [{"name": "pi"}],
+                    **(
+                        {
+                            "orchestrator": {
+                                "quiet": True,
+                            },
+                            "tasks": [],
+                            "datasets": [],
+                        }
+                    ),
                 }
             )
 
@@ -649,13 +685,18 @@ class TestJobConfigBackwardCompat:
             warnings.simplefilter("always")
             config = JobConfig.model_validate(
                 {
-                    "orchestrator": {
-                        "type": "local",
-                        "n_concurrent_trials": 4,
-                        "kwargs": {"foo": "bar"},
-                    },
-                    "tasks": [],
-                    "datasets": [],
+                    "agents": [{"name": "pi"}],
+                    **(
+                        {
+                            "orchestrator": {
+                                "type": "local",
+                                "n_concurrent_trials": 4,
+                                "kwargs": {"foo": "bar"},
+                            },
+                            "tasks": [],
+                            "datasets": [],
+                        }
+                    ),
                 }
             )
 

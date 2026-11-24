@@ -62,7 +62,13 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
+from experiments.post_training.task_curation.inventory import (
+    SELECTION_INPUT_PREFIX,
+    EvalLiteRecipe,
+    SelectionRecipe,
+    eval_lite_step,
+    task_selection_step,
+)
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
@@ -89,12 +95,16 @@ EMBEDDING_STAGES = (
 
 
 def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
-    """The named catalog sources in catalog order, or the whole catalog when none is named."""
+    """Select named sources, or training sources when no names are supplied."""
     catalog = runnable_sources()
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+    return {
+        name: pipeline
+        for name, pipeline in catalog.items()
+        if (name in sources if sources else pipeline.declaration.type != "eval")
+    }
 
 
 def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
@@ -133,7 +143,13 @@ def _conversion_steps(
         step = cast(CurationPipeline, source.pipeline)(source, options)
         declaration = source.declaration
         assert declaration.pipeline is not None
-        identity = canonical_sha256({"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()})
+        identity = canonical_sha256(
+            {
+                "pipeline": declaration.pipeline.model_dump(),
+                "step": f"{step.name}@{step.version}",
+                "dependencies": step.fingerprint(),
+            }
+        )
         steps[source.name] = replace(
             step, name=f"rl-semantics/converted/{source.name}-{identity[:16]}", version=CORPUS_CONVERSION_VERSION
         )
@@ -244,17 +260,19 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     return _CorpusSources(roots, inventory, document["population"])
 
 
-def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
-    if corpus.population != "admitted":
-        raise click.UsageError("Task selection requires an admitted corpus from FULL curation")
-    curated = {
-        source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
-        for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))
+def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: str) -> dict[str, ArtifactStep]:
+    if corpus.population != population:
+        raise click.UsageError("EvalLite requires a converted corpus; training selection requires an admitted corpus")
+    return {
+        source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
+        for source_id, root in sorted(corpus.roots.items())
     }
+
+
+def _selection_pass(step: ArtifactStep, *, cache_dir: Path | None, do_run: bool) -> None:
     with ExitStack() as scope:
         if cache_dir is not None:
             scope.enter_context(artifact_prefix(str(cache_dir)))
-        step = task_selection_step(curated, recipe)
         if do_run:
             result = run(step, max_concurrent=1)[0]
             click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
@@ -374,6 +392,7 @@ def _embedding_pass(
 @click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
 @click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
+@click.option("--eval-lite", help="EvalLite recipe JSON: select from a completed converted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
@@ -481,6 +500,7 @@ def main(
     corpus: str | None,
     embed: str | None,
     selection: str | None,
+    eval_lite: str | None,
     representation: str,
     embedding_sample_size: int | None,
     catalog_root: str | None,
@@ -521,8 +541,10 @@ def main(
         )
     if mode is None and corpus is None:
         raise click.UsageError("Supply --mode or --corpus")
-    if corpus is not None and embed is None and selection is None:
-        raise click.UsageError("--corpus requires --embed or --selection")
+    if corpus is not None and embed is None and selection is None and eval_lite is None:
+        raise click.UsageError("--corpus requires --embed, --selection or --eval-lite")
+    if eval_lite is not None and (corpus is None or selection is not None or embed is not None):
+        raise click.UsageError("--eval-lite requires --corpus and cannot combine with --selection or --embed")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
     configure_coreweave_s3()
@@ -534,6 +556,10 @@ def main(
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
     selected = _selected_sources(sources)
+    if processing_mode != SourceProcessingMode.QUICK and any(
+        source.declaration.type == "eval" for source in selected.values()
+    ):
+        raise click.UsageError("Evaluation sources use --mode quick to publish their full benchmark population")
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
     if publication_catalog is not None and (
@@ -549,8 +575,15 @@ def main(
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
-        assert selection_recipe is not None
-        _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
+        if eval_lite is not None:
+            panel = EvalLiteRecipe.model_validate_json(StoragePath(eval_lite).read_text())
+            inputs = _corpus_inputs(_corpus_sources(corpus), "converted", panel.name, panel.version)
+            step = eval_lite_step(inputs, panel)
+        else:
+            assert selection_recipe is not None
+            inputs = _corpus_inputs(_corpus_sources(corpus), "admitted", selection_recipe.name, selection_recipe.version)
+            step = task_selection_step(inputs, selection_recipe)
+        _selection_pass(step, cache_dir=cache_dir, do_run=do_run)
         return
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
@@ -585,7 +618,15 @@ def main(
         max_workers,
         concurrent_sources,
         worker_resources=worker_resources,
-        coordinator_resources=ResourceConfig(cpu=1, ram=coordinator_memory or LOCAL_MEMORY, preemptible=False),
+        # Iris authorizes an elevated worker profile only when the launching parent
+        # task carries the same profile; the coordinator job is that parent, so it
+        # must request the profile the workers will run under.
+        coordinator_resources=ResourceConfig(
+            cpu=1,
+            ram=coordinator_memory or LOCAL_MEMORY,
+            preemptible=False,
+            container_profile=worker_resources.container_profile,
+        ),
         chunk_storage_prefix=(
             str(cache_dir / ".zephyr")
             if cache_dir is not None
@@ -608,13 +649,23 @@ def main(
             pool=pool,
             stage=embed,
         )
-    inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
+    declarations = {source.declaration.id: source.declaration for source in {**all_sources(), **selected}.values()}
+    inventory = list(declarations.values())
     if corpus is not None:
         restored = _corpus_sources(corpus)
         assert embedding is not None
-        embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
+        # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
+        corpus_inventory = {row.id: row for row in restored.inventory}
+        corpus_inventory.update({row.id: row for row in inventory})
+        embedding(
+            restored.roots,
+            inventory=list(corpus_inventory.values()),
+            population=restored.population,
+            do_run=do_run,
+        )
         if selection_recipe is not None:
-            _selection_pass(restored, selection_recipe, cache_dir=cache_dir, do_run=do_run)
+            inputs = _corpus_inputs(restored, "admitted", selection_recipe.name, selection_recipe.version)
+            _selection_pass(task_selection_step(inputs, selection_recipe), cache_dir=cache_dir, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")
@@ -634,11 +685,14 @@ def main(
         if local and sources:
             selected = {name: selected[name] for name in dict.fromkeys(sources)}
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
-        steps = (
-            {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
-            if local
-            else _conversion_steps(selected, options)
-        )
+        if local:
+            assert cache_dir is not None
+            with artifact_prefix(str(cache_dir)):
+                steps = {
+                    name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()
+                }
+        else:
+            steps = _conversion_steps(selected, options)
         roots = _quick_conversion(
             steps,
             selected,

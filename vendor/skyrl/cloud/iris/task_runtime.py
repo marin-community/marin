@@ -45,9 +45,21 @@ import time
 import uuid
 from typing import Any, Protocol
 
+import huggingface_hub.constants
+from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
+from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.timing import RateLimiter
 
-from cloud.iris.artifacts import ArtifactSource, atomic_directory_update, file_inventory, fs_and_path, materialize
+from cloud.iris.artifacts import (
+    ArtifactSource,
+    FileEntry,
+    atomic_directory_update,
+    copy_file_inventory,
+    file_inventory,
+    fs_and_path,
+    materialize,
+)
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
     ensure_hugging_face_model_cache,
@@ -70,12 +82,16 @@ from marinskyrl.environment_contract import (
     ensure_debug_artifact_directories,
     ray_cluster_owner_environment,
 )
-from marinskyrl.hf_model import immutable_model_cache_key, validate_hf_model_weights
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
+from marinskyrl.hf_model import (
+    MODEL_CACHE_SUFFIXES,
+    HuggingFaceModelCache,
+    immutable_model_cache_key,
+    validate_hf_model_weights,
+)
+from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
-from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
-from marinskyrl.distillation import TeacherModelSpec, TeacherSource, compile_distillation_plan_from_config
+from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
 from marinskyrl.process_diagnostics import (
     ProcessOutcomeKind,
     initialize_process_diagnostics,
@@ -83,13 +99,14 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
     resolve_ray_spill_target,
     validate_ray_spill_dir,
 )
-from cloud.iris.launch_config import RunMode, load_launch_config
+from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -192,6 +209,8 @@ def _ray_bin() -> str:
 DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
+STARTUP_POLL_INTERVAL = 1.0
+RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
 # Bound the rank-0 rendezvous PutObject: unbounded fsspec/s3fs put can wedge the
@@ -248,33 +267,102 @@ def stage_task_data(data_json: str, *, role: str) -> None:
     _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
-def stage_model(model_path: str, revision: str | None = None) -> None:
-    """Pre-download one model revision into this NODE's local HF cache on EVERY node.
-
-    The controller runs on every node before Ray bootstrap, so pre-download the
-    weights ONCE PER NODE here (N pulls, not N*8) into the node-local HF cache.
-    The download runs in the controller's pre-Ray phase where no collective
-    barrier is active. With ``HF_HUB_OFFLINE=1`` set for the training ranks
-    (config extra_env), all ranks on a node read the pre-populated cache.
-    Idempotent: ``snapshot_download`` skips already-complete cached files.
-    """
-    if is_cloud_uri(model_path):
-        raise ValueError(f"stage_model accepts a Hugging Face repo ID, not object-store model URI {model_path!r}")
-    if not model_path or os.path.isdir(model_path):
-        _log(f"stage_model: skip (model_path={model_path!r} is empty or a local directory)")
+def _write_model_ref(cache_root: Path, revision: str, resolved_revision: str) -> None:
+    if revision == resolved_revision:
         return
+    refs = (cache_root / "refs").resolve()
+    ref = (refs / revision).resolve()
+    ref.relative_to(refs)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ref-", dir=ref.parent) as temporary:
+        staged = Path(temporary) / "commit"
+        staged.write_text(resolved_revision)
+        os.replace(staged, ref)
 
-    # Weights + config + tokenizer + repository-provided chat templates and any
-    # trust_remote_code modeling files needed by from_pretrained in offline ranks.
-    allow_patterns = ["*.safetensors", "*.json", "*.txt", "*.model", "*.py", "*.jinja"]
 
-    _log(f"Pre-staging model on this node (rank {_rank()}/{_num_tasks()}): {model_path}")
-    local_dir = download_hugging_face_snapshot(
-        model_path,
-        revision=revision,
-        allow_patterns=tuple(allow_patterns),
-    )
-    _log(f"model pre-staged to node-local HF cache: {local_dir}")
+def _stage_model_from_hub(model_id: str, revision: str | None, *, requested_revision: str | None = None) -> Path:
+    """Retain the node's direct-Hub download when its CPU mirror is unavailable."""
+    cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model_id.replace('/', '--')}"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(cache_root / ".stage.lock")):
+        _log(f"Pre-staging model from the Hub on node {_rank()}/{_num_tasks()}: {model_id}")
+        snapshot = Path(
+            download_hugging_face_snapshot(
+                model_id,
+                revision=revision,
+                allow_patterns=tuple(f"*{suffix}" for suffix in MODEL_CACHE_SUFFIXES),
+            )
+        )
+
+        if requested_revision is not None and revision is not None:
+            _write_model_ref(cache_root, requested_revision, revision)
+        return snapshot
+
+
+def stage_model(model: HuggingFaceModelCache) -> Path:
+    """Restore a CPU-made bucket mirror into this node's offline HF cache."""
+    if not is_hugging_face_commit(model.resolved_revision):
+        raise ValueError(f"Hugging Face cache requires a resolved commit: {model.model_id}")
+    try:
+        manifest = load_model_manifest(model.uri)
+        if manifest.identity != model.identity or manifest.model_id != model.model_id:
+            raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
+        if manifest.revision != model.resolved_revision:
+            raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
+        cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
+        local_path = cache_root / "snapshots" / manifest.revision
+        _log(f"Staging bucket mirror on node {_rank()}/{_num_tasks()}: {model.uri} -> {local_path}")
+        filesystem, root = fs_and_path(model.uri)
+        for entry in manifest.files:
+            if not filesystem.exists(join_resource_path(root, entry.path)):
+                raise FileNotFoundError(f"Model mirror file missing: {entry.path}")
+        inventory = tuple(
+            (join_resource_path(root, entry.path), FileEntry(entry.path, entry.size))
+            for entry in manifest.files
+            if entry.path.endswith(MODEL_CACHE_SUFFIXES)
+        )
+        validate_hf_model_weights({entry.path for _, entry in inventory}, model.uri)
+        # Iris tasks share the host HF cache, including separately submitted jobs.
+        # Lock the materializer's existence check and install, plus the ref update.
+        cache_root.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(cache_root / ".stage.lock")):
+            # A snapshot is shared across tokenizer variants and running jobs.
+            # Keep its existing metadata/template edits and add files atomically.
+            missing = tuple(
+                (source, entry)
+                for source, entry in inventory
+                if not (local_path / entry.path).is_file()
+                or (entry.path.endswith(".safetensors") and (local_path / entry.path).stat().st_size != entry.size)
+            )
+            if missing:
+                with tempfile.TemporaryDirectory(prefix=".hf-stage-", dir=cache_root) as temporary:
+                    staging = Path(temporary) / "snapshot"
+                    copy_file_inventory(filesystem, missing, staging)
+                    for _, entry in missing:
+                        destination = local_path / entry.path
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(staging / entry.path, destination)
+            _write_model_ref(cache_root, model.revision, model.resolved_revision)
+        return local_path
+    except FileNotFoundError:
+        _log(f"Bucket mirror missing files; falling back to the Hub: {model.uri}")
+        return _stage_model_from_hub(model.model_id, model.resolved_revision, requested_revision=model.revision)
+
+
+def stage_hugging_face_models(config: DictConfig) -> None:
+    """Prefer CPU mirrors when staging Hub models before starting Ray."""
+    models = {
+        (value.model_id, value.revision): HuggingFaceModelCache(**_container(value))
+        for value in config.inputs.hugging_face_models
+    }
+    required = hugging_face_models(config)
+    # Checkpoint exports no longer need their training teacher mirrors.
+    for model in required:
+        mirror = models.get((model.path, model.revision))
+        if mirror is None:
+            _stage_model_from_hub(model.path, model.revision)
+        else:
+            stage_model(mirror)
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
@@ -382,6 +470,14 @@ def _copy_tokenizer_metadata(source: Path, destination: Path) -> None:
         shutil.copy2(metadata_file, destination / metadata_file.name)
 
 
+def _validate_policy_tokenizer(path: Path, source: str) -> None:
+    # Keep Transformers optional for dependency-light launcher imports.
+    from transformers import AutoTokenizer
+
+    _require_tokenizer_metadata(path, source)
+    AutoTokenizer.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
+
+
 def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenizer | None:
     """Stage the requested tokenizer independently from the policy weights."""
     tokenizer_path = args.policy_tokenizer
@@ -394,7 +490,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)
         stage_model_metadata(tokenizer_path, manifest, local_path)
-        _require_tokenizer_metadata(target, tokenizer_path)
+        _validate_policy_tokenizer(target, tokenizer_path)
         (target / MODEL_MANIFEST_FILENAME).unlink(missing_ok=True)
     else:
         with atomic_directory_update(target, staging_prefix=f".{target.name}.tokenizer-") as staging:
@@ -409,11 +505,23 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
                     destination=staging,
                     allow_patterns=TOKENIZER_METADATA_PATTERNS + TOKENIZER_CLASS_RESOLUTION_FILES,
                 )
-                _require_tokenizer_metadata(staging, tokenizer_path)
             else:
                 raise ValueError(f"Unsupported policy tokenizer source: {tokenizer_path!r}")
+            _validate_policy_tokenizer(staging, tokenizer_path)
 
     return PreparedPolicyTokenizer(local_path)
+
+
+def _draft_mirror_manifest(model: HuggingFaceModelCache) -> ModelManifest:
+    manifest = load_model_manifest(model.uri)
+    if manifest.identity != model.identity or manifest.model_id != model.model_id:
+        raise ValueError(f"Draft mirror identity mismatch: {model.uri}")
+    filesystem, root = fs_and_path(model.uri)
+    for entry in manifest.files:
+        path = join_resource_path(root, entry.path)
+        if not filesystem.exists(path):
+            raise FileNotFoundError(f"Draft mirror file missing: {path}")
+    return manifest
 
 
 def prepare_draft_model(
@@ -421,8 +529,40 @@ def prepare_draft_model(
     *,
     cache_ttl_days: int,
     cache_source_prefix: str,
+    model_caches: tuple[HuggingFaceModelCache, ...] = (),
 ) -> SpeculatorModelConfig:
     """Resolve a draft locator, mirroring a Hub revision once when needed."""
+    cached = next((cache for cache in model_caches if cache.uri == model.source_uri), None)
+    if cached is not None:
+        if model.source_identity != cached.identity:
+            raise ValueError(f"Draft mirror identity mismatch: {model.source_uri}")
+        try:
+            manifest = _draft_mirror_manifest(cached)
+        except FileNotFoundError:
+            # A surviving marker otherwise makes main's lock-free warm path
+            # return a mirror whose shards have already expired.
+            lock = create_lock(f"{cached.uri}.lock")
+            while not lock.try_acquire():
+                time.sleep(POLL_INTERVAL)
+            try:
+                with lease_refresh(lock):
+                    try:
+                        _draft_mirror_manifest(cached)
+                    except FileNotFoundError:
+                        filesystem, marker = fs_and_path(join_resource_path(cached.uri, MODEL_MANIFEST_FILENAME))
+                        if filesystem.exists(marker):
+                            filesystem.rm(marker)
+            finally:
+                lock.release()
+            source_uri, manifest = ensure_hugging_face_model_cache(
+                cached.model_id,
+                cached.resolved_revision,
+                ttl_days=cache_ttl_days,
+                source_prefix=cache_source_prefix,
+                tokenizer_mode="policy",
+            )
+            return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
+        return SpeculatorModelConfig(source_uri=cached.uri, source_identity=manifest.identity)
     if model.source_kind is SpeculatorModelSourceKind.LOCAL:
         assert model.local_source_path is not None
         filesystem, root = fs_and_path(model.local_source_path)
@@ -445,7 +585,7 @@ def prepare_draft_model(
     else:
         source_uri = model.source_uri
         manifest = load_model_manifest(source_uri)
-        if model.source_identity.startswith("sha256:") and model.source_identity != manifest.identity:
+        if model.source_identity != manifest.identity:
             raise ValueError(
                 f"Draft manifest identity mismatch: requested {model.source_identity}, "
                 f"found {manifest.identity} at {source_uri}"
@@ -958,7 +1098,7 @@ def poll_rendezvous(
             raise
         except Exception as exc:  # transient object-store hiccup
             _log(f"rendezvous poll error (will retry): {exc}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(STARTUP_POLL_INTERVAL)
     raise TimeoutError(
         f"Worker rank {_rank()} timed out after {timeout}s waiting for "
         f"rank-0 rendezvous at {uri}. Did the head task fail to start?"
@@ -1093,6 +1233,8 @@ def _ray_mem_flags() -> list[str]:
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1107,6 +1249,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1120,6 +1263,8 @@ def ray_start_worker(
     ray_port: int,
     node_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1130,6 +1275,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -1158,27 +1304,32 @@ def ray_stop() -> None:
     _log(f"Ray stop completed (exit {completed.returncode})")
 
 
-def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
+def wait_for_nodes(
+    ray_address: str,
+    expected_nodes: int,
+    timeout: int,
+    rewrite_cb=None,
+) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
-    ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
-    the rendezvous so its ``written_at`` stays fresh. A worker pod on a cold node can
-    start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the head wrote the rendezvous; its
-    ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
-    one-shot rendezvous as "stale" and wait forever while the head waits for that node —
-    a mutual deadlock. Rewriting each poll keeps the timestamp ahead of any late worker's
-    freshness threshold without weakening the prior-ATTEMPT protection (a stale file from
-    a dead PRIOR attempt is still never refreshed).
+    ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
+    so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
+    head wrote the rendezvous; its ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
+    one-shot rendezvous as "stale" and wait forever while the head waits for that node — a mutual deadlock. Periodic
+    rewrites keep the timestamp ahead of any late worker's freshness threshold without weakening the prior-ATTEMPT
+    protection (a stale file from a dead PRIOR attempt is still never refreshed).
     """
     import ray
 
     deadline = time.time() + timeout
+    limiter = RateLimiter(RENDEZVOUS_REWRITE_INTERVAL)
+    limiter.mark_run()
     _log(f"Waiting for {expected_nodes} Ray node(s) at {ray_address} (timeout {timeout}s)...")
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         last_count = -1
         while time.time() < deadline:
-            if rewrite_cb is not None:
+            if rewrite_cb is not None and limiter.should_run():
                 try:
                     rewrite_cb()
                 except Exception as exc:
@@ -1191,7 +1342,7 @@ def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_
             if count >= expected_nodes:
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
-            time.sleep(POLL_INTERVAL)
+            time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
     finally:
         ray.shutdown()
@@ -1828,6 +1979,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
 
@@ -1844,8 +1996,6 @@ def run_head(
             f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
         )
         write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        # Re-publish the rendezvous each poll so a late cold-node worker never sees it
-        # as "stale" (see wait_for_nodes docstring — prevents the freshness deadlock).
         wait_for_nodes(
             ray_address,
             num_tasks,
@@ -1953,6 +2103,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
@@ -2014,13 +2165,6 @@ def _json_list(value: Any) -> str:
     return json.dumps(values, sort_keys=True)
 
 
-def _local_teacher_models(skyrl: DictConfig) -> tuple[TeacherModelSpec, ...]:
-    plan = compile_distillation_plan_from_config(skyrl)
-    if plan is None:
-        return ()
-    return tuple(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE)
-
-
 def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     """Project the typed launch document into the controller's private runtime state."""
     model = config.inputs.model
@@ -2043,6 +2187,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
+        role_topology=derive_launch_topology(_container(config)).role_topology,
+        ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
@@ -2056,8 +2202,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         terminal_bench_data=_json_list(skyrl.get("data", {}).get("terminal_bench_data", [])),
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
-        model_revision=str(skyrl.get("trainer", {}).get("policy", {}).get("model", {}).get("revision") or ""),
-        prestage_teacher_models=() if checkpoint_export else _local_teacher_models(skyrl),
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
         model_local_path=str(model.local_path),
         model_source_identity=model_identity if is_cloud_uri(model_uri) else "",
@@ -2169,6 +2313,8 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    if args.role_topology is not None:
+        args.ray_labels = args.role_topology.node_labels(_rank())
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.
@@ -2196,22 +2342,19 @@ def main() -> None:
         materialize_data_sources(args.data_sources_json)
     if args.terminal_bench_data:
         stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
+    stage_hugging_face_models(launch_config)
     policy_model = prepare_policy_model(args)
     policy_local_path = policy_model.local_path if policy_model is not None else None
     policy_tokenizer = prepare_policy_tokenizer(args)
-    if args.prestage_model:
-        stage_model(
-            args.prestage_model,
-            revision=(args.model_revision or None),
-        )
-    for teacher_model in args.prestage_teacher_models:
-        stage_model(teacher_model.path, revision=teacher_model.revision)
     draft_model = args.draft_model
     if draft_model is not None:
         draft_model = prepare_draft_model(
             draft_model,
             cache_ttl_days=args.draft_model_cache_ttl_days,
             cache_source_prefix=args.draft_model_cache_source_prefix,
+            model_caches=tuple(
+                HuggingFaceModelCache(**_container(cache)) for cache in launch_config.inputs.hugging_face_models
+            ),
         )
     # Force the policy chat template onto staged metadata or a local model on every
     # node before Ray; the training driver's tokenizer may load anywhere.

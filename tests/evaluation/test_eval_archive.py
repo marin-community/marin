@@ -13,6 +13,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from evalrecords.lm_eval_samples import (
+    evalchemy_result_committed,
+    export_lm_eval_samples,
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    run_artifacts,
+    sample_from_lm_eval,
+    samples_from_lm_eval,
+    summarize_native_eval_samples,
+    task_coverage,
+)
+from evalrecords.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from finestore.admin import set_table_metadata
 from finestore.eval import (
     Choice,
@@ -28,20 +40,7 @@ from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
-from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.lm_eval_samples import (
-    evalchemy_result_committed,
-    export_lm_eval_samples,
-    preserved_sample_sources,
-    rebuild_lm_eval_samples,
-    run_artifacts,
-    sample_from_lm_eval,
-    samples_from_lm_eval,
-    summarize_native_eval_samples,
-    task_coverage,
-)
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import (
@@ -242,7 +241,6 @@ def test_native_summary_reads_direct_evalchemy_result_table(tmp_path):
 
     summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 0),))
 
-    assert completed_result(root, "gsm8k_0shot")
     assert evalchemy_result_committed(root, "gsm8k_0shot")
     assert summary.samples == 1
     assert summary.coverage == {
@@ -1506,3 +1504,14 @@ def test_native_coverage_counts_trials_and_keeps_missing_repetitions(tmp_path, b
     assert coverage.n_correct == observed_repetitions
     assert summary.scored_counts[benchmark] == coverage.n_scored
     assert summary.tasks[0].benchmark.n_attempted == 6
+
+
+def test_continuous_metric_endpoints_do_not_produce_correct_count():
+    coverage = task_coverage(
+        [(_mcq("0", correct=True), ""), (_mcq("1", correct=False), "")],
+        n_benchmark=2,
+        n_attempted=2,
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+    assert coverage.n_scored == 2
+    assert coverage.n_correct is None

@@ -17,20 +17,22 @@ Plan or run the experiment::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import click
+import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
-from marin.rl.drafting_sft import DraftSftPlan, MegatronDraftPolicy, OnlineEagleTraining, draft_sft_plan
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
+    SkyRLRolePlan,
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
@@ -38,6 +40,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
 
 from experiments.post_training.curriculum_rl.pool import (
     TRAIN_FILENAME,
@@ -74,25 +77,22 @@ SMOKE = _OnlineEaglePreset(label="smoke", artifact_suffix="-smoke", max_steps=7,
 FULL = _OnlineEaglePreset(label="full", artifact_suffix="", max_steps=25, checkpoint_interval=5)
 PRESETS = {preset.label: preset for preset in (SMOKE, FULL)}
 
-POLICY = MegatronDraftPolicy(
+GEOMETRY = MegatronGeometry(1, 2, 1, 8, 1)
+ROLE_PLAN = SkyRLRolePlan(
+    colocate_all=False,
     policy_num_nodes=4,
-    gpus_per_node=GPUS_PER_NODE,
+    policy_num_gpus_per_node=GPUS_PER_NODE,
+    num_inference_engines=1,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=GPUS_PER_NODE,
     inference_engine_expert_parallel_size=GPUS_PER_NODE,
     train_batch_size=32,
     policy_mini_batch_size=32,
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=4,
-    eval_batch_size=64,
-    micro_forward_batch_size_per_gpu=1,
-    tensor_model_parallel_size=1,
-    pipeline_model_parallel_size=2,
-    context_parallel_size=1,
-    expert_model_parallel_size=8,
-    expert_tensor_parallel_size=1,
-    learning_rate=1.0e-6,
 )
-TRAINING = OnlineEagleTraining(
-    num_speculative_tokens=3,
+TRAINING = sections.SpeculatorTraining(
     interval_steps=4,
     max_tokens_per_update=131072,
     max_window_tokens=16384,
@@ -109,18 +109,55 @@ TRAINING = OnlineEagleTraining(
 )
 
 
-def _snowball_draft_sft_plan(preset: _OnlineEaglePreset) -> DraftSftPlan:
-    return draft_sft_plan(
-        initial_draft=INITIAL_DRAFT_URI,
-        initial_draft_identity=INITIAL_DRAFT_REVISION,
-        policy=POLICY,
-        training=TRAINING,
-        environment="aime",
-        project_name="marin-snowball-online-eagle",
-        request_window_tokens=9856,
-        max_new_tokens_per_turn=8192,
-        max_steps=preset.max_steps,
-        checkpoint_interval=preset.checkpoint_interval,
+def training_recipe(preset: _OnlineEaglePreset) -> SkyRLRecipe:
+    return SkyRLRecipe(
+        entrypoint=RLEntrypoint.STANDARD,
+        context_budget=ContextBudget(request_window_tokens=9856, max_new_tokens_per_turn=8192, max_turns=1),
+        environment=sections.Environment(env_class="aime"),
+        trainer=sections.Trainer(
+            strategy="megatron",
+            flash_attn=False,
+            use_sample_packing=False,
+            offload_optimizer_during_rollouts=True,
+            gradient_checkpointing=True,
+            algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=False),
+            epochs=1,
+            max_steps=preset.max_steps,
+            update_epochs_per_batch=1,
+            eval_batch_size=64,
+            micro_forward_batch_size_per_gpu=1,
+            eval_before_train=False,
+            eval_interval=-1,
+            ckpt_interval=preset.checkpoint_interval,
+            resume_mode="latest",
+            logger="wandb",
+            project_name="marin-snowball-online-eagle",
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(lr=1.0e-6, max_grad_norm=1.0),
+                megatron_config=sections.PolicyMegatronConfig(**asdict(GEOMETRY)),
+            ),
+        ),
+        generator=sections.Generator(
+            backend="vllm",
+            model_dtype="bfloat16",
+            vllm_attention_backend="FLASH_ATTN",
+            gpu_memory_utilization=0.75,
+            enforce_eager=False,
+            run_engines_locally=True,
+            weight_sync_backend="nccl",
+            engine_init_kwargs={"async_scheduling": False},
+            speculative_decoding=sections.SpeculativeDecoding(
+                method="eagle3",
+                model=sections.SpeculatorModel(
+                    source_uri=str(INITIAL_DRAFT_URI), source_identity=INITIAL_DRAFT_REVISION
+                ),
+                num_speculative_tokens=3,
+                training=TRAINING,
+            ),
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0),
+        ),
+        data=sections.Data(kind="parquet", train_data=(), val_data=()),
+        extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     )
 
 
@@ -133,7 +170,6 @@ TARGET_MODEL = ArtifactStep.adopt(
 
 
 def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
-    plan = _snowball_draft_sft_plan(preset)
     name = user_owned_name(f"{ARTIFACT_NAME}{preset.artifact_suffix}")
     version = resolve_version(name, None)
     pool = pool_step(POOL_ARTIFACT_NAME, resolve_version(POOL_ARTIFACT_NAME, None))
@@ -141,7 +177,7 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=plan.config_yaml,
+            config_yaml=yaml.safe_dump(training_recipe(preset).to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,
@@ -151,10 +187,11 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
-                num_nodes=plan.num_nodes,
+                # One rollout node and one DraftTrainer node accompany the policy nodes.
+                num_nodes=ROLE_PLAN.policy_num_nodes + 2,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
-                role_plan=plan.role_plan,
+                role_plan=ROLE_PLAN,
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,

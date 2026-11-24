@@ -10,23 +10,11 @@ import haliax.nn
 from haliax import NamedArray, is_named_array
 from haliax.jax_utils import is_jax_array_like
 
-from levanter.layers.stacked import ArrayStacked
+from levanter.layers.stacked import ArrayStacked, layer_in_axes
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils import jax_utils
 
 _SplitScanContainer = (haliax.nn.Stacked, ArrayStacked)
-
-
-def _array_stacked_layer_in_axes(stacked: Any, num_layers: int) -> Any:
-    """`jax.vmap` in_axes tree that maps over the leading layer axis of layer-batched leaves.
-
-    ``ArrayStacked`` stores per-layer arrays with a leading ``num_layers`` axis and shares any
-    other leaf across layers, so mapped leaves get axis 0 and shared leaves get ``None``.
-    """
-    return jax.tree.map(
-        lambda x: 0 if (is_jax_array_like(x) and getattr(x, "ndim", 0) > 0 and x.shape[0] == num_layers) else None,
-        stacked,
-    )
 
 
 def _stacked_leaves(stacked: Any) -> list[tuple[str, Any]]:
@@ -103,7 +91,7 @@ def summary_statistics_for_tree(
 
             elif split_scan_layers and isinstance(g, ArrayStacked):
                 num_layers = g.num_layers
-                in_axes = _array_stacked_layer_in_axes(g.stacked, num_layers)
+                in_axes = layer_in_axes(g.stacked, num_layers, is_array_like=is_jax_array_like)
                 vmapped_norms, vmapped_hists = jax.vmap(_rec_log_magnitudes, in_axes=(None, None, None, in_axes))(
                     {}, {}, "", g.stacked
                 )

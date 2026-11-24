@@ -10,6 +10,7 @@ one it just finished.
 """
 
 from dataclasses import asdict
+import socket
 
 import torch
 
@@ -61,6 +62,8 @@ class ExpertBlockSender:
         self.expert_sources = {item.entry.name: item for item in experts}
         return {
             "trainer": to_wire(self.trainer),
+            "host": socket.gethostname(),
+            "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid),
             "expert_parallel_size": state.get_expert_model_parallel_world_size(),
             "layers": sorted({item.entry.layer for item in experts}),
             "model": {
@@ -84,6 +87,7 @@ class ExpertBlockSender:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             device,
+            backend=init_info["backend"],
             sources=self.sources,
             expert_sources=self.expert_sources,
         )

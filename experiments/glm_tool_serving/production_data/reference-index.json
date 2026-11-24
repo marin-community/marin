@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/glm-tool-conversion-production-data",
-  "revision": "86ca57ec6a3b57132d56a7b49520336aefe923d6",
+  "revision": "68e904eaffd3c63eb3f1b26708a32238face1024",
   "references": [
     {
       "repo": "open-athena/glm-tool-conversion-production-data",
@@ -19,6 +19,12 @@
       "revision": "86ca57ec6a3b57132d56a7b49520336aefe923d6",
       "path": "scale-catalog.json",
       "sha256": "4cdb26d8c12e57c0517bfbff10031c5c929fc0ab5bb3653958edbaf34db65c7d"
+    },
+    {
+      "repo": "open-athena/glm-tool-conversion-production-data",
+      "revision": "68e904eaffd3c63eb3f1b26708a32238face1024",
+      "path": "sft_tokenizer",
+      "sha256": "495d779cec92bcebe6b7b2263f7d571872942edf8ddf6c951aa47f1ab1716093"
     }
   ]
 }

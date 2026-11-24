@@ -7,14 +7,15 @@ The builder ships this file alone to the job's working directory and runs ``pyth
 
 Nothing the build produced runs here. The job downloads the build job's Iris output archive from
 the cluster object store, checks it against the sha256 Iris recorded, extracts ``image.tar``,
-fetches and sha256-checks ``crane``, and pushes. The registry credential arrives as a base64
-docker config in ``REGISTRY_AUTH_ENV``, which Iris redacts from job descriptions; it is written to a
-private config directory that only ``crane`` reads, and removed afterwards.
+fetches and sha256-checks ``crane``, and pushes. The registry credential arrives as a docker config
+in the Iris secret file ``REGISTRY_AUTH_SECRET``; it is copied to a private config directory that
+only ``crane`` reads, and removed afterwards. The CoreWeave storage credentials that read the
+archive are Iris secret files as well.
 
-Standard library only. Python 3.14 is required for zstd (Iris archives are ``.tar.zst``).
+Standard library only (no ``rigging``), so secret files are read from ``$RIGGING_SECRETS_DIR``, which
+Iris sets whenever a job has secrets. Python 3.14 is required for zstd (Iris archives are ``.tar.zst``).
 """
 
-import base64
 import datetime
 import hashlib
 import hmac
@@ -32,7 +33,7 @@ CHUNK_BYTES = 1 << 20
 IMAGE_MEMBER = "image.tar"
 UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
 SIGNED_HEADERS = "host;x-amz-content-sha256;x-amz-date"
-# The variables crane may see; everything else in the task env (object-store keys) stays out.
+# The variables crane may see; everything else in the task env stays out.
 CRANE_ENV = ("PATH", "HOME")
 # The variables ``image_builder`` sets for this job.
 CRANE_URL_ENV = "CRANE_URL"
@@ -40,8 +41,14 @@ CRANE_SHA256_ENV = "CRANE_SHA256"
 ARCHIVE_URI_ENV = "ARCHIVE_URI"
 ARCHIVE_SHA256_ENV = "ARCHIVE_SHA256"
 DESTINATION_ENV = "DESTINATION"
-# rigging.redaction treats "auth" as a sensitive key word, so Iris redacts this variable's value.
-REGISTRY_AUTH_ENV = "REGISTRY_AUTH"
+REGISTRY_AUTH_SECRET = "REGISTRY_AUTH"
+SECRETS_DIR_ENV = "RIGGING_SECRETS_DIR"
+"""``rigging.secrets.SECRETS_DIR_ENV``, which this stdlib-only module cannot import."""
+
+
+def secret(name: str) -> str:
+    """The value of the job's Iris secret ``name``, from its file."""
+    return (Path(os.environ[SECRETS_DIR_ENV]) / name).read_text()
 
 
 def _hmac(key: bytes, message: str) -> bytes:
@@ -112,13 +119,13 @@ def extract_member(archive: Path, name: str, target: Path, mode: Literal["r|gz",
 
 
 def archive_request() -> urllib.request.Request:
-    """Read an Iris output archive using the submitter's CoreWeave credentials."""
+    """A signed GET request for the Iris output archive at ``$ARCHIVE_URI``, with the submitter's CoreWeave keys."""
     return s3_get_request(
         os.environ[ARCHIVE_URI_ENV],
         "https://cwobject.com",
         "auto",
-        os.environ["CW_KEY_ID"],
-        os.environ["CW_KEY_SECRET"],
+        secret("CW_KEY_ID"),
+        secret("CW_KEY_SECRET"),
     )
 
 
@@ -146,7 +153,7 @@ def main() -> None:
     config_dir.mkdir(mode=0o700)
     config = config_dir / "config.json"
     config.touch(mode=0o600)
-    config.write_bytes(base64.b64decode(os.environ.pop(REGISTRY_AUTH_ENV)))
+    config.write_text(secret(REGISTRY_AUTH_SECRET))
     try:
         env = {name: os.environ[name] for name in CRANE_ENV if name in os.environ} | {"DOCKER_CONFIG": str(config_dir)}
         subprocess.run((str(crane), "push", str(image), os.environ[DESTINATION_ENV]), env=env, check=True)

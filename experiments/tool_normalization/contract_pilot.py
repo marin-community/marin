@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from experiments.tool_normalization.candidate import CALL_SCHEMA
 from experiments.tool_normalization.execute import ExecutionConfig, execute
-from experiments.tool_normalization.model import ModelConfig, complete, initialize_ledger
+from experiments.tool_normalization.model import complete, initialize_ledger, parse_model_config
 from experiments.tool_normalization.native_seed import native_seed
 
 PROPOSAL_SCHEMA = {
@@ -103,10 +103,7 @@ def fixtures() -> list[dict]:
 def run(config_path: Path, root: Path, fixture_path: Path | None = None) -> None:
     root.mkdir(parents=True, exist_ok=False)
     cfg = json.loads(config_path.read_text())
-    model_config = cfg["model"]
-    for key in ("api_key_file", "capacity_file", "ledger"):
-        model_config[key] = Path(model_config[key])
-    model = ModelConfig(**model_config)
+    model = parse_model_config(cfg["model"])
     initialize_ledger(model)
     tokenizer = AutoTokenizer.from_pretrained(cfg["serving_tokenizer"])
     execution = ExecutionConfig(**cfg["execution"])

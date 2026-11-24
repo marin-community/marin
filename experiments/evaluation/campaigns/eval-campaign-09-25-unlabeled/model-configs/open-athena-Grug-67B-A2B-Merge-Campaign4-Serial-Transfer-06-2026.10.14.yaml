@@ -20,6 +20,9 @@ serve:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+generation:
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
 agent:
   agent_kwargs:
     thinking_format: chat-template

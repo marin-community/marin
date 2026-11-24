@@ -1,0 +1,70 @@
+{
+  "version": "2026-11-05-v1",
+  "implementation_sha256": {
+    "rules.py": "6a9cdfd7996dc99fbf3cc999ad30ca9e22d437575691562e60604bf2b0325693",
+    "native_seed.py": "baca1f2ed4bb42cb379cda2b372824fae0923d5917dd012492c5067f107fbfd9",
+    "historical_projection.py": "0605142966f1eff459cf3bfcf49a1734e1de47be6ef041f56a7bfd5099d8e341",
+    "serialize.py": "1c32bfee8c56c0a10dd7cb18a01cfaa15fa2b393a07b7f1394edbd6aef6d5d63",
+    "candidate.py": "1de95c71dea42bf07b17ced28bf23bb43c9185343c5bf342d017c8e27af9b638",
+    "opencode-tools.json": "a279d7c13d77962e67807b29229630a433203e72302f9993ecf4df2202402dbf"
+  },
+  "approved_rules": [
+    "native-bash",
+    "native-edit",
+    "native-glob",
+    "native-read",
+    "native-write",
+    "read-zero-to-one-based-offset",
+    "declared-python-stdout-to-bash"
+  ],
+  "audit": {
+    "sample_seed": 20261105,
+    "random_sample_rows": 20,
+    "eligible_frozen_frame": 64,
+    "mapping_defects_observed": 0,
+    "scope": "Parent review of tool-level before/after changes, plus serialization/mask/pairing reconstruction; not a source-task quality verdict",
+    "sample_sha256": "7506c34d352496945c0f8b522771d38e4732ea4c872953bd60679d184044b639",
+    "limitations": "Small sample from existing benchmark frame; only the listed native families and explicitly declared zero-based read offset conversion. No general corpus error-rate guarantee."
+  },
+  "alias_audit": {
+    "eligible_local_frame": 1,
+    "sampled": 1,
+    "selection": "All eligible alias rows in the bounded540-row pilot source frame",
+    "mapping_defects_observed": 0,
+    "scope": "Mechanical conversion only; no scientific-answer endorsement",
+    "restriction": "Exactly one source operation, declared Python stdout semantics; multi-call Python requires GLM review"
+  },
+  "implementation_equivalence": {
+    "parent_approval": {
+      "path": "rule-approval-v3.json",
+      "sha256": "98b5839fdbd6ca000eeb2845e4da033ad9e9252564aec5d8fec0b8de15b4c257"
+    },
+    "approved_source_commit": "32758e276932a0a7a396711b0ea97b8ba65bac90",
+    "cleanup_commit": "8eaeeca3404e1899874715649c37a09e6358daa5",
+    "method": "After removing only the listed unused declarations/imports from the approved source, the full module AST equals the cleaned module AST. No removed symbol is referenced by surviving code. Audited conversion behavior is unchanged.",
+    "files": {
+      "native_seed.py": {
+        "approved_sha256": "eb4580dbd52592b0b143ab3b6475f1e5fbaa9b3dd173ae136bac80df6b1fafb4",
+        "cleaned_sha256": "baca1f2ed4bb42cb379cda2b372824fae0923d5917dd012492c5067f107fbfd9",
+        "removed_symbols": [
+          "EDIT_SCHEMA",
+          "apply_edits"
+        ],
+        "removed_imports": [
+          "copy"
+        ],
+        "retained_ast_sha256": "b54259e47bc27b01992f4a550a1b37ce9dabdd86713001f7ecf1da2645f7f778"
+      },
+      "candidate.py": {
+        "approved_sha256": "a6d1432eafd0cc5c0a43054a8face2501dc0df6dfea7ee3eeb760e548290a009",
+        "cleaned_sha256": "1de95c71dea42bf07b17ced28bf23bb43c9185343c5bf342d017c8e27af9b638",
+        "removed_symbols": [
+          "CANDIDATE_SCHEMA",
+          "TURN_SCHEMA"
+        ],
+        "removed_imports": [],
+        "retained_ast_sha256": "0bc81c546e9698212f7249a71788306d8942704c7e674cacd300b76217ad5e30"
+      }
+    }
+  }
+}

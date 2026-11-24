@@ -22,5 +22,5 @@ independent root so slow agentic evaluations do not serialize the others.
 ```
 
 The launcher's local config snapshots and every durable result record retain the
-effective inputs and Marin, Harbor, and Evalchemy revisions. These launches do
+effective inputs and Marin and Evalchemy revisions. These launches do
 not set a policy label.

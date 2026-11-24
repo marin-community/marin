@@ -202,14 +202,67 @@ class _HFShardWriter:
             return record
 
 
-def _add_host_tensor(
-    tensors: dict[str, np.ndarray], key: str, replicated: jax.Array, outputs: tuple[str, ...]
-) -> None:
-    host = np.asarray(replicated.addressable_data(0), order="C")
+def _add_host_tensor(tensors: dict[str, np.ndarray], key: str, host: np.ndarray, outputs: tuple[str, ...]) -> None:
+    host = np.asarray(host, order="C")
     if outputs == (key,):
         tensors[key] = host
     else:
         tensors.update(zip(outputs, host, strict=True))
+
+
+def save_host_hf_shards(
+    shards: Mapping[str, Mapping[str, jax.ShapeDtypeStruct]],
+    load_shard: Callable[[tuple[str, ...]], Mapping[str, np.ndarray]],
+    path: str,
+    *,
+    export_host_budget_bytes: int,
+    max_concurrent_shards: int,
+    resume: HFShardResume | None = None,
+    tensor_names: Mapping[str, tuple[str, ...]] | None = None,
+    upload_to_hf: Callable[[str, str], None] | None = None,
+) -> list[HFShardRecord]:
+    """Load and write bounded NumPy shards on one host, without device collectives.
+
+    Reserve twice each planned shard's payload before calling ``load_shard``; its
+    returned arrays must match the planned shapes and dtypes and must not be
+    mutated or reused by later loads. ``tensor_names``
+    optionally names first-axis slices of a bank. Local output is written directly;
+    remote output stages under TMPDIR. Resume verifies completed shards before
+    loading their input. Return ordered receipts with resume, or [] without it.
+    """
+    with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
+        writer = _HFShardWriter(pool, path, export_host_budget_bytes, max_concurrent_shards, resume, upload_to_hf)
+        for filename, shapes in shards.items():
+            names = sorted(
+                output for key in shapes for output in (tensor_names[key] if tensor_names is not None else (key,))
+            )
+            if writer.resume_shard(filename, names):
+                continue
+
+            reserved_bytes = 2 * sum(value.size * value.dtype.itemsize for value in shapes.values())
+            tensors: dict[str, np.ndarray] = {}
+            with ExitStack() as reservation:
+                writer.reserve(reserved_bytes, reservation)
+                weights = load_shard(tuple(shapes))
+                for key in shapes:
+                    weight = weights[key]
+                    if weight.shape != shapes[key].shape or weight.dtype != shapes[key].dtype:
+                        raise ValueError(f"Loaded tensor does not match shard plan: {key}")
+                    outputs = tensor_names[key] if tensor_names is not None else (key,)
+                    _add_host_tensor(tensors, key, weight, outputs)
+                    del weight
+                del weights
+                writer.submit(filename, tensors, names, reservation)
+            del tensors
+            if max_concurrent_shards == 1:
+                writer.drain_one()
+
+        records = writer.finish()
+
+    if resume is None:
+        return []
+    by_filename = {record.filename: record for record in records}
+    return [by_filename[filename] for filename in shards]
 
 
 def save_hf_shards(
@@ -259,7 +312,9 @@ def save_hf_shards(
                     replicated = jax.sharding.reshard(weights[key], P())
                     replicated.block_until_ready()
                     outputs = tensor_names[key] if tensor_names is not None else (key,)
-                    run_on_export_writer(lambda: _add_host_tensor(tensors, key, replicated, outputs))
+                    run_on_export_writer(
+                        lambda: _add_host_tensor(tensors, key, np.asarray(replicated.addressable_data(0)), outputs)
+                    )
                     del replicated
                 del weights
 

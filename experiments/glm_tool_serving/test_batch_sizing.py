@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for giant-row batch sizing in the production drivers.
 
 The sizing decision must be a pure function of the store state so that a relaunched
@@ -6,7 +9,6 @@ never change claim/cursor/receipt semantics — only the claimed range length.
 """
 
 import numpy as np
-import pytest
 
 from experiments.glm_tool_serving.ortet_production import giant_row_batch_size
 
@@ -84,7 +86,7 @@ def test_peek_failure_falls_back_to_default(monkeypatch):
 
 def test_sizing_is_deterministic_for_recovery(monkeypatch):
     # a relaunched pod must compute the same boundary for the same store state
-    lengths = {r: (60_000 if r % 3 == 0 else 45_000) for r in range(128)}
+    lengths = {r: 60_000 if r % 3 == 0 else 45_000 for r in range(128)}
     fake_peek(monkeypatch, lengths)
     first = giant_row_batch_size("s3://store/x", 0, 10_000)
     second = giant_row_batch_size("s3://store/x", 0, 10_000)

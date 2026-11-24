@@ -150,11 +150,7 @@ def validate_mcq(spec: McqSpec) -> None:
 
 
 def grade_mcq_candidate(spec: McqSpec, candidate: str) -> Reward:
-    """Score an extracted MCQ option letter against a validated task spec.
-
-    The caller extracts the candidate from its own output format. An empty candidate
-    means no answer was found; an option outside the declared range scores zero.
-    """
+    """Score an extracted MCQ option letter against a validated task spec."""
     validate_mcq(spec)
     letters = tuple(string.ascii_uppercase[: spec.options])
     expected = spec.expected.strip().upper()

@@ -68,12 +68,22 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     GCS/S3 listings expire immediately by default, and S3/R2 URLs get finite
     timeouts injected (#6487).
     """
-    if url.startswith("s3://"):
-        kwargs = _s3_filesystem_options(kwargs)
-    fs, path = fsspec.core.url_to_fs(url, **kwargs)
+    fs, path = unbudgeted_url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
     return fs, path
+
+
+def unbudgeted_url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
+    """Like :func:`url_to_fs` without the GCS cross-region guard.
+
+    For a long-lived service reading state it wrote. The guard's budget is
+    cumulative and never resets, so these reads would eventually exhaust it.
+    ``mirror://`` URLs still charge their copies to the budget.
+    """
+    if url.startswith("s3://"):
+        kwargs = _s3_filesystem_options(kwargs)
+    return fsspec.core.url_to_fs(url, **kwargs)
 
 
 def is_remote_path(path: str) -> bool:

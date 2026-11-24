@@ -41,8 +41,8 @@ _RETRY_BACKOFF_FACTOR = 2.0
 _RETRY_BACKOFF_JITTER = 0.25
 _COMMIT_RETRY_BUDGET = 60 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
-_SCHEMA_RETRY_BUDGET = 60.0
-_MAX_SCHEMA_ATTEMPTS = 1000
+_CREATE_RETRY_BUDGET = 60.0
+_MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
@@ -103,19 +103,42 @@ def _empty_manifest() -> Manifest:
     return Manifest(commit_id=_ROOT_COMMIT_ID, sequence=0)
 
 
+def _create_or_read(path: str, data: bytes, *, operation: str) -> bytes:
+    """Create the object at ``path`` with ``data`` unless it exists, and return the stored bytes."""
+    obj = conditional_object(path)
+
+    def attempt() -> bytes:
+        existing = obj.read()
+        if existing is not None:
+            return existing.data
+        try:
+            obj.write(data, expected_version=None)
+            return data
+        except ConditionalWriteError:
+            existing = obj.read()
+            if existing is None:
+                # The competing create is still in flight; retry until its object is visible.
+                raise
+            return existing.data
+
+    return retry_with_backoff(
+        attempt,
+        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
+        max_attempts=_MAX_CREATE_ATTEMPTS,
+        max_elapsed=_CREATE_RETRY_BUDGET,
+        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
+        operation=operation,
+    )
+
+
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
     """Create the archive marker, or validate the marker already present."""
-    marker = conditional_object(layout.archive_path)
-    existing = marker.read()
-    expected = ArchiveMetadata()
-    if existing is None:
-        try:
-            marker.write(expected.model_dump_json(indent=2).encode(), expected_version=None)
-            return expected
-        except ConditionalWriteError:
-            existing = marker.read()
-            assert existing is not None
-    found = ArchiveMetadata.model_validate_json(existing.data)
+    data = _create_or_read(
+        layout.archive_path,
+        ArchiveMetadata().model_dump_json(indent=2).encode(),
+        operation=f"FineStore archive initialization at {layout.root}",
+    )
+    found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=found.format_version)
     return found
@@ -138,30 +161,9 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
     data = metadata.model_dump_json(indent=2).encode()
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
-    obj = conditional_object(path)
-
-    def publish() -> str:
-        existing = obj.read()
-        if existing is None:
-            try:
-                obj.write(data, expected_version=None)
-                return path
-            except ConditionalWriteError:
-                existing = obj.read()
-                if existing is None:
-                    raise
-        if existing.data != data:
-            raise ValueError(f"schema digest collision at {path}")
-        return path
-
-    return retry_with_backoff(
-        publish,
-        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
-        max_attempts=_MAX_SCHEMA_ATTEMPTS,
-        max_elapsed=_SCHEMA_RETRY_BUDGET,
-        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
-        operation=f"FineStore schema publication at {path}",
-    )
+    if _create_or_read(path, data, operation=f"FineStore schema publication at {path}") != data:
+        raise ValueError(f"schema digest collision at {path}")
+    return path
 
 
 def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:

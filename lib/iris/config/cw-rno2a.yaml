@@ -49,6 +49,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-rn02a, zone: RNO2A }
     kueue:
+      cpu_scale_group: cpu-turin
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
@@ -118,9 +119,10 @@ auth:
     - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - contractor@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris

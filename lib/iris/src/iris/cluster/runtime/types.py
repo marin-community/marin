@@ -22,6 +22,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from rigging.timing import Duration
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
@@ -99,6 +101,7 @@ class ContainerConfig:
     resources: job_pb2.ResourceSpecProto | None = None
     container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
+    termination_grace: Duration | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = NETWORK_MODE_HOST
     # Host file mounted read-only at /etc/resolv.conf; None keeps the runtime's default.
@@ -296,6 +299,7 @@ class DiscoveredContainer:
     exit_code: int | None
     started_at: str  # ISO 8601 timestamp from Docker
     workdir_host_path: str  # host path of the /app mount
+    termination_grace: Duration
     ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
 
 

@@ -76,6 +76,8 @@ class KueueProvisioningSpec(BaseModel):
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
     # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
     flavor_topology: str = "infiniband"
+    # Optional physical CPU pool with a separate hostname-only TAS flavor.
+    cpu_scale_group: str | None = None
     # controllerManager.manager.resources memory request and limit. Kueue retains
     # every watched Pod and Workload during restart resync, so the chart's 512Mi
     # default is too small for Marin clusters.
@@ -146,6 +148,13 @@ class LoomSessionRbacSpec(BaseModel):
     usernames: tuple[str, ...] = Field(min_length=1)
 
 
+class SandboxRuntimeSpec(BaseModel):
+    """Operator-installed CRI handler and eligible nodes for an Iris RuntimeClass."""
+
+    handler: str = Field(min_length=1)
+    node_selector: dict[str, str] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
@@ -154,6 +163,7 @@ class CoreweaveProvisioning(BaseModel):
     rbac: RbacSpec = RbacSpec()
     grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
     loom_session_rbac: LoomSessionRbacSpec | None = None
+    sandbox_runtime: SandboxRuntimeSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):

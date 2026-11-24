@@ -15,8 +15,9 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
-from experiments.tool_normalization.model import CapacityUnavailable, ModelConfig, initialize_ledger
-from experiments.tool_normalization.review_real import digest, process
+from experiments.tool_normalization.eligibility import digest
+from experiments.tool_normalization.model import CapacityUnavailable, initialize_ledger, parse_model_config
+from experiments.tool_normalization.review_real import process
 from experiments.tool_normalization.verify import verify_adapter
 
 
@@ -43,10 +44,7 @@ def run_locked(config_path: Path, manifest_path: Path, root: Path) -> None:
     reservation = cfg["max_record_bytes"]
     if not 0 < reservation <= budget <= 1_000_000_000_000:
         raise ValueError("Invalid artifact budget")
-    model_cfg = cfg["model"].copy()
-    for key in ("api_key_file", "capacity_file", "ledger"):
-        model_cfg[key] = Path(model_cfg[key])
-    model = ModelConfig(**model_cfg)
+    model = parse_model_config(cfg["model"])
     initialize_ledger(model)
     allocation = json.loads(model.capacity_file.read_text())
     if not 1 <= cfg["workers"] <= allocation["conversion_slots"]:
@@ -73,7 +71,12 @@ def run_locked(config_path: Path, manifest_path: Path, root: Path) -> None:
     stop_dispatch = threading.Event()
 
     def worker() -> None:
-        while not stop_dispatch.is_set() and not (root / "STOP").exists():
+        while (
+            not stop_dispatch.is_set()
+            and not (root / "STOP").exists()
+            and not model.stop_file.exists()
+            and time.time() < model.deadline_unix
+        ):
             with sqlite3.connect(queue, timeout=60) as db:
                 db.execute("BEGIN IMMEDIATE")
                 used, active = db.execute(

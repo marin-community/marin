@@ -12,7 +12,15 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from verifyit.spec import ExactSpec, JudgeSpec, PredictedActionSpec, Spec, StructuredExactSpec, UnsolvableSpec
+from verifyit.spec import (
+    ExactSpec,
+    JudgeSpec,
+    PredictedActionSpec,
+    ReasoningMarkupSpec,
+    Spec,
+    StructuredExactSpec,
+    UnsolvableSpec,
+)
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
@@ -130,7 +138,7 @@ def accepted_submission_types(verifier: Spec) -> tuple[type[Submission], ...]:
         return (JsonSubmission, StateSubmission)
     if isinstance(verifier, PredictedActionSpec | UnsolvableSpec):
         return (ActionSubmission,)
-    if isinstance(verifier, JudgeSpec):
+    if isinstance(verifier, JudgeSpec | ReasoningMarkupSpec):
         return (TextSubmission, ActionSubmission)
     if isinstance(verifier, ExactSpec):
         return (TextSubmission, JsonSubmission, StateSubmission)

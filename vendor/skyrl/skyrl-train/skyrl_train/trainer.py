@@ -5,14 +5,13 @@ import io as stdlib_io
 import json
 import math
 import os
-import re
+import pickle
 import shutil
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from jaxtyping import Float
-from pathlib import Path
 import ray
 from ray import ObjectRef
 import torch
@@ -21,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
+from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
 
 import numpy as np
@@ -35,22 +35,15 @@ from skyrl_train.trajectory_runners.base import (
     TrajectoryRunner,
 )
 import copy
-from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
 from skyrl_train.trajectory_runners.trajectory_processing import (
     concatenate_trajectory_batches,
-    get_metrics_from_trajectory_batch,
-    graded_row_indices,
-    normalized_verifier_scores,
-    scalar_reward_token_credit,
-    verifier_score_summary,
 )
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.dataset.preprocess import (
-    collate_response_token_channel,
     convert_prompts_responses_to_batch_tensors,
 )
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
-from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC, validate_distillation_attachment
+from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.distillation_adapters import AsyncRoutedTeacherScoreTicket, RoutedScoredDistillationBatch
 from skyrl_train.distillation_runtime import DistillationRuntime
 from skyrl_train.teacher_routing import route_row_metrics
@@ -61,8 +54,7 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.algorithm_registry import AdvantageEstimator
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
+from skyrl_train.utils.advantage_estimators import compute_advantages_and_returns
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
@@ -70,8 +62,6 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.objective.teacher import teacher_advantages
-from skyrl_train.objective.correction import compute_correction
-from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
     boundary_route_metrics,
@@ -108,6 +98,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
+    selected_export_step,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -115,7 +106,6 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_mod
 from skyrl_train.checkpoint_listing import extract_step_from_path
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
-    consumed_stop_metrics,
     cleanup_old_checkpoints,
     run_on_each_node,
     get_node_ids,
@@ -143,12 +133,9 @@ from skyrl_train.telemetry import (
     record_consumed_work,
     record_event,
     record_policy_step,
-    record_rollout_staleness,
     record_training_metrics,
 )
 from skyrl_train.rollout_observability import async_phase_window, monitor_event_loop_lag
-from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.timing_observability import StepWallTime, publish_startup_timings, publish_step_timings
 from skyrl_train.hf_export import (
     protected_hf_export_steps,
@@ -167,6 +154,23 @@ from skyrl_train.hf_export_schema import (
     HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
+from marinskyrl.runtime_options import BatchBuilder
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input, plan_worker_batch
+from skyrl_train.batch_metrics import (
+    install_correction,
+    advantage_metrics,
+    forward_metrics,
+    reward_metrics,
+    rollout_metrics,
+    rollout_staleness_metrics,
+    token_staleness_metrics,
+)
+from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.telemetry import record_consumed_staleness
+from skyrl_train.trajectory_runners.trajectory_processing import token_reward_rows
+from skyrl_train.trajectory_runners.types import BatchFields
+from skyrl_train.utils.advantage_estimators import apply_loop_advantages, batch_advantages, drop_advantage_inputs
 
 
 @dataclass(frozen=True)
@@ -182,47 +186,6 @@ class CheckpointSnapshot:
 
 _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
 
-MAX_DOMAIN_REWARD_METRICS = 32
-
-
-def _domain_metric_source_key(source: str | None) -> str:
-    """Encode one source as a distinct, tracker-safe metric path segment.
-
-    Lowercase ASCII names stay readable. ``_missing`` denotes absent metadata;
-    other names use fixed-width UTF-8 byte escapes under ``_source_``.
-    """
-    if source is None:
-        return "_missing"
-    if re.fullmatch(r"[a-z_][a-z0-9_]*", source) and source != "_missing" and not source.startswith("_source_"):
-        return source
-    encoded = "".join(
-        chr(byte) if byte in b"abcdefghijklmnopqrstuvwxyz0123456789" else f"_{byte:02x}"
-        for byte in source.encode("utf-8")
-    )
-    return f"_source_{encoded}"
-
-
-def _domain_reward_metrics(data_sources: List[str | None], rewards: List[float]) -> Dict[str, float]:
-    """Return bounded per-source means with distinct, stable metric names."""
-    if len(data_sources) != len(rewards):
-        raise ValueError(
-            f"Expected one data source per reward, got {len(data_sources)} sources and {len(rewards)} rewards"
-        )
-
-    rewards_by_source: Dict[str, List[float]] = defaultdict(list)
-    for source, reward in zip(data_sources, rewards, strict=True):
-        rewards_by_source[_domain_metric_source_key(source)].append(reward)
-
-    sources = sorted(rewards_by_source)
-    metrics = {
-        f"reward/domain/{source}/avg_raw_reward": float(np.mean(rewards_by_source[source]))
-        for source in sources[:MAX_DOMAIN_REWARD_METRICS]
-    }
-    if len(sources) > MAX_DOMAIN_REWARD_METRICS:
-        overflow = [reward for source in sources[MAX_DOMAIN_REWARD_METRICS:] for reward in rewards_by_source[source]]
-        metrics["reward/domain_overflow/avg_raw_reward"] = float(np.mean(overflow))
-    return metrics
-
 
 def _active_online_eagle_results(results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     return [item for engine_results in results for item in engine_results if item.get("active", False)]
@@ -237,29 +200,6 @@ def _policy_revision(step: int) -> str:
     return f"policy-step-{step}"
 
 
-def _validated_distillation_tensors(
-    trajectory_batch: TrajectoryBatch,
-    response_mask: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    """Validate optional teacher evidence and return its learner-only tensors."""
-    evidence = trajectory_batch.get("teacher_evidence")
-    distillation = trajectory_batch.get("distillation")
-    if evidence is None and distillation is None:
-        return {}
-    if evidence is None or distillation is None:
-        raise ValueError("trajectory batches must carry teacher_evidence and prepared distillation together")
-    trajectory_ids = trajectory_batch.get("trajectory_ids")
-    if trajectory_ids is None:
-        raise ValueError("teacher evidence requires stable trajectory_ids")
-    validate_distillation_attachment(
-        evidence,
-        distillation,
-        trajectory_ids=tuple(trajectory_id.to_string() for trajectory_id in trajectory_ids),
-        response_mask=response_mask.to(torch.bool),
-    )
-    return distillation.training_tensors()
-
-
 def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
     """Count the rows and tokens an optimizer step consumed, excluding data-parallel padding."""
     real_rows = training_input.batch_size - training_input.metadata.get("pad_size", 0)
@@ -270,58 +210,24 @@ def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
     )
 
 
-def _token_staleness(
-    lease_staleness: Sequence[int], policy_steps: torch.Tensor | None, response_mask: torch.Tensor, global_step: int
-) -> torch.Tensor:
-    """Each response token's staleness: its lease's, unless the engine recorded the policy step that sampled it."""
-    lease = torch.tensor(lease_staleness, dtype=torch.int32).unsqueeze(1)
-    staleness = lease * response_mask.to(torch.int32)
-    if policy_steps is None:
-        return staleness
-    stamped = (policy_steps != UNSTAMPED_POLICY_STEP) & (response_mask > 0)
-    staleness = torch.where(stamped, global_step - policy_steps, staleness)
-    assert bool(((staleness >= 0) & (staleness <= lease)).all()), (
-        "a token's policy step must fall between its lease's step and the training step"
+@dataclass(frozen=True)
+class BatchSummary:
+    work: ConsumedWork
+    stop_metrics: dict[str, float]
+    batch_size: int
+
+
+def batch_summary(plan: BatchPlan) -> BatchSummary:
+    """Summarize consumed rows and stop metrics from the batch plan."""
+    return BatchSummary(
+        ConsumedWork(
+            len(plan.uids),
+            sum(int(value) for group in plan.facts for value in group.response_len),
+            sum(int(value) for group in plan.facts for value in group.loss_tokens),
+        ),
+        plan.stop_metrics,
+        len(plan.uids),
     )
-    return staleness
-
-
-def _token_staleness_metrics(
-    staleness: torch.Tensor, loss_mask: torch.Tensor, policy_steps: torch.Tensor | None
-) -> Dict[str, float]:
-    """Staleness of loss-masked response tokens by engine stamp, beside the lease family ``async/staleness_*``."""
-    trained = loss_mask > 0
-    count = trained.count_nonzero().item()
-    if not count:
-        return {}
-    charged = staleness.masked_fill(~trained, 0)
-    metrics = {
-        "async/staleness_tokens_mean": charged.sum().item() / count,
-        "async/staleness_tokens_max": charged.max().item(),
-        "async/staleness_tokens_ratio": charged.count_nonzero().item() / count,
-        "async/staleness_tokens_stamped": 0.0,
-        "async/staleness_tokens_spanning": 0.0,
-    }
-    if policy_steps is not None:
-        stamped = trained & (policy_steps != UNSTAMPED_POLICY_STEP)
-        steps = policy_steps.masked_fill(~stamped, UNSTAMPED_POLICY_STEP)
-        spanning = (stamped & (steps < steps.amax(dim=1, keepdim=True))).any(dim=1)
-        metrics["async/staleness_tokens_stamped"] = stamped.count_nonzero().item() / count
-        metrics["async/staleness_tokens_spanning"] = spanning.float().mean().item()
-    return metrics
-
-
-def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> float:
-    group_rewards: dict[str, list[torch.Tensor]] = {}
-    for uid, reward in zip(uids, rewards, strict=True):
-        group_rewards.setdefault(uid, []).append(reward)
-    if not group_rewards:
-        return 0.0
-    flat_groups = sum(
-        len(group) > 1 and torch.std(torch.stack(group)).item() <= GRPO_FLAT_REWARD_STD_TOLERANCE
-        for group in group_rewards.values()
-    )
-    return flat_groups / len(group_rewards)
 
 
 class RayPPOTrainer:
@@ -356,6 +262,7 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -575,7 +482,7 @@ class RayPPOTrainer:
         """Kill all managed Ray actors (models + inference engines).
 
         Terminates policy, critic, and ref-model actor groups as well as
-        inference engine actors (vLLM / SGLang workers) that would otherwise
+        inference engine actors (vLLM workers) that would otherwise
         keep running until the node dies.
         """
         for model_name, model in [
@@ -884,22 +791,25 @@ class RayPPOTrainer:
             await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_save_hf_model:
-            if step_wall is not None:
-                step_wall.start("checkpoint_work")
-            # HF export reads the committed checkpoint. When checkpoint and HF
-            # export share a cadence, wait for the background shard uploads and
-            # marker publication before asking the exporter to consume it.
-            if await self._drain_checkpoint_upload():
-                await asyncio.to_thread(self.handle_hf_export)
-            self._control.should_save_hf_model = False
-
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
             with Timer("eval", self.all_timings):
                 await self._evaluate_and_log(state, commit=False)
             self._control.should_evaluate = False
+
+        if self._control.should_save_hf_model:
+            if step_wall is not None:
+                step_wall.start("checkpoint_work")
+            # HF export reads the committed checkpoint. When checkpoint and HF
+            # export share a cadence, wait for the background shard uploads and
+            # marker publication before asking the exporter to consume it.
+            # Best selection is resolved only at train end: before an eligible
+            # evaluation, metadata can be absent or still point at the initializer.
+            if self.cfg.trainer.hf_export_checkpoint != "best" and await self._drain_checkpoint_upload():
+                await asyncio.to_thread(self.handle_hf_export)
+            self._control.should_save_hf_model = False
+
         if step_wall is not None:
             step_wall.start("step_end_bookkeeping")
 
@@ -1201,9 +1111,21 @@ class RayPPOTrainer:
             if self.colocate_all:
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
                 await self.inference_engine_client.wake_up(tags=["weights"])
-                await self.sync_policy_weights_to_inference_engines()
+                if self._expert_block_sync is not None:
+                    if not self.inference_engine_client.generation_paused_event.is_set():
+                        await self.inference_engine_client.pause_generation()
+                    try:
+                        for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                            timings[f"expert_block_sync/{phase}"] = seconds
+                        await self.sync_policy_weights_to_inference_engines()
+                    finally:
+                        await self._expert_block_sync.close()
+                else:
+                    await self.sync_policy_weights_to_inference_engines()
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=False, offload_model=True)
                 await self.inference_engine_client.wake_up(tags=["kv_cache"])
+                if self._expert_block_sync is not None:
+                    await self.inference_engine_client.resume_generation(policy_step=self.global_step + 1)
             else:
                 await self.inference_engine_client.pause_generation()
                 # Training backloads the optimizer before every step. Offload it after every update, including
@@ -1283,17 +1205,17 @@ class RayPPOTrainer:
         self,
         *,
         epoch: int,
-        training_input: TrainingInputBatch,
+        summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
-        self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
+        self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
-            record_consumed_work(consumed_work(training_input), step=self.global_step)
+            record_consumed_work(summary.work, step=self.global_step)
         logger.info(
             "Optimizer step completed: step={} epoch={} sequences={} duration_seconds={:.3f}",
             self.global_step,
             epoch,
-            len(training_input["sequences"]),
+            summary.batch_size,
             duration_seconds,
         )
 
@@ -1376,7 +1298,7 @@ class RayPPOTrainer:
             cycle_started = time.perf_counter()
             step_wall = StepWallTime(OmegaConf.to_container(self.cfg.trainer.step_phase_budgets))
             with Timer("step", self.all_timings) as step_timer:
-                training_input = await self._train_step(epoch, step_wall)
+                summary = await self._train_step(epoch, step_wall)
                 # The core wall excludes the step-end callbacks below.
                 core_seconds = time.perf_counter() - cycle_started
                 step_wall.start("step_end_bookkeeping")
@@ -1385,9 +1307,7 @@ class RayPPOTrainer:
             self.all_metrics.update(
                 step_wall.finish(step_timer.duration, ended_at=step_timer.start_time + step_timer.duration)
             )
-            self._update_step_performance_metrics(
-                training_input, core_seconds=core_seconds, cycle_started=cycle_started
-            )
+            self._update_step_performance_metrics(summary, core_seconds=core_seconds, cycle_started=cycle_started)
 
             if self._control.should_log:
                 log_payload = {
@@ -1444,9 +1364,11 @@ class RayPPOTrainer:
                 policy_model=self.policy_model,
                 inference_engine_client=self.inference_engine_client,
                 timeout_seconds=self.cfg.generator.expert_block_sync.timeout_seconds,
+                colocated=self.colocate_all,
             )
-            for phase, seconds in (await self._expert_block_sync.prepare()).items():
-                self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
+            if not self.colocate_all:
+                for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                    self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
 
     def _record_run_configuration(self) -> None:
         if not self._training_metrics_enabled:
@@ -1474,13 +1396,13 @@ class RayPPOTrainer:
         )
 
     def _update_step_performance_metrics(
-        self, training_input: TrainingInputBatch, *, core_seconds: float, cycle_started: float
+        self, summary: BatchSummary, *, core_seconds: float, cycle_started: float
     ) -> None:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
         generator = self.cfg.generator
-        consumed = consumed_work(training_input)
+        consumed = summary.work
         self.all_metrics.update(
             async_step_metrics(
                 core_seconds=core_seconds,
@@ -1505,29 +1427,46 @@ class RayPPOTrainer:
         await self._begin_speculator_capture(step)
         await self.context.publish(step)
 
-    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> TrainingInputBatch:
-        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return the batch."""
+    @asynccontextmanager
+    async def _admission_window(self, step_wall: StepWallTime):
         step_wall.start("group_admission")
         logger.info(
             "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
         )
         with (
-            Timer("wait_for_generation_buffer", self.all_timings) as rollout_wait_timer,
+            Timer("wait_for_generation_buffer", self.all_timings),
             critical_phase("rollout_or_inference_wait", self.global_step),
             async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
-            groups, selection_metrics = await self.context.next_batch(
+            yield
+        await self._seal_speculator_capture()
+        await self._start_speculator_update()
+
+    @asynccontextmanager
+    async def _training_window(self, step_wall: StepWallTime):
+        step_wall.start("training_preparation")
+        with (
+            Timer("run_training", self.all_timings),
+            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
+        ):
+            yield
+
+    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return its work summary."""
+        if self.batch_builder is BatchBuilder.WORKER:
+            return await self._train_loaded_step(epoch, step_wall)
+        async with self._admission_window(step_wall):
+            groups, metadata = await self.context.next_batch(
                 stall_timeout=admission_stall_timeout(
-                    recent_step_times=self._step_time_history,
-                    timeout_override=self.group_admission_stall_timeout,
+                    recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
                 ),
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
-        self.all_metrics.update(selection_metrics)
-        await self._seal_speculator_capture()
-        await self._start_speculator_update()
+            self.all_metrics.update(metadata.metrics)
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
+            if self._expert_block_sync is not None:
+                await self.inference_engine_client.pause_generation()
             await self.inference_engine_client.sleep()
 
         scored_distillation = None
@@ -1536,21 +1475,109 @@ class RayPPOTrainer:
                 scored_distillation = await self._await_admitted_teacher_evidence(groups)
 
         step_wall.start("batch_assembly")
-        training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups)
+        facts = tuple(admitted.row_facts for admitted in metadata.groups)
+        training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups, facts=facts)
         if scored_distillation is not None:
             self._attach_teacher_evidence(training_input, scored_distillation)
-        self._log_rollout_batch_completed(groups, duration_seconds=rollout_wait_timer.duration)
+        responses = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+        self._log_rollout_batch_completed(
+            groups=len(groups),
+            sequences=len(responses),
+            response_tokens=sum(map(len, responses)),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
 
-        step_wall.start("training_preparation")
-        with (
-            Timer("run_training", self.all_timings),
-            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
-        ):
+        async with self._training_window(step_wall):
             status = await self._run_training(training_input, step_wall=step_wall)
+        summary = BatchSummary(
+            consumed_work(training_input),
+            training_input.metadata["consumed_stop_metrics"],
+            training_input.batch_size,
+        )
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _train_loaded_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        context, policy = self.context, self.policy_model
+        num_experts = self._resolve_num_experts() if moe_router_replay_requested(self.cfg) else None
+        stall_timeout = admission_stall_timeout(
+            recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
+        )
+        async with self._admission_window(step_wall):
+            metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
+            reader = context.reader(metadata, stall_timeout=stall_timeout)
+            self.all_metrics.update(metadata.metrics)
+        step_wall.start("batch_assembly")
+        plan, metrics = plan_worker_batch(
+            self.cfg,
+            metadata.groups,
+            global_step=self.global_step,
+            dp_size=policy.actor_infos[0].rank.dp_size,
+            max_staleness_steps=context.config.max_staleness_steps,
+            num_experts=num_experts,
+        )
+        self.all_metrics.update(metrics)
+        if self.cfg.trainer.training_metrics:
+            record_consumed_staleness(
+                plan.uids,
+                plan.rollout_staleness,
+                [int(value) for group in plan.facts for value in group.response_len],
+                step=self.global_step,
+            )
+        reader_ref = ray.put(reader)
+        references = list(await context.wait(asyncio.gather(*policy.share_batch_groups(plan, reader_ref))))
+        loaded = await context.wait(
+            asyncio.gather(*policy.load_batch(plan, reader_ref, references, self.tokenizer.pad_token_id))
+        )
+        self.all_timings["load_worker_batch"] = max(loaded)
+        del references, reader_ref
+        self._log_rollout_batch_completed(
+            groups=len(plan.facts),
+            sequences=len(plan.uids),
+            response_tokens=sum(int(group.response_len.sum()) for group in plan.facts),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
+        async with self._training_window(step_wall):
+            await self._drain_policy_event_loops()
+            with Timer("fwd_logprobs_values_reward", self.all_timings):
+                outputs = await context.wait(
+                    asyncio.gather(*policy.async_run_ray_method("pass_through", "prepare_loaded", plan.global_step))
+                )
+                await context.wait(asyncio.gather(*policy.async_run_ray_method("pass_through", "empty_cache")))
+                self.all_metrics.update(outputs[0].metadata["batch_metrics"])
+            step_wall.start("policy_training")
+            with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
+                if self.cfg.trainer.offload_optimizer_during_rollouts:
+                    with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
+                        await asyncio.to_thread(policy.backload_to_gpu, backload_optimizer=True, backload_model=False)
+                with Timer("policy_train", self.all_timings):
+                    outputs = await asyncio.to_thread(
+                        collect_actor_results,
+                        policy.actor_infos,
+                        policy.async_run_ray_method("pass_through", "train_loaded", plan.global_step),
+                        operation="policy training",
+                    )
+                status = outputs[0].metadata["train_status"]
+                self.all_metrics.update({f"policy/{key}": value for key, value in status.items()})
+                await context.wait(asyncio.gather(*policy.async_run_ray_method("pass_through", "empty_cache")))
+            self._policy_version_step = self.global_step
+            await context.wait(
+                asyncio.gather(*policy.async_run_ray_method("pass_through", "unload_batch", plan.global_step))
+            )
+        summary = batch_summary(plan)
+        self._current_step_rewards = (
+            [float(value) for group in plan.facts for value in group.scalar_values]
+            if not plan.fields.token_rewards
+            else []
+        )
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _finish_train_step(
+        self, epoch: int, step_wall: StepWallTime, status: dict, summary: BatchSummary
+    ) -> BatchSummary:
         step_wall.start("group_bookkeeping")
         self._log_optimizer_step_completed(
             epoch=epoch,
-            training_input=training_input,
+            summary=summary,
             duration_seconds=self.all_timings["train_critic_and_policy"],
         )
 
@@ -1561,7 +1588,7 @@ class RayPPOTrainer:
 
         logger.info(status)
         self.all_metrics.update({"trainer/epoch": epoch, "trainer/global_step": self.global_step})
-        return training_input
+        return summary
 
     def _attach_teacher_evidence(
         self, training_input: TrainingInputBatch, scored_distillation: tuple[RoutedScoredDistillationBatch, ...]
@@ -1581,15 +1608,16 @@ class RayPPOTrainer:
             }
         )
 
-    def _log_rollout_batch_completed(self, groups: List[RolloutGroup], *, duration_seconds: float) -> None:
-        response_ids = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+    def _log_rollout_batch_completed(
+        self, *, groups: int, sequences: int, response_tokens: int, duration_seconds: float
+    ) -> None:
         logger.info(
             "Rollout batch completed: step={} groups={} trajectories={} response_tokens={} staleness_mean={:.3f} "
             "staleness_max={} duration_seconds={:.3f}",
             self.global_step,
-            len(groups),
-            len(response_ids),
-            sum(len(response) for response in response_ids),
+            groups,
+            sequences,
+            response_tokens,
             self.all_metrics["async/staleness_mean"],
             self.all_metrics["async/staleness_max"],
             duration_seconds,
@@ -1626,7 +1654,9 @@ class RayPPOTrainer:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
                 additional = [
-                    tasks.create_task(callback.collect_evaluation(state, trainer=self, pool=pool))
+                    tasks.create_task(
+                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                    )
                     for callback in self.callback_handler.callbacks
                 ]
             eval_metrics = native.result()
@@ -1668,16 +1698,7 @@ class RayPPOTrainer:
                 raise ValueError("distillation reward_mode=replace requires teacher evidence on every training batch")
             training_input["loss_mask"] = training_input["loss_mask"] * training_input["teacher_valid_mask"]
 
-        correction = off_policy_correction(self.cfg.trainer.algorithm)
-        if correction.rules:
-            rollout_logprobs = training_input.get("rollout_logprobs")
-            if rollout_logprobs is None:
-                raise ValueError("off_policy_correction requires rollout_logprobs")
-            result = compute_correction(
-                training_input["action_log_probs"], rollout_logprobs, training_input["loss_mask"], correction
-            )
-            training_input["correction_weights"] = result.weights
-            self.all_metrics.update(result.metrics)
+        self.all_metrics.update(install_correction(training_input, self.cfg.trainer.algorithm))
 
         if self.cfg.trainer.algorithm.use_kl_in_reward:
             with Timer("apply_reward_kl_penalty", self.all_timings):
@@ -1750,7 +1771,9 @@ class RayPPOTrainer:
             del self._distillation_tickets[group.uid]
         return scored
 
-    def convert_rollout_groups_to_training_input(self, groups: List[RolloutGroup]) -> TrainingInputBatch:
+    def convert_rollout_groups_to_training_input(
+        self, groups: List[RolloutGroup], *, facts: tuple[RowFacts, ...]
+    ) -> TrainingInputBatch:
         """Concatenate one batch of admitted groups and convert it to a training batch."""
         batch_size = self.context.config.batch_size
         max_staleness_steps = self.context.config.max_staleness_steps
@@ -1759,9 +1782,8 @@ class RayPPOTrainer:
             uids = [group.uid for group in groups for _ in group.trajectory_batch["response_ids"]]
             stalenesses = [self.global_step - group.policy_step for group in groups]
             staleness_by_uid = {group.uid: staleness for group, staleness in zip(groups, stalenesses, strict=True)}
-            record_rollout_staleness(stalenesses, self.global_step)
-            assert max(stalenesses) <= max_staleness_steps, (
-                f"batch assembly returned staleness {max(stalenesses)} above max {max_staleness_steps}"
+            staleness_metrics = rollout_staleness_metrics(
+                stalenesses, global_step=self.global_step, max_staleness_steps=max_staleness_steps
             )
 
             trajectory_batch = concatenate_trajectory_batches(
@@ -1770,21 +1792,18 @@ class RayPPOTrainer:
                     self.cfg.trainer.algorithm,
                     loss_spec=PolicyLossRegistry.spec(self.cfg.trainer.algorithm.policy_loss_type),
                 ),
+                metrics=rollout_metrics(
+                    facts, tis_lcs_alert_threshold=float(self.cfg.trainer.algorithm.tis_lcs_alert_threshold)
+                ),
                 tis_lcs_alert_threshold=float(self.cfg.trainer.algorithm.tis_lcs_alert_threshold),
             )
-            assert trajectory_batch["rollout_metrics"] is not None, "Rollout metrics should be non-null."
+            if any(group.loop_credit for group in facts):
+                refresh_trajectory_reward_shaping_metrics(trajectory_batch)
             self.all_metrics.update(trajectory_batch["rollout_metrics"])
-            self.all_metrics.update(
-                {
-                    "async/staleness_mean": sum(stalenesses) / len(stalenesses),
-                    "async/staleness_max": max(stalenesses),
-                    "async/staleness_min": min(stalenesses),
-                    "async/staleness_ratio": sum(1 for s in stalenesses if s > 0) / len(stalenesses),
-                }
-            )
+            self.all_metrics.update(staleness_metrics)
 
         with Timer("postprocess_trajectory_batch", self.all_timings):
-            trajectory_batch = self.postprocess_trajectory_batch(trajectory_batch, uids)
+            trajectory_batch = self.postprocess_trajectory_batch(trajectory_batch, uids, facts=facts)
             trajectory_batch, uids = self.select_trajectories(trajectory_batch, uids)
         # Built after selection, because select_trajectories may drop rows.
         rollout_staleness = [staleness_by_uid[uid] for uid in uids]
@@ -1792,23 +1811,20 @@ class RayPPOTrainer:
         logger.debug(f"Example generated: {self.tokenizer.decode(trajectory_batch['response_ids'][0])}")
 
         with Timer("convert_to_training_input", self.all_timings):
-            training_input = self.convert_to_training_input(trajectory_batch, uids, rollout_staleness=rollout_staleness)
+            training_input = self.convert_to_training_input(
+                trajectory_batch,
+                uids,
+                rollout_staleness=rollout_staleness,
+                facts=facts if self.trajectory_selector is None else None,
+            )
         if self._training_metrics_enabled:
-            self._record_consumed_staleness(uids, rollout_staleness, training_input["response_mask"][: len(uids)])
+            record_consumed_staleness(
+                uids,
+                rollout_staleness,
+                training_input["response_mask"][: len(uids)].sum(-1).tolist(),
+                step=self.global_step,
+            )
         return training_input
-
-    def _record_consumed_staleness(
-        self, uids: List[str], rollout_staleness: List[int], response_masks: torch.Tensor
-    ) -> None:
-        counts: dict[str, dict[str, int]] = {}
-        # One reduction and one device sync for the whole batch, rather than one per row.
-        token_counts = response_masks.sum(dim=-1).tolist()
-        for uid, steps, token_count in zip(uids, rollout_staleness, token_counts, strict=True):
-            group = counts.setdefault(uid, {"staleness": steps, "groups": 1, "sequences": 0, "response_tokens": 0})
-            group["sequences"] += 1
-            group["response_tokens"] += int(token_count)
-        for group in counts.values():
-            record_event("consumed_staleness", group, attributes={"role": TRAINER_ROLE, "step": str(self.global_step)})
 
     def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
@@ -1830,7 +1846,6 @@ class RayPPOTrainer:
         if (
             use_ref_model
             and cfg.trainer.strategy == "megatron"
-            and (cfg.trainer.placement.colocate_all or cfg.trainer.placement.colocate_policy_ref)
             and cfg.trainer.ref.nccl_buffer_size_bytes is not None
         ):
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}
@@ -2127,18 +2142,7 @@ class RayPPOTrainer:
                 trust_remote_code=True,
                 revision=self.cfg.trainer.policy.model.get("revision"),
             )
-            # Some families nest the expert count under a text/decoder sub-config.
-            candidates = [hf_config, getattr(hf_config, "text_config", None)]
-            for cfg_obj in candidates:
-                if cfg_obj is None:
-                    continue
-                for attr in ("num_experts", "num_local_experts", "n_routed_experts"):
-                    val = getattr(cfg_obj, attr, None)
-                    if isinstance(val, int) and val > 0:
-                        num_experts = val
-                        break
-                if num_experts is not None:
-                    break
+            num_experts = model_expert_count(hf_config)
         except Exception as e:  # noqa: BLE001 — config load is best-effort; fallback is safe
             logger.warning(
                 f"Could not resolve num_experts from policy model config for the "
@@ -2157,111 +2161,44 @@ class RayPPOTrainer:
         uids: List[str],
         *,
         rollout_staleness: List[int] | None = None,
+        facts: tuple[RowFacts, ...] | None = None,
     ) -> TrainingInputBatch:
         """Converts lists to a padded batch of tensors for training"""
         assert_training_groups_eligible(trajectory_batch, uids, self.group_advantage_invariant)
-        prompt_ids: List[List[int]] = trajectory_batch["prompt_token_ids"]
-        response_ids: List[List[int]] = trajectory_batch["response_ids"]
-        rewards: List[List[float]] = trajectory_batch["rewards"]
-        loss_masks: List[List[int]] = trajectory_batch["loss_masks"]
-
-        logprobs: Optional[List[np.ndarray]] = trajectory_batch.get("rollout_logprobs", None)
-
-        # MoE router-replay capture rail (Stage 1): only pull routed_experts when
-        # the flag is on. Gated so the flag-off TrainingInputBatch is byte-identical
-        # (the field is never even passed to the collator nor set on the batch).
-        moe_router_replay = moe_router_replay_requested(self.cfg)
-        routed_experts = trajectory_batch.get("rollout_routed_experts", None) if moe_router_replay else None
-        # Deterministic dtype for the compact rollout_routed_experts transport:
-        # resolve the model's expert count once (memoized) and pass it to the
-        # route rows so the narrowed dtype is keyed on num_experts (max possible id),
-        # NOT the per-batch observed max — otherwise ranks whose batch max straddles
-        # a dtype boundary diverge and a later collective on this tensor hangs NCCL.
-        # Only needed when we actually carry routed experts (moe_router_replay on).
-        num_experts = self._resolve_num_experts() if routed_experts is not None else None
-
-        # Loop-behavior reward shaping (Stage B / F5 + F4): only pull the per-token
-        # shaping channel + span tags when the channel is enabled. Gated so the
-        # flag-off TrainingInputBatch is byte-identical (the fields are never passed
-        # to the collator nor set on the batch). Mirrors moe_router_replay above.
-        enable_token_reward_channel = bool(self.cfg.trainer.algorithm.get("enable_token_reward_channel", False))
-        token_level_shaping = trajectory_batch.get("token_level_shaping", None) if enable_token_reward_channel else None
-        response_span_tags = trajectory_batch.get("response_span_tags", None) if enable_token_reward_channel else None
-        loop_advantages = trajectory_batch.get("loop_advantages")
-
-        (
-            sequences_tensor,
-            attention_masks_tensor,
-            response_masks_tensor,
-            rewards_tensor,
-            loss_masks_tensor,
-            rollout_logprobs_tensor,
-            token_level_shaping_tensor,
-            response_span_tags_tensor,
-        ) = convert_prompts_responses_to_batch_tensors(
-            self.tokenizer,
-            prompt_ids,
-            response_ids,
-            rewards,
-            loss_masks,
-            logprobs,
-            token_level_shaping,
-            response_span_tags,
+        facts = facts if facts is not None else (RowFacts.from_batch(trajectory_batch),)
+        fields = BatchFields.from_batch(trajectory_batch)
+        routed_experts = (
+            trajectory_batch.get("rollout_routed_experts") if moe_router_replay_requested(self.cfg) else None
         )
-        if (
-            rollout_logprobs_required(
-                self.cfg.trainer.algorithm,
-                loss_spec=PolicyLossRegistry.spec(self.cfg.trainer.algorithm.policy_loss_type),
-            )
-            and rollout_logprobs_tensor is None
-        ):
-            raise ValueError("rollout_logprobs are required by the configured objective")
-        if rollout_logprobs_tensor is not None:
-            assert rollout_logprobs_tensor.shape == loss_masks_tensor.shape, "Logprobs should look like responses"
-        # Keep the response-window width for placement, without allocating its dense route canvas.
-        rollout_routed_experts_rows = None
-        if routed_experts is not None:
-            rollout_routed_experts_rows = RoutedExpertRows(
-                tuple(routed_experts), response_masks_tensor.shape[1], num_experts
-            )
-            if len(rollout_routed_experts_rows) != len(response_ids):
-                raise ValueError("routed experts must have one row per response")
-        distillation_tensors = _validated_distillation_tensors(trajectory_batch, response_masks_tensor)
-        # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
-        policy_steps = None
-        if rollout_staleness is None:
-            rollout_staleness_tensor = torch.zeros_like(response_masks_tensor, dtype=torch.int32)
-        else:
-            policy_steps = collate_response_token_channel(
-                trajectory_batch.get("rollout_policy_steps"),
-                response_masks_tensor,
-                dtype=torch.int32,
-                expected_lengths=[len(response) for response in response_ids],
-            )
-            rollout_staleness_tensor = _token_staleness(
-                rollout_staleness, policy_steps, response_masks_tensor, self.global_step
-            )
+        if routed_experts is None:
+            fields = fields.without_routes()
+        plan = BatchPlan(
+            global_step=self.global_step,
+            uids=tuple(uids),
+            facts=facts,
+            fields=fields,
+            rollout_staleness=tuple(rollout_staleness) if rollout_staleness is not None else None,
+            num_experts=self._resolve_num_experts() if routed_experts is not None else None,
+        )
+        training_input = assemble_slice(
+            plan,
+            range(len(uids)),
+            trajectory_batch,
+            pad_token_id=self.tokenizer.pad_token_id,
+            algorithm=self.cfg.trainer.algorithm,
+        )
         if self._training_metrics_enabled:
-            self.all_metrics.update(_token_staleness_metrics(rollout_staleness_tensor, loss_masks_tensor, policy_steps))
-        training_input = TrainingInputBatch(
-            {
-                "sequences": sequences_tensor,  # Full trajectories (padded and concatenated prompts and responses)
-                "attention_mask": attention_masks_tensor,
-                "response_mask": response_masks_tensor,
-                "rewards": rewards_tensor,
-                "loss_mask": loss_masks_tensor,
-                "rollout_logprobs": rollout_logprobs_tensor,
-                "rollout_staleness": rollout_staleness_tensor,
-                "is_last_step": (
-                    torch.tensor(trajectory_batch["is_last_step"], dtype=torch.bool)
-                    if trajectory_batch.get("is_last_step", None) is not None
-                    else None
-                ),
-            },
-            routed_expert_rows=rollout_routed_experts_rows,
-        )
-        training_input.update(distillation_tensors)
+            self.all_metrics.update(
+                token_staleness_metrics(training_input, facts if rollout_staleness is not None else ())
+            )
+        rollout_staleness_tensor = training_input["rollout_staleness"]
+        prompt_ids = trajectory_batch["prompt_token_ids"]
+        response_ids = trajectory_batch["response_ids"]
+        loss_masks = trajectory_batch["loss_masks"]
+        response_masks_tensor = training_input["response_mask"]
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
+        rewards = trajectory_batch["rewards"]
+        logprobs = trajectory_batch.get("rollout_logprobs")
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
                 trajectory_batch,
@@ -2335,9 +2272,9 @@ class RayPPOTrainer:
                     raise ValueError("Verified suffix repairs require an explicit repair_sft_weight")
                 if (
                     routed_experts is not None
-                    or token_level_shaping is not None
-                    or response_span_tags is not None
-                    or loop_advantages is not None
+                    or "token_level_shaping" in training_input
+                    or "response_span_tags" in training_input
+                    or trajectory_batch.get("loop_advantages") is not None
                 ):
                     raise ValueError("Closure repair training does not support sampled-token auxiliary channels")
                 # Preserve the recorded rollout. Only the learner's response
@@ -2356,7 +2293,7 @@ class RayPPOTrainer:
                     _,
                     _,
                 ) = convert_prompts_responses_to_batch_tensors(
-                    self.tokenizer,
+                    self.tokenizer.pad_token_id,
                     prompt_ids,
                     response_ids,
                     [
@@ -2412,6 +2349,7 @@ class RayPPOTrainer:
                         "ftpo_repair_mask": repair_mask,
                     }
                 )
+                training_input.metadata["response_length"] = width
                 self.all_metrics["closure/repair_tokens"] = float(repair_mask.sum())
             training_input["student_topk_indices"] = candidates
             training_input["ftpo_chosen_mask"] = chosen
@@ -2437,37 +2375,6 @@ class RayPPOTrainer:
                         training_input.get("ftpo_repair_mask"),
                     )
                 )
-        # Stage B (F5/F4): attach the per-token shaping channel + span tags ONLY
-        # when present, so the flag-off batch dict has exactly the same keys as
-        # today (TensorBatch.__eq__ compares key sets).
-        if token_level_shaping_tensor is not None:
-            training_input["token_level_shaping"] = token_level_shaping_tensor
-        if response_span_tags_tensor is not None:
-            training_input["response_span_tags"] = response_span_tags_tensor
-        pair_roles = trajectory_batch.get("pair_roles")
-        if pair_roles is not None:
-            if len(pair_roles) != len(response_ids):
-                raise ValueError("pair_roles must carry one role per response row")
-            training_input["pair_roles"] = torch.tensor(pair_roles, dtype=torch.float32)
-        loop_advantages_tensor = collate_response_token_channel(
-            loop_advantages,
-            response_masks_tensor,
-            dtype=torch.float,
-            expected_lengths=[len(response) for response in response_ids],
-        )
-        if loop_advantages_tensor is not None:
-            training_input["loop_advantages"] = loop_advantages_tensor
-        training_input.metadata = {"uids": uids}
-        # For RLOO-N: pass through exclude_from_baseline flags if present
-        if trajectory_batch.get("exclude_from_baseline") is not None:
-            training_input.metadata["exclude_from_baseline"] = np.array(
-                trajectory_batch["exclude_from_baseline"], dtype=bool
-            )
-        training_input.metadata["consumed_stop_metrics"] = consumed_stop_metrics(
-            trajectory_batch.get("stop_reasons"), len(response_ids)
-        )
-        # padded response length
-        training_input.metadata["response_length"] = response_masks_tensor.shape[1]
         if self.cfg.trainer.step_wise_training:
             assert "trajectory_ids" in trajectory_batch, (
                 "Expected `trajectory_ids` in trajectory batch for step wise training"
@@ -2480,10 +2387,8 @@ class RayPPOTrainer:
                 for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
                 if is_last_step
             ) / len(response_ids)
-        else:
-            training_input.metadata["avg_response_length"] = sum(
-                len(sample_response_ids) for sample_response_ids in response_ids
-            ) / len(response_ids)
+        elif ftpo is not None:
+            training_input.metadata["avg_response_length"] = sum(map(len, response_ids)) / len(response_ids)
 
         logger.info(f"Number of sequences before padding: {len(training_input['sequences'])}")
         training_input = self.pad_batch(training_input)
@@ -2492,7 +2397,9 @@ class RayPPOTrainer:
         return training_input
 
     @torch.no_grad()
-    def postprocess_trajectory_batch(self, trajectory_batch: TrajectoryBatch, uids: List[str]) -> TrajectoryBatch:
+    def postprocess_trajectory_batch(
+        self, trajectory_batch: TrajectoryBatch, uids: List[str], *, facts: tuple[RowFacts, ...] | None = None
+    ) -> TrajectoryBatch:
         """
         Converts to per token rewards and computes pass@N.
 
@@ -2515,7 +2422,11 @@ class RayPPOTrainer:
 
         # only use `trajectory_batch_for_metrics` for metrics calculation
         # For step-wise training, we only calculate metrics for the last step of each trajectory
-        self._record_reward_metrics(trajectory_batch_for_metrics, uids_for_metrics)
+        self._record_reward_metrics(
+            trajectory_batch_for_metrics,
+            uids_for_metrics,
+            facts=facts if not self.cfg.trainer.step_wise_training else None,
+        )
 
         # Per-sample scalar rewards for this step, kept for callbacks that need the
         # distribution rather than its mean (PreflightGateCallback reads this). Captured
@@ -2527,75 +2438,24 @@ class RayPPOTrainer:
             [float(r) for r in step_rewards] if step_rewards and not isinstance(step_rewards[0], list) else []
         )
 
-        # these use the full trajectory batch
-        rewards: Union[List[float], List[List[float]]] = trajectory_batch["rewards"]
-        responses: List[List[int]] = trajectory_batch["response_ids"]
-        per_token_rewards: List[List[float]] = []
-
-        # Check if rewards are already token-level (List[List[float]]) or response-level (List[float])
-        if rewards and isinstance(rewards[0], list):
-            # Token-level rewards: rewards is List[List[float]]
-            per_token_rewards = rewards
-        else:
-            # Response-level rewards: rewards is List[float], convert to per-token rewards.
-            # Zero-token responses keep an empty credit list; see scalar_reward_token_credit.
-            per_token_rewards = [
-                scalar_reward_token_credit(reward, response) for reward, response in zip(rewards, responses)
-            ]
-
-        # re-assign reward but now it's per token rewards
-        trajectory_batch["rewards"] = per_token_rewards
+        trajectory_batch["rewards"] = token_reward_rows(trajectory_batch["rewards"], trajectory_batch["response_ids"])
         return trajectory_batch
 
-    def _record_reward_metrics(self, trajectory_batch: TrajectoryBatch, uids: List[str]) -> None:
+    def _record_reward_metrics(
+        self, trajectory_batch: TrajectoryBatch, uids: List[str], *, facts: tuple[RowFacts, ...] | None = None
+    ) -> None:
         """Record reward metrics over graded rows; a step with none records no reward metrics."""
-        graded_indices = graded_row_indices(trajectory_batch)
-        if not graded_indices:
-            return
-        if len(graded_indices) < len(trajectory_batch["rewards"]):
-            trajectory_batch = filter_trajectory_batch(
-                trajectory_batch, graded_indices, row_ownership=RowOwnership.BORROWED
-            )
-            uids = [uids[index] for index in graded_indices]
-        mean_reward, pass_at_n = get_metrics_from_trajectory_batch(trajectory_batch, uids)
-        rewards = trajectory_batch["rewards"]
-        n_samples_per_prompt = self.cfg.generator.n_samples_per_prompt
-
-        reward_metrics = {
-            f"reward/avg_pass_at_{n_samples_per_prompt}": pass_at_n,
-            "reward/avg_raw_reward": mean_reward,
-        }
-        # A group whose rewards all tie carries no advantage signal.
-        grouped_rewards = defaultdict(list)
-        for uid, reward in zip(uids, rewards):
-            grouped_rewards[uid].append(float(np.sum(reward)))
-        reward_metrics["reward/informative_group_fraction"] = sum(
-            max(values) > min(values) for values in grouped_rewards.values()
-        ) / len(grouped_rewards)
-        verifier_scores = normalized_verifier_scores(trajectory_batch)
-        if verifier_scores is not None:
-            coverage, average = verifier_score_summary(verifier_scores)
-            reward_metrics["reward/verifier_score_coverage"] = coverage
-            if average is not None:
-                reward_metrics["reward/avg_verifier_score"] = average
-            results = trajectory_batch["verification_results"]
-            scores_by_agent: Dict[str, List[float]] = defaultdict(list)
-            for result, score in zip(results, verifier_scores, strict=True):
-                if result is not None and score is not None and isinstance(result.diagnostics.get("agent"), str):
-                    agent = _domain_metric_source_key(result.diagnostics["agent"])
-                    scores_by_agent[agent].append(score)
-            for agent in sorted(scores_by_agent)[:MAX_DOMAIN_REWARD_METRICS]:
-                reward_metrics[f"reward/agent/{agent}/avg_verifier_score"] = float(np.mean(scores_by_agent[agent]))
-        self.all_metrics.update(reward_metrics)
-        data_sources = trajectory_batch.get("data_sources")
-        if data_sources is not None:
-            self.all_metrics.update(
-                _domain_reward_metrics(
-                    data_sources,
-                    [float(sum(reward) if isinstance(reward, list) else reward) for reward in rewards],
-                )
-            )
-        logger.info(f"reward/avg_pass_at_{n_samples_per_prompt}: {pass_at_n}, reward/avg_raw_reward: {mean_reward}")
+        metrics = reward_metrics(
+            (facts if facts is not None else (RowFacts.from_batch(trajectory_batch),)),
+            uids,
+            n_samples_per_prompt=self.cfg.generator.n_samples_per_prompt,
+        )
+        self.all_metrics.update(metrics)
+        if metrics:
+            n_samples_per_prompt = self.cfg.generator.n_samples_per_prompt
+            pass_at_n = metrics[f"reward/avg_pass_at_{n_samples_per_prompt}"]
+            mean_reward = metrics["reward/avg_raw_reward"]
+            logger.info(f"reward/avg_pass_at_{n_samples_per_prompt}: {pass_at_n}, reward/avg_raw_reward: {mean_reward}")
 
     def select_trajectories(
         self, trajectory_batch: TrajectoryBatch, uids: List[str]
@@ -2659,87 +2519,23 @@ class RayPPOTrainer:
             advantages = last_step_advantages[traj_ids]
             returns = last_step_returns[traj_ids]
         else:
-            # For RLOO-N: pass exclude_from_baseline if present in metadata
-            exclude_from_baseline = data.metadata.get("exclude_from_baseline", None)
-            # Stage C (F6): thread the per-token PBS shaping channel into the
-            # advantage estimator when it is present. The dispatcher forwards it
-            # via **kwargs; only the rloo_n_pbs combiner consumes it (every other
-            # estimator ignores the extra kwarg), and when the key is absent
-            # (channel off) token_level_shaping is None -> byte-identical path.
-            token_level_shaping = data["token_level_shaping"] if "token_level_shaping" in data else None
-            advantages, returns = compute_advantages_and_returns(
-                token_level_rewards=token_level_rewards,
-                response_mask=data["response_mask"],
-                index=data.metadata["uids"],
-                adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
-                config=self.cfg.trainer.algorithm,
-                values=data["values"],
-                gamma=self.cfg.trainer.algorithm.gamma,
-                lambd=self.cfg.trainer.algorithm.lambd,
-                grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
-                exclude_from_baseline=exclude_from_baseline,
-                token_level_shaping=token_level_shaping,
-                group_advantage_invariant=self.group_advantage_invariant,
+            advantages, returns = batch_advantages(
+                data, self.cfg.trainer.algorithm, invariant=self.group_advantage_invariant
             )
         data["returns"] = returns
         data["advantages"] = advantages
 
-        # remove padding while calculating metrics
-        pad_size = data.metadata.get("pad_size", 0)
-        num_samples = len(token_level_rewards)
-
-        return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        if (
-            self.cfg.trainer.algorithm.advantage_estimator == AdvantageEstimator.GRPO
-            and not self.cfg.trainer.step_wise_training
-        ):
-            self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(
-                data.metadata["uids"][: num_samples - pad_size], return_sums
-            )
-        if self.cfg.trainer.step_wise_training:
-            avg_rewards: float = return_sums[data["is_last_step"][: num_samples - pad_size]].mean().item()
-        else:
-            avg_rewards: float = return_sums.mean().item()
-
-        avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")
-
-        valid_advantages = torch.masked_select(
-            data["advantages"][: num_samples - pad_size, ...], data["response_mask"][: num_samples - pad_size].bool()
-        )
-        avg_advantages: float = valid_advantages.mean().item()
-        avg_advantages_abs: float = valid_advantages.abs().mean().item()
-
-        if "metrics" not in data.metadata:
-            data.metadata["metrics"] = {}
-        data.metadata["metrics"].update(
-            {
-                "avg_final_rewards": avg_rewards,
-                "avg_response_length": avg_response_length,
-                "avg_advantages": avg_advantages,
-                "avg_advantages_abs": avg_advantages_abs,
-            }
-        )
-
-        logger.info(f"avg_final_rewards: {avg_rewards}, avg_response_length: {avg_response_length}")
         self.all_metrics.update(
-            {
-                "loss/avg_final_rewards": avg_rewards,
-                "loss/avg_raw_advantages": avg_advantages,
-                "loss/avg_raw_advantages_abs": avg_advantages_abs,
-            }
+            advantage_metrics(
+                data,
+                algorithm=self.cfg.trainer.algorithm,
+                step_wise=self.cfg.trainer.step_wise_training,
+            )
         )
-        return data
-
-    @staticmethod
-    def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
-        """Add loop credit after normalization, or return unchanged when the channel is absent."""
-        loop_advantages = data.get("loop_advantages")
-        if loop_advantages is None:
-            return data
-        advantages = data["advantages"]
-        loop_advantages = loop_advantages.to(device=advantages.device, dtype=advantages.dtype)
-        data["advantages"] = advantages + loop_advantages * data["response_mask"]
+        avg_rewards = data.metadata["metrics"]["avg_final_rewards"]
+        avg_response_length = data.metadata["avg_response_length"]
+        logger.info(f"avg_final_rewards: {avg_rewards}, avg_response_length: {avg_response_length}")
         return data
 
     def finalize_advantages_for_training(self, data: TrainingInputBatch) -> TrainingInputBatch:
@@ -2771,19 +2567,17 @@ class RayPPOTrainer:
 
     def apply_loop_credit_and_drop_advantage_inputs(self, data: TrainingInputBatch) -> TrainingInputBatch:
         """Apply loop credit, then remove rewards, loop_advantages, and uids before worker dispatch."""
-        data = self.apply_loop_advantages(data)
-        data.pop("rewards")
-        data.pop("loop_advantages", None)
-        data.metadata.pop("uids")
-        return data
+        return drop_advantage_inputs(apply_loop_advantages(data))
 
     def dump_data(self, data: TrainingInputBatch, file_name: str):
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(self.cfg.trainer.export_path, "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        path = join_resource_path(data_save_dir, f"{file_name}.pkl")
+        with io.open_file(path, "wb") as destination:
+            pickle.dump(data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""
@@ -2862,10 +2656,7 @@ class RayPPOTrainer:
         # identical (replay) path so step 1 is genuinely on-policy (log_ratio ~ 0).
         # Gated on presence: flag-off (8B / no router-replay) batches keep the
         # original forward inputs. Compact routes are carried as a side field.
-        fwd_keys = ["sequences", "attention_mask"]
-        if training_input.routed_experts is not None:
-            fwd_keys.append("rollout_routed_experts")
-        data_fwd_pass = training_input.select(keys=fwd_keys, metadata_keys=["response_length"])
+        data_fwd_pass = forward_input(training_input)
         data_fwd_pass.metadata["global_step"] = self.global_step
 
         def collect_results(actor_infos, results, key):
@@ -2894,9 +2685,8 @@ class RayPPOTrainer:
 
             reference_data = data_fwd_pass
             if "ftpo_chosen_mask" in training_input:
-                reference_data = training_input.select(
-                    keys=fwd_keys + ["ftpo_chosen_mask"], metadata_keys=["response_length"]
-                )
+                reference_data = forward_input(training_input)
+                reference_data["ftpo_chosen_mask"] = training_input["ftpo_chosen_mask"]
                 reference_data.metadata["global_step"] = self.global_step
             reference_score_refs = self.ref_model.async_run_ray_method("mesh", "forward", data=reference_data)
 
@@ -2968,34 +2758,14 @@ class RayPPOTrainer:
         training_input["action_log_probs"] = action_log_probs
         training_input["values"] = values
 
-        # Only the mismatch statistics read token staleness, so the workers never receive it.
-        rollout_staleness = training_input.pop("rollout_staleness")
-        if self._training_metrics_enabled and training_input.get("rollout_logprobs") is not None:
-            self.all_metrics.update(
-                mismatch_ratio_metrics(
-                    action_log_probs,
-                    training_input["rollout_logprobs"],
-                    training_input["loss_mask"],
-                    rollout_staleness,
-                    eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
-                    eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
-                )
-            )
-
-        if self.cfg.generator.sampling_params.logprobs is not None and training_input["rollout_logprobs"] is not None:
-            logprobs_diff = (
-                training_input["rollout_logprobs"][training_input["loss_mask"] > 0]
-                - action_log_probs[training_input["loss_mask"] > 0]
-            )
-            prob_diff = logprobs_diff.exp().abs()
-            prob_diff_mean = prob_diff.mean().item()
-            prob_diff_std = prob_diff.std().item()
-            self.all_metrics.update(
-                {
-                    "policy/rollout_train_prob_diff_mean": prob_diff_mean,
-                    "policy/rollout_train_prob_diff_std": prob_diff_std,
-                }
-            )
+        metrics = forward_metrics(
+            training_input,
+            staleness=training_input.pop("rollout_staleness"),
+            algorithm=self.cfg.trainer.algorithm,
+            training_metrics_enabled=self._training_metrics_enabled,
+            rollout_logprobs_enabled=self.cfg.generator.sampling_params.logprobs is not None,
+        )
+        self.all_metrics.update(metrics)
         # Always log KL divergence as a diagnostic, even when not used as penalty
         if base_log_probs is not None:
             _kl = compute_approx_kl(
@@ -3144,7 +2914,8 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Save and publish a complete checkpoint before returning."""
+        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        await self._drain_checkpoint_upload()
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -3283,6 +3054,7 @@ class RayPPOTrainer:
             checkpoint_path: The path to the checkpoint.
         """
         checkpoint_path = None
+        recovering_own_checkpoint = False
         # Check if resumption is enabled
         if self.resume_mode == ResumeMode.NONE:
             logger.info("Checkpoint resumption disabled, starting training from scratch")
@@ -3290,24 +3062,26 @@ class RayPPOTrainer:
         # first, let's get resume_path
         elif self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
-            if not io.exists(latest_checkpoint_file):
+            if io.exists(latest_checkpoint_file):
+                recovering_own_checkpoint = True
+                with io.open_file(latest_checkpoint_file, "r") as f:
+                    ckpt_iteration = int(f.read().strip())
+                checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
+                # A corrupt or incomplete current-run checkpoint must still fail validation.
+                validate_consistency_for_latest_checkpoint(
+                    self.cfg.trainer.ckpt_path,
+                    ckpt_iteration,
+                    checkpoint_path,
+                    latest_checkpoint_file,
+                    self.cfg.trainer.ckpt_interval,
+                )
+            elif not self.cfg.trainer.get("resume_path"):
                 logger.warning(
                     f"resume_mode=latest found no checkpoint marker at {latest_checkpoint_file}; "
                     "starting training from global_step 0"
                 )
                 return 0, None
-            with io.open_file(latest_checkpoint_file, "r") as f:
-                ckpt_iteration = int(f.read().strip())
-            checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
-            # Run validation: Make sure ckpt folder is consistent with latest_ckpt_global_step.txt
-            validate_consistency_for_latest_checkpoint(
-                self.cfg.trainer.ckpt_path,
-                ckpt_iteration,
-                checkpoint_path,
-                latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
-            )
-        else:
+        if checkpoint_path is None:
             # Get and validate resume path
             checkpoint_path = self.cfg.trainer.resume_path
             if not checkpoint_path:
@@ -3347,7 +3121,7 @@ class RayPPOTrainer:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
         self._ftpo_stopped = bool(trainer_state.get("ftpo_stopped", False))
-        if self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
             self.distillation_scored_tokens_total = 0
         else:
             self.distillation_scored_tokens_total = int(trainer_state.get("distillation_scored_tokens_total", 0))
@@ -3361,7 +3135,9 @@ class RayPPOTrainer:
             logger.warning(f"Global step mismatch: path={global_step}, saved={saved_global_step}. Using path value.")
 
         # 2. Load rollout state if requested and available
-        if not self.cfg.trainer.restore_dataloader_state:
+        if self.resume_mode == ResumeMode.LATEST and not recovering_own_checkpoint:
+            logger.info("Starting checkpoint imported; starting the configured dataset from the beginning")
+        elif not self.cfg.trainer.restore_dataloader_state:
             logger.info("Rollout state restoration disabled; starting the configured dataset from the beginning")
         elif io.exists(rollout_state_path):
             with io.open_file(rollout_state_path, "rb") as f:
@@ -3405,7 +3181,7 @@ class RayPPOTrainer:
             logger.info("Successfully loaded critic checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
-        if self.cfg.trainer.get("reset_global_step_on_resume", False):
+        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
         return global_step, str(checkpoint_path)
@@ -3416,18 +3192,21 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{self.global_step}")
-        trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
+        export_step = selected_export_step(
+            self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
+        )
+        checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
+        trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise RuntimeError(
-                f"Cannot request HF export for global_step_{self.global_step}: "
+                f"Cannot request HF export for global_step_{export_step}: "
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
         placement = self.cfg.trainer.placement
         model = self.cfg.trainer.policy.model
         request = HFExportRequest(
-            step=self.global_step,
+            step=export_step,
             checkpoint_base_path=self.cfg.trainer.ckpt_path,
             checkpoint_path=checkpoint_path,
             export_path=self.cfg.trainer.export_path,
@@ -3444,10 +3223,10 @@ class RayPPOTrainer:
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
             if existing.status is HFExportStatus.COMPLETE:
-                logger.info(f"HF export for global_step_{self.global_step} is already complete")
+                logger.info(f"HF export for global_step_{export_step} is already complete")
                 return
             if existing.status is HFExportStatus.IN_PROGRESS:
-                logger.info(f"HF export for global_step_{self.global_step} is already in progress")
+                logger.info(f"HF export for global_step_{export_step} is already in progress")
                 return
             request = replace(
                 request,
@@ -3455,9 +3234,9 @@ class RayPPOTrainer:
                 timeout=existing.timeout,
                 last_exit_code=existing.last_exit_code,
             )
-            logger.info(f"Refreshing pending HF export request for global_step_{self.global_step}")
+            logger.info(f"Refreshing pending HF export request for global_step_{export_step}")
         request_path = write_hf_export_request(request)
-        logger.info(f"Queued out-of-band HF export for global_step_{self.global_step}: {request_path}")
+        logger.info(f"Queued out-of-band HF export for global_step_{export_step}: {request_path}")
 
     def _log_startup_timings(self) -> None:
         publish_startup_timings(

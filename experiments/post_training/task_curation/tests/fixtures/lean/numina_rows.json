@@ -1,0 +1,26 @@
+[
+ {
+  "uuid": "c1528388-9831-5977-b08a-676a9bcb0d3b",
+  "problem": "Problem 7.5. A store sells four types of nuts: hazelnuts, almonds, cashews, and pistachios. Stepan wants to buy 1 kilogram of nuts of one type and another 1 kilogram of nuts of a different type. He calculated how much such a purchase would cost him depending on which two types of nuts he chooses. Five out of six possible purchases by Stepan would cost 1900, 2070, 2110, 2330, and 2500 rubles. How many rubles does the cost of the sixth possible purchase amount to?",
+  "author": "human",
+  "ground_truth_type": "complete",
+  "formal_statement": "import Mathlib\ntheorem algebra_174839 (a b c d : ℝ)\n    (h₀ : 0 < a ∧ 0 < b ∧ 0 < c ∧ 0 < d)\n    (h₂ : a + b = 1900 ∧ a + c = 2070 ∧ a + d = 2110 ∧ b + c = 2330 ∧ b + d = 2500) :\n    c + d = 2290 := by",
+  "formal_ground_truth": "import Mathlib\n\ntheorem algebra_174839 (a b c d : ℝ)\n    (h₀ : 0 < a ∧ 0 < b ∧ 0 < c ∧ 0 < d)\n    (h₂ : a + b = 1900 ∧ a + c = 2070 ∧ a + d = 2110 ∧ b + c = 2330 ∧ b + d = 2500) :\n    c + d = 2290 := by linarith",
+  "source": "olympiads",
+  "problem_type": "Algebra",
+  "question_type": "",
+  "exam": "unknown"
+ },
+ {
+  "uuid": "f03693d7-e546-5617-a580-23d59d85bb1b",
+  "problem": "Given the function $f(x) = 2 \\sin x + \\sin 2x$, find the minimum value of $f(x)$.",
+  "author": "human",
+  "ground_truth_type": "complete",
+  "formal_statement": "import Mathlib\n\nopen Real Set\n\ntheorem algebra_9034 (f : ℝ → ℝ) (hf : f = λ x => 2 * sin x + sin (2 * x)) :\n    IsLeast (range f) (-3 * √3 / 2) := by",
+  "formal_ground_truth": "import Mathlib\n\nopen Real Set\n\ntheorem algebra_9034 (f : ℝ → ℝ) (hf : f = λ x => 2 * sin x + sin (2 * x)) :\n    IsLeast (range f) (-3 * √3 / 2) := by\n  simp [hf, sin_two_mul, range, IsLeast, lowerBounds]\n  constructor\n  . use -(π / 3)\n    simp [hf]\n    ring\n  . intro x\n    suffices H : (sin x * (1 + cos x)) ^ 2 ≤ (3 * √3 / 4) ^ 2 by\n      linarith [abs_le_of_sq_le_sq' H (by positivity)]\n    conv_rhs =>\n      ring_nf\n      norm_num\n    rw [show (sin x * (1 + cos x))  ^ 2 = sin x ^ 2 * (1 + cos x) ^ 2 by ring, sin_sq]\n    nlinarith [sq_nonneg (2 * cos x - 1), sq_nonneg (2 * cos x + 3)]\n",
+  "source": "cn_k12",
+  "problem_type": "Algebra",
+  "question_type": "math-word-problem",
+  "exam": "unknown"
+ }
+]

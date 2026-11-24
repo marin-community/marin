@@ -234,6 +234,7 @@ lanes:
   - ml-slop-test
   - ml-time-sleep-in-test
   - ml-unittest-class-wrapper
+  - ml-committed-data
 - name: prose
   prompt: |-
     # Marin lint rules — Prose lane

@@ -5,6 +5,11 @@ from enum import StrEnum
 from typing import Any
 
 
+class BatchBuilder(StrEnum):
+    DRIVER = "driver"
+    WORKER = "worker"
+
+
 class R3Transport(StrEnum):
     BY_VALUE = "by_value"
     RESIDENT = "resident"
@@ -39,6 +44,9 @@ class AdvantageEstimator(StrEnum):
     REINFORCE_PP = "reinforce++"
     UNIFORM = "uniform"
     REWARD = "reward"
+
+
+OUTCOME_ADVANTAGE_ESTIMATORS = frozenset((AdvantageEstimator.RLOO, AdvantageEstimator.RLOO_N, AdvantageEstimator.GRPO))
 
 
 class PolicyLossType(StrEnum):

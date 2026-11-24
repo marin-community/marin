@@ -45,6 +45,7 @@ from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
+from iris.cluster.runtime.sandbox import SANDBOX_IMAGE_WORKDIR_CAPABILITY
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
@@ -118,6 +119,7 @@ def make_task_backend(
                 default_image=config.defaults.worker.default_task_image,
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
+                sandbox_runtime_class=kp.sandbox_runtime_class,
                 host_network=kp.host_network,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
@@ -217,6 +219,9 @@ def make_backend(
         advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
         scale_groups=frozenset(config.scale_groups),
         capabilities=capabilities,
+        task_capabilities=(
+            frozenset({SANDBOX_IMAGE_WORKDIR_CAPABILITY}) if which == "kubernetes_provider" else frozenset()
+        ),
     )
     if which == "kubernetes_provider":
         provider = make_task_backend(

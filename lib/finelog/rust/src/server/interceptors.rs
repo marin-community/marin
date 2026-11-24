@@ -8,16 +8,16 @@
 //!   Registered FIRST (outermost) so it times the WHOLE chain, including the
 //!   concurrency wait.
 //!
-//! - [`ConcurrencyInterceptor`] — two `tokio::sync::Semaphore`s (FetchLogs and
-//!   Query) keyed by the dispatched method name; acquires a permit BEFORE
+//! - [`ConcurrencyInterceptor`] — independent SQL and log-fetch semaphores;
+//!   acquires permits BEFORE
 //!   `next.run` and holds it across the handler (bounding the parquet working
-//!   set). Re-checks the deadline AFTER acquiring (the post-acquire shed): if
-//!   the client deadline has elapsed while queued, short-circuit with
-//!   `deadline_exceeded` rather than run a doomed handler. The caps are
-//!   `{FetchLogs: 4}` and `{Query: 2}`, both living in one interceptor keyed by
-//!   method. Registered AFTER SlowRpc.
+//!   set). One deadline bounds admission and the whole handler; expiry drops
+//!   queued requests and running reads with `deadline_exceeded`.
+//!   Per-method caps bound the parquet working set; separate lower-priority
+//!   read workers preserve ingestion's runtime. Writes bypass admission.
+//!   Registered AFTER SlowRpc.
 //!
-//! Both read the dispatched method's short name from `ctx.spec().method()`. The
+//! Both identify the dispatched RPC through `ctx.spec()`. The
 //! spec is populated ONLY when the services are registered through the generated
 //! `register()` (which `server::app::build_app` uses); a `None` spec means the
 //! interceptor cannot identify the method and passes through untouched, so the
@@ -29,19 +29,39 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
+use connectrpc::spec::Spec;
 use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use tokio::sync::Semaphore;
+
+use crate::proto::finelog::logging::LOG_SERVICE_FETCH_LOGS_SPEC;
+use crate::proto::finelog::stats::STATS_SERVICE_QUERY_SPEC;
+use crate::query::{query_timeout, run_within_query_timeout};
 
 /// Default per-method slow-RPC threshold.
 /// Picked well above the durable-write floor (one bg flush cycle) so a normal
 /// WriteRows that waits for its L0 segment doesn't spam warnings.
 pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 
-/// Per-method concurrency caps. Both FetchLogs and Query fan out into parquet
-/// scans across hundreds of MB; unbounded parallelism evicts the page cache and
-/// wedges the process.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
 pub const MAX_CONCURRENT_QUERY: usize = 2;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ReadProcedure {
+    FetchLogs,
+    Query,
+}
+
+const READ_PROCEDURES: [(Spec, ReadProcedure); 2] = [
+    (LOG_SERVICE_FETCH_LOGS_SPEC, ReadProcedure::FetchLogs),
+    (STATS_SERVICE_QUERY_SPEC, ReadProcedure::Query),
+];
+
+pub(crate) fn read_procedure(path: &str) -> Option<ReadProcedure> {
+    READ_PROCEDURES
+        .iter()
+        .find(|(spec, _)| spec.procedure == path)
+        .map(|(_, method)| *method)
+}
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`
 /// when the spec is absent (manual `route_*` registration without `with_spec`).
@@ -115,16 +135,14 @@ impl Interceptor for SlowRpcInterceptor {
     }
 }
 
-/// Caps the number of in-flight `FetchLogs` / `Query` RPCs (other methods pass
-/// through untouched), with a post-acquire deadline shed.
+/// Bound read concurrency and the entire read RPC, including admission wait.
 pub struct ConcurrencyInterceptor {
     fetch: Arc<Semaphore>,
     query: Arc<Semaphore>,
 }
 
 impl ConcurrencyInterceptor {
-    /// Build with explicit per-method caps. The caps are constructor params so a
-    /// test can lower them.
+    /// Bound each method's working set without SQL consuming log-fetch permits.
     pub fn new(fetch_limit: usize, query_limit: usize) -> Self {
         Self {
             fetch: Arc::new(Semaphore::new(fetch_limit)),
@@ -132,12 +150,10 @@ impl ConcurrencyInterceptor {
         }
     }
 
-    /// The semaphore for `method`, or `None` for an uncapped method.
-    fn semaphore_for(&self, method: &str) -> Option<&Arc<Semaphore>> {
-        match method {
-            "FetchLogs" => Some(&self.fetch),
-            "Query" => Some(&self.query),
-            _ => None,
+    fn semaphore_for(&self, procedure: ReadProcedure) -> &Semaphore {
+        match procedure {
+            ReadProcedure::FetchLogs => &self.fetch,
+            ReadProcedure::Query => &self.query,
         }
     }
 }
@@ -150,40 +166,50 @@ fn deadline_expired(ctx: &RequestContext) -> bool {
 }
 
 fn deadline_error(method: &str) -> ConnectError {
-    ConnectError::deadline_exceeded(format!(
-        "RPC {method}: deadline exceeded before handler ran"
-    ))
+    ConnectError::deadline_exceeded(format!("RPC {method}: deadline exceeded"))
 }
 
 #[async_trait]
 impl Interceptor for ConcurrencyInterceptor {
     async fn intercept_unary(
         &self,
-        req: UnaryRequest,
+        mut req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let method = method_name(&req.ctx).unwrap_or("");
-        let Some(sem) = self.semaphore_for(method) else {
+        let Some(procedure) = req
+            .ctx
+            .spec()
+            .and_then(|spec| read_procedure(spec.procedure))
+        else {
             return next.run(req).await;
         };
+        let semaphore = self.semaphore_for(procedure);
         // Pre-acquire shed: a request that arrived already past its deadline is
         // not worth queuing.
         if deadline_expired(&req.ctx) {
             return Err(deadline_error(method));
         }
-        // Acquire BEFORE the handler and hold the permit across it. The
-        // semaphore is never closed (the namespace owns it for the process
-        // lifetime), so `acquire` only errors on close — treat that as internal.
-        let _permit = sem
-            .acquire()
-            .await
-            .map_err(|_| ConnectError::internal("concurrency semaphore closed"))?;
-        // Post-acquire shed: under overload a caller can sit behind in-flight
-        // RPCs long enough that the client gave up. Don't run a doomed handler.
-        if deadline_expired(&req.ctx) {
-            return Err(deadline_error(method));
+        let timeout = query_timeout(req.ctx.time_remaining(), None);
+        if let Some(timeout) = timeout {
+            req.ctx = req.ctx.with_deadline(Some(Instant::now() + timeout));
         }
-        next.run(req).await
+        // Admission, snapshot construction, visibility waits, execution, and
+        // encoding all spend the same request budget. Dropping the handler also
+        // releases its permits and cancels its optional cache downloads.
+        run_within_query_timeout(
+            timeout,
+            async {
+                let _read_permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|_| ConnectError::internal("read semaphore closed"))?;
+                next.run(req).await
+            },
+            |_| deadline_error(method),
+            |error| error,
+        )
+        .await
     }
 }
 
@@ -218,6 +244,106 @@ mod tests {
 
     fn ok_response() -> UnaryResponse {
         UnaryResponse::from_encoded(EncodedResponse::new(Bytes::new()), CodecFormat::Proto)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_read_expires_without_entering_the_handler() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(0, 0))];
+        let result = run_chain(
+            &chain,
+            request(
+                STATS_SERVICE_QUERY_SPEC.procedure,
+                Some(Instant::now() + Duration::from_millis(25)),
+            ),
+            |_| async {
+                panic!("expired queued query reached the handler");
+            },
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().code,
+            connectrpc::ErrorCode::DeadlineExceeded
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sql_saturation_keeps_log_and_write_admission_available() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1, 1))];
+        let release = Notify::new();
+        let query = run_chain(
+            &chain,
+            request(STATS_SERVICE_QUERY_SPEC.procedure, None),
+            |_| async {
+                release.notified().await;
+                Ok(ok_response())
+            },
+        );
+        futures::pin_mut!(query);
+        assert!(futures::poll!(query.as_mut()).is_pending());
+        let second_query = run_chain(
+            &chain,
+            request(STATS_SERVICE_QUERY_SPEC.procedure, None),
+            |_| async { Ok(ok_response()) },
+        );
+        futures::pin_mut!(second_query);
+        assert!(futures::poll!(second_query.as_mut()).is_pending());
+        run_chain(
+            &chain,
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
+            |_| async { Ok(ok_response()) },
+        )
+        .await
+        .unwrap();
+        let fetch = run_chain(
+            &chain,
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
+            |_| async {
+                release.notified().await;
+                Ok(ok_response())
+            },
+        );
+        futures::pin_mut!(fetch);
+        assert!(futures::poll!(fetch.as_mut()).is_pending());
+        for method in [
+            crate::proto::finelog::stats::STATS_SERVICE_WRITE_ROWS_SPEC.procedure,
+            crate::proto::finelog::logging::LOG_SERVICE_PUSH_LOGS_SPEC.procedure,
+        ] {
+            run_chain(&chain, request(method, None), |_| async {
+                Ok(ok_response())
+            })
+            .await
+            .unwrap();
+        }
+        release.notify_waiters();
+        query.await.unwrap();
+        fetch.await.unwrap();
+        second_query.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_deadline_cancels_handler_and_releases_admission() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1, 1))];
+        for procedure in [
+            STATS_SERVICE_QUERY_SPEC.procedure,
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
+        ] {
+            let held = Semaphore::new(1);
+            let result = run_chain(&chain, request(procedure, None), |_| async {
+                let _active = held.acquire().await.unwrap();
+                std::future::pending::<Result<UnaryResponse, ConnectError>>().await
+            })
+            .await;
+            assert_eq!(
+                result.unwrap_err().code,
+                connectrpc::ErrorCode::DeadlineExceeded
+            );
+            assert_eq!(held.available_permits(), 1);
+            run_chain(&chain, request(procedure, None), |_| async {
+                Ok(ok_response())
+            })
+            .await
+            .unwrap();
+        }
     }
 
     /// A tracing layer that counts events at WARN level.
@@ -267,7 +393,7 @@ mod tests {
         // A 1ms threshold against a 20ms terminal -> exactly one WARN.
         let n = slow_warn_count(
             SlowRpcInterceptor::new(1),
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -279,7 +405,7 @@ mod tests {
         // A huge threshold against a fast terminal -> no WARN.
         let n = slow_warn_count(
             SlowRpcInterceptor::new(100_000),
-            "/finelog.stats.StatsService/Query",
+            STATS_SERVICE_QUERY_SPEC.procedure,
             Duration::from_millis(1),
         )
         .await;
@@ -293,7 +419,7 @@ mod tests {
             .with_method_threshold("FetchLogs", 0);
         let n = slow_warn_count(
             interceptor,
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -306,7 +432,7 @@ mod tests {
         let interceptor = SlowRpcInterceptor::new(1).with_method_threshold("Query", 0);
         let n = slow_warn_count(
             interceptor,
-            "/finelog.logging.LogService/FetchLogs",
+            LOG_SERVICE_FETCH_LOGS_SPEC.procedure,
             Duration::from_millis(20),
         )
         .await;
@@ -345,7 +471,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 run_chain(
                     &chain,
-                    request("/finelog.logging.LogService/FetchLogs", None),
+                    request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, None),
                     move |_req| {
                         let in_flight = Arc::clone(&in_flight);
                         let peak = Arc::clone(&peak);
@@ -450,7 +576,7 @@ mod tests {
         let past = Instant::now() - Duration::from_secs(1);
         let result = run_chain(
             &chain,
-            request("/finelog.logging.LogService/FetchLogs", Some(past)),
+            request(LOG_SERVICE_FETCH_LOGS_SPEC.procedure, Some(past)),
             move |_req| {
                 let ran2 = Arc::clone(&ran2);
                 async move {

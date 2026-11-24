@@ -75,10 +75,17 @@ _LABEL_TASK_HASH = LABEL_TASK_HASH
 def _dispatch(
     request: job_pb2.RunTaskRequest,
     config: PodConfig,
+    *,
+    regions: tuple[str, ...] = ("US-WEST-04A",),
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
-    provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(advertised_attributes={"region": set(regions)}),
+        kubectl=k8s,
+        pods=config,
+        cluster_scan_interval=0.0,
+    )
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
@@ -422,6 +429,17 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_ADVERTISE_HOST" in env_names
 
 
+def test_pod_termination_grace_uses_typed_budget_and_overrides_user_env():
+    req = make_run_req("/test-job/0")
+    req.termination_grace.milliseconds = 60001
+    req.environment.env_vars["IRIS_TERMINATION_GRACE_MS"] = "999999"
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["terminationGracePeriodSeconds"] == 66
+    env = {entry["name"]: entry.get("value") for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env["IRIS_TERMINATION_GRACE_MS"] == "60001"
+    assert "IRIS_TERMINATION_GRACE_MS" not in json.loads(env["IRIS_JOB_ENV"])
+
+
 def test_build_pod_manifest_secret_is_required_and_read_only():
     req = make_run_req("/test-job/0")
     req.environment.secrets["custom"] = "secret-value"
@@ -692,12 +710,52 @@ def test_constraints_to_node_selector_pool():
     assert manifest["spec"]["nodeSelector"] == {"iris.pool": "h100-8x"}
 
 
-def test_constraints_to_node_selector_region():
+def test_region_constraint_does_not_become_node_selector():
+    # Region dispatch is validated against the backend's advertised regions and is
+    # never translated to a Node selector: no CoreWeave Node carries `iris.region`.
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")
 
     manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["nodeSelector"] == {"iris.region": "US-WEST-04A"}
+    assert "nodeSelector" not in manifest["spec"]
+
+
+@pytest.mark.parametrize("regions", [("US-EAST-08A",), ()])
+def test_region_mismatch_rejects_dispatch_before_creating_a_pod(regions):
+    # Pins the dispatch path, not nodeSelector propagation: a required region the
+    # backend cannot serve fails the task before any Pod is created. The empty
+    # regions case mirrors a backend that advertises no regions.
+    req = make_run_req("/my-job/task-0")
+    add_eq_constraint(req, "region", "US-WEST-04A")
+    updates, resources = _dispatch(req, pod_config(), regions=regions)
+    assert resources[K8sResource.PODS] == []
+    assert len(updates) == 1
+    assert updates[0].new_state == job_pb2.TASK_STATE_FAILED
+
+
+@pytest.mark.parametrize("op", [job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN])
+def test_region_constraint_matches_backend_without_using_kubernetes_region_labels(op):
+    req = make_run_req("/my-job/task-0")
+    c = req.constraints.add(key="region", op=op)
+    if op == job_pb2.CONSTRAINT_OP_IN:
+        c.values.add(string_value="us-east-02a")
+        c.values.add(string_value="us-east-08a")
+    else:
+        c.value.string_value = "us-east-08a"
+    updates, resources = _dispatch(req, pod_config(), regions=("US-EAST-08A",))
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    assert "nodeSelector" not in pod["spec"]
+
+
+def test_preferred_region_mismatch_does_not_reject_dispatch():
+    req = make_run_req("/my-job/task-0")
+    add_eq_constraint(req, "region", "US-WEST-04A")
+    req.constraints[0].mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    updates, resources = _dispatch(req, pod_config(), regions=("US-EAST-08A",))
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    assert "nodeSelector" not in pod["spec"]
 
 
 def test_constraints_to_node_selector_multiple():
@@ -708,7 +766,6 @@ def test_constraints_to_node_selector_multiple():
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["nodeSelector"] == {
         "iris.pool": "h100-8x",
-        "iris.region": "US-WEST-04A",
     }
 
 
@@ -777,7 +834,7 @@ def test_coreweave_constraints_end_to_end():
     spec = manifest["spec"]
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
-    assert spec["nodeSelector"]["iris.region"] == "US-WEST-04A"
+    assert "iris.region" not in spec["nodeSelector"]
     assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
 
 
@@ -1043,13 +1100,6 @@ def test_privileged_profile_applied_to_pod_manifest():
     req.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["containers"][0]["securityContext"]["privileged"] is True
-
-
-def test_docker_access_pod_manifest_raises():
-    req = make_run_req("/my-job/task-0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
-    update = _rejected_dispatch(req, pod_config())
-    assert "DOCKER_ACCESS is not supported" in update.error
 
 
 def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
@@ -1728,6 +1778,33 @@ def test_kueue_required_topology_for_nvlink_domain():
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
+@pytest.mark.parametrize("groups", [(8, 16), (16, 16, 16)])
+def test_locality_groups_emit_one_gang_with_separate_ranked_pod_sets(groups):
+    manifests = []
+    for index in range(sum(groups)):
+        request = _sliced_req(f"/job/task/{index}", num_tasks=sum(groups), group_by="nvlink.domain")
+        request.coscheduling.group_sizes.extend(groups)
+        manifests.append(_build_pod_manifest(request, pod_config()))
+
+    assert len({pod["metadata"]["labels"][KUEUE_POD_GROUP_NAME] for pod in manifests}) == 1
+    offset = 0
+    role_hashes = set()
+    for size in groups:
+        members = manifests[offset : offset + size]
+        hashes = {pod["metadata"]["annotations"]["kueue.x-k8s.io/role-hash"] for pod in members}
+        assert len(hashes) == 1
+        role_hashes.update(hashes)
+        assert [int(pod["metadata"]["labels"][KUEUE_POD_GROUP_POD_INDEX]) for pod in members] == list(range(size))
+        for index, pod in enumerate(members, start=offset):
+            annotations = pod["metadata"]["annotations"]
+            assert annotations[KUEUE_POD_GROUP_TOTAL] == str(sum(groups))
+            assert annotations[KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+            assert annotations["iris.task_id"] == f"/job/task/{index}"
+            assert KUEUE_SLICE_SIZE not in annotations
+        offset += size
+    assert len(role_hashes) == len(groups)
+
+
 def test_kueue_required_nvlink_gang_rejects_above_schedulable_slice():
     """A hard nvlink.domain gang larger than a rack's guaranteed-schedulable slice can hang
     whenever the rack is short a node, so it must fail fast (the guard for a programmatic or
@@ -1968,3 +2045,141 @@ def test_coreweave_retry_without_stored_keys_is_rejected() -> None:
     request = make_run_req("/user/queued-before-upgrade/0", attempt_id=1)
     update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
     assert "https://console.coreweave.com/object-storage/access-keys" in update.error
+
+
+@pytest.mark.parametrize("disk_bytes", [512 * 1024**2, 2305 * 1024**2])
+def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> None:
+    req = make_run_req("/storage/0", cpu_mc=1500)
+    req.resources.disk_bytes = disk_bytes
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    _, objects = _dispatch(req, pod_config())
+    pod = objects[K8sResource.PODS][0]
+    resources = pod["spec"]["containers"][0]["resources"]
+    assert parse_k8s_quantity(resources["limits"]["ephemeral-storage"]) == disk_bytes
+    assert parse_k8s_quantity(resources["requests"]["ephemeral-storage"]) == disk_bytes
+    assert resources["limits"]["cpu"] == "1500m"
+    assert not any("hostPath" in volume for volume in pod["spec"].get("volumes", []))
+
+
+@pytest.mark.parametrize(
+    "message,expected_state,exit_code,disrupted,sandbox",
+    [
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            137,
+            True,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            0,
+            False,
+            True,
+        ),
+        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED, 137, True, True),
+        (
+            "The node was low on resource: ephemeral-storage. Threshold quantity: 100Gi, available: 5Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
+            False,
+        ),
+    ],
+)
+def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(
+    message: str, expected_state: int, exit_code: int, disrupted: bool, sandbox: bool
+) -> None:
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
+    )
+    req = make_run_req("/storage/0", attempt_uid="disk-limit-test")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.resources.disk_bytes = 2 * 1024**3
+    try:
+        provider.sync(make_batch(tasks_to_run=[req]))
+        pod = deepcopy(k8s.list_json(K8sResource.PODS)[0])
+        pod["status"] = {
+            "phase": "Failed",
+            "reason": "Evicted",
+            "message": message,
+            "conditions": (
+                [{"type": "DisruptionTarget", "status": "True", "reason": "TerminationByKubelet"}] if disrupted else []
+            ),
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": exit_code, "reason": "Error"}}}],
+        }
+        k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
+        updates = provider.sync(
+            make_batch(
+                running_tasks=[
+                    RunningTaskEntry(
+                        task_id=JobName.from_wire("/storage/0"), attempt_id=0, attempt_uid="disk-limit-test"
+                    )
+                ]
+            )
+        )
+        assert len(updates) == 1
+        update = updates[0]
+        assert update.new_state == expected_state
+        if expected_state == job_pb2.TASK_STATE_FAILED:
+            assert update.error is not None
+            assert update.error.startswith("RESOURCE_LIMIT_DISK:")
+            assert update.terminal_reason == update.error
+        else:
+            assert update.terminal_reason is not None
+            assert not update.terminal_reason.startswith("RESOURCE_LIMIT_DISK:")
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_pod_without_declared_disk_has_no_storage_limit(sandbox: bool) -> None:
+    req = make_run_req("/storage/0")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    manifest = _build_pod_manifest(req, pod_config())
+    resources = manifest["spec"]["containers"][0]["resources"]
+    assert "ephemeral-storage" not in resources.get("requests", {})
+    assert "ephemeral-storage" not in resources.get("limits", {})
+
+
+@pytest.mark.parametrize("disk_bytes,expected_quantity", [(512 * 1024**2, "1Gi"), (2305 * 1024**2, "2Gi")])
+def test_ordinary_pod_preserves_legacy_storage_quantity(disk_bytes: int, expected_quantity: str) -> None:
+    req = make_run_req("/storage/0")
+    req.resources.disk_bytes = disk_bytes
+    manifest = _build_pod_manifest(req, pod_config())
+    resources = manifest["spec"]["containers"][0]["resources"]
+    assert resources["requests"]["ephemeral-storage"] == expected_quantity
+    assert resources["limits"]["ephemeral-storage"] == expected_quantity
+    assert "cpu" not in resources.get("limits", {})
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+@pytest.mark.parametrize("staged_workdir", ["none", "files", "refs", "bundle"])
+def test_pod_workdir_mount_preserves_prepared_sandbox_image(sandbox: bool, staged_workdir: str) -> None:
+    req = make_run_req("/prepared-image/0")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    if staged_workdir == "files":
+        req.entrypoint.workdir_files["input.txt"] = b"explicit input"
+    elif staged_workdir == "refs":
+        req.entrypoint.workdir_file_refs["input.txt"] = "abcd1234" * 8
+    elif staged_workdir == "bundle":
+        req.bundle_id = "bundle-abc"
+    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
+    mounts = manifest["spec"]["containers"][0]["volumeMounts"]
+    expects_workdir = not sandbox or staged_workdir != "none"
+    assert any(mount["mountPath"] == "/app" for mount in mounts) is expects_workdir
+    volumes = manifest["spec"]["volumes"]
+    assert any(volume["name"] == "workdir" for volume in volumes) is expects_workdir

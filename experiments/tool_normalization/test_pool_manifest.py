@@ -18,8 +18,9 @@ from experiments.tool_normalization.pool_manifest import (
 )
 
 
-def _write_pool(tmp_path: Path, entries: list[dict], status_overrides: dict | None = None,
-                credentials: dict[str, str] | None = None) -> str:
+def _write_pool(
+    tmp_path: Path, entries: list[dict], status_overrides: dict | None = None, credentials: dict[str, str] | None = None
+) -> str:
     """Materialize a manifest/status/credential set under file:// refs."""
     credentials = credentials or {}
     for i, entry in enumerate(entries):
@@ -92,8 +93,10 @@ def test_check_status_enforces_contract() -> None:
 
 
 def test_load_pool_happy_path(tmp_path: Path) -> None:
-    entries = [{"base_url": "http://entry-a/v1", "api_key_ref": ""},
-               {"base_url": "http://entry-b/v1", "api_key_ref": ""}]
+    entries = [
+        {"base_url": "http://entry-a/v1", "api_key_ref": ""},
+        {"base_url": "http://entry-b/v1", "api_key_ref": ""},
+    ]
     ref = _write_pool(tmp_path, entries, credentials={"key-0": "jwt-a", "key-1": "jwt-b"})
     plan = load_pool(ref, tmp_path / "work", expected_model="glm-5.3", expected_pods=2, pod_index=1)
     assert [e.base_url for e in plan.entries] == ["http://entry-a/v1", "http://entry-b/v1"]
@@ -139,10 +142,14 @@ def test_refresh_pool_adopts_rolled_generation(tmp_path: Path) -> None:
     ref = _write_pool(tmp_path, entries)
     first = load_pool(ref, tmp_path / "work", expected_pods=2, pod_index=0)
     # The serving side rolls the generation: a second entry joins and the budget doubles.
-    _write_pool(tmp_path, [
-        {"base_url": "http://entry-a/v1", "api_key_ref": ""},
-        {"base_url": "http://entry-b/v1", "api_key_ref": ""},
-    ], status_overrides={"validated_at": first.validated_at + 30})
+    _write_pool(
+        tmp_path,
+        [
+            {"base_url": "http://entry-a/v1", "api_key_ref": ""},
+            {"base_url": "http://entry-b/v1", "api_key_ref": ""},
+        ],
+        status_overrides={"validated_at": first.validated_at + 30},
+    )
     fresh = refresh_pool(ref, tmp_path / "work", first, expected_pods=2, pod_index=0)
     assert fresh is not None and len(fresh.entries) == 2
     assert fresh.request_slots == first.total_concurrency
@@ -155,10 +162,13 @@ def test_refresh_pool_pauses_on_inconsistent_publication(tmp_path: Path) -> None
     plan = load_pool(ref, tmp_path / "work")
     # Mid-roll publication: the manifest has two entries but the stale status still
     # claims one healthy entry — a mixed generation must never be consumed.
-    _write_pool(tmp_path, [
-        {"base_url": "http://entry-a/v1", "api_key_ref": ""},
-        {"base_url": "http://entry-b/v1", "api_key_ref": ""},
-    ])
+    _write_pool(
+        tmp_path,
+        [
+            {"base_url": "http://entry-a/v1", "api_key_ref": ""},
+            {"base_url": "http://entry-b/v1", "api_key_ref": ""},
+        ],
+    )
     stale_status = {
         "model": "glm-5.3",
         "cluster": "cw-us-east-08a",

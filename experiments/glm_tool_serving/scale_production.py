@@ -25,8 +25,6 @@ from experiments.glm_tool_serving.catalog_loader import load_catalog
 from experiments.glm_tool_serving.ortet_production import (
     giant_row_batch_size,
     pool_api_key,
-    read_bulk_token,
-    resolve_relay_base_url,
     resume_cursor,
 )
 from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
@@ -35,10 +33,12 @@ from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
 from experiments.tool_normalization.pool_manifest import PoolPlan, refresh_pool
 from experiments.tool_normalization.preflight import classify
-from experiments.tool_normalization.scope import terminus_source
+from experiments.tool_normalization.relay import RELAY_JOB, read_bulk_token, resolve_relay_base_url
+from experiments.tool_normalization.scope import excluded_terminal_source
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/h100-scale-20261103"
 POOL_PAUSE_SECONDS = 120
+FLEET_MAX_ATTEMPTS = 12
 
 
 def main() -> None:
@@ -124,6 +124,12 @@ def main() -> None:
         cfg["workers"] = min(args.slots, plan.request_slots)
         request_slots = plan.request_slots
         write_capacity(request_slots)
+
+    # Shared fleet configuration keys (tool_normalization.model.ModelConfig): see ortet_production.
+    cfg["model"]["max_attempts"] = FLEET_MAX_ATTEMPTS
+    cfg["model"]["stop_file"] = str(root / "STOP")
+    cfg["model"]["deadline_unix"] = time.time() + args.hours * 3600
+    cfg["model"]["relay_job"] = None if manifest_ref else RELAY_JOB
 
     if manifest_ref:
         pool_plan = refresh_pool(
@@ -252,7 +258,7 @@ def main() -> None:
             index = acquire_shard(source_rows, tokenizer, batch / "sources")
             selected = []
             dispositions = []
-            terminus = terminus_source(shard.get("source", ""))
+            terminus = excluded_terminal_source(shard.get("source", ""))
             for item in index:
                 source_file = batch / "sources" / item["id"] / "source.json"
                 source = json.loads(source_file.read_text())

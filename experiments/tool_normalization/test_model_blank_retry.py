@@ -134,6 +134,7 @@ def pool_config(tmp_path: Path) -> ModelConfig:
     (tmp_path / "capacity.json").write_text(
         json.dumps({"generation": "g", "conversion_slots": 4, "science_slots": 0, "expires_at_unix": time.time() + 3600})
     )
+    stop_file = tmp_path / "STOP"
     config = ModelConfig(
         base_url="http://entry-a/v1",
         model="glm-5.3",
@@ -147,6 +148,10 @@ def pool_config(tmp_path: Path) -> ModelConfig:
         request_timeout=30,
         capacity_file=tmp_path / "capacity.json",
         ledger=tmp_path / "ledger.sqlite3",
+        max_attempts=4,
+        stop_file=stop_file,
+        deadline_unix=time.time() + 600,
+        relay_job=None,
         pool_entries=tuple(entries),
     )
     initialize_ledger(config)
@@ -156,8 +161,8 @@ def pool_config(tmp_path: Path) -> ModelConfig:
 def _run_complete(monkeypatch, tmp_path: Path, config: ModelConfig, script: list[list[str]]) -> tuple[list[str], Path]:
     posted: list[str] = []
     monkeypatch.setattr(model_module.httpx, "Client", lambda **kwargs: FakeClient(script, posted))
+    # complete() creates the stage directory itself (exist_ok=False).
     directory = tmp_path / "stage"
-    directory.mkdir(parents=True, exist_ok=True)
     value = complete(config, StubTokenizer(), directory, "system", {}, SCHEMA, reasoning_effort="low")
     assert value == {"ok": True}
     return posted, directory
@@ -186,7 +191,6 @@ def test_second_blank_is_fatal(monkeypatch, tmp_path, pool_config) -> None:
     script = [blank_attempt_lines(), blank_attempt_lines()]
     monkeypatch.setattr(model_module.httpx, "Client", lambda **kwargs: FakeClient(script, posted))
     directory = tmp_path / "stage2"
-    directory.mkdir(parents=True, exist_ok=True)
     with pytest.raises(PermanentRequestError, match="blank answer persisted"):
         complete(pool_config, StubTokenizer(), directory, "system", {}, SCHEMA, reasoning_effort="low")
     assert [u.split("//")[1].split("/")[0] for u in posted] == ["entry-a", "entry-b"]
@@ -198,7 +202,6 @@ def test_second_blank_is_fatal(monkeypatch, tmp_path, pool_config) -> None:
 def test_malformed_json_remains_fatal(monkeypatch, tmp_path, pool_config) -> None:
     monkeypatch.setattr(model_module.httpx, "Client", lambda **kwargs: FakeClient([malformed_attempt_lines()], []))
     directory = tmp_path / "stage3"
-    directory.mkdir(parents=True, exist_ok=True)
     with pytest.raises(PermanentRequestError, match="schema violation"):
         complete(pool_config, StubTokenizer(), directory, "system", {}, SCHEMA, reasoning_effort="low")
     receipt = json.loads((directory / "receipt.json").read_text())

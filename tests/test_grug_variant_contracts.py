@@ -12,6 +12,8 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import signal
 import tempfile
 import uuid
 from io import StringIO
@@ -40,6 +42,8 @@ from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.grug.preemption import GracefulPreemption
+
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
     grug_dir = Path(__file__).resolve().parents[1] / "experiments" / "grug"
@@ -58,6 +62,19 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
     return variants
 
 
+def test_grug_preemption_records_sigterm_until_completed_step():
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        assert not preemption.should_stop(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert preemption.should_stop(2)
+    finally:
+        preemption.restore()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+
+
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
 
@@ -69,7 +86,7 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 1, 16, 1)
+    ) == (4, 2, 16, 1, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -102,10 +119,32 @@ def test_compact_grug_mesh_axis_sizes():
         assert tuple(mesh.shape.items()) == (
             ("replica_dcn", 1),
             ("data", device_count // 8),
-            ("context", 2),
             ("expert", 4),
+            ("context", 2),
             ("model", 1),
         ), mesh.shape
+
+
+_CONTEXT_BEFORE_EXPERT_AXES = ("replica_dcn", "data", "context", "expert", "model")
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(("replica", "expert"), [(1, 8), (2, 4), (1, 2), (2, 1)])
+def test_compact_grug_mesh_keeps_cp1_device_assignment(replica, expert):
+    """At context=1 the expert-before-context mesh places every device where the old order did."""
+    with use_test_devices(8):
+        if jax.process_count() != 1 or len(jax.devices()) != 8:
+            pytest.skip("the layout comparison needs exactly eight devices in one process")
+        mesh = compact_grug_mesh(replica_axis_size=replica, expert_axis_size=expert, context_axis_size=1)
+        old_devices = np.asarray(jax.devices(), dtype=object).reshape(replica, 8 // (replica * expert), 1, expert, 1)
+
+        def coordinates(devices, axis_names):
+            return {
+                device.id: {name: int(index) for name, index in zip(axis_names, position, strict=True)}
+                for position, device in np.ndenumerate(devices)
+            }
+
+        assert coordinates(mesh.devices, mesh.axis_names) == coordinates(old_devices, _CONTEXT_BEFORE_EXPERT_AXES)
 
 
 @pytest.mark.multidevice
@@ -122,8 +161,8 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
             axis_types=(AxisType.Explicit,) * 4,
         )
         mesh = Mesh(
-            devices.reshape(1, device_count // 2, 1, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            devices.reshape(1, device_count // 2, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
 
@@ -163,7 +202,7 @@ def test_legacy_checkpoint_restore_with_context_sharding():
         )
         mesh = Mesh(
             devices.reshape(1, device_count // 4, 2, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
 
@@ -322,7 +361,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -391,7 +430,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
@@ -447,7 +486,8 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
-def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
+@pytest.mark.parametrize("preempt", [False, True])
+def test_grug_base_run_metrics_and_preemption_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preempt: bool):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")
 
@@ -509,9 +549,25 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
                 compute_bpb=False,
             ),
         )
-        train_module.run_grug(run_cfg)
+        if preempt:
+            original_should_stop = GracefulPreemption.should_stop
+
+            def request_preemption(self: GracefulPreemption, completed_step: int) -> bool:
+                self._request_stop(signal.SIGTERM, None)
+                return original_should_stop(self, completed_step)
+
+            monkeypatch.setattr(GracefulPreemption, "should_stop", request_preemption)
+            with pytest.raises(SystemExit) as exited:
+                train_module.run_grug(run_cfg)
+            assert exited.value.code == 128 + signal.SIGTERM
+        else:
+            train_module.run_grug(run_cfg)
     finally:
         logger.removeHandler(handler)
+
+    if preempt:
+        assert list((variant_tmp / "checkpoints").rglob("metadata.json"))
+        return
 
     records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
     finish_records = [record for record in records if record.get("event") == "finish"]

@@ -72,6 +72,9 @@ pub struct LocalSegment {
     pub max_key_value: Option<String>,
     pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
+    /// Bounds of the columns the table flags with `catalog_bounds`; see
+    /// [`crate::store::column_bounds`]. Empty for a legacy-local segment.
+    pub column_bounds: crate::store::column_bounds::ColumnBounds,
     /// The local files this segment's advertised artifacts resolve to. Empty
     /// until an index build commits them.
     pub artifacts: crate::store::table_state::LocalArtifacts,

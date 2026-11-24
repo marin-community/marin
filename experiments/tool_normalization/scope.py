@@ -39,7 +39,7 @@ def family(kind: str, tool: str) -> str:
     return "control_search"
 
 
-def terminus_source(source: str) -> bool:
+def excluded_terminal_source(source: str) -> bool:
     """Identify agenttrove and terminus sources excluded from conversion."""
     return "agenttrove" in source or "terminus" in source
 

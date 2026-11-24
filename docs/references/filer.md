@@ -1,7 +1,7 @@
 # Filer
 
 Filer is a private Marina app for browsing object storage and inspecting data.
-Open [Filer](https://applets.marina.oa.dev/a/7f536ce3-0562-40f1-b209-e6110d8ab4e8/),
+Open [Filer](https://filer.marina.oa.dev/),
 choose a configured bucket, or paste an `s3://bucket/key` or `gs://bucket/key` URL.
 Bucket routing comes from the same cluster configuration as `fsutil`. Access uses
 Marina's service credentials; buckets outside that account's permissions return an
@@ -9,12 +9,25 @@ access error. Local filesystem paths and HTTP URLs are rejected.
 
 Folder listings load one backend page at one directory level. **Load next listing
 page** appends another page. Name filtering and sorting cover the loaded entries.
-Breadcrumbs and **Parent** navigate upward. **Copy link** preserves the location in
-the URL; recent locations are stored in the browser.
+Breadcrumbs and **Parent** navigate upward. Each location change adds a browser
+history entry, including locations pasted into the address bar. Back and Forward
+return to earlier locations. **Copy Filer link** uses the stable Filer hostname and
+preserves the storage URL in the fragment. **Copy storage URL** copies the `s3://`
+or `gs://` address for command-line use. Recent locations are stored in the browser.
+Favorites are stored in Filer's Postgres schema by verified Marina user and are
+available across browsers.
+
+The listing has list and grid views. Images at or below 1 MiB show lazy-loaded
+thumbnails; larger files show an icon and can be opened for a preview within the
+10 MiB media limit. The image viewer can switch between fitted and actual size.
+Selecting a file with a recognized text extension opens its source in a pane
+beside the listing, so the surrounding folder stays visible. The pane can copy
+either link or open the full file view. On narrow screens, it appears below the
+listing. It uses the same bounded text read as the full view.
 
 | File | Views |
 | --- | --- |
-| Parquet | Paged table, schema, JSON, column selection, record inspector |
+| Parquet | Paged table, schema with footer statistics, JSON, column selection, row jump, record inspector |
 | CSV, TSV, JSON arrays, JSONL, NDJSON | Table, JSON, source text, record inspector |
 | JSON objects, YAML | Formatted JSON and source text |
 | Markdown | Sanitized document and source text |
@@ -30,6 +43,10 @@ strings expand into a tree. Table sorting and search cover the current page only
 **Export page** downloads the current page as JSON. Parquet column selection changes
 which columns the backend reads. Text table column selection projects the response after parsing the bounded
 preview. It does not reduce object-store reads.
+The Parquet schema view shows null counts, minimum and maximum values, and
+compressed sizes where the footer has statistics for a top-level column. Missing
+footer statistics display as unavailable. **Go to row** reads a page beginning at
+the selected row; it does not scan preceding row groups.
 
 ## Read limits
 
@@ -41,7 +58,8 @@ preview. It does not reduce object-store reads.
 - Text: at most 10 MiB after decompression, with at most 2 MiB of source text sent
   to the browser. Text tables retain at most 10,000 rows. Truncation is disclosed.
   `.gz`, `.bz2`, `.xz`, and `.lzma` text previews are decompressed by fsutil.
-- Media and archives: objects larger than 10 MiB are rejected. For compressed
+- Media and archives: objects larger than 10 MiB are rejected. Thumbnails are
+  limited to 1 MiB per image and loaded lazily. For compressed
   archives this limit applies to compressed size. Archive listings retain at most
   5,000 members. Media is fetched as a bounded whole object, without a streaming range API.
 - JSON API responses: at most 4 MiB. A page that exceeds the limit returns an error;
@@ -88,8 +106,9 @@ Use `--allow-dirty` to release branch or uncommitted source without verified Git
 provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
 Keep the app private: its backend uses Marina's storage credentials. Backend
-code runs as a trusted plugin in Marina's process. It needs no database tables or
-migrations. Frontend dependencies are bundled; PDF rendering uses a packaged worker.
+code runs as a trusted plugin in Marina's process. The package migration creates
+the per-user favorites table. Frontend dependencies are bundled; PDF rendering
+uses a packaged worker.
 
 `infra/marina/Pulumi.marin-marina.yaml` declares `filer.marina.oa.dev` in
 `marin-marina:applet_domains`. The Marina stack manages its DNS and domain mapping.

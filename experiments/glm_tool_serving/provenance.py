@@ -5,20 +5,21 @@
 
 import hashlib
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
 
-import fsspec
+from rigging.filesystem.storage_path import StoragePath
 
 REQUIRED_PROVENANCE_FILES = (
     "experiments/glm_tool_serving/scale_production.py",
     "experiments/glm_tool_serving/ortet_production.py",
     "experiments/glm_tool_serving/provenance.py",
+    "experiments/glm_tool_serving/fleet.py",
+    "experiments/glm_tool_serving/assets.py",
     "experiments/tool_normalization/environments.json",
     "experiments/tool_normalization/opencode-tools.json",
-    "experiments/glm_tool_serving/production_data/rule-approval-v3.json",
+    "experiments/glm_tool_serving/production_data/rule-approval-v4.json",
 )
 
 
@@ -30,7 +31,7 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
+def write_provenance(app_root: Path, root: Path, catalog_sha256: str, fallback_git_head: str | None) -> dict:
     """Write root/provenance.json before the batch loop; returns the document."""
     root.mkdir(parents=True, exist_ok=True)
     files = {}
@@ -52,8 +53,8 @@ def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
             head, source = result.stdout.strip(), "git"
     except (OSError, subprocess.SubprocessError):
         pass
-    if head is None and os.environ.get("PROVENANCE_GIT_HEAD"):
-        head, source = os.environ["PROVENANCE_GIT_HEAD"], "env"
+    if head is None and fallback_git_head:
+        head, source = fallback_git_head, "env"
     document = {
         "git_head": head,
         "git_head_source": source,
@@ -79,7 +80,7 @@ def emit_receipt(prefix: str, name: str, archive: Path, catalog_sha256: str, cur
     try:
         receipt = {
             "batch": name,
-            "archive_uri": f"{prefix}/batches/{archive.name}",
+            "archive_uri": str(StoragePath(prefix) / "batches" / archive.name),
             "archive_sha256": _file_sha256(archive),
             "archive_bytes": archive.stat().st_size,
             "catalog_sha256": catalog_sha256,
@@ -87,7 +88,7 @@ def emit_receipt(prefix: str, name: str, archive: Path, catalog_sha256: str, cur
             "provenance": provenance,
             "at": time.time(),
         }
-        with fsspec.open(f"{prefix}/receipts/{name}.json", "w") as stream:
+        with (StoragePath(prefix) / "receipts" / (name + ".json")).open("w") as stream:
             json.dump(receipt, stream)
         print(json.dumps({"phase": "receipt_emitted", "batch": name, "sha256": receipt["archive_sha256"]}), flush=True)
     except Exception as error:

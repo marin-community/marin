@@ -27,7 +27,7 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
-from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdmissionStalledError, GroupAdvantageInvariant
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
@@ -37,15 +37,17 @@ from skyrl_train.rollouts.buffer import (
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
+    RowFacts,
     RolloutContentPolicy,
     RolloutGroup,
     RolloutTask,
 )
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
+from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
@@ -208,6 +210,7 @@ class TrainingContext:
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+                max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -234,14 +237,14 @@ class TrainingContext:
         """Stop dispatching new generation and finish already submitted groups."""
         self._submission_allowed.clear()
         if self._running:
-            await self._until_failure(asyncio.gather(*self._running))
+            await self.wait(asyncio.gather(*self._running))
 
     def resume(self) -> None:
         self._submission_allowed.set()
 
     async def publish(self, policy_step: int) -> None:
         """Acknowledge the previous batch and lease rollouts at ``policy_step``, whose weights are now live."""
-        await self._until_failure(self._buffer.publish.remote(policy_step))
+        await self.wait(self._buffer.publish.remote(policy_step))
         self._policy_step = policy_step
 
     async def next_batch(
@@ -249,7 +252,7 @@ class TrainingContext:
         *,
         stall_timeout: float,
         on_admitted: Callable[[list[RolloutGroup]], Awaitable[None]],
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> tuple[list[RolloutGroup], RolloutBatchMetadata]:
         """Wait for the current step's batch and return its groups with selection and prompt-order metrics.
 
         Groups reach ``on_admitted`` as they are admitted, before the batch is complete. Every group judged for
@@ -262,38 +265,17 @@ class TrainingContext:
         groups: list[RolloutGroup] = []
 
         async def fetch_admitted(admitted: tuple[AdmittedRollout, ...]) -> None:
-            fetched = await self._fetch_groups(self._policy_step, admitted, stall_timeout=stall_timeout)
+            reader = RolloutReader(self._buffer, self._payloads, admitted, stall_timeout)
+            fetched = await self.wait(reader.read(self._policy_step, tuple(group.index for group in admitted)))
             groups.extend(fetched)
             await on_admitted(fetched)
 
         metadata = await self.next_batch_metadata(stall_timeout=stall_timeout, on_admitted=fetch_admitted)
-        return groups, metadata.metrics
+        return groups, metadata
 
-    async def _fetch_groups(
-        self, batch_id: int, selected: tuple[AdmittedRollout, ...], *, stall_timeout: float
-    ) -> list[RolloutGroup]:
-        try:
-            async with asyncio.timeout(stall_timeout):
-                refs = await self._until_failure(
-                    self._buffer.payload_refs.remote(batch_id, tuple(group.index for group in selected))
-                )
-                groups = await self._until_failure(self._payloads.fetch(refs))
-        except TimeoutError as error:
-            raise GroupAdmissionStalledError(
-                f"{len(selected)} selected rollout payloads did not arrive within "
-                f"{stall_timeout:.0f}s: batch_id={batch_id} indices={[group.index for group in selected]}"
-            ) from error
-        if len(groups) != len(selected):
-            raise ValueError("payload store returned the wrong number of selected rollout groups")
-        for expected, group in zip(selected, groups, strict=True):
-            if group.uid != expected.uid or group.policy_step != expected.policy_step:
-                raise ValueError(f"selected rollout payload does not match batch metadata for {expected.uid}")
-            work = GeneratedWork.from_batch(
-                group.trajectory_batch["response_ids"], group.trajectory_batch.get("is_last_step")
-            )
-            if work.sample_count != expected.sample_count or work.generated_token_count != expected.response_tokens:
-                raise ValueError(f"selected rollout payload size does not match batch metadata for {expected.uid}")
-        return groups
+    def reader(self, metadata: RolloutBatchMetadata, *, stall_timeout: float) -> RolloutReader:
+        """Construct the bounded reader for an admitted batch's ordered groups."""
+        return RolloutReader(self._buffer, self._payloads, metadata.groups, stall_timeout)
 
     async def next_batch_metadata(
         self,
@@ -307,7 +289,7 @@ class TrainingContext:
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
-            admission = await self._until_failure(self._buffer.admit.remote(timeout))
+            admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
             for policy_step, work in admission.generated:
                 record_generated_work(work, policy_step)
@@ -350,7 +332,12 @@ class TrainingContext:
         payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.ready))
         ready = [
             # The buffer's clock does not carry across processes.
-            dataclasses.replace(rollout, payload=payload, committed_at=None)
+            dataclasses.replace(
+                rollout,
+                payload=payload,
+                committed_at=None,
+                verdict=dataclasses.replace(rollout.verdict, row_facts=None),
+            )
             for rollout, payload in zip(snapshot.ready, payloads, strict=True)
         ]
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
@@ -374,6 +361,18 @@ class TrainingContext:
         ready = [
             dataclasses.replace(rollout, payload=self._payloads.restore(rollout.payload)) for rollout in state.ready
         ]
+        for start in range(0, len(ready), PAYLOAD_IO_THREADS):
+            indices = [
+                index
+                for index in range(start, min(start + PAYLOAD_IO_THREADS, len(ready)))
+                if ready[index].verdict.trainable
+            ]
+            groups = await self._payloads.fetch([ready[index].payload for index in indices])
+            for index, group in zip(indices, groups, strict=True):
+                verdict = dataclasses.replace(
+                    ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
+                )
+                ready[index] = dataclasses.replace(ready[index], verdict=verdict)
         await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
@@ -409,6 +408,8 @@ class TrainingContext:
             return
         async with self._uids_released:
             self._live_uids -= collections.Counter(outcome.uid for outcome in admission.dispositions)
+            for outcome in admission.dispositions:
+                self.loader.record_disposition(outcome.uid, outcome.disposition)
             for prompt in admission.retries:
                 self.loader.retry(prompt)
             self._uids_released.notify_all()
@@ -435,7 +436,7 @@ class TrainingContext:
         if not self._failure.done():
             self._failure.set_exception(error)
 
-    async def _until_failure(self, awaitable: Awaitable[_T]) -> _T:
+    async def wait(self, awaitable: Awaitable[_T]) -> _T:
         """Await ``awaitable`` unless a rollout task fails first, then raise that failure."""
         assert self._failure is not None, "start the training context before reading from it"
         work: asyncio.Future[Any] = asyncio.ensure_future(awaitable)

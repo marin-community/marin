@@ -3,25 +3,23 @@
 
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.reader import ReadView
-from upath import UPath
-from harbor_config.models.job.config import SotopiaCohort
 from harbor.metrics.sotopia import (
     EpisodeScore,
     correct_sotopia,
     length_controlled_scores,
 )
-from harbor.job import Job
-from harbor.models.job.config import JobConfig
-from harbor.models.job.result import JobResult
-from harbor.models.trial.config import AgentConfig, TrialConfig, TaskConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
+from harbor_config.models.job.config import SotopiaCohort
+from upath import UPath
 
 RANGES = {
     "believability": (0, 10),
@@ -96,6 +94,7 @@ def candidate_trials(root):
     for row in ReadView(str(root)).iter_rows("samples"):
         directory = root / "harbor_jobs" / "job" / row["trial_id"]
         config = TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(path=Path("/tasks") / row["doc_id"]),
             trial_name=row["trial_id"],
             job_id=uuid4(),
@@ -111,6 +110,8 @@ def candidate_trials(root):
                 config=config,
                 agent_info=AgentInfo(name="sotopia", version="test"),
                 verifier_result=VerifierResult(rewards=dict(row["metrics"])),
+                finished_at=datetime.now(),
+                completion=TrialCompletion(trajectory_present=False),
             )
         )
     return trials
@@ -130,7 +131,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         "models": [{"model": "baseline", "results_path": str(baseline)}],
     }
     result = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     adjusted = [
         row.length_controlled_overall
@@ -144,9 +148,15 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     assert [trial.model_dump() for trial in trials] == before
     assert result.cohort == cohort
     assert len(result.source_episodes) == 200
-    assert correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
-    ) == result
+    assert (
+        correct_sotopia(
+            trials,
+            model="candidate",
+            trials_dir=trials_dir,
+            cohort=SotopiaCohort.model_validate(cohort),
+        )
+        == result
+    )
     replacement = {
         **cohort,
         "models": [
@@ -155,7 +165,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         ],
     }
     replaced = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(replacement)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(replacement),
     )
     assert replaced.source_episodes == result.source_episodes
     assert replaced.canonical_metrics == result.canonical_metrics
@@ -163,13 +176,19 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     candidate.rename(relocated)
     trials_dir = UPath(relocated / "harbor_jobs" / "job")
     resumed = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     assert resumed == result
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()
     with pytest.raises(ValueError, match="missing SOTOPIA summary"):
         correct_sotopia(
-            trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+            trials,
+            model="candidate",
+            trials_dir=trials_dir,
+            cohort=SotopiaCohort.model_validate(cohort),
         )
 
 
@@ -196,58 +215,3 @@ def test_length_control_removes_synthetic_verbosity_bonus() -> None:
         by_model["short"].length_controlled_overall,
         abs_tol=0.02,
     )
-
-
-async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_alias(tmp_path):
-    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
-    sotopia_archive(baseline, 0)
-    sotopia_archive(candidate, 200)
-    trials = candidate_trials(candidate)
-    tasks = []
-    agent = AgentConfig(
-        import_path="harbor.agents.installed.sotopia:SotopiaAgent",
-        model_name="hosted_vllm/org/candidate",
-        model_alias="hosted_vllm/old-endpoint",
-    )
-    for trial in trials:
-        task_dir = tmp_path / "tasks" / trial.task_name
-        task_dir.mkdir(parents=True)
-        (task_dir / "task.toml").write_text(f'[task]\nname = "{trial.task_name}"\n')
-        (task_dir / "instruction.md").write_text("Continue the conversation.")
-        (task_dir / "environment").mkdir()
-        (task_dir / "tests").mkdir()
-        (task_dir / "tests" / "test.sh").write_text("exit 0\n")
-        task = TaskConfig(path=task_dir)
-        tasks.append(task)
-        trial.config = TrialConfig(task=task, agent=agent, trial_name=trial.trial_name)
-        directory = candidate / "harbor_jobs" / "job" / trial.trial_name
-        (directory / "config.json").write_text(trial.config.model_dump_json())
-        (directory / "result.json").write_text(trial.model_dump_json())
-    config = JobConfig(
-        job_name="job", jobs_dir=candidate / "harbor_jobs", tasks=tasks, agents=[agent],
-        sotopia_cohort=SotopiaCohort.model_validate({
-            "version": "test-v1", "models": [
-                {"model": "baseline", "results_path": str(baseline)},
-                {"model": "org/candidate", "results_path": str(tmp_path / "superseded")},
-            ],
-        }),
-    )
-    job_dir = candidate / "harbor_jobs" / "job"
-    (job_dir / "config.json").write_text(config.model_dump_json())
-    resumed_config = config.model_copy(update={
-        "agents": [agent.model_copy(update={"model_alias": "hosted_vllm/new-endpoint"})],
-    })
-    job = await Job.create(resumed_config)
-    try:
-        result = await job.run()
-        persisted = JobResult.model_validate_json((job_dir / "result.json").read_text())
-        evidence = persisted.metric_evidence["adhoc"]
-        assert len(result.trial_results) == 100
-        assert persisted.stats.n_completed_trials == 100
-        assert {row["model"] for row in evidence["source_episodes"]} == {"baseline", "org/candidate"}
-        assert len(evidence["source_episodes"]) == 200
-        assert persisted.canonical_metrics["adhoc"]["length_controlled_overall"] == pytest.approx(
-            next(row["length_controlled_overall"] for row in evidence["scores"] if row["model"] == "org/candidate")
-        )
-    finally:
-        job._close_logger_handlers()

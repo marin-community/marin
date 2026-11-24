@@ -8,6 +8,7 @@ from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
+from haliax import jax_utils
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes, max_weight_tile_bytes_for_device
@@ -24,6 +25,7 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
+_AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 4096
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
 _H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
@@ -44,9 +46,7 @@ def _is_power_of_two(n: int) -> bool:
 
 
 def _device_kind() -> str:
-    if not jax.devices():
-        return ""
-    return jax.devices()[0].device_kind.lower()
+    return jax_utils.device_kind().lower()
 
 
 def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
@@ -532,6 +532,11 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
+    if w.shape[1] >= _LARGE_VOCAB_THRESHOLD and "amd instinct" in _device_kind():
+        # Each vocab block adds one full pass over the f32 [B, H] input-gradient accumulator, so the backward
+        # takes fewer, larger blocks than the forward, whose autotuned block is 1024 on MI350X and MI355X.
+        forward_v_block = block_sizes.v_block_size if block_sizes is not None else 0
+        return max(forward_v_block, _AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB)
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size

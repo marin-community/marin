@@ -34,7 +34,8 @@ jobs:
 
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          # The updater starts from current main and leases remote updates by SHA.
+          fetch-depth: 1
           ref: main
           token: ${{ steps.app-token.outputs.token }}
 

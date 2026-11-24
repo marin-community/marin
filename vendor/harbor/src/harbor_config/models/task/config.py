@@ -79,6 +79,10 @@ class SolutionConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     timeout_sec: float | None = None
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment overrides for agent processes only; never passed to the verifier.",
+    )
     user: str | int | None = Field(
         default=None,
         description="Username or UID to run the agent as. None uses the environment's default USER (e.g., root).",
@@ -426,6 +430,14 @@ class StepConfig(BaseModel):
         "steps/{name}/artifacts/. Appended to task-level and trial-level "
         "artifacts during this step's collection pass.",
     )
+
+
+    @field_validator("agent")
+    @classmethod
+    def reject_step_agent_env(cls, agent: AgentConfig) -> AgentConfig:
+        if agent.env:
+            raise ValueError("Per-step agent.env is unsupported; use top-level [agent.env].")
+        return agent
 
 
 class MultiStepRewardStrategy(str, Enum):

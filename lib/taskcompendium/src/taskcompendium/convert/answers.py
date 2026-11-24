@@ -12,7 +12,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_math import grade_math_candidate
 from verifyit.numeric import numeric_literal
 from verifyit.spec import (
     Constraint,
@@ -39,7 +41,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 EVIDENCE_PATH = "reference/source-evidence.json"
 
@@ -59,6 +61,11 @@ def _text(value: Any) -> str | None:
 def evidence_resource(evidence: Mapping[str, Any]) -> TaskResource:
     """Source fields retained beside the grader for review and audit."""
     return inline_resource(EVIDENCE_PATH, json.dumps(dict(evidence), ensure_ascii=False, sort_keys=True).encode())
+
+
+def source_evidence(task: TaskSpec) -> dict[str, Any]:
+    resource = next(resource for resource in task.resources.verifier if resource.path == EVIDENCE_PATH)
+    return json.loads(resource_bytes(resource))
 
 
 def answer_task(
@@ -108,9 +115,12 @@ def math_answer_task(
     if reference is None:
         return source_defect("invalid_reference", "The reference answer must be a nonempty string")
     expected = extract_boxed(reference) or reference
-    return answer_task(
-        row, prompt=problem, spec=MathSpec(expected=expected, math_type=math_type(expected)), evidence=evidence
-    )
+    spec = MathSpec(expected=expected, math_type=math_type(expected))
+    try:
+        grade_math_candidate(spec, "")
+    except InvalidTask as error:
+        return source_defect("invalid_reference", str(error))
+    return answer_task(row, prompt=problem, spec=spec, evidence=evidence)
 
 
 def numeric_answer_task(

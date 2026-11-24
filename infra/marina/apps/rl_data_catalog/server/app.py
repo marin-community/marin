@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
+from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -158,6 +159,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "snapshot_id": metadata["snapshot_id"],
             "created_at": metadata["created_at"],
             "synced_at": metadata["loaded_at"],
+            "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
         }
 
     @api.get("/assessment")

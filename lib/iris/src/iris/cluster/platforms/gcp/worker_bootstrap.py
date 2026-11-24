@@ -26,6 +26,7 @@ from iris.cluster.runtime.docker import (
 )
 from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS
 from iris.cluster.secrets import VM_WORKER_SECRETS_ROOT
+from iris.preemption import WORKER_CONTAINER_STOP_TIMEOUT_SECONDS
 
 # gVisor release the worker installs so the SANDBOX container profile can run task
 # containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
@@ -436,6 +437,7 @@ sudo mkdir -p {{ secrets_root }}
 sudo chmod 700 {{ secrets_root }}
 sudo docker run -d --name iris-worker \\
     --restart=unless-stopped \\
+    --stop-timeout={{ worker_stop_timeout }} \\
     --network=host \\
     --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
@@ -509,6 +511,7 @@ def build_worker_bootstrap_script(
         secrets_root=str(VM_WORKER_SECRETS_ROOT),
         docker_image=worker_config.docker_image,
         worker_port=worker_config.port,
+        worker_stop_timeout=WORKER_CONTAINER_STOP_TIMEOUT_SECONDS,
         worker_config_json=worker_config_json,
         port_range=EPHEMERAL_PORT_RANGE,
         reserved_ports=f"{RESERVED_HOST_PORTS},{task_port_start}-{task_port_end - 1}",

@@ -8,7 +8,6 @@ Task loading, extraction filters and corpus aggregations remain caller-owned.
 """
 
 from collections.abc import Sequence
-from dataclasses import asdict, replace
 from typing import Any
 
 from verifyit.adapters.harness_agieval import agieval_config_profile, agieval_task_metrics
@@ -21,60 +20,9 @@ from verifyit.adapters.harness_probability import truthfulqa_mc2_profile, truthf
 from verifyit.adapters.harness_profiles import generation_profile, profile_task_metrics
 from verifyit.adapters.harness_rolling import rolling_config_profile, rolling_task_metrics
 from verifyit.grade import Aggregation, InvalidTask, Reward, aggregate_rewards
-from verifyit.modes.grade_exact import grade_exact_candidate
+from verifyit.modes.grade_exact import grade_exact_candidate, grade_normalized_aliases
 from verifyit.modes.grade_mcq import LikelihoodScoring, grade_mcq_likelihoods
-from verifyit.preparation.text import TextNormalization, TextPolicy, normalize_text, structure_text
 from verifyit.spec import EmptyOutputPolicy, ExactSpec
-
-
-def exact_match(
-    candidate: str,
-    references: Sequence[str],
-    *,
-    empty_output: EmptyOutputPolicy = EmptyOutputPolicy.GRADE,
-    normalization_policy: TextPolicy = TextPolicy.HARNESS_EXACT,
-    **options,
-) -> Reward:
-    """Normalize source text and compare aliases under an explicit empty-output policy.
-
-    ZERO rejects answers that become empty during normalization; GRADE preserves
-    source literal-empty matching. Trusted aliases are validated in either case.
-    """
-    if not isinstance(empty_output, EmptyOutputPolicy):
-        raise InvalidTask("unknown exact empty-output policy")
-    allowed = {"regexes_to_ignore", "ignore_case", "ignore_punctuation", "ignore_numbers"}
-    if unknown := options.keys() - allowed:
-        raise InvalidTask(f"unsupported exact_match options: {sorted(unknown)}")
-    prepared = normalize_text(
-        structure_text(candidate, references),
-        TextNormalization(
-            policy=normalization_policy,
-            regexes_to_ignore=tuple(options.get("regexes_to_ignore") or ()),
-            ignore_case=options.get("ignore_case", False),
-            ignore_punctuation=options.get("ignore_punctuation", False),
-            ignore_numbers=options.get("ignore_numbers", False),
-        ),
-    )
-    value = prepared.candidate
-    normalized_references = prepared.references
-    results = [
-        grade_exact_candidate(
-            ExactSpec(
-                (reference,),
-                ignore_case=False,
-                ignore_whitespace=False,
-                strip_outer_whitespace=False,
-                empty_output=empty_output,
-            ),
-            value,
-        )
-        for reference in normalized_references
-    ]
-    verdict = aggregate_rewards(results, expected_total=len(normalized_references), policy=Aggregation.MAX)
-    return replace(
-        verdict,
-        detail={**verdict.detail, "preparation": {**asdict(prepared.normalization), "empty_output": empty_output}},
-    )
 
 
 def likelihood_choice(
@@ -209,7 +157,7 @@ def native_task_metrics(
         return probability_metrics
     if task.config.process_results is not None:
         return None
-    profile_metrics = profile_task_metrics(task, doc, responses, exact_match)
+    profile_metrics = profile_task_metrics(task, doc, responses, grade_normalized_aliases)
     if profile_metrics is not None:
         return profile_metrics
     config = {
@@ -239,7 +187,7 @@ def native_task_metrics(
         references = gold if task.multiple_target else [gold]
         return {
             "exact_match": (
-                exact_match(
+                grade_normalized_aliases(
                     candidate, references, empty_output=exact_empty_output, **task._metric_fn_kwargs["exact_match"]
                 ).reward
             )

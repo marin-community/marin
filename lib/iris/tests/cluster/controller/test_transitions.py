@@ -27,7 +27,6 @@ from iris.cluster.controller.reads import WorkerResourceUsage
 # =============================================================================
 # Test Helpers
 # =============================================================================
-from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.job import recompute_state
 from iris.cluster.controller.reconcile.overlay import Overlay
@@ -52,7 +51,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table, tasks_table
+from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -99,10 +98,9 @@ from iris.testing.controller_state import (
 from iris.testing.transitions import (
     WorkerTaskUpdates,
     apply_task_observations,
-    commit_dispatch_updates,
 )
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func, insert, select
+from sqlalchemy import insert, select
 from sqlalchemy import update as sa_update
 
 _ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
@@ -2123,8 +2121,8 @@ def _a100_device() -> job_pb2.DeviceConfig:
     return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="A100", count=8))
 
 
-def test_demand_passes_all_tasks(state):
-    """Job emits all task demand entries."""
+def test_demand_with_no_workers_includes_every_pending_task(state):
+    """With no workers registered, every pending task becomes autoscaler demand (scale from zero)."""
     req = controller_pb2.Controller.LaunchJobRequest(
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
@@ -2750,28 +2748,6 @@ def test_demand_absorbs_capacity_before_emitting(state):
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
 
-def test_demand_no_workers_falls_back_to_all_pending(state):
-    """When no workers provided, all pending tasks generate demand (backward compat)."""
-
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name="gpu-job",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=_h100_device(),
-        ),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=3,
-    )
-    submit_job(state, "j1", req)
-
-    # No scheduler, no workers -> all tasks become demand
-    demand = _demand_entries(state)
-    task_demand = list(demand)
-    assert len(task_demand) == 3
-
-
 def test_demand_building_limited_with_multiple_workers(state):
     """All matching workers at building limit -> no demand, even with multiple workers."""
 
@@ -3389,369 +3365,6 @@ def test_resubmit_invalidates_run_template_cache(state):
         template_v2 = snap.caches[RunTemplatesProjection].get(snap, job_id)
     assert template_v2 is not None
     assert template_v2.task_image == "image:v2"
-
-
-# =============================================================================
-# Direct Provider Transition Tests
-# =============================================================================
-
-
-def _submit_job_direct(
-    state: ControllerTestState,
-    job_id_str: str,
-    *,
-    replicas: int = 1,
-    max_retries_failure: int = 0,
-    max_retries_preemption: int = 0,
-    max_task_failures: int = 0,
-) -> list[JobName]:
-    job_id = JobName.from_wire(job_id_str)
-    request = controller_pb2.Controller.LaunchJobRequest(
-        name="test-job",
-        replicas=replicas,
-        max_retries_failure=max_retries_failure,
-        max_retries_preemption=max_retries_preemption,
-        max_task_failures=max_task_failures,
-    )
-    with state._db.transaction() as cur:
-        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
-    return [job_id.task(idx) for idx in range(replicas)]
-
-
-def _task_state_direct(state: ControllerTestState, task_id: JobName) -> int:
-    with state._db.read_snapshot() as tx:
-        row = reads.get_task_detail(tx, task_id)
-    assert row is not None
-    return int(row.state)
-
-
-def _task_row_direct(state: ControllerTestState, task_id: JobName):
-    with state._db.read_snapshot() as tx:
-        row = reads.get_task_detail(tx, task_id)
-    assert row is not None
-    return row
-
-
-def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
-    """Drain and transition tasks to RUNNING via direct provider."""
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            now=Timestamp.now(),
-        )
-
-
-def test_drain_pending_creates_attempt_rows(state):
-    """drain_for_dispatch promotes PENDING tasks to ASSIGNED with NULL worker_id."""
-    task_ids = _submit_job_direct(state, "/user/job1")
-    task_id = task_ids[0]
-
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-
-    assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
-    assert batch.tasks_to_run[0].attempt_id == 0
-    assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_ASSIGNED
-
-    # Verify attempt row was created with NULL worker_id.
-    with state._db.read_snapshot() as _snap:
-        row = _snap.execute(
-            select(task_attempts_table.c.worker_id, task_attempts_table.c.state).where(
-                (task_attempts_table.c.task_id == task_id) & (task_attempts_table.c.attempt_id == 0)
-            )
-        ).first()
-    assert row is not None
-    assert row.worker_id is None
-    assert int(row.state) == job_pb2.TASK_STATE_ASSIGNED
-
-
-def _count_pending(state: ControllerTestState) -> int:
-    with state._db.read_snapshot() as q:
-        row = q.execute(
-            select(func.count().label("c"))
-            .select_from(tasks_table)
-            .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
-        ).first()
-    return int(row.c)
-
-
-def test_drain_redrives_assigned_until_executing(state):
-    """ASSIGNED+null-worker rows are redriven each cycle so a missed pod-apply
-    is recovered, and they are also in running_tasks so the same-cycle poll
-    transitions them out of ASSIGNED. Once the task reaches BUILDING/RUNNING,
-    it leaves tasks_to_run but stays in running_tasks."""
-    task_ids = _submit_job_direct(state, "/user/job1")
-    task_id = task_ids[0]
-
-    # First drain: PENDING -> ASSIGNED, dispatched and polled.
-    with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur)
-    assert len(batch1.tasks_to_run) == 1
-    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
-
-    # Second drain (e.g. previous _apply_pod failed or controller crashed):
-    # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
-    with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur)
-    assert len(batch2.tasks_to_run) == 1
-    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
-    assert batch2.tasks_to_run[0].attempt_id == 0
-    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
-
-    # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
-    # contains it so the next poll observes terminal transitions.
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        batch3 = dispatch.drain_for_dispatch(cur)
-    assert len(batch3.tasks_to_run) == 0
-    assert len(batch3.running_tasks) == 1
-    assert batch3.running_tasks[0].task_id == task_id
-
-
-def test_drain_caps_promotions_per_cycle(state):
-    """``max_promotions`` caps how many PENDING rows are promoted per cycle.
-    Redrives of already-ASSIGNED rows do not count against the cap."""
-    _submit_job_direct(state, "/user/big-job", replicas=200)
-    assert _count_pending(state) == 200
-
-    with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=128)
-    # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
-    assert len(batch1.tasks_to_run) == 128
-    assert _count_pending(state) == 72
-
-    # Second drain: 72 newly promoted, 128 redriven.
-    with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=128)
-    assert len(batch2.tasks_to_run) == 200
-    assert _count_pending(state) == 0
-
-
-def test_drain_max_promotions_limits_batch(state):
-    """``max_promotions`` is a per-cycle PENDING-promotion budget, not a cap
-    on total dispatch (which also includes ASSIGNED redrives)."""
-    _submit_job_direct(state, "/user/cap-job", replicas=250)
-
-    with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=50)
-    assert len(batch1.tasks_to_run) == 50
-    assert _count_pending(state) == 200
-
-    # 50 newly promoted + 50 prior ASSIGNED redriven.
-    with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=50)
-    assert len(batch2.tasks_to_run) == 100
-    assert _count_pending(state) == 150
-
-
-def test_apply_running(state):
-    """Applying a RUNNING update transitions task from ASSIGNED to RUNNING."""
-    task_ids = _submit_job_direct(state, "/user/job1")
-    task_id = task_ids[0]
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-
-    assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_RUNNING
-
-
-def test_apply_succeeded(state):
-    """Applying SUCCEEDED transitions task to terminal state with exit_code=0."""
-    task_ids = _submit_job_direct(state, "/user/job1")
-    task_id = task_ids[0]
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = _task_row_direct(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_SUCCEEDED
-    assert task.exit_code == 0
-    assert task.finished_at_ms is not None
-
-
-def test_apply_failed_with_retry(state):
-    """FAILED with retries remaining returns task to PENDING."""
-    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1, max_task_failures=1)
-    task_id = task_ids[0]
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ],
-            now=Timestamp.now(),
-        )
-
-    # Task should be PENDING again (1 failure <= 1 max_retries_failure).
-    assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_PENDING
-
-    # The dead attempt 0 must have finished_at_ms stamped even though the task
-    # itself rolled back to PENDING. Otherwise the row is indistinguishable from
-    # a still-assigned attempt. Regression guard for the terminal_ms conflation.
-    with state._db.read_snapshot() as tx:
-        attempts = tx.execute(
-            select(
-                task_attempts_table.c.task_id,
-                task_attempts_table.c.attempt_id,
-                task_attempts_table.c.worker_id,
-                task_attempts_table.c.state,
-                task_attempts_table.c.created_at_ms,
-                task_attempts_table.c.started_at_ms,
-                task_attempts_table.c.finished_at_ms,
-                task_attempts_table.c.exit_code,
-                task_attempts_table.c.error,
-            )
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
-    assert len(attempts) == 1
-    assert attempts[0].state == job_pb2.TASK_STATE_FAILED
-    assert attempts[0].finished_at_ms is not None
-
-    # Draining again should promote it for a second attempt.
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].attempt_id == 1
-
-
-def test_apply_failed_no_retry(state):
-    """FAILED with no retries remaining leaves task in FAILED terminal state."""
-    task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
-    task_id = task_ids[0]
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = _task_row_direct(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_FAILED
-    assert task.failure_count == 1
-    assert task.finished_at_ms is not None
-
-
-def test_apply_worker_failed(state):
-    """WORKER_FAILED on a RUNNING task increments preemption_count and retries if allowed."""
-    task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
-    task_id = task_ids[0]
-    with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
-            ],
-            now=Timestamp.now(),
-        )
-
-    # Should be retried (preemption_count=1 <= max_retries_preemption=1).
-    assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_PENDING
-    task = _task_row_direct(state, task_id)
-    assert task.preemption_count == 1
-
-
-def test_cancel_job_kills_dispatch_tasks(state):
-    """cancel_job moves NULL-worker_id (direct-provider) tasks to KILLED."""
-    task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
-    _run_direct_tasks(state, task_ids)
-
-    with state._db.transaction() as cur:
-        ops.job.cancel(
-            cur,
-            job_id=JobName.from_wire("/user/job1"),
-            reason="test cancel",
-        )
-
-    for tid in task_ids:
-        assert _task_state_direct(state, tid) == job_pb2.TASK_STATE_KILLED
-
-
-def test_max_failures_kills_dispatch_tasks(state):
-    """When a task fails and triggers kill of siblings, direct-provider tasks are killed via task_mutations."""
-    task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
-    _run_direct_tasks(state, task_ids)
-
-    # Fail one task — with max_task_failures=0 (default) this should kill the job,
-    # triggering _kill_non_terminal_tasks for the sibling.
-    with state._db.transaction() as cur:
-        result = commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
-            now=Timestamp.now(),
-        )
-
-    # The sibling task (task_ids[1]) should have a KILLED task delta.
-    killed_task_ids = {tid for tid, delta in result.tasks.items() if delta.state == job_pb2.TASK_STATE_KILLED}
-    assert task_ids[1] in killed_task_ids
 
 
 # =============================================================================

@@ -296,3 +296,125 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     tasks = [row for path in release["paths"] for row in load_parquet(path)]
     assert len(tasks) == 1 and tasks[0]["intended_use"] == "eval"
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
+
+
+def test_publication_adds_declared_inventory_sources_without_placement(tmp_path, description_server):
+    curated = tmp_path / "curated"
+    (curated / "final").mkdir(parents=True)
+    (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
+    task = numeric_answer_task(
+        RawRow(
+            id="a",
+            source=Source(dataset="fixture", revision="1", importer_revision="1", row="a"),
+            data={},
+        ),
+        prompt="Add two and three.",
+        answer="5",
+        tolerance_abs=0,
+        tolerance_rel=0,
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"task_id": "a", "task_json": task.model_dump_json()}]), curated / "final/tasks.parquet"
+    )
+    directory = tmp_path / "curriculum"
+    directory.mkdir()
+    (directory / "curriculum.json").write_text(catalog().model_dump_json())
+    cache = tmp_path / "cache"
+    spec = EmbeddingSpec(
+        model="fixture", revision="1", tokenizer_revision="1", dimensions=3, max_tokens=512, compute_dtype="float32"
+    )
+    runtime = CampaignRuntime()
+    with (
+        artifact_prefix(str(cache)),
+        ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+        runtime.activate(context),
+    ):
+        stages = curation_embedding_pipeline(
+            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
+            runtime=runtime,
+            description_model=DescriptionModel("fixture", "1"),
+            endpoint=DescriptionEndpoint(f"http://127.0.0.1:{description_server.server_port}/v1", "unused"),
+            spec=spec,
+            embedder_factory=lambda: EmbeddingEndpoint(str(tmp_path / "embedding-calls.jsonl"), spec.dimensions),
+            cache_root=str(cache),
+            population="admitted",
+            sample_size=None,
+            seed=0,
+            inventory=[
+                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
+                RlDataSource(
+                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                ).declaration,
+                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+            ],
+        )
+        built = run(stages.publication, max_concurrent=1)[0]
+    release = json.loads((Path(built.path) / "release.json").read_text())
+    rows = {row["source_id"]: row for row in release["sources"]}
+    assert rows["source"]["basis"] == "matched"
+    assert rows["Pointer:release"]["basis"] == "declared"
+    assert rows["Pointer:release"]["task_count"] == 7
+    assert rows["Pointer:release"]["intended_use"] is None
+    assert "Pointer:no-count" not in rows
+    assert release["task_count"] == 1
+
+
+def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.driver.load_harrier",
+        lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
+    )
+    staged = tmp_path / "input/data"
+    staged.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist([{"problem": "Two plus three?", "answer": "5"}]),
+        staged / "train-0000.parquet",
+    )
+    curriculum = tmp_path / "curriculum"
+    curriculum.mkdir()
+    (curriculum / "curriculum.json").write_text(catalog().model_dump_json())
+    output, cache = tmp_path / "output", tmp_path / "cache"
+    common = [
+        "--cache-dir",
+        str(cache),
+        "--embed",
+        "coverage",
+        "--max-workers",
+        "1",
+        "--catalog-root",
+        str(curriculum),
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{description_server.server_port}/v1",
+    ]
+    runner = CliRunner()
+    quick = runner.invoke(
+        main,
+        [
+            *common,
+            "--mode",
+            "quick",
+            "--source",
+            "aime24",
+            "--input-root",
+            str(staged.parent),
+            "--output-root",
+            str(output),
+            "--run",
+        ],
+    )
+    assert quick.exit_code == 0, quick.output
+    corpus_path = output / "corpus.json"
+    corpus = json.loads(corpus_path.read_text())
+    corpus["inventory"] = []
+    corpus_path.write_text(json.dumps(corpus))
+    resumed = runner.invoke(main, [*common, "--corpus", str(corpus_path), "--run"])
+    assert resumed.exit_code == 0, resumed.output
+    releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
+    sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
+    assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
+    declared = [row for row in sources.values() if row["basis"] == "declared"]
+    assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
+    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)

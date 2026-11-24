@@ -5,10 +5,10 @@
 
 import enum
 import logging
-from collections.abc import Iterable
+from collections.abc import Hashable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +22,22 @@ class Aggregation(enum.StrEnum):
     MIN = "min"
 
 
+class CounterKey(NamedTuple):
+    """Identifies a counter by scope and name; ``stage`` is None for pipeline-level counters.
+
+    Counters with the same name in different scopes are separate counters.
+    """
+
+    stage: str | None
+    name: str
+
+
 @dataclass
 class CounterEntry:
-    """A single named counter value with its aggregation mode and optional stage scope."""
+    """A single counter value with its aggregation mode."""
 
     value: int | float
     aggregation: Aggregation = field(default=Aggregation.SUM)
-    stage: str | None = None
     count: int = 1  # number of observations; used for rolling average via update_counter
 
     def merge(self, other: "CounterEntry") -> None:
@@ -52,44 +61,63 @@ class CounterEntry:
                 self.count = total
 
 
-def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[dict[str, CounterEntry], set[str]]:
-    """Fold named counter entries into one accumulator per name.
+_K = TypeVar("_K", bound=Hashable)
+
+
+def merge_counter_entries(entries: Iterable[tuple[_K, CounterEntry]]) -> tuple[dict[_K, CounterEntry], set[_K]]:
+    """Fold counter entries into one accumulator per key.
 
     The single reducer used everywhere counters are combined: across a
     worker's concurrent runners, and across worker snapshots on the
-    coordinator. Each name's first entry seeds a fresh accumulator (the
-    inputs are never mutated) and the rest are folded in with
-    :meth:`CounterEntry.merge`, so AVERAGE stays weighted by observation
-    count no matter how many levels the values pass through.
+    coordinator. Keys are :class:`CounterKey` to keep scopes apart, or bare
+    names to fold every scope of a name together. Each key's first entry
+    seeds a fresh accumulator (the inputs are never mutated) and the rest
+    are folded in with :meth:`CounterEntry.merge`, so AVERAGE stays weighted
+    by observation count no matter how many levels the values pass through.
 
     Entries that disagree with the accumulator's aggregation mode are
-    skipped and their names returned in the second element; a warning is
-    logged once per name. That is only reachable when user code calls
+    skipped and their keys returned in the second element; a warning is
+    logged once per key. That is only reachable when user code calls
     ``set_aggregation`` with different modes for the same counter name.
 
     Returns:
         ``(merged, conflicted)``. Callers decide whether to drop the
-        conflicted names or report the partial fold.
+        conflicted keys or report the partial fold.
     """
-    merged: dict[str, CounterEntry] = {}
-    conflicted: set[str] = set()
-    for name, entry in entries:
-        accumulated = merged.get(name)
+    merged: dict[_K, CounterEntry] = {}
+    conflicted: set[_K] = set()
+    for key, entry in entries:
+        accumulated = merged.get(key)
         if accumulated is None:
-            merged[name] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
+            merged[key] = CounterEntry(entry.value, entry.aggregation, entry.count)
             continue
         if accumulated.aggregation != entry.aggregation:
-            if name not in conflicted:
+            if key not in conflicted:
                 logger.warning(
                     "Counter %r has conflicting aggregations: %r vs %r; dropping",
-                    name,
+                    key,
                     accumulated.aggregation,
                     entry.aggregation,
                 )
-                conflicted.add(name)
+                conflicted.add(key)
             continue
         accumulated.merge(entry)
     return merged, conflicted
+
+
+def counters_by_name(
+    entries: Iterable[tuple[CounterKey, CounterEntry]], stage: str | None = None
+) -> dict[str, CounterEntry]:
+    """Fold scoped counters into one entry per name.
+
+    With ``stage`` set, only that stage's counters are included. With
+    ``stage=None``, a name recorded under several scopes folds into one
+    entry. Names whose entries disagree on aggregation are dropped.
+    """
+    merged, conflicted = merge_counter_entries(
+        (key.name, entry) for key, entry in entries if stage is None or key.stage == stage
+    )
+    return {name: entry for name, entry in merged.items() if name not in conflicted}
 
 
 @dataclass
@@ -104,7 +132,7 @@ class InputProgress:
 class RunnerSnapshot:
     """Detached counters and input progress from one runner."""
 
-    counters: dict[str, CounterEntry] = field(default_factory=dict)
+    counters: dict[CounterKey, CounterEntry] = field(default_factory=dict)
     input_progress: InputProgress | None = None
 
 
@@ -128,10 +156,11 @@ class CounterSnapshot:
     report_result carries a unique tag.  The coordinator uses strict
     ordering (>) to discard stale or out-of-order updates.
 
-    Each entry carries its own aggregation mode and optional stage scope.
+    Counters are keyed by scope and name; each entry carries its own
+    aggregation mode.
     """
 
-    counters: dict[str, CounterEntry]
+    counters: dict[CounterKey, CounterEntry]
     generation: int
     shards: dict[int, ShardProgress] = field(default_factory=dict)
 

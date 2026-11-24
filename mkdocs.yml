@@ -74,6 +74,7 @@ nav:
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
       - Run Evaluations: tutorials/run-lm-evals.md
+      - Add an Evaluation Benchmark: tutorials/add-evaluation.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -95,6 +96,7 @@ nav:
       - Agent Workflows: dev-guide/agent-workflows.md
       - Experiment Records: dev-guide/experiment-records.md
       - Research Engineering: dev-guide/research-engineering.md
+      - Large Data In Git: dev-guide/large-data.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
           - Public Communication Conventions: dev-guide/writing-style/conventions.md
@@ -114,7 +116,10 @@ nav:
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
+      - Document Low-value Scoring: references/low-value-scoring.md
+      - Replay Low-value Model Card: model-cards/replay-low-value-v1.md
       - Task Curation: references/task-curation.md
+      - Evaluation tasks: references/evaluation-tasks.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
@@ -123,6 +128,7 @@ nav:
       - Building Marina apps: references/marina.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
+      - Gated DeltaNet-2 TPU kernel: references/gdn2-kernels.md
       - HBM Optimization: references/hbm-optimization.md
       - Hero Pipeline on H100: references/hero-pipeline-h100.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md

@@ -39,7 +39,7 @@ from cloud.iris.artifacts import terminal_checkpoint_step
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -69,6 +69,12 @@ def _verify_hf_model_export(export_path: str) -> None:
     from skyrl_train.hf_model_io import verify_hf_model_export  # noqa: PLC0415 - keep launcher imports Torch-free
 
     verify_hf_model_export(export_path)
+
+
+def _has_completed_hf_model_export(export_path: str) -> bool:
+    from skyrl_train.hf_model_io import has_completed_hf_model_export  # noqa: PLC0415 - keep launcher imports Torch-free
+
+    return has_completed_hf_model_export(export_path)
 
 
 @dataclass(frozen=True)
@@ -375,17 +381,21 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
     exit_code = subprocess.call(command, stdout=sys.stderr)
     if exit_code != 0:
         raise subprocess.CalledProcessError(exit_code, command)
-    if not spec.no_wait:
-        export_path = policy_export_path(spec.request.export_path, spec.request.step)
-        _verify_hf_model_export(export_path)
 
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     """Submit one export job, verify synchronous output, and persist request state."""
+    export_path = policy_export_path(spec.request.export_path, spec.request.step)
+    if spec.request.hf_hub_repo_id is None and _has_completed_hf_model_export(export_path):
+        _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
+        print(f"[export-hf] reused verified global_step_{spec.request.step} export")
+        return
     request = spec.request.with_status(HFExportStatus.IN_PROGRESS, timeout=spec.timeout, increment_attempts=True)
     _write_hf_export_request(request)
     try:
         _run_export(spec, command)
+        if not _has_completed_hf_model_export(export_path):
+            raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
@@ -397,7 +407,11 @@ def export_terminal_policy(training_config_path: Path) -> None:
     """Derive and run the terminal policy export from one training launch document."""
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = terminal_checkpoint_step(checkpoint_root)
+    step = selected_export_step(
+        checkpoint_root,
+        str(training_config.skyrl.trainer.hf_export_checkpoint),
+        terminal_checkpoint_step(checkpoint_root),
+    )
     checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
     request = _read_hf_export_request(checkpoint_path)
     if request is None:
@@ -449,6 +463,9 @@ def main() -> None:
         return
     if request is None:
         _run_export(spec, cmd)
+        if not spec.no_wait:
+            export_path = policy_export_path(spec.request.export_path, spec.request.step)
+            _verify_hf_model_export(export_path)
     else:
         submit_requested_export(spec, cmd)
 

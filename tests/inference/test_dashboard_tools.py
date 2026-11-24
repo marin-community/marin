@@ -24,6 +24,11 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
+from marin.inference.web_search import ParallelWebSearch
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from experiments.llama import llama3_instruct_trainable_chat_template
@@ -299,6 +304,42 @@ def test_dashboard_shared_chat_rejects_payload_over_512_kib(dashboard_tool_base_
     assert oversized.status_code == 413
 
 
+def test_dashboard_feedback_saves_report_with_serving_metadata(tmp_path):
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        feedback_prefix=str(tmp_path),
+    )
+    report = {
+        "description": "Ignored the system prompt.",
+        "reporter": "Ada",
+        "model": "fake-model",
+        "conversation": {"title": "Be terse", "messages": [{"role": "user", "content": "Hi"}]},
+    }
+    with TestClient(app) as client:
+        assert client.get("/info").json()["feedback"] is True
+        saved = client.post("/feedback", json=report)
+        missing_description = client.post("/feedback", json={"description": " ", "conversation": None})
+        oversized = client.post("/feedback", json={"description": "x" * (1024 * 1024)})
+
+    assert saved.status_code == 201
+    location = Path(saved.json()["location"])
+    assert location.parent.parent == tmp_path
+    record = json.loads(location.read_text())
+    assert record["report"] == report
+    assert record["serving"] == asdict(info)
+    assert missing_description.status_code == 400
+    assert oversized.status_code == 413
+    assert [path.name for path in tmp_path.rglob("*.json")] == [location.name]
+
+    unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
+    with TestClient(unconfigured) as client:
+        assert client.get("/info").json()["feedback"] is False
+        assert client.post("/feedback", json=report).status_code in (404, 405)
+
+
 def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_base_url):
     files = {
         "calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
@@ -438,3 +479,45 @@ def test_dashboard_shell_workspace_recreates_imported_git_history(dashboard_tool
     assert response.status_code == 200
     assert response.json()["exit_code"] == 0
     assert response.json()["stdout"] == "add program\ninitial import\n\nOLD\nfirst revision\n"
+
+
+PARALLEL_RESULTS = {"search_id": "search_1", "results": [{"url": "https://example.com", "excerpts": ["Example"]}]}
+
+
+def _fake_parallel_app(received: list[tuple[str | None, dict[str, object]]]) -> Starlette:
+    async def search(request: Request) -> JSONResponse:
+        body = await request.json()
+        received.append((request.headers.get("x-api-key"), body))
+        return JSONResponse(PARALLEL_RESULTS)
+
+    return Starlette(routes=[Route("/v1/search", search, methods=["POST"])])
+
+
+def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    received: list[tuple[str | None, dict[str, object]]] = []
+    parallel_sock = bind_serving_socket("127.0.0.1", 0)
+    parallel_url = f"http://127.0.0.1:{parallel_sock.getsockname()[1]}/v1"
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        web_search=ParallelWebSearch("test-key", base_url=parallel_url),
+    )
+    with serve_app_background(_fake_parallel_app(received), parallel_sock), TestClient(app) as client:
+        assert client.get("/info").json()["web_search"] is True
+        search = client.post(
+            "/web-search",
+            json={"objective": "Find an example", "search_queries": ["example"], "processor": "pro"},
+        )
+        rejected = client.post("/web-search", json={"objective": "Find an example"})
+
+    assert search.status_code == 200
+    assert search.json() == PARALLEL_RESULTS
+    assert rejected.status_code == 422
+    assert received == [("test-key", {"objective": "Find an example", "search_queries": ["example"]})]
+
+    unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
+    with TestClient(unconfigured) as client:
+        assert client.get("/info").json()["web_search"] is False
+        assert client.post("/web-search", json={"objective": "x", "search_queries": ["x"]}).status_code == 404

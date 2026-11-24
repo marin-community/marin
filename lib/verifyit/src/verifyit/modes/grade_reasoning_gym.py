@@ -24,6 +24,7 @@ from verifyit.modes.extract import extract_markdown_answer
 from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200
+PRIME_FACTORIZATION = "prime_factorization"
 
 
 def load_entry(path: Path) -> dict:
@@ -85,7 +86,7 @@ def grade_reasoning_gym_candidate(
     """Score extracted text with the dataset's configured scorer, retaining partial credit.
 
     Supply decoded params for a spec that names a params file. The caller owns isolation:
-    upstream scorers can parse or execute candidate expressions. Scorer failures propagate.
+    upstream scorers can parse or execute candidate expressions.
     """
     if spec.params is not None and params is None:
         raise InvalidTask("reasoning-gym candidate grading requires decoded params")
@@ -102,6 +103,34 @@ def _validate_entry(spec: ReasoningGymSpec, entry: dict) -> None:
         raise InvalidTask("reasoning-gym entry requires an answer field containing a string or null")
 
 
+def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Callable[[str, dict], float]) -> float:
+    if dataset == PRIME_FACTORIZATION:
+        reference = entry["answer"]
+        if not isinstance(reference, str):
+            raise InvalidTask("prime_factorization requires a string reference answer")
+        try:
+            score_answer(reference, entry)
+        except ValueError as error:
+            raise InvalidTask("prime_factorization reference answer is malformed") from error
+    try:
+        score = score_answer(answer, entry)
+    except ValueError:
+        if dataset != PRIME_FACTORIZATION:
+            raise
+        return 0.0
+    if isinstance(score, bool) or not isinstance(score, int | float):
+        raise TypeError(f"reasoning-gym scorer for {dataset} returned {type(score).__name__}")
+    return float(score)
+
+
+def score_reasoning_gym_answer(dataset: str, entry: dict, answer: str) -> float:
+    """Score a raw answer while treating malformed prime factors as an incorrect candidate."""
+    spec = ReasoningGymSpec(dataset=dataset)
+    score_answer = _score_answer(dataset, None)
+    _validate_entry(spec, entry)
+    return _score_candidate(dataset, entry, answer, score_answer)
+
+
 def _grade_candidate(
     spec: ReasoningGymSpec, entry: dict, candidate: str | None, score_answer: Callable[[str, dict], float]
 ) -> Reward:
@@ -114,10 +143,8 @@ def _grade_candidate(
     if isinstance(output, list) and all(isinstance(row, list) for row in output):
         # JSON turns tuple grids into lists, while the grid scorers parse replies into tuples.
         entry = {**entry, "metadata": {**metadata, "output": tuple(tuple(row) for row in output)}}
-    score = score_answer(answer, entry)
-    if isinstance(score, bool) or not isinstance(score, int | float):
-        raise TypeError(f"reasoning-gym scorer for {spec.dataset} returned {type(score).__name__}")
-    return scored(float(score), dataset=spec.dataset, answer=answer[:CANDIDATE_DETAIL_CHARS])
+    score = _score_candidate(spec.dataset, entry, answer, score_answer)
+    return scored(score, dataset=spec.dataset, answer=answer[:CANDIDATE_DETAIL_CHARS])
 
 
 def grade(spec: ReasoningGymSpec, tests_dir: Path, workspace: Path) -> Reward:

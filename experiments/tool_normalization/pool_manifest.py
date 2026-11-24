@@ -131,12 +131,16 @@ def refresh_pool(
     """
     for attempt in range(1, max_attempts + 1):
         try:
-            plan = load_pool(manifest_ref, workdir, expected_model=expected_model, expected_pods=expected_pods, pod_index=pod_index)
+            plan = load_pool(
+                manifest_ref, workdir, expected_model=expected_model, expected_pods=expected_pods, pod_index=pod_index
+            )
         except Exception as error:  # any refresh failure (including transient S3 errors) pauses
             if attempt >= max_attempts:
                 logger.warning("pool manifest refresh failed after %d attempts; pausing (%s)", attempt, error)
                 return None
-            logger.warning("pool manifest refresh failed (%d/%d): %s; retrying in %ds", attempt, max_attempts, error, pause_seconds)
+            logger.warning(
+                "pool manifest refresh failed (%d/%d): %s; retrying in %ds", attempt, max_attempts, error, pause_seconds
+            )
             time.sleep(pause_seconds)
             continue
         if plan.request_slots < 1:
@@ -190,7 +194,10 @@ def load_pool(
     slots = split_slots(status["total_concurrency"], expected_pods, pod_index)
     logger.info(
         "pool manifest: %d entries, %d request slots for pod %d, model %s, validated %s",
-        len(entries), slots, pod_index, status["model"],
+        len(entries),
+        slots,
+        pod_index,
+        status["model"],
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(status["validated_at"])),
     )
     return PoolPlan(

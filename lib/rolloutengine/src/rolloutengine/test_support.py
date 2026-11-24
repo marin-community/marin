@@ -142,17 +142,16 @@ def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> M
     return ModelEngine(rollout_engine, model.complete)
 
 
+def tool_call(name: str, arguments: dict, *, call_id: str) -> dict:
+    function = {"name": name, "arguments": json.dumps(arguments)}
+    return {"role": "assistant", "tool_calls": [{"id": call_id, "type": "function", "function": function}]}
+
+
 def shell_call(command: str, *, call_id: str = "write") -> dict:
-    return {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": "shell",
-                    "arguments": json.dumps({"command": command}),
-                },
-            }
-        ],
-    }
+    return tool_call("shell", {"command": command}, call_id=call_id)
+
+
+def tool_observations(graded: GradedRollout) -> list[dict]:
+    """The JSON content of each tool message in the first conversation of ``graded``."""
+    messages = graded.rollout.conversations[0].messages
+    return [json.loads(message["content"]) for message in messages if message["role"] == "tool"]

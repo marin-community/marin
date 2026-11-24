@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from harbor.models.job.result import JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
@@ -29,7 +29,6 @@ from harbor.trial.errors import (
     VerificationNotCompletedError,
 )
 from harbor.trial.trial import Trial
-
 
 # --------------------------------------------------------------------------- #
 # Gate 1: the four-case truth table for _enforce_verifier_result_invariant
@@ -171,7 +170,7 @@ def _unscored_trial_result(
 ) -> TrialResult:
     """An UNSCORED trial (verifier_result is None) labelled by the given error."""
     tc = TaskConfig(path="/tmp/x")
-    cfg = TrialConfig(task=tc, trials_dir="/tmp/trials")
+    cfg = TrialConfig(agent=AgentConfig(name="pi"), task=tc, trials_dir="/tmp/trials")
     return TrialResult(
         task_name="t",
         trial_name=name,
@@ -194,7 +193,7 @@ def _unscored_trial_result(
 def _scored_trial_result(*, reward, name: str) -> TrialResult:
     """A normally-scored trial that DOES contribute to n_trials / reward_stats."""
     tc = TaskConfig(path="/tmp/x")
-    cfg = TrialConfig(task=tc, trials_dir="/tmp/trials")
+    cfg = TrialConfig(agent=AgentConfig(name="pi"), task=tc, trials_dir="/tmp/trials")
     return TrialResult(
         task_name="t",
         trial_name=name,

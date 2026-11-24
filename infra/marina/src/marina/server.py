@@ -14,7 +14,8 @@ app (the app directory and the caller's identity); ``/`` lists the apps. A per-a
 Content-Security-Policy restricts what the page may fetch to itself, the manifest's
 ``connect_src``, and the configured Loom origin for apps that enable the agent panel.
 The public-applet deployment uses the same kernel without named application routes and
-admits only GET and HEAD routes for applets whose stored mode is public.
+admits only GET and HEAD routes for applets whose stored mode is public, including through
+the named hosts it is configured to resolve.
 """
 
 import html
@@ -62,6 +63,7 @@ from marina.applets import (
     AppletPackage,
     AppletRuntime,
     AppletStore,
+    IndexFallback,
     InvalidQuery,
     PublishResult,
     QueryLimitExceeded,
@@ -365,9 +367,13 @@ def accepts_encoding(header: str, encoding: str) -> bool:
     return qualities.get(encoding.lower(), qualities.get("*", 0)) > 0
 
 
-def accepts_html(header: str) -> bool:
-    accepted = {item.split(";", 1)[0].strip().lower() for item in header.split(",")}
-    return not accepted or "text/html" in accepted or "*/*" in accepted
+def index_fallback(accept: str) -> IndexFallback:
+    accepted = {item.split(";", 1)[0].strip().lower() for item in accept.split(",")}
+    if "text/html" in accepted:
+        return IndexFallback.ANY_PATH
+    if "*/*" in accepted:
+        return IndexFallback.EXTENSIONLESS
+    return IndexFallback.NONE
 
 
 def sqlstate(error: sqlalchemy.exc.SQLAlchemyError) -> str | None:
@@ -1197,7 +1203,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 version,
                 path,
                 accept_gzip=accepts_encoding(request.headers.get("accept-encoding", ""), "gzip"),
-                accept_html=accepts_html(request.headers.get("accept", "")),
+                index_fallback=index_fallback(request.headers.get("accept", "")),
             )
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet file not found") from error
@@ -1360,10 +1366,11 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         return response
 
     authenticated = RouteAuthMiddleware(api, policy)
-    if config.surface is MarinaSurface.PUBLIC_APPLETS:
-        return public_applet_surface(authenticated)
-    if config.applet_domains:
-        if applet_store is None:
-            raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")
-        return named_applet_hosts(authenticated, applet_store, config.applet_domains)
-    return authenticated
+    served = public_applet_surface(authenticated) if config.surface is MarinaSurface.PUBLIC_APPLETS else authenticated
+    if not config.applet_domains:
+        return served
+    if applet_store is None:
+        raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")
+    # On the public surface, the rewritten /a/<id>/ routes still check the bound app's stored
+    # mode on each request, so a host bound to a private app answers 404.
+    return named_applet_hosts(served, applet_store, config.applet_domains)

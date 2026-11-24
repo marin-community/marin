@@ -25,7 +25,7 @@ name: qwen3-32b                 # slash-free launch identity; catalog entries mu
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path
-apply_chat_template: true       # whether Evalchemy formats requests with the tokenizer chat template
+apply_chat_template: true       # select curated chat or completion corpus variants
 
 resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
@@ -48,6 +48,7 @@ serve:                          # ServeConfig -> model-server behavior
   reasoning_parser: qwen3
   vllm_batch_invariant: null    # VLLM_BATCH_INVARIANT; true/false is preserved
   vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
+  vllm_use_nccl_symm_mem: null  # VLLM_USE_NCCL_SYMM_MEM; all-reduce, all-gather and reduce-scatter
   vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
   vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
   vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
@@ -56,10 +57,10 @@ serve:                          # ServeConfig -> model-server behavior
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
 
 generation:                     # per-model generation behavior
-  max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
-  extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
+  max_gen_toks: null            # Curated generation limit and Harbor agent output budget
+  extra_gen_kwargs:             # forwarded to curated requests, e.g. for a thinking model
     skip_special_tokens: "false"
-  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
+  chat_template_kwargs:         # boolean or string template arguments on curated chat requests
     enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent
@@ -97,6 +98,26 @@ The launch guard rejects `--enforce-eager` without the acknowledgement flag
 `--i-know-i-am-making-vllm-slow`. Treat that error as a reason to investigate the configuration;
 do not satisfy it automatically. Marin removes the acknowledgement flag before launching vLLM
 and rejects `--config` files and abbreviated eager flags.
+
+## NCCL symmetric memory
+
+Set `serve.vllm_use_nccl_symm_mem: true` to pass `VLLM_USE_NCCL_SYMM_MEM=1` to GPU vLLM workers.
+`false` disables it; an unset field leaves the worker environment unchanged and is omitted from
+`record.json`. vLLM ignores the request under `VLLM_BATCH_INVARIANT=1` or when its NCCL allocator
+fails to build. For Hero BF16 on 16 GB200 GPUs with full decode graphs, it raised throughput from
+1,321 to 1,399 output tokens/s/GPU at 1,024 requests in flight
+([issue #11430](https://github.com/marin-community/marin/issues/11430#issuecomment-6876476443)).
+
+## Hero serving settings
+
+Hero BF16 was measured on 16 GB200 GPUs at TP1/DP16/EP16; see
+[issue #11430](https://github.com/marin-community/marin/issues/11430) for the results. ShortConv
+models need `cudagraph_mode: PIECEWISE` with `vllm::unified_attention_with_output`,
+`vllm::unified_kv_cache_update` and `vllm::grug_moe_short_conv` in
+`compilation_config.splitting_ops`. On the pinned wheel, any other graph mode or a missing split op
+runs without CUDA graphs. Use `max_num_seqs: 128` for 1K outputs and about 96 for 4K outputs, which
+avoids KV-cache waiting. The catalog cannot launch this topology yet: it needs data parallelism
+across hosts.
 
 ## Multi-node GPU serving
 

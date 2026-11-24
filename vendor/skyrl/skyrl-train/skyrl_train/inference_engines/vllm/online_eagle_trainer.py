@@ -397,9 +397,8 @@ def _refresh_target_owned_weights(model: nn.Module, capture_dir: Path) -> None:
         model.embed_tokens.weight.copy_(embedding)
         model.lm_head.weight.copy_(draft_head)
         model.verifier_lm_head.weight.copy_(draft_head)
+    # Captured head inputs are already normalized by the target model.
     model.verifier_norm = nn.Identity()
-    model.verifier_gate_down = None
-    model.verifier_gate_up = None
 
 
 def _configure_exact_mask_attention(config: Any) -> None:

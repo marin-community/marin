@@ -101,6 +101,7 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    vllm_use_nccl_symm_mem: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
     hf_hub_disable_xet: bool = False
@@ -194,11 +195,11 @@ class ModelConfig:
     ``tokenizer`` because the eval client loads its tokenizer through HF. ``revision`` pins an
     immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the tokenizer repository.
     When ``tokenizer`` is omitted, it defaults to ``location`` and its revision defaults to
-    ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with the
-    tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
+    ``revision``. ``apply_chat_template`` selects curated chat or completion protocols.
+    ``resource_hint`` states where the model is compatible; ``serve``
     states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
-    inputs and never affect inference placement. ``evalchemy_num_concurrent`` limits the number of
-    in-flight Evalchemy requests to this model's endpoint without changing benchmark semantics.
+    inputs and never affect inference placement. ``evaluation_num_concurrent`` limits the number of
+    in-flight curated requests to this model's endpoint without changing benchmark semantics.
     """
 
     name: str
@@ -212,13 +213,13 @@ class ModelConfig:
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
-    evalchemy_num_concurrent: int | None = None
+    evaluation_num_concurrent: int | None = None
 
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
-        if self.evalchemy_num_concurrent is not None and self.evalchemy_num_concurrent <= 0:
-            raise ValueError("evalchemy_num_concurrent must be positive")
+        if self.evaluation_num_concurrent is not None and self.evaluation_num_concurrent <= 0:
+            raise ValueError("evaluation_num_concurrent must be positive")
         if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
             raise ValueError("pipeline parallelism requires resource_hint.gpu")
 
@@ -242,9 +243,9 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
     ``max_model_len``, ``max_num_batched_tokens``, ``max_num_seqs``, ``chat_template``, and
     ``auto_overrides`` are consumed by serving configuration or lowering rather than rendered as
-    extra flags. ``vllm_batch_invariant`` and ``vllm_use_flashinfer_sampler`` become GPU-worker
-    process settings. ``--trust-remote-code`` is not rendered here: the native server forces it on
-    for every evaluated model.
+    extra flags. ``vllm_batch_invariant``, ``vllm_use_flashinfer_sampler`` and ``vllm_use_nccl_symm_mem``
+    become GPU-worker process settings. ``--trust-remote-code`` is not rendered here: the native
+    server forces it on for every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []

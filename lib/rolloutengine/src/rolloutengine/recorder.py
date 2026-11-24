@@ -22,6 +22,9 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
+    ContextRecovery,
+    ContextRejected,
+    ContextWindowExceeded,
     Continuation,
     ConversationRecord,
     ConversationStarted,
@@ -172,11 +175,20 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(
+        self,
+        model: Model,
+        limits: RolloutLimits,
+        mode: TraceMode,
+        events: EventSink,
+        *,
+        context_recovery: ContextRecovery,
+    ):
         self.model = model
         self.limits = limits
         self.mode = mode
         self.events = events
+        self.context_recovery = context_recovery
         self.earlier: list[ConversationRecord] = []
         self.conversation: _Conversation | None = None
         self.request: _Request | None = None
@@ -210,7 +222,9 @@ class _Recorder:
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
         current = self.conversation
-        if current is not None and (self.budget_reached or self.turns >= self.limits.max_turns):
+        if current is not None and (
+            self.budget_reached or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
+        ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
         deadlines = self.deadlines
@@ -230,7 +244,11 @@ class _Recorder:
             raise RuntimeError("A harness replies only after a model turn")
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
-        if self.stop_reason == LENGTH_STOP_REASON or self.budget_reached or self.turns >= self.limits.max_turns:
+        if (
+            self.stop_reason == LENGTH_STOP_REASON
+            or self.budget_reached
+            or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
+        ):
             self._stop_at_limit(observations, token_ids)
         served = conversation.trace.prefix
         if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:
@@ -355,6 +373,14 @@ class _Recorder:
             outcome = TimeoutError("The model turn deadline expired")
         if self._ended():
             raise RolloutEnded("The harness ended, or a deadline expired, while the model generated")
+        if isinstance(outcome, ContextRejected):
+            if self.context_recovery == ContextRecovery.ALWAYS or (
+                self.context_recovery == ContextRecovery.AFTER_TURN and self.has_response
+            ):
+                self.request = None
+                self._set_tool_deadline(self.limits.tool_turn_timeout)
+                raise ContextWindowExceeded(str(outcome)) from outcome.error
+            outcome = outcome.error
         self._record_request(request)
         conversation = self.conversation
         assert conversation is not None
@@ -539,7 +565,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, limits, trace, events)
+    recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)

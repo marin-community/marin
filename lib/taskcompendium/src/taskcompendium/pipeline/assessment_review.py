@@ -10,7 +10,7 @@ from functools import partial
 from typing import Any
 
 import pyarrow as pa
-from finestore.rl.curation import ModelReference, Verdict
+from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, ModelReference, Verdict
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -62,6 +62,7 @@ GRADE_SCHEMA = pa.schema(
         ("verdict", pa.string()),
         ("explanation", pa.string()),
         ("evidence_ids", pa.list_(pa.string())),
+        ("coercions", pa.list_(pa.string())),
     ]
 )
 
@@ -76,7 +77,31 @@ class AssessmentModel:
 
 
 class IncompleteAssessment(RuntimeError):
-    """The partial judgment artifact is retained, but must not be cached as successful."""
+    """Too many judgments are unavailable; the partial artifact is retained but not publishable."""
+
+
+def _coerce_evidence_ids(arguments: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Repair an ``evidence_ids`` the model serialized as a bare array body.
+
+    GLM intermittently returns the array's inner text with the enclosing brackets
+    or edge quotes dropped. Parse a complete JSON array when there is one, and
+    otherwise split on commas and strip residual quotes; the repaired value still
+    has to validate as non-empty strings and cite known packet sections. Return
+    ``(arguments, coerced)`` with *arguments* unchanged when the value is absent
+    or irreparable, so ordinary validation rejects it as before.
+    """
+    value = arguments.get("evidence_ids")
+    if not isinstance(value, str) or not value.strip():
+        return arguments, False
+    text = value.strip()
+    try:
+        parsed = json.loads(text) if text.startswith("[") else None
+    except json.JSONDecodeError:
+        parsed = None
+    items = parsed if isinstance(parsed, list) else [part.strip().strip('"') for part in text.strip("[]").split(",")]
+    if items and all(isinstance(item, str) and item for item in items):
+        return {**arguments, "evidence_ids": items}, True
+    return arguments, False
 
 
 def _curation_context(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -152,9 +177,16 @@ def _request(
     }
 
 
-def _records(output: str, packets: dict[str, dict[str, Any]]) -> list[TypedBatchRecord[TaskJudgment]]:
-    def validate(value: str) -> TaskJudgment:
-        judgment = TaskJudgment.model_validate_json(value)
+def _records(
+    output: str, packets: dict[str, dict[str, Any]], *, coerced: set[str] | None = None
+) -> list[TypedBatchRecord[TaskJudgment]]:
+    def validate(value: str, task_id: str) -> TaskJudgment:
+        arguments, repaired = _coerce_evidence_ids(json.loads(value))
+        judgment = TaskJudgment.model_validate(arguments)
+        if repaired and coerced is not None and judgment.task_id == task_id:
+            # Identity holds until typed_batch_records re-checks it; mark only the request this
+            # judgment answers, so a mismatched claim cannot poison another task's provenance.
+            coerced.add(task_id)
         packet = packets[judgment.task_id]
         allowed = {*json.loads(packet["packet_json"]), "curation"}
         if not set(judgment.evidence_ids).issubset(allowed):
@@ -193,6 +225,9 @@ def _grade_shard(
     for attempt in range(1, model.max_attempts + 1):
         if not pending:
             break
+        # Scoped per attempt: a repaired-but-rejected response never outlives the record that
+        # produced it, so a later clean answer cannot inherit the coercion mark.
+        coerced: set[str] = set()
         requests = [
             _request(packet, curation=curation, rubric=rubric, model=model.model, max_tokens=budgets[packet["task_id"]])
             for packet in pending.values()
@@ -220,7 +255,7 @@ def _grade_shard(
             ({"attempt": attempt, **asdict(observation)} for observation in result.observations),
             str(StoragePath(output_root) / f"responses/attempt-{attempt:02d}.jsonl"),
         )
-        for record in _records(result.output, pending):
+        for record in _records(result.output, pending, coerced=coerced):
             value = record.value
             grades[record.task_id] = {
                 "task_id": record.task_id,
@@ -229,6 +264,7 @@ def _grade_shard(
                 "verdict": value.verdict if value is not None else Verdict.UNKNOWN,
                 "explanation": value.explanation if value is not None else record.detail or "Judgment unavailable",
                 "evidence_ids": list(value.evidence_ids) if value is not None else [],
+                "coercions": ["evidence_ids"] if value is not None and record.task_id in coerced else [],
             }
             if value is not None:
                 pending.pop(record.task_id)
@@ -248,7 +284,7 @@ def grade_assessment(
     cache_root: str,
     output_root: str,
 ) -> None:
-    """Write every selected judgment before failing an incomplete assessment for retry."""
+    """Write every selected judgment, failing only when unavailable judgments exceed the threshold."""
     inputs = assessment_inputs(inputs_root)
     curation = _curation_context(json.loads((StoragePath(curated_root) / "manifest.json").read_text()))
     telemetry = SourceTelemetry(inputs.source, output_root)
@@ -284,5 +320,9 @@ def grade_assessment(
             schema=arrow_schema(AssessmentJudgments),
         )
         unavailable = sum(row["status"] == ReviewStatus.UNAVAILABLE for row in grades)
-        if unavailable:
-            raise IncompleteAssessment(f"{unavailable} judgments unavailable; retained at {output_root}")
+        share = unavailable / len(grades) if grades else 1.0
+        if share > MAX_UNAVAILABLE_JUDGMENT_SHARE:
+            raise IncompleteAssessment(
+                f"{unavailable} of {len(grades)} judgments unavailable "
+                f"(share {share:.1%} above {MAX_UNAVAILABLE_JUDGMENT_SHARE:.0%}); retained at {output_root}"
+            )

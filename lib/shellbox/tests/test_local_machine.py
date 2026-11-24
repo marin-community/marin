@@ -117,10 +117,28 @@ def factory() -> LocalMachineFactory:
     return make_factory()
 
 
+@pytest.fixture
+def undelegated_factory(monkeypatch) -> LocalMachineFactory:
+    monkeypatch.setattr("shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None)
+    return make_factory()
+
+
 def test_local_factory_reports_unsupported_host(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     with pytest.raises(SandboxUnavailable):
         LocalMachineFactory()
+
+
+def test_local_numeric_limits_allow_execution_without_delegation(undelegated_factory):
+    async def check():
+        machine = await undelegated_factory.create(MachineSpec(HostImage(), workdir="/app", cpus=2, memory_mb=256))
+        try:
+            result = await machine.run(Command(("sh", "-c", "printf answer > answer; cat answer")))
+            assert (result.exit_code, result.stdout) == (0, b"answer")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):
@@ -387,7 +405,7 @@ def test_background_processes_survive_successful_commands(factory):
 
 @pytest.mark.parametrize("members", [1, 2], ids=["machine", "task"])
 @pytest.mark.parametrize("retained_stream", ["stdout", "stderr"])
-def test_process_session_close_reclaims_detached_command_and_its_task(factory, members, retained_stream):
+def test_process_session_close_reclaims_detached_command_and_its_task(undelegated_factory, members, retained_stream):
     async def scenario():
         spec = TaskSpec(
             tuple(
@@ -400,7 +418,7 @@ def test_process_session_close_reclaims_detached_command_and_its_task(factory, m
             ),
             primary="member-0",
         )
-        task = await factory.create_task(spec)
+        task = await undelegated_factory.create_task(spec)
         machine = cast(LocalMachine, task.primary)
         roots = [cast(LocalMachine, member).root for member in task.containers.values()]
         session = None
@@ -955,15 +973,26 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
 
 
-def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
-    python_environment, python_factory, monkeypatch
-):
-    script = "import sys, six; print(sys.prefix); print(sys.base_prefix)"
-    result = run_command(python_factory, Command(("python3", "-c", script)))
-    assert result.exit_code == 0, result.stderr.decode()
-    prefix, base_prefix = map(Path, result.stdout.decode().split())
-    assert prefix == python_environment.bin_dir.parent
-    assert base_prefix.is_relative_to(python_environment.root)
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
+def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(python_environment, monkeypatch, tmp_path):
+    script = (
+        "import sys, six; from pathlib import Path; print(sys.prefix); print(sys.base_prefix); "
+        "Path('answer').write_text(six.text_type(42))"
+    )
+
+    async def scenario(machine):
+        result = await machine.run(Command(("python3", "-c", script)))
+        assert result.exit_code == 0, result.stderr.decode()
+        prefix, base_prefix = map(Path, result.stdout.decode().split())
+        assert prefix == python_environment.bin_dir.parent
+        assert base_prefix.is_relative_to(python_environment.root)
+        await machine.download("/app/answer", tmp_path / "answer")
+        assert (tmp_path / "answer").read_text() == "42"
+
+    with monkeypatch.context() as host:
+        host.setenv("PATH", "/usr/bin:/bin")
+        factory = make_factory(read_only=(python_environment.root,), bin_dirs=(python_environment.bin_dir,))
+        on_machine(factory, SPEC, scenario)
 
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
@@ -1063,11 +1092,11 @@ else:
 """
 
 
-def private_task_spec(marker="service", readiness=None):
+def private_task_spec(marker="service", readiness=None, peer_name="runtime"):
     return TaskSpec(
         containers=(
             ContainerSpec(
-                name="runtime",
+                name=peer_name,
                 machine=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
                 endpoints=(ServiceEndpoint("http", 8123),),
                 entrypoint=("python3", "-c", SERVICE_SERVER),
@@ -1124,7 +1153,10 @@ def test_real_local_http_relay_serves_concurrent_requests(factory):
                 await release.wait()
             return HttpResponse(200, request.path.encode(), "text/plain")
 
-        async with serve_http(machine, handler, port=8787) as endpoint:
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(machine, handler, task_group=service_tasks, port=8787) as endpoint,
+        ):
             slow = asyncio.create_task(
                 machine.run(Command(("python3", "-c", HTTP_CLIENT, endpoint + "/slow"), timeout=15))
             )
@@ -1144,12 +1176,16 @@ def test_real_local_http_relay_serves_concurrent_requests(factory):
     on_machine(factory, MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY), scenario)
 
 
-@pytest.mark.parametrize("family,host", [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")], ids=["ipv4", "ipv6"])
-def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, family, host):
+@pytest.mark.parametrize(
+    "family,host,peer_name",
+    [(socket.AF_INET, "127.0.0.1", "runtime_peer"), (socket.AF_INET6, "::1", "runtime")],
+    ids=["ipv4-underscore-peer", "ipv6"],
+)
+def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, family, host, peer_name):
     async def scenario(host_port):
         groups = await asyncio.gather(
-            factory.create_task(private_task_spec("first")),
-            factory.create_task(private_task_spec("second")),
+            factory.create_task(private_task_spec("first", peer_name=peer_name)),
+            factory.create_task(private_task_spec("second", peer_name=peer_name)),
         )
         roots = [cast(LocalMachine, machine).root for group in groups for machine in group.containers.values()]
         try:
@@ -1160,7 +1196,7 @@ def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, 
                 own = await group.primary.run(Command(("cat", "/app/member-secret")))
                 assert own.stdout == b"actor\n"
                 answer = await group.primary.run(
-                    Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint("runtime", "http")))
+                    Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint(peer_name, "http")))
                 )
                 assert (answer.exit_code, answer.stdout) == (0, expected)
                 connection = await group.primary.run(Command(("python3", "-c", CONNECT_PROBE, str(host_port), host)))
@@ -1217,9 +1253,9 @@ socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
 
 
 @pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
-def test_local_task_command_deadline_closes_every_member(factory, cancel):
+def test_local_task_command_deadline_closes_every_member(undelegated_factory, cancel):
     async def scenario():
-        group = await factory.create_task(private_task_spec())
+        group = await undelegated_factory.create_task(private_task_spec())
         roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
@@ -1248,9 +1284,9 @@ def test_local_task_command_deadline_closes_every_member(factory, cancel):
     asyncio.run(scenario())
 
 
-def test_cancelled_command_start_closes_the_machine(factory, monkeypatch):
+def test_cancelled_command_start_closes_the_machine(undelegated_factory, monkeypatch):
     async def scenario():
-        machine = await factory.create(SPEC)
+        machine = await undelegated_factory.create(SPEC)
         connection_made = asyncio.subprocess.SubprocessStreamProtocol.connection_made
 
         def cancel_before_handle_returns(protocol, transport):
@@ -1456,7 +1492,7 @@ def executable_oci_image(oci_image):
     return oci_image(
         (archive.getvalue(),),
         {
-            "Env": ["PATH=/bin", "IMAGE_VALUE=from-image"],
+            "Env": ["IMAGE_VALUE=from-image"],
             "WorkingDir": "/app",
             "Entrypoint": ["/bin/sh", "-c"],
             "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
@@ -1512,8 +1548,13 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
         roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
-            identity = await group.primary.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
-            assert (identity.exit_code, identity.stdout) == (0, b"/app\nfrom-image\n0\n")
+            identity = await group.primary.run(
+                Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u; printf "%s" "$PATH"'))
+            )
+            assert identity.exit_code == 0, identity.stderr
+            workdir, value, user, path = identity.stdout.decode().splitlines()
+            assert (workdir, value, user) == ("/app", "from-image", "0")
+            assert "/run/current-system" not in path
             written = await group.primary.run(Command(("sh", "-c", "printf actor >index.html")))
             assert written.exit_code == 0
             response = await group.primary.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))

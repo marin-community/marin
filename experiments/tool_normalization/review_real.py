@@ -19,9 +19,16 @@ from experiments.tool_normalization.candidate import (
     has_source_calls,
     source_messages,
 )
+from experiments.tool_normalization.eligibility import digest
 from experiments.tool_normalization.eligibility_check import eligibility
 from experiments.tool_normalization.historical_projection import historical_projection
-from experiments.tool_normalization.model import CapacityUnavailable, ModelConfig, complete, initialize_ledger
+from experiments.tool_normalization.model import (
+    CapacityUnavailable,
+    ModelConfig,
+    complete,
+    initialize_ledger,
+    parse_model_config,
+)
 from experiments.tool_normalization.native_seed import native_seed
 from experiments.tool_normalization.rules import approved, rule_record
 from experiments.tool_normalization.scope import EXCLUDED_SOURCES
@@ -143,10 +150,6 @@ def proposal_seed(original: list[dict], proposal: dict) -> dict:
     }
 
 
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def process(
     source_path: Path, directory: Path, model: ModelConfig, tokenizer: PreTrainedTokenizerBase, cfg: dict
 ) -> dict:
@@ -258,10 +261,7 @@ def process(
 def run(config_file: Path, manifest_file: Path, root: Path) -> None:
     cfg = json.loads(config_file.read_text())
     root.mkdir(parents=True, exist_ok=False)
-    model_args = cfg["model"].copy()
-    for key in ("api_key_file", "capacity_file", "ledger"):
-        model_args[key] = Path(model_args[key])
-    model = ModelConfig(**model_args)
+    model = parse_model_config(cfg["model"])
     initialize_ledger(model)
     tokenizer = AutoTokenizer.from_pretrained(cfg["serving_tokenizer"])
     for evidence in cfg["adapter_evidence"]:

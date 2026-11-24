@@ -10,16 +10,22 @@ import pulumi_kubernetes as k8s
 from iris.cluster.config import IrisClusterConfig
 from iris.cluster.platforms.k8s.constants import CW_REPO_URL, NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.kueue_manifests import (
+    CPU_NOMINAL_QUOTAS,
+    CPU_RESOURCE_FLAVOR_NAME,
+    CPU_TOPOLOGY_LEVELS,
+    CPU_TOPOLOGY_NAME,
     OPERATOR_NS,
     RELEASE_DEFAULT,
     RESOURCE_FLAVOR_NAME,
     TOPOLOGIES,
     build_cks_values,
     build_cluster_queue,
+    build_cpu_resource_flavor,
     build_resource_flavor,
     build_topology_cr,
 )
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
+from iris.cluster.platforms.types import Labels
 from iris.cluster.types import AcceleratorType
 
 from iac.config import KueueProvisioningSpec
@@ -41,6 +47,22 @@ class KueueAddonArgs:
     cluster_queue: str  # from kubernetes_provider.kueue.cluster_queue
     spec: KueueProvisioningSpec
     nominal_quotas: dict[str, str]
+    cpu_node_labels: dict[str, str] | None = None
+
+
+def cpu_flavor_node_labels(config: IrisClusterConfig, scale_group: str) -> dict[str, str]:
+    """Select a configured CoreWeave CPU pool without provider fabric labels."""
+    group = config.scale_groups[scale_group]
+    if (
+        group.resources is None
+        or group.resources.device_type != AcceleratorType.CPU
+        or group.slice_template is None
+        or group.slice_template.coreweave is None
+    ):
+        raise ValueError(f"Kueue CPU flavor requires a CoreWeave CPU scale group, got {scale_group!r}")
+    # Do not add the managed-label key here: Kueue checks Pod selectors against
+    # the union of flavor keys, and immutable cw-tas does not declare that key.
+    return {Labels(config.platform.label_prefix).iris_scale_group: scale_group}
 
 
 def accelerator_nominal_quotas(config: IrisClusterConfig) -> dict[str, str]:
@@ -135,14 +157,42 @@ class KueueAddon(pulumi.ComponentResource):
         )
         imports.register(resource_flavor, parent=self, provider_id=RESOURCE_FLAVOR_NAME)
 
-        queue_manifest = build_cluster_queue(args.cluster_queue, nominal_quotas=args.nominal_quotas)
+        queue_dependencies = [release, resource_flavor]
+        if args.cpu_node_labels is not None:
+            cpu_topology_manifest = build_topology_cr(CPU_TOPOLOGY_NAME, CPU_TOPOLOGY_LEVELS, TOPOLOGY_API_VERSION)
+            cpu_topology = k8s.apiextensions.CustomResource(
+                "topology-cpu",
+                api_version=TOPOLOGY_API_VERSION,
+                kind="Topology",
+                metadata=cpu_topology_manifest["metadata"],
+                spec=cpu_topology_manifest["spec"],
+                opts=child_opts(depends_on=[release]),
+            )
+            imports.register(cpu_topology, parent=self, provider_id=CPU_TOPOLOGY_NAME)
+            cpu_manifest = build_cpu_resource_flavor(args.cpu_node_labels)
+            cpu_flavor = k8s.apiextensions.CustomResource(
+                "resource-flavor-cpu",
+                api_version=cpu_manifest["apiVersion"],
+                kind=cpu_manifest["kind"],
+                metadata=cpu_manifest["metadata"],
+                spec=cpu_manifest["spec"],
+                opts=child_opts(depends_on=[cpu_topology]),
+            )
+            imports.register(cpu_flavor, parent=self, provider_id=CPU_RESOURCE_FLAVOR_NAME)
+            queue_dependencies.append(cpu_flavor)
+
+        queue_manifest = build_cluster_queue(
+            args.cluster_queue,
+            nominal_quotas=args.nominal_quotas,
+            cpu_nominal_quotas=CPU_NOMINAL_QUOTAS if args.cpu_node_labels is not None else None,
+        )
         cluster_queue = k8s.apiextensions.CustomResource(
             "cluster-queue",
             api_version=queue_manifest["apiVersion"],
             kind=queue_manifest["kind"],
             metadata=queue_manifest["metadata"],
             spec=queue_manifest["spec"],
-            opts=child_opts(depends_on=[release, resource_flavor]),
+            opts=child_opts(depends_on=queue_dependencies),
         )
         imports.register(cluster_queue, parent=self, provider_id=args.cluster_queue)
 

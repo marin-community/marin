@@ -151,13 +151,15 @@ async def serve_http(
     handler: Callable[[HttpRequest], Awaitable[HttpResponse]],
     *,
     port: int,
+    task_group: asyncio.TaskGroup,
 ) -> AsyncIterator[str]:
     """Run a host handler behind one foreground machine-local HTTP listener.
 
     Python 3 in the guest exchanges bounded, buffered frames over persistent
     process pipes. The handler authorizes paths and operations before using host
     authority. Caller headers and streaming are unsupported. Close this context
-    before closing the machine or its container group.
+    before closing the machine or its container group and leaving task_group.
+    The caller's group owns pump failures, including after startup has returned.
     """
     if not 1 <= port <= 65535:
         raise ValueError("HTTP service port is out of range")
@@ -166,35 +168,18 @@ async def serve_http(
     source = Path(http_service_guest.__file__).read_text()
     session = await machine.open_process(Command(("python3", "-u", "-c", source, str(port))))
     pump: asyncio.Task[None] | None = None
-    owner = asyncio.current_task()
-    assert owner is not None
-    failed = False
-    interrupted = False
     primary: BaseException | None = None
-
-    def finished(task: asyncio.Task[None]) -> None:
-        nonlocal failed, interrupted
-        if not task.cancelled():
-            # Interrupt the body promptly if the helper exits while no HTTP
-            # request is active. Retrieve the actual failure after cleanup.
-            failed = True
-            if not owner.cancelling():
-                interrupted = True
-                owner.cancel()
 
     try:
         frames = _Frames(session)
         async with asyncio.timeout(TRANSPORT_TIMEOUT):
             _ReadyFrame.model_validate_json(await frames.receive())
-        pump = asyncio.create_task(_pump(frames, handler))
-        pump.add_done_callback(finished)
+        pump = task_group.create_task(_pump(frames, handler))
         yield f"http://127.0.0.1:{port}"
     except BaseException as error:
         primary = error
         raise
     finally:
-        if pump is not None:
-            pump.remove_done_callback(finished)
 
         async def cleanup() -> None:
             if pump is not None:
@@ -213,11 +198,4 @@ async def serve_http(
                 error.add_note(f"HTTP service cleanup failed ({type(cleanup_error).__name__})")
             if primary is None:
                 raise
-        if (
-            failed
-            and pump is not None
-            and (primary is None or (interrupted and isinstance(primary, asyncio.CancelledError)))
-        ):
-            if interrupted:
-                owner.uncancel()
-            pump.result()
+            primary.add_note(f"HTTP service cleanup interrupted or failed ({type(error).__name__})")
