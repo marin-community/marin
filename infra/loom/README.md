@@ -46,6 +46,8 @@ current base images, so every update rebuilds the image, even for an unchanged
 commit. When preview skips that build, it shows the VM image as unknown.
 `pulumi up` builds and pushes the image, places the provider-produced digest in
 VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
+The image entrypoint sets the Claude and Codex CLI and ACP adapter versions
+and selects the Codex executable for ACP sessions.
 
 ```sh
 cd /path/to/marin
@@ -224,6 +226,10 @@ each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
 key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
 to every CoreWeave job, so this key's access policy bounds what Belay runs can
 read and write. Replies on the intake issue use Loom's GitHub App token.
+
+Idle archiving has a 15-minute minimum (five for completed watches) and waits
+for active turns to finish. Suspended sessions still count toward concurrency
+limits. Profile edits apply to new sessions.
 
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
