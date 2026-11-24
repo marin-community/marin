@@ -452,7 +452,8 @@ def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeyp
 
         lifecycle_client.sandbox.process.run = failed_setup
         monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
-        with pytest.raises(DaytonaProvisioningError):
+        # A server error from setup is retried like a lost request.
+        with pytest.raises(MachineUnavailable):
             await DaytonaMachineFactory(lambda: lifecycle_client).create(
                 MachineSpec(source=RegistryImage("fixture:latest"))
             )
@@ -501,9 +502,10 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(no_retry_wait, fail
         (RateLimitError("too many requests", status_code=429), DaytonaCapacityExhausted),
         (ProviderConnectionError("Connection reset by peer"), MachineUnavailable),
         (ClientTimeoutError("Request timed out", status_code=408), MachineUnavailable),
+        (DaytonaError("Internal server error", status_code=500), MachineUnavailable),
         (DaytonaError("invalid image reference", status_code=400), DaytonaProvisioningError),
     ],
-    ids=["limit", "throttled", "lost-connection", "timed-out", "refused"],
+    ids=["limit", "throttled", "lost-connection", "timed-out", "server-error", "refused"],
 )
 def test_daytona_factory_raises_provider_failures_under_shellbox_types(no_retry_wait, provider_error, expected):
     # Callers classify failures by name, and the SDK's names (ConnectionError, RateLimitError) are shared.

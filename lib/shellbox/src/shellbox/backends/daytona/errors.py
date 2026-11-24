@@ -11,6 +11,7 @@ the SDK error as their cause.
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 
 from daytona import DaytonaError, DaytonaRateLimitError
 
@@ -30,14 +31,15 @@ class DaytonaProvisioningError(RuntimeError):
 async def provisioning_failures(action: str) -> AsyncIterator[None]:
     """Raise a provider error from ``action`` under a Shellbox type.
 
-    A lost or timed-out request raises ``MachineUnavailable``; a capacity or rate refusal
-    raises ``DaytonaCapacityExhausted``; any other failure raises ``DaytonaProvisioningError``.
+    A lost or timed-out request, or a server error, raises ``MachineUnavailable``, as a command's
+    does; a capacity or rate refusal raises ``DaytonaCapacityExhausted``; any other failure raises
+    ``DaytonaProvisioningError``.
     """
     try:
         yield
     except DaytonaRateLimitError as error:
         raise DaytonaCapacityExhausted(f"Daytona cannot {action}: {error}") from error
     except DaytonaError as error:
-        if is_ambiguous_daytona_error(error):
+        if is_ambiguous_daytona_error(error) or (error.status_code or 0) >= HTTPStatus.INTERNAL_SERVER_ERROR:
             raise MachineUnavailable(f"Lost the connection to Daytona while trying to {action}: {error}") from error
         raise DaytonaProvisioningError(f"Daytona could not {action}: {error}") from error
