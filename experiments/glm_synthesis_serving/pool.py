@@ -21,8 +21,8 @@ tokens, ~96% of tokens are prefill, strong prompt-prefix sharing. That drives th
 large max_num_batched_tokens and mandatory prefix caching below.
 """
 
-from iris.rpc.proto_display import priority_band_value
 from fray.types import ResourceConfig, create_environment
+from iris.rpc.proto_display import priority_band_value
 from marin.inference.config import (
     BrokerConfig,
     InferenceProxyConfig,
