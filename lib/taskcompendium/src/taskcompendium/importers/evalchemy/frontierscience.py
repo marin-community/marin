@@ -14,25 +14,11 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
-
-# Appendix B, as transcribed by bytedance/axion1_0 at 96ce1830d87399f20577790f405fe2407da34156.
-def _prompt(filename: str) -> str:
-    return (
-        Path(__file__)
-        .with_name("assets")
-        .joinpath(filename)
-        .read_text(encoding="utf-8")
-        .rstrip("\n")
-        .replace("{problem}", "{question}")
-        .replace("{reference answer}", "{reference}")
-        .replace("{rubric}", "{reference}")
-        .replace("{answer}", "{candidate}")
-    )
-
-
+# Appendix B, transcribed by bytedance/axion1_0 at 96ce1830d87399f20577790f405fe2407da34156.
+_ASSETS = Path(__file__).with_name("assets")
 JUDGE_MODEL = "openai/gpt-oss-120b"
-_OLYMPIAD_PROMPT = _prompt("frontierscience_olympiad_judge.txt")
-_RESEARCH_PROMPT = _prompt("frontierscience_research_judge.txt")
+_OLYMPIAD_PROMPT = (_ASSETS / "frontierscience_olympiad_judge.txt").read_text(encoding="utf-8").rstrip("\n")
+_RESEARCH_PROMPT = (_ASSETS / "frontierscience_research_judge.txt").read_text(encoding="utf-8").rstrip("\n")
 
 
 def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
@@ -49,7 +35,7 @@ def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
         label_scores={"VERDICT: CORRECT": 1.0, "VERDICT: INCORRECT": 0.0},
         label_scan="lines",
     )
-    task = answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    task = answer_task(row, prompt=problem, spec=spec, evidence=row.data)
     return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-olympiad")})
 
 
@@ -68,7 +54,7 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         exact_gate=False,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    task = answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    task = answer_task(row, prompt=problem, spec=spec, evidence=row.data)
     return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-research")})
 
 
