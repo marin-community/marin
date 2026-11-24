@@ -134,7 +134,7 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
     with TemporaryDirectory(prefix="acceptance-") as directory:
         workdir = Path(directory)
         build_source = _docker_build_source(task, workdir)
-        with AsyncExitStack() as owned:
+        async with AsyncExitStack() as owned:
             task_machine = await _prepare_machine(
                 task.environment_requirements,
                 runtime,
