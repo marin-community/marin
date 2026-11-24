@@ -1130,8 +1130,7 @@ class InferenceEngine:
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > page_table.max_seqs:
             raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
-                "Decompose your request into smaller batches or increase max_seqs when building the service."
+                f"A request asks for {max_needed} generations, exceeding max_seqs ({page_table.max_seqs})."
             )
 
     def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
