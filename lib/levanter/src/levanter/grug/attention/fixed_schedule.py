@@ -83,10 +83,10 @@ def materialize_contiguous_kv(
 ) -> jax.Array:
     """Pack contiguous K/V into the exact serving page layout.
 
-    Invalid or duplicate adapter write maps are sanitized to page zero before
-    any dynamic update and poison the returned cache with BF16 NaNs. A valid
-    map must be unique and in range because this adapter writes each logical
-    page exactly once. Serving attention itself permits shared physical pages.
+    Invalid indices are clipped before the update. Invalid or duplicate maps
+    poison the returned cache with BF16 NaNs. A valid map must be unique and
+    in range because this adapter writes each logical page exactly once.
+    Serving attention itself permits shared physical pages.
     """
     expected = (spec.max_num_seqs, spec.max_kv_len, spec.num_kv_heads, spec.head_dim)
     if keys.shape != expected or values.shape != expected:
@@ -212,8 +212,9 @@ def fixed_schedule_attention(
 ) -> jax.Array:
     """Run the shared fixed-schedule forward on explicit data=4 sequence slots.
 
-    Shapes are q=[4,256,2,128], kv_pages=[8,128,2,128],
-    kv_lens=[4], page_indices=[4,2], and query metadata [4] or [4,256].
+    With the default spec, shapes are q=[4,256,2,128],
+    kv_pages=[8,128,2,128], kv_lens=[4], page_indices=[4,2],
+    query_lengths=[4], and query_positions and query_valid each [4,256].
     The function requires an explicit mesh with a data axis of size four.
     Each shard receives one sequence's metadata and the replicated KV pages. query_lengths=L and valid rows beginning at
     position 256-L make decode at position p use L=256-p without repacking
