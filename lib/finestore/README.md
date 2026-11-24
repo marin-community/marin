@@ -30,11 +30,13 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
-`store.transaction(author=..., message=...)`, and the same arguments to
-`store.unbounded_transaction()`, record who made a change and why. The manifest of the
-commit the transaction publishes holds them as `commit_info`, with that commit's
-sequence and publication time, and `ReadView.commit_info` returns the record of the
-pinned commit. FineStore stores the author as given and does not verify it. A
+`store.transaction(message=...)`, and the same argument to
+`store.unbounded_transaction()`, records why a change was made and who made it. The
+manifest of the commit the transaction publishes holds them as `commit_info`, with that
+commit's sequence and publication time, and `ReadView.commit_info` returns the record of
+the pinned commit. `author=` defaults to the user who launched the process, as
+`rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
+submitting user. FineStore stores the author as given and does not verify it. A
 transaction without rows on a non-empty archive publishes no commit and records
 nothing.
 

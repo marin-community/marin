@@ -21,6 +21,7 @@ import pyarrow as pa
 from rigging import telemetry
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.provenance import launch_user
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import (
@@ -100,10 +101,13 @@ class TransactionTooLarge(ValueError):
 
 
 def _attribution(author: str | None, message: str | None) -> Attribution | None:
-    if author is None and message is None:
+    if message is None:
+        if author is not None:
+            raise ValueError("a commit author needs a message")
         return None
-    if author is None or message is None:
-        raise ValueError("a commit needs both author and message, or neither")
+    author = author or launch_user()
+    if not author:
+        raise ValueError("no commit author given and none resolves from the launch; pass author=")
     return Attribution(author=author, message=message)
 
 
@@ -325,13 +329,14 @@ class DataStore:
         return ReadView(self.root)
 
     def transaction(
-        self, *, max_bytes: int | None = None, author: str | None = None, message: str | None = None
+        self, *, max_bytes: int | None = None, message: str | None = None, author: str | None = None
     ) -> Transaction:
         """Create a transaction bounded by actual Arrow buffer bytes.
 
-        When both are given, ``author`` and ``message`` are recorded, with the commit's sequence and
-        publication time, as the ``commit_info`` of the commit this transaction publishes. A
-        transaction without rows on a non-empty archive publishes no commit and records nothing.
+        With a ``message``, the commit this transaction publishes records it as ``commit_info``,
+        together with ``author``, the commit's sequence and its publication time. ``author``
+        defaults to the launching user (``rigging.provenance.launch_user``). A transaction without
+        rows on a non-empty archive publishes no commit and records nothing.
         """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
@@ -339,8 +344,8 @@ class DataStore:
             raise ValueError("max_bytes must be positive")
         return Transaction(self, max_bytes=transaction_limit, attribution=_attribution(author, message))
 
-    def unbounded_transaction(self, *, author: str | None = None, message: str | None = None) -> Transaction:
-        """Create a transaction without an Arrow buffer byte limit; ``author`` and ``message`` as for ``transaction``."""
+    def unbounded_transaction(self, *, message: str | None = None, author: str | None = None) -> Transaction:
+        """Create a transaction without an Arrow buffer byte limit; ``message`` and ``author`` as for ``transaction``."""
         self.raise_if_failed()
         return Transaction(self, max_bytes=None, attribution=_attribution(author, message))
 
