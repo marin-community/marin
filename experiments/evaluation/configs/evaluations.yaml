@@ -205,6 +205,27 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
+  swebench-multilingual:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-lite:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-full:
+    benchmark: swebench-multilingual
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
   gaia:
     benchmark: gaia
     protocol: terminus-2
