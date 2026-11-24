@@ -142,7 +142,8 @@ def test_grader_replays_the_harbor_verifier_steps_in_order():
         COPIED_VERDICT,
         "/source-exit-code.txt",
     ]
-    assert grader.reward.files[0].path == COPIED_VERDICT
+    assert grader.argv == ("cp", COPIED_VERDICT, "/converted-verdict.json")
+    assert grader.reward.files[0].path == "/converted-verdict.json"
     assert grader.reward.files[0].format.value == "verdict_json"
     assert grader.environment.docker_image == CONTROL_IMAGE
 
@@ -161,7 +162,13 @@ def test_verifier_config_absent_falls_back_to_the_reward_files():
     targets = [artifact.target for artifact in grader.artifacts]
     assert targets == [COPIED_TEST_STDOUT, "/source-reward.json", "/source-reward.txt", "/source-exit-code.txt"]
     assert [file.format.value for file in grader.reward.files] == ["json", "number"]
-    assert grader.argv == ("bash", "-c", "test -f /source-reward.json || test -f /source-reward.txt")
+    assert grader.reward.files[0].path == "/converted-reward.json"
+    assert grader.reward.files[1].path == "/converted-reward.txt"
+    assert grader.argv == (
+        "bash",
+        "-c",
+        "cp /source-reward.json /converted-reward.json 2>/dev/null || cp /source-reward.txt /converted-reward.txt",
+    )
 
 
 def test_declared_execution_limits_lift_only_when_the_declaration_is_complete():

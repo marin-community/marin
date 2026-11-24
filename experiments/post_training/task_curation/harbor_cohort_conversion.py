@@ -91,6 +91,9 @@ COPIED_TEST_EXIT = "/source-exit-code.txt"
 COPIED_VERDICT = "/source-verdict.json"
 COPIED_REWARD_JSON = "/source-reward.json"
 COPIED_REWARD_TEXT = "/source-reward.txt"
+REWARD_PATH = "/converted-verdict.json"
+REWARD_JSON_PATH = "/converted-reward.json"
+REWARD_TEXT_PATH = "/converted-reward.txt"
 CONVERSION_PROTOCOL = "harbor-cohort-taskspec-v1"
 HARBOR_VERIFIER_TIMEOUT = 600.0
 _ROOT_USERS = frozenset({"root", "0"})
@@ -183,15 +186,17 @@ def _restore_commands(task: TaskSpec, staged: list[StagedFile]) -> tuple[Verifie
 
 
 def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ...], FileReward, VerifierCommand]:
-    """Copy Harbor's reward artifacts and read them with the same precedence.
+    """Copy Harbor's reward artifacts and read them at the grader's own reward paths.
 
-    The argv guards the artifact's arrival: a grading machine without the
-    copied reward file fails loudly instead of scoring anything. The reward
-    artifacts themselves copy with the skip-if-missing policy — the fallback
-    path's reward.json and reward.txt are alternatives (the harness writes one
-    of them), and a crashed harness leaves the guard to fail the grading. The
-    test script's own exit code is copied beside the reward for diagnostics,
-    exactly as Harbor records it in the control detail.
+    The grading runtime clears the reward-file paths before the grader command
+    runs (the reward is the grader command's output), so the argv copies the
+    arrived artifact to the reward path — the root-delivery graders' exact
+    shape — and the FileReward reads it there. The reward artifacts copy with
+    the skip-if-missing policy: the fallback path's reward.json and reward.txt
+    are alternatives the harness chooses between, and a crashed harness leaves
+    the copy (and so the grading) failed. The test script's own exit code is
+    copied beside the reward for diagnostics, exactly as Harbor records it in
+    the control detail.
     """
     skipped = MissingArtifactPolicy.SKIP
     exit_artifact = (
@@ -205,8 +210,8 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
             VerifierArtifact(source=HARBOR_VERDICT, target=COPIED_VERDICT, kind=ArtifactKind.FILE, missing=skipped),
             *exit_artifact,
         )
-        reward = FileReward(files=(RewardFile(path=COPIED_VERDICT, format=RewardFileFormat.VERDICT_JSON),))
-        return artifacts, reward, VerifierCommand(argv=("test", "-f", COPIED_VERDICT), cwd="/")
+        reward = FileReward(files=(RewardFile(path=REWARD_PATH, format=RewardFileFormat.VERDICT_JSON),))
+        return artifacts, reward, VerifierCommand(argv=("cp", COPIED_VERDICT, REWARD_PATH), cwd="/")
     artifacts = (
         VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE, missing=skipped),
         VerifierArtifact(source=HARBOR_REWARD_JSON, target=COPIED_REWARD_JSON, kind=ArtifactKind.FILE, missing=skipped),
@@ -215,15 +220,16 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
     )
     reward = FileReward(
         files=(
-            RewardFile(path=COPIED_REWARD_JSON, format=RewardFileFormat.JSON),
-            RewardFile(path=COPIED_REWARD_TEXT, format=RewardFileFormat.NUMBER),
+            RewardFile(path=REWARD_JSON_PATH, format=RewardFileFormat.JSON),
+            RewardFile(path=REWARD_TEXT_PATH, format=RewardFileFormat.NUMBER),
         )
     )
-    guard = VerifierCommand(
-        argv=("bash", "-c", f"test -f {COPIED_REWARD_JSON} || test -f {COPIED_REWARD_TEXT}"),
-        cwd="/",
+    argv = (
+        "bash",
+        "-c",
+        f"cp {COPIED_REWARD_JSON} {REWARD_JSON_PATH} 2>/dev/null || cp {COPIED_REWARD_TEXT} {REWARD_TEXT_PATH}",
     )
-    return artifacts, reward, guard
+    return artifacts, reward, VerifierCommand(argv=argv, cwd="/")
 
 
 @dataclass(frozen=True)
