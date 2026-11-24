@@ -1,0 +1,40 @@
+{
+  "exclusions": [
+    {
+      "format": "task_spec",
+      "rows": 1500,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.17.1/full_validation.parquet",
+      "version": "2026.11.17.1"
+    }
+  ],
+  "family_limits": {
+    "calendar": 512,
+    "closure": 4000,
+    "code32k": 4000,
+    "if32k": 4000,
+    "math": 15000,
+    "mcq32k": 1000,
+    "rgym32k": 4000
+  },
+  "heldout": [
+    {
+      "format": "historical",
+      "rows": 910,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+      "version": "2026.10.23.1"
+    }
+  ],
+  "name": "mochi-doom-ftpo",
+  "seed": 20261124,
+  "sources": {
+    "MarinSkyRL:dapo_math": "math",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": "code32k",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": "mcq32k",
+    "MarinSkyRL:reasoning_gym": "rgym32k",
+    "SnowballV01:structure-closure": "closure",
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "if32k"
+  },
+  "validation_per_family": 16,
+  "version": "2026.11.24.1"
+}
