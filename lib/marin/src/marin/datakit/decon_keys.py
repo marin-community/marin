@@ -465,7 +465,12 @@ def excerpt(
 
 @dataclass(frozen=True)
 class Candidate:
-    """A stage-1 candidate: a record that holds an item's key, with the record text around the item."""
+    """A stage-1 candidate: a record that holds an item's key, with the record text around the item.
+
+    ``right`` is that excerpt (the right side of the model's (item, excerpt) pair), ``kind`` the key stream that
+    matched, ``record_chars`` the record's length, and ``located`` whether the excerpt is cut around the item's
+    question rather than around the key's first match; the last three are kept in the pair files for analysis.
+    """
 
     record: str
     item: str

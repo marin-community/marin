@@ -27,12 +27,12 @@ from typing import Any, NamedTuple
 import pandas as pd
 import pyarrow.parquet as pq
 from marin.datakit.decon_keys import text_stream
-from marin.datakit.decon_pairs import ItemText, item_texts
 from marin.datakit.decon_tables import parquet_files, read_frame, write_frame
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.labels import SILVER_OVERLAP, word_overlap
+from experiments.datakit.decontam.pair_text import ItemText, item_texts
 
 logger = logging.getLogger(__name__)
 EVALS_PER_FAMILY = 6

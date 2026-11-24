@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.datakit.decon_pairs import pair_left
+from experiments.datakit.decontam.pair_text import pair_left
 
 
 def test_missing_answer_words_stay_out_of_the_question_hint():

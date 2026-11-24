@@ -15,9 +15,8 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from marin.datakit.decon import build_keys
+from marin.datakit.decon import ITEM_SCHEMA, build_keys
 from marin.datakit.decon_keys import KeyTable, record_pairs
-from marin.datakit.decon_pairs import ITEM_SCHEMA
 
 from experiments.datakit.decontam import pinned_references
 from experiments.datakit.decontam.eval_manifests import validate_required_manifest

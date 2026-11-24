@@ -1,23 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decontaminate normalized data against the eval items: a rarest-key scan, then an encoder model.
+"""Decontaminate normalized data against the eval items: a rarest-key scan, then a pair scorer.
 
-Two stages, each resumable shard by shard:
+Each stage is a step, resumable shard by shard:
 
-1. Keys (:func:`decon_keys_step`, once). Every item of the eval item table (``decon_pairs.ITEM_SCHEMA``)
+1. Keys (:func:`decon_keys_step`, once). Every item of the eval item table (``ITEM_SCHEMA``)
    gets up to three key streams (``decon_keys.key_streams``); each stream's key is its rarest 20-character
    window of letters and digits, counted over reference shards. Candidate windows lie outside the prefix and
    suffix that all of an eval's streams share (its prompt text), and equally rare windows go to the one that
    the fewest other items hold. Writes ``keys.parquet`` and the locator table that the scan reads.
-2. Marks (:func:`decon_step`, one per normalized source), in three phases:
+2. Per normalized source, three steps:
 
-   - scan (CPU): every record of every shard is read three ways (as is, and with JSON escapes read once and
-     twice); each item whose key a reading holds gives a candidate pair, the record text around the item
-     (``decon_keys.record_pairs``; records over ``MAX_DOC_CHARS`` are read in overlapping pieces);
-   - score (:class:`ScoreWorkers`, GPUs in production): the encoder models give each pair the probability that
-     the excerpt holds the item, and the pair's score is the models' mean (:class:`EncoderModels`);
-   - mark (CPU): a record is contaminated when one of its pairs scores at or above the cutoff.
+   - scan (:func:`decon_scan_step`): every record of every shard is read three ways (as is, and with JSON
+     escapes read once and twice); each item whose key a reading holds gives a candidate pair, the record text
+     around the item (``decon_keys.record_pairs``; records over ``MAX_DOC_CHARS`` are read in overlapping
+     pieces);
+   - score (:func:`decon_score_step`, on :class:`ScoreWorkers`): a :class:`PairScorer` gives each pair the
+     probability that the excerpt holds the item;
+   - mark (:func:`decon_mark_step`): a record is contaminated when one of its pairs scores at or above the
+     cutoff. A cutoff change re-runs only this step.
 
 The marks are a co-partitioned attributes dataset, one file per input shard in input order (the contract that
 the datakit store reads): ``id``, ``partition_id``, ``contaminated``, ``max_score`` (the record's best pair
@@ -33,19 +35,16 @@ import logging
 import math
 import os
 import random
-import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from fray.types import EnvironmentConfig, GpuConfig, ResourceConfig
+from fray.types import EnvironmentConfig, GpuConfig, ResourceConfig, create_environment
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
@@ -70,7 +69,6 @@ from marin.datakit.decon_keys import (
     template_bounds,
     text_stream,
 )
-from marin.datakit.decon_pairs import OUTPUTS, item_texts, with_pair_text
 from marin.datakit.decon_tables import parquet_files, read_frame, read_table, write_frame, write_table
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath
@@ -80,18 +78,31 @@ from marin.execution.step_spec import StepSpec
 logger = logging.getLogger(__name__)
 
 DECON_ATTRIBUTES_VERSION = 6
+# Bump when the key choice changes; the keys, and every scan, score and mark built on them, re-key.
+KEYS_VERSION = 1
+# Bump when the scan's pairs change (key matching, readings, excerpts).
+SCAN_VERSION = 1
 KEYS_FILENAME = "keys.parquet"
 LOCATORS_FILENAME = "locators.parquet"
 _WINDOWS_FILENAME = "windows.npz"
 # Pair files that one score task reads and scores together.
 SCORE_GROUP_FILES = 16
-SCORE_BATCH = 64
-MAX_INPUT_TOKENS = 1024
-# Later models score only the pairs that the first model scores at least this high; the others keep the first
-# model's score. On 1,673,046 scored catalog pairs, 96.7% score below it, and 6 of 14,075 pairs with a
-# two-model mean of at least 0.5 had a first score below it.
-LATER_MODELS_FLOOR = 0.01
 
+# The item table: one row per eval record, read by the keys and the scorer.
+ITEM_SCHEMA = pa.schema(
+    [
+        ("id", pa.string()),
+        ("eval", pa.string()),
+        ("suite", pa.string()),
+        ("question", pa.string()),
+        ("choices", pa.list_(pa.string())),
+        ("answer", pa.string()),
+        ("prompt", pa.string()),
+        ("passage", pa.string()),
+        ("choices_mode", pa.string()),
+        ("reason", pa.string()),
+    ]
+)
 ATTRIBUTE_SCHEMA = pa.schema(
     [
         ("id", pa.string()),
@@ -131,15 +142,36 @@ class DeconKeys(BaseModel):
     counters: dict[str, int | float]
 
 
+class DeconScan(BaseModel):
+    """Outcome of :func:`scan_source`: the candidate pairs of one source.
+
+    Attributes:
+        pairs_dir: One file of ``decon_keys.Candidate`` rows per input shard with pairs, with the shard's name.
+        pair_files: The names of the input shards with pairs.
+        counters: ``decon/records``, ``decon/candidate_records``, ``decon/pairs`` and ``decon/long_records``.
+    """
+
+    pairs_dir: DatakitArtifactPath
+    pair_files: list[str]
+    counters: dict[str, int | float]
+
+
+class DeconScores(BaseModel):
+    """Outcome of :func:`score_pairs`: one file of scored pairs (``record``, ``item``, ``eval``, ``right``,
+    ``score``) per pair file of the scan, with its name."""
+
+    scores_dir: DatakitArtifactPath
+    counters: dict[str, int | float]
+
+
 class DeconAttributes(BaseModel):
-    """Outcome of :func:`decon_source`: a co-partitioned attributes dataset (see the module docstring).
+    """Outcome of :func:`mark_source`: a co-partitioned attributes dataset (see the module docstring).
 
     Attributes:
         main_output_dir: Directory of the attribute files, one per input shard with the input's file name.
         flagged_output_dir: Directory of the flagged sample, one file per input shard that has a flag.
         num_partitions: Number of output partitions; matches the source.
-        counters: ``decon/contaminated`` and ``decon/clean`` records, ``decon/candidate_records`` and
-            ``decon/pairs`` of the scan.
+        counters: ``decon/contaminated`` and ``decon/clean`` records.
     """
 
     version: str = f"v{DECON_ATTRIBUTES_VERSION}"
@@ -233,7 +265,7 @@ def _make_count(windows_path: str, counts_dir: str, width: int) -> Callable[[Ite
 def _window_counts(windows: Windows, counts_dir: str) -> np.ndarray:
     """The summed reference count of every candidate window."""
     parts_hashes, parts_counts = [], []
-    for path in parquet_files(counts_dir, "*.npz"):
+    for path in sorted(str(part) for part in StoragePath(prefix_join(counts_dir, "*.npz")).glob()):
         part = np.load(io.BytesIO(StoragePath(path).read_bytes()))
         parts_hashes.append(part["hashes"])
         parts_counts.append(part["counts"].astype(np.int64))
@@ -284,6 +316,36 @@ def locator_table(keys: pa.Table, items_dir: str, width: int) -> pa.Table:
     )
 
 
+def _prepare_windows(items_dir: str, windows_path: str, width: int) -> dict[str, int]:
+    """Write every item stream's candidate windows: those outside the prefix and suffix that all of its eval's
+    streams of its kind share."""
+    ids, kinds, streams, evals = item_streams(items_dir, width)
+    groups = [f"{e}\t{k}" for e, k in zip(evals, kinds, strict=True)]
+    hashes, owners, offsets = candidate_windows(streams, width, template_bounds(streams, groups, width))
+    _save_windows(
+        Windows(hashes, owners, offsets, np.array(ids, dtype=object), np.array(kinds, dtype=object)), windows_path
+    )
+    return {"items": len(set(ids)), "streams": len(ids)}
+
+
+def _choose_keys(windows_path: str, counts_dir: str, items_dir: str, output_path: str, width: int) -> dict[str, int]:
+    """Write each stream's keys from the summed window counts, and the locator table the scan reads."""
+    candidates = _load_windows(windows_path)
+    table = keys_table(candidates, _window_counts(candidates, counts_dir), width, shared_holders(candidates))
+    write_table(table, prefix_join(output_path, KEYS_FILENAME))
+    locators = locator_table(table, items_dir, width)
+    write_table(locators, prefix_join(output_path, LOCATORS_FILENAME))
+    return {"keyed_items": len(set(locators.column("item").to_pylist()))}
+
+
+def _one_task(context: ZephyrContext, task: Callable[[], dict[str, int]], resources: ResourceConfig) -> dict[str, int]:
+    """Run *task* as the only task of a pipeline, so that its memory is a worker's, not the driver's."""
+    outcome = context.execute(
+        Dataset.from_list([0]).map_shard(lambda _items, _shard: iter([task()])), map_task_resources=resources
+    )
+    return outcome.results[0]
+
+
 def build_keys(
     *,
     items_dir: str,
@@ -295,43 +357,29 @@ def build_keys(
     zephyr_context: ZephyrContext | None = None,
 ) -> DeconKeys:
     """Choose each item stream's key from its candidate windows' counts over *reference_shards*, and write the
-    keys and the locator table under *output_path* (see the module docstring)."""
+    keys and the locator table under *output_path* (see the module docstring). Every phase runs on workers."""
     if not reference_shards:
         raise ValueError("build_keys needs reference shards")
-    ids, kinds, streams, evals = item_streams(items_dir, width)
-    groups = [f"{e}\t{k}" for e, k in zip(evals, kinds, strict=True)]
-    hashes, owners, offsets = candidate_windows(streams, width, template_bounds(streams, groups, width))
-    candidates = Windows(hashes, owners, offsets, np.array(ids, dtype=object), np.array(kinds, dtype=object))
     windows_path = prefix_join(output_path, _WINDOWS_FILENAME)
-    _save_windows(candidates, windows_path)
-
     counts_dir = prefix_join(output_path, "counts")
     context = zephyr_context or ZephyrContext(
-        name="decon-keys-count", resources=worker_resources, max_workers=min(max_workers, len(reference_shards))
+        name="decon-keys", resources=worker_resources, max_workers=min(max_workers, len(reference_shards))
     )
+    streams = _one_task(context, lambda: _prepare_windows(items_dir, windows_path, width), worker_resources)
     context.execute(
         Dataset.from_list(list(reference_shards)).map_shard(_make_count(windows_path, counts_dir, width)),
         map_task_resources=worker_resources,
     )
-    table = keys_table(candidates, _window_counts(candidates, counts_dir), width, shared_holders(candidates))
-    keys_path = prefix_join(output_path, KEYS_FILENAME)
-    write_table(table, keys_path)
-    locators = locator_table(table, items_dir, width)
-    locators_path = prefix_join(output_path, LOCATORS_FILENAME)
-    write_table(locators, locators_path)
-    keyed_items = len(set(locators.column("item").to_pylist()))
-    logger.info("decon keys: %d items, %d streams, %d keyed items", len(set(ids)), len(ids), keyed_items)
+    keyed = _one_task(
+        context, lambda: _choose_keys(windows_path, counts_dir, items_dir, output_path, width), worker_resources
+    )
+    logger.info("decon keys: %s, %s", streams, keyed)
     return DeconKeys(
-        keys_path=keys_path,
-        locators_path=locators_path,
+        keys_path=prefix_join(output_path, KEYS_FILENAME),
+        locators_path=prefix_join(output_path, LOCATORS_FILENAME),
         items_dir=items_dir,
         width=width,
-        counters={
-            "items": len(set(ids)),
-            "streams": len(ids),
-            "keyed_items": keyed_items,
-            "reference_shards": len(reference_shards),
-        },
+        counters={**streams, **keyed, "reference_shards": len(reference_shards)},
     )
 
 
@@ -349,8 +397,11 @@ def reference_shards(normalized_dirs: Sequence[str], per_source: int, seed: int)
 
 
 class PairScorer(Protocol):
-    """Loads, once per worker, a function from pairs (columns ``item`` and ``right``) to each pair's score, on
-    *device* (``"cuda"`` or ``"cpu"``)."""
+    """Scores pairs (columns ``item`` and ``right``). ``version`` names the scorer in the score step's identity;
+    ``load`` returns, once per worker, the function from pairs to scores on *device* (``"cuda"`` or ``"cpu"``)."""
+
+    @property
+    def version(self) -> str: ...
 
     def load(self, items_dir: str, device: str) -> Callable[[pd.DataFrame], np.ndarray]: ...
 
@@ -358,80 +409,20 @@ class PairScorer(Protocol):
 @dataclass(frozen=True)
 class ScoreWorkers:
     """The workers that score the pairs: one per *pairs_per_worker* pairs of a source, up to *max_workers*, of
-    *resources*. A GPU in *resources* makes the scorer run on CUDA. *environment* gives the workers their own
-    dependencies (the CUDA build of torch) when the driver's lack them; ``None`` reuses the driver's."""
+    *resources*. A GPU in *resources* makes the scorer run on CUDA. The workers sync *extras* in place of the
+    driver's environment (the gpu extra has the CUDA build of torch); ``()`` reuses the driver's."""
 
     resources: ResourceConfig
     max_workers: int
     pairs_per_worker: int
-    environment: EnvironmentConfig | None
+    extras: tuple[str, ...]
 
     @property
     def device(self) -> str:
         return "cuda" if isinstance(self.resources.device, GpuConfig) else "cpu"
 
-
-@dataclass(frozen=True)
-class EncoderModels:
-    """The encoder classifiers of the decontamination, one per seed; a pair's score is the mean of the models'
-    probabilities that the excerpt holds the item. Each path is a storage prefix of a saved Hugging Face model
-    with its tokenizer. ``version`` names the weights (e.g. ``"it16-s0-s1"``) and
-    enters the mark step's identity in place of the region-specific paths."""
-
-    paths: tuple[str, ...]
-    version: str
-    max_length: int = MAX_INPUT_TOKENS
-
-    def load(self, items_dir: str, device: str) -> Callable[[pd.DataFrame], np.ndarray]:
-        import torch  # noqa: PLC0415  # optional dep: torch, needed only on the score workers
-
-        if device == "cuda":
-            if not torch.cuda.is_available():
-                raise RuntimeError("the score workers have a GPU but torch has no CUDA; see ScoreWorkers.environment")
-            # The cuDNN attention backend builds no plan for these padded bf16 batches; the others do.
-            torch.backends.cuda.enable_cudnn_sdp(False)
-        models, tokenizers = [], []
-        for path in self.paths:
-            with tempfile.TemporaryDirectory() as directory:
-                for file in StoragePath(prefix_join(path, "*")).glob():
-                    (Path(directory) / file.name).write_bytes(file.read_bytes())
-                models.append(AutoModelForSequenceClassification.from_pretrained(directory).to(device).eval())
-                tokenizers.append(AutoTokenizer.from_pretrained(directory))
-        if any(t.get_vocab() != tokenizers[0].get_vocab() for t in tokenizers):
-            raise ValueError("the decontamination models must share a tokenizer")
-        texts = item_texts(items_dir)
-        head = OUTPUTS.index("label_q")
-
-        @torch.no_grad()
-        def score(pairs: pd.DataFrame) -> np.ndarray:
-            framed = with_pair_text(pairs, texts)
-            order = np.argsort(framed["right"].str.len().to_numpy())
-            result = np.zeros(len(framed))
-            for start in range(0, len(order), SCORE_BATCH):
-                rows = order[start : start + SCORE_BATCH]
-                encoded = tokenizers[0](
-                    list(framed["left"].iloc[rows]),
-                    list(framed["right"].iloc[rows]),
-                    truncation="longest_first",
-                    max_length=self.max_length,
-                    padding=True,
-                    return_tensors="pt",
-                )
-                inputs = {key: value.to(device, non_blocking=True) for key, value in encoded.items()}
-                with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
-                    first = torch.sigmoid(models[0](**inputs).logits[:, head].float())
-                    values = [first]
-                    keep = (first >= LATER_MODELS_FLOOR).nonzero(as_tuple=True)[0]
-                    for model in models[1:]:
-                        later = first.clone()
-                        if len(keep):
-                            subset = {key: value[keep] for key, value in inputs.items()}
-                            later[keep] = torch.sigmoid(model(**subset).logits[:, head].float())
-                        values.append(later)
-                result[rows] = torch.stack(values, dim=1).mean(dim=1).cpu().numpy()
-            return result
-
-        return score
+    def environment(self) -> EnvironmentConfig | None:
+        return create_environment(extras=list(self.extras)) if self.extras else None
 
 
 @functools.lru_cache(maxsize=1)
@@ -523,9 +514,10 @@ def _record_scores(
     rows = zip(columns["record"], columns["item"], columns["eval"], columns["right"], columns["score"], strict=True)
     for record, item, eval_name, right, score in sorted(rows, key=lambda row: -float(row[4])):
         best.setdefault(str(record), (float(score), str(right)))
-        if float(score) >= cutoff:
-            matched.setdefault(str(record), []).append((str(item), str(eval_name)))
-    return best, matched
+        hits = matched.setdefault(str(record), [])
+        if float(score) >= cutoff and (str(item), str(eval_name)) not in hits:
+            hits.append((str(item), str(eval_name)))
+    return best, {record: hits for record, hits in matched.items() if hits}
 
 
 def _mark_rows(
@@ -593,21 +585,7 @@ def _make_mark(scores_dir: str, output_dir: str, cutoff: float, flagged_sample_s
     return mark
 
 
-def decon_source(
-    *,
-    normalized: NormalizedData,
-    keys: DeconKeys,
-    scorer: PairScorer,
-    cutoff: float,
-    output_path: str,
-    flagged_sample_size: int,
-    worker_resources: ResourceConfig,
-    score_workers: ScoreWorkers,
-    max_workers: int,
-    zephyr_context: ZephyrContext | None = None,
-) -> DeconAttributes:
-    """Mark the records of *normalized* that hold an eval item (see the module docstring). Scan and mark run on
-    *worker_resources* (or *zephyr_context*); scoring runs on its own context of *score_workers*."""
+def _shards(normalized: NormalizedData) -> list[str]:
     files = parquet_files(normalized.main_output_dir, "**/*.parquet")
     if not files:
         raise FileNotFoundError(f"no .parquet files under {normalized.main_output_dir}")
@@ -616,56 +594,95 @@ def decon_source(
         raise ValueError(
             f"the shards under {normalized.main_output_dir} must have distinct file names; the outputs use them"
         )
-    pairs_dir = prefix_join(output_path, "scan/pairs")
-    stats_dir = prefix_join(output_path, "scan/stats")
-    scores_dir = prefix_join(output_path, "scores")
+    return files
+
+
+def scan_source(
+    *,
+    normalized: NormalizedData,
+    keys: DeconKeys,
+    output_path: str,
+    worker_resources: ResourceConfig,
+    max_workers: int,
+    zephyr_context: ZephyrContext | None = None,
+) -> DeconScan:
+    """The candidate pairs of every record of *normalized* (see the module docstring)."""
+    files = _shards(normalized)
+    pairs_dir = prefix_join(output_path, "pairs")
     context = zephyr_context or ZephyrContext(
         name="decon-scan", resources=worker_resources, max_workers=min(max_workers, len(files))
     )
     scan = context.execute(
-        Dataset.from_list(files).map_shard(_make_scan(keys.locators_path, pairs_dir, stats_dir, keys.width)),
+        Dataset.from_list(files).map_shard(
+            _make_scan(keys.locators_path, pairs_dir, prefix_join(output_path, "stats"), keys.width)
+        ),
         map_task_resources=worker_resources,
     )
-    pending = [
-        path
-        for path in parquet_files(pairs_dir)
-        if not StoragePath(prefix_join(scores_dir, os.path.basename(path))).exists()
-    ]
+    return DeconScan(
+        pairs_dir=pairs_dir,
+        pair_files=sorted(stats["file"] for stats in scan.results if stats["pairs"]),
+        counters={
+            f"decon/{name}": sum(stats[name] for stats in scan.results)
+            for name in ("records", "candidate_records", "pairs", "long_records")
+        },
+    )
+
+
+def score_pairs(
+    *, scan: DeconScan, keys: DeconKeys, scorer: PairScorer, score_workers: ScoreWorkers, output_path: str
+) -> DeconScores:
+    """Score every pair of *scan* on its own context of *score_workers*; fail unless every pair file is scored."""
+    scores_dir = prefix_join(output_path, "scores")
+
+    def unscored() -> list[str]:
+        return [name for name in scan.pair_files if not StoragePath(prefix_join(scores_dir, name)).exists()]
+
+    pending = [prefix_join(scan.pairs_dir, name) for name in unscored()]
     if pending:
         groups = [pending[i : i + SCORE_GROUP_FILES] for i in range(0, len(pending), SCORE_GROUP_FILES)]
-        pairs = sum(stats["pairs"] for stats in scan.results)
-        workers = min(score_workers.max_workers, len(groups), math.ceil(pairs / score_workers.pairs_per_worker))
+        wanted = math.ceil(scan.counters["decon/pairs"] / score_workers.pairs_per_worker)
         ZephyrContext(
             name="decon-score",
             resources=score_workers.resources,
-            worker_environment=score_workers.environment,
-            max_workers=max(workers, 1),
+            worker_environment=score_workers.environment(),
+            max_workers=max(min(score_workers.max_workers, len(groups), wanted), 1),
         ).execute(
             Dataset.from_list(groups).map_shard(_make_score(scorer, keys.items_dir, scores_dir, score_workers.device)),
             map_task_resources=score_workers.resources,
         )
-    unscored = [
-        stats["file"]
-        for stats in scan.results
-        if stats["pairs"] and not StoragePath(prefix_join(scores_dir, stats["file"])).exists()
-    ]
-    if unscored:
-        raise RuntimeError(f"{len(unscored)} scanned shards with pairs have no scores, such as {unscored[:5]}")
+    missing = unscored()
+    if missing:
+        raise RuntimeError(f"{len(missing)} pair files have no scores, such as {missing[:5]}")
+    return DeconScores(scores_dir=scores_dir, counters={"decon/scored_pairs": scan.counters["decon/pairs"]})
+
+
+def mark_source(
+    *,
+    normalized: NormalizedData,
+    scores: DeconScores,
+    cutoff: float,
+    flagged_sample_size: int,
+    output_path: str,
+    worker_resources: ResourceConfig,
+    max_workers: int,
+    zephyr_context: ZephyrContext | None = None,
+) -> DeconAttributes:
+    """Mark the records of *normalized* whose best pair in *scores* reaches *cutoff* (see the module docstring)."""
+    files = _shards(normalized)
+    context = zephyr_context or ZephyrContext(
+        name="decon-mark", resources=worker_resources, max_workers=min(max_workers, len(files))
+    )
     marked = context.execute(
-        Dataset.from_list(files).map_shard(_make_mark(scores_dir, output_path, cutoff, flagged_sample_size, files)),
+        Dataset.from_list(files).map_shard(
+            _make_mark(scores.scores_dir, output_path, cutoff, flagged_sample_size, files)
+        ),
         map_task_resources=worker_resources,
     )
-    totals = {
-        "decon/records": sum(stats["records"] for stats in scan.results),
-        "decon/candidate_records": sum(stats["candidate_records"] for stats in scan.results),
-        "decon/pairs": sum(stats["pairs"] for stats in scan.results),
-        "decon/long_records": sum(stats["long_records"] for stats in scan.results),
-    }
     return DeconAttributes(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         flagged_output_dir=prefix_join(output_path, "outputs/flagged_sample"),
         num_partitions=len(files),
-        counters={**dict(marked.counters), **totals},
+        counters=dict(marked.counters),
     )
 
 
@@ -705,48 +722,90 @@ def decon_keys_step(
         name=name,
         fn=run,
         deps=[items, *source_steps],
-        hash_attrs={
-            "shards_per_source": shards_per_source,
-            "seed": seed,
-            "width": width,
-        },
+        hash_attrs={"keys_version": KEYS_VERSION, "shards_per_source": shards_per_source, "seed": seed, "width": width},
         output_path_prefix=output_path_prefix,
     )
 
 
-def decon_step(
+def decon_scan_step(
     *,
     name: str,
     normalized: StepSpec,
     keys: StepSpec,
-    scorer: EncoderModels,
-    cutoff: float,
-    flagged_sample_size: int,
     worker_resources: ResourceConfig,
-    score_workers: ScoreWorkers,
     max_workers: int,
     zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
-    """A StepSpec for :func:`decon_source` over the output of *normalized*, with the keys of *keys*."""
+    """A StepSpec for :func:`scan_source` over the output of *normalized*, with the keys of *keys*."""
     return StepSpec(
         name=name,
-        fn=lambda output_path: decon_source(
+        fn=lambda output_path: scan_source(
             normalized=read_artifact(normalized.output_path, NormalizedData),
             keys=read_artifact(keys.output_path, DeconKeys),
-            scorer=scorer,
-            cutoff=cutoff,
             output_path=output_path,
-            flagged_sample_size=flagged_sample_size,
             worker_resources=worker_resources,
-            score_workers=score_workers,
             max_workers=max_workers,
             zephyr_context=zephyr_context,
         ),
         deps=[normalized, keys],
+        hash_attrs={"scan_version": SCAN_VERSION},
+        output_path_prefix=output_path_prefix,
+    )
+
+
+def decon_score_step(
+    *,
+    name: str,
+    scan: StepSpec,
+    keys: StepSpec,
+    scorer: PairScorer,
+    score_workers: ScoreWorkers,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """A StepSpec for :func:`score_pairs` over the pairs of *scan*."""
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: score_pairs(
+            scan=read_artifact(scan.output_path, DeconScan),
+            keys=read_artifact(keys.output_path, DeconKeys),
+            scorer=scorer,
+            score_workers=score_workers,
+            output_path=output_path,
+        ),
+        deps=[scan, keys],
+        hash_attrs={"scorer": scorer.version},
+        output_path_prefix=output_path_prefix,
+    )
+
+
+def decon_mark_step(
+    *,
+    name: str,
+    normalized: StepSpec,
+    scores: StepSpec,
+    cutoff: float,
+    flagged_sample_size: int,
+    worker_resources: ResourceConfig,
+    max_workers: int,
+    zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """A StepSpec for :func:`mark_source` over the output of *normalized*, with the scores of *scores*."""
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: mark_source(
+            normalized=read_artifact(normalized.output_path, NormalizedData),
+            scores=read_artifact(scores.output_path, DeconScores),
+            cutoff=cutoff,
+            flagged_sample_size=flagged_sample_size,
+            output_path=output_path,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+            zephyr_context=zephyr_context,
+        ),
+        deps=[normalized, scores],
         hash_attrs={
-            "models": scorer.version,
-            "max_length": scorer.max_length,
             "cutoff": cutoff,
             "flagged_sample_size": flagged_sample_size,
             "attribute_schema_version": DECON_ATTRIBUTES_VERSION,

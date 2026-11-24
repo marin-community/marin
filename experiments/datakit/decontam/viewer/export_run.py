@@ -23,13 +23,13 @@ import random
 from collections import Counter
 
 from marin.datakit.decon import DeconAttributes, DeconKeys
-from marin.datakit.decon_pairs import ItemText, item_texts
 from marin.datakit.decon_tables import parquet_files, read_table
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.decontam.pair_text import ItemText, item_texts
 from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
 
 logger = logging.getLogger(__name__)

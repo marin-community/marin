@@ -7,8 +7,10 @@ Runs the reference pipeline's decontamination stages
 (:func:`experiments.datakit.reference_pipeline.decontamination_steps`: item table, keys, one mark per source)
 over the testbed's sampled sources, to measure the flag rates on the ~1T-token by-provenance sample.
 
-Prereq: the sealed eval corpus and the decontamination models must be staged in the run region
-(``{marin_prefix()}/datakit/decontam/evals`` and ``{marin_prefix()}/datakit/decontam/models``).
+Prereq: the prepared item table and the decontamination models must be staged in the run region
+(``{marin_prefix()}/datakit/decontam/items/<ITEMS_VERSION>`` and ``{marin_prefix()}/datakit/decontam/models``).
+The marks score on CPU workers (``CPU_SCORE_WORKERS``) because the GCP cluster has no GPUs; CPU throughput is
+not measured.
 
 Submit on iris (us-central1, same region as the sample — no egress):
 
@@ -19,6 +21,7 @@ Submit on iris (us-central1, same region as the sample — no egress):
 """
 
 import argparse
+import dataclasses
 import logging
 import os
 
@@ -28,10 +31,12 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.config import CPU_SCORE_WORKERS
 from experiments.datakit.reference_pipeline import (
     DEFAULT_SCALE,
     DecontaminationSteps,
     decontamination_steps,
+    require_prebuilt_inputs,
     sample_sources,
 )
 from experiments.datakit.testbed.sampler import build_testbed_steps
@@ -79,7 +84,8 @@ def build_testbed_decon_steps(
         missing = [s for s in only_sources if s not in sources]
         if missing:
             raise ValueError(f"unknown sources: {missing}; have {sorted(sources)[:5]}…")
-    steps = decontamination_steps(sources, scale=DEFAULT_SCALE, mark_source_names=only_sources)
+    scale = dataclasses.replace(DEFAULT_SCALE, decon_score=CPU_SCORE_WORKERS)
+    steps = decontamination_steps(sources, scale=scale, mark_source_names=only_sources)
     logger.info("testbed decon: %d sources, %d marks", len(sources), len(steps.marks))
     return steps
 
@@ -111,7 +117,8 @@ def main() -> None:
         only_sources=args.only,
         exclude_sources=frozenset(args.exclude or ()),
     )
-    StepRunner().run([steps.items, steps.keys, *steps.marks.values()])
+    require_prebuilt_inputs([steps.items])
+    StepRunner().run([steps.keys, *steps.scans.values(), *steps.scores.values(), *steps.marks.values()])
 
 
 if __name__ == "__main__":

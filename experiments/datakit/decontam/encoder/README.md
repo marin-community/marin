@@ -38,14 +38,16 @@ JSON dump loses about a third of its windows, because `\n` before a word reads a
 
 ## Pipeline
 
-The item table is prepared once per region (`python -m experiments.datakit.decontam.items`); the other
-production stages are pipeline targets (see the `reference_pipeline.py` docstring):
+The item table is built once and copied to each region (`python -m experiments.datakit.decontam.items`); the
+other production stages are pipeline steps (see the `reference_pipeline.py` docstring):
 
 | Stage | Code | Output |
 |---|---|---|
 | Item table: one row per required eval record (question, choices, answer, passage) | `experiments/datakit/decontam/items.py` | `items/<eval>.parquet`, `report.json` |
-| `decon-keys`: count candidate windows in two reference shards per source, keep the rarest | `marin.datakit.decon.build_keys`, `decon_keys` | `keys.parquet`, `locators.parquet` |
-| `decon-mark`: scan, GPU scoring, marks per source | `marin.datakit.decon.decon_source`, `decon_pairs` | `outputs/main/`, `outputs/flagged_sample/` |
+| Keys: count candidate windows in two reference shards per source, keep the rarest | `marin.datakit.decon.build_keys`, `decon_keys` | `keys.parquet`, `locators.parquet` |
+| Scan, per source: the candidate pairs | `marin.datakit.decon.scan_source` | `pairs/`, `stats/` |
+| Score, per source: the models' mean per pair | `marin.datakit.decon.score_pairs`, `../encoder_models.py`, `../pair_text.py` | `scores/` |
+| Mark, per source: records whose best pair reaches the cutoff | `marin.datakit.decon.mark_source` | `outputs/main/`, `outputs/flagged_sample/` |
 
 The research steps in this directory:
 
@@ -61,7 +63,7 @@ The research steps in this directory:
 | Planted copies in 14 forms, stage 1 and stage 2 (gate G2) | `planted.py` | `stats/*.json`, `pairs/*.parquet` |
 
 Pairs and label rows store an item id. Training, scoring and context synthesis read the item's texts
-from the item table (`decon_pairs.item_texts`), so a fix of the table reaches every stored label.
+from the item table (`pair_text.item_texts`), so a fix of the table reaches every stored label.
 `sources.json` lists the 160 normalized sources of the sample. `measure_keys.py` draws one measure shard per
 source (seed 7) from the shards that are not reference shards of the keys.
 
@@ -70,7 +72,9 @@ source (seed 7) from the shards that are not reference shards of the keys.
 The research steps run on Iris (`cw-us-east-02a`), at interactive priority. `$T` is a scratch prefix, for
 example `s3://marin-us-east-08a/tmp/ttl=7d/$USER`; `$ITEMS` and `$KEYS` are the output directories of the
 item table and of the `decon-keys` step. GPU jobs need `--disk 100GB`: the default 5 GB disk is too small for
-the model and the pairs.
+the model and the pairs. The inputs and outputs of the measured runs (label sets, training data with
+`judged_pairs_v3.parquet` in `data16/`, models, stage-1 runs, catalog scores and removal lists) are kept at
+`s3://marin-us-east-02a/user/rav/projects/decon-encoder-poc/decon-poc/`.
 
 ```bash
 # Candidate volume and the stage-1 sample (one Zephyr worker per measure shard).
@@ -274,11 +278,11 @@ a copy.
   candidate pairs, and the second run removes 98.1% at 0.6. Copies of items whose evals share a real
   question opening (MedConceptsQA, FDA) are found by the earlier keys and missed by the default ones more
   often; see the overlap of the two lists above.
-- **Both catalog runs cut excerpts around the question as stored, with its prompt text.** When a record
-  lacks the prompt text, its excerpt is cut at the key's first match; in a LangChain test file that tells a
-  GSM8K story about 20 times, mostly changed, that match is a changed version and the copy is kept (1 of
-  942 GSM8K clear copies). `locate` now stores the question without its eval's shared prompt text, so the
-  excerpt lands on the exact copy (the models score it 0.986); this applies from the next scan.
+- **The measured catalog runs cut excerpts around the question as stored, with its prompt text.** When a
+  record lacks the prompt text, its excerpt was cut at the key's first match; in a LangChain test file that
+  tells a GSM8K story about 20 times, mostly changed, that match was a changed version and the copy was kept
+  (1 of 942 GSM8K clear copies). The scan locates the question without its eval's shared prompt text, so the
+  excerpt lands on the exact copy (the models score it 0.986); the measured numbers do not include this.
 - **Candidate load concentrates on shared question stems.** One Nemotron formal-logic shard holds 886,186
   candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
   following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.

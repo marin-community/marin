@@ -172,23 +172,27 @@ flowchart TD
 The decontamination stages (`marin.datakit.decon`) mark the records that hold a copy of an eval item:
 
 1. The item table holds one row per eval record of the sealed AA, Uncheatable, LMH and pinned-reference
-   corpora, with its question, choices, answer and passage. It is prepared once per region at
-   `datakit/decontam/items/<ITEMS_VERSION>` with `python -m experiments.datakit.decontam.items` (cpu and
-   lm_eval extras, `HF_TOKEN`). A required eval that fails to load, or that has another record count than its
-   manifest, fails the build.
+   corpora, with its question, choices, answer and passage. It is built once with
+   `python -m experiments.datakit.decontam.items` (cpu and lm_eval extras, `HF_TOKEN`) at
+   `datakit/decontam/items/<ITEMS_VERSION>`, and the directory is copied to the same path in each region. A
+   required eval that fails to load, or that has another record count than its manifest, fails the build.
 2. `datakit/decontam/_keys` chooses each item's key: the 20-character window of its normalized letters and
    digits that the fewest records of a reference sample hold (two shards per source).
-3. `datakit/decontam/<source>` scans every record for keys (stage 1), scores each record–item pair with two
-   fine-tuned mmBERT-base encoders (stage 2, on H100 workers in production), and marks a record when its best
-   pair scores at least `CUTOFF` (0.6). Records over 5,000,000 characters are read in overlapping pieces.
+3. Per source, three steps. `datakit/decontam/scan/<source>` scans every record for keys (stage 1); records
+   over 5,000,000 characters are read in overlapping pieces. `datakit/decontam/score/<source>` scores each
+   record–item pair with two fine-tuned mmBERT-base encoders (stage 2, on H100 workers in production).
+   `datakit/decontam/<source>` marks a record when its best pair scores at least `CUTOFF` (0.6); a cutoff
+   change re-runs only this step.
 
 The attributes have the input's shard names and row order: `id`, `partition_id`, `contaminated`,
 `max_score`, and `matched_items`. A sample of flagged records with their excerpts goes to
 `outputs/flagged_sample/`. The measurements behind the method are in
 [`decontam/encoder/README.md`](decontam/encoder/README.md).
 
-Each region that runs the stages needs the item table and the models under its `MARIN_PREFIX`. Score workers sync the `gpu` extra for the CUDA build of torch; where there are no GPUs (the
-GCP ferries), `CPU_SCORE_WORKERS` scores on CPU.
+Each region that runs the stages needs the item table and the models under its `MARIN_PREFIX`; a run fails
+before its first step when the item table is missing. Score workers sync the `gpu` extra for the CUDA build
+of torch. Every `PipelineScale` names its score workers: `GPU_SCORE_WORKERS`, or `CPU_SCORE_WORKERS` on the
+GCP cluster, which has no GPUs.
 
 ## Evaluation references
 

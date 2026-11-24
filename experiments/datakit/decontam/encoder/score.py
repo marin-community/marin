@@ -4,9 +4,9 @@
 """Score labeled or sampled pairs with one trained classifier on one GPU, for the research evaluations.
 
 Reads every ``pairs/*.parquet`` under ``--pairs``, builds each pair's text as the pipeline does
-(``marin.datakit.decon_pairs.with_pair_text``), and scores it with the model saved under ``--model``. Writes one
-parquet with a ``score_<head>`` column per output and logs the rate. The pipeline itself scores with
-``marin.datakit.decon.EncoderModels``.
+(``pair_text.with_pair_text``), and scores it with the model saved under ``--model``. Writes one parquet with a
+``score_<head>`` column per output and logs the rate. The pipeline itself scores with
+``encoder_models.EncoderModels``.
 """
 
 import argparse
@@ -17,13 +17,13 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-from marin.datakit.decon_pairs import OUTPUTS, item_texts, with_pair_text
 from marin.datakit.decon_tables import parquet_files, read_frame, write_frame
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from experiments.datakit.decontam.encoder.train import predict
+from experiments.datakit.decontam.pair_text import OUTPUTS, item_texts, with_pair_text
 
 logger = logging.getLogger(__name__)
 

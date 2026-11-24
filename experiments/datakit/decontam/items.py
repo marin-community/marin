@@ -25,11 +25,12 @@ AA rows take the question from the first text field of the benchmark and the
 answer from its answer fields; Uncheatable records and the pinned references are
 free text. Every record of the manifests either gets an item or a ``reason``.
 
-The table is prepared once per region and version (``ITEMS_VERSION``), like the
-eval corpus, and the reference pipeline reads it (``prepared_items_step``). Prepare
-it on a CPU worker in the region, with the cpu and lm_eval extras and HF_TOKEN::
+The table is built once per version (``ITEMS_VERSION``) and its directory is copied to the same path under each
+region's ``MARIN_PREFIX``; the reference pipeline reads it (``prepared_items_step``). Two builds can differ (an
+eval's source can reorder its choices), so every region gets the bytes of one build. Build it with the cpu and
+lm_eval extras and HF_TOKEN::
 
-    uv run iris --cluster=cw-us-east-02a job run --extra=cpu --extra=lm_eval --cpu 1 --memory 4GB \
+    uv run iris --cluster=cw-us-east-02a job run --extra=cpu --extra=lm_eval \\
         -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.datakit.decontam.items
 """
 
@@ -45,8 +46,8 @@ from typing import Any, NamedTuple, Protocol
 
 import pyarrow as pa
 from fray.types import ResourceConfig
+from marin.datakit.decon import ITEM_SCHEMA
 from marin.datakit.decon_keys import WINDOW, text_stream
-from marin.datakit.decon_pairs import ITEM_SCHEMA
 from marin.datakit.decon_tables import read_table, write_table
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_runner import StepRunner
@@ -483,7 +484,7 @@ def coverage_rows(manifest_path: str) -> Iterator[EvalRows]:
 
 
 class ItemTable(BaseModel):
-    """Outcome of :func:`build_items`: one row per record of the required evals (``decon_pairs.ITEM_SCHEMA``).
+    """Outcome of :func:`build_items`: one row per record of the required evals (``marin.datakit.decon.ITEM_SCHEMA``).
 
     Attributes:
         items_dir: Directory of ``<eval>.parquet`` item files.

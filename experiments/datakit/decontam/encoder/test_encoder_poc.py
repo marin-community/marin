@@ -9,10 +9,10 @@ from marin.datakit.decon_keys import (
     item_stream,
     window_hashes,
 )
-from marin.datakit.decon_pairs import ItemText
 
 from experiments.datakit.decontam.encoder.planted import holds_key, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
+from experiments.datakit.decontam.pair_text import ItemText
 
 
 def test_synthetic_question_without_its_answer_counts_for_the_question_output_only():

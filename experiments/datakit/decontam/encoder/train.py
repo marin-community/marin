@@ -3,8 +3,9 @@
 
 """Fine-tune a pretrained multilingual encoder to say whether `right` contains `left`.
 
-`left` is an eval item and `right` is record text (see ``marin.datakit.decon_pairs.pair_left``). The model has
-two outputs (``OUTPUTS``): the record holds the question, and the record holds the question with its answer.
+`left` is an eval item and `right` is record text (see ``experiments.datakit.decontam.pair_text.pair_left``). The
+model has two outputs (``OUTPUTS``): the record holds the question, and the record holds the question with its
+answer.
 Results (metrics, test scores, model) go to ``--output``.
 """
 
@@ -19,12 +20,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from marin.datakit.decon_pairs import OUTPUTS, ItemText, item_texts, with_pair_text
 from marin.datakit.decon_tables import read_frame, write_frame
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
+from experiments.datakit.decontam.pair_text import OUTPUTS, ItemText, item_texts, with_pair_text
 
 TARGET_PRECISION = 0.95
 # One in this many train items of the real label sets goes to the dev split.

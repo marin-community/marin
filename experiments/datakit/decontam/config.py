@@ -7,10 +7,12 @@ The models, the cutoff and the key settings come from the measurements in
 ``experiments/datakit/decontam/encoder/README.md``.
 """
 
-from fray.types import ResourceConfig, create_environment
-from marin.datakit.decon import EncoderModels, ScoreWorkers
+from fray.types import ResourceConfig
+from marin.datakit.decon import ScoreWorkers
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import prefix_join
+
+from experiments.datakit.decontam.encoder_models import EncoderModels
 
 # The encoder classifiers (iteration 16, seeds 0 and 1) under the storage prefix; each region that runs the
 # pipeline needs a copy, as it needs the item table.
@@ -33,12 +35,12 @@ GPU_SCORE_WORKERS = ScoreWorkers(
     resources=ResourceConfig.with_gpu("H100", count=1, cpu=8, ram="64g", disk="100g"),
     max_workers=30,
     pairs_per_worker=1_000_000,
-    environment=create_environment(extras=["gpu"]),
+    extras=("gpu",),
 )
 # The GCP cluster that runs the ferries has no GPUs; there the workers score on CPU in the driver's environment.
 # CPU throughput is not measured.
 CPU_SCORE_WORKERS = ScoreWorkers(
-    resources=ResourceConfig(cpu=8, ram="16g", disk="20g"), max_workers=16, pairs_per_worker=10_000, environment=None
+    resources=ResourceConfig(cpu=8, ram="16g", disk="20g"), max_workers=16, pairs_per_worker=10_000, extras=()
 )
 
 

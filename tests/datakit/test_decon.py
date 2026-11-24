@@ -15,11 +15,15 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.datakit.decon import (
     ATTRIBUTE_SCHEMA,
+    ITEM_SCHEMA,
     DeconKeys,
     ScoreWorkers,
+    _record_scores,
     build_keys,
-    decon_source,
     located_questions,
+    mark_source,
+    scan_source,
+    score_pairs,
     shared_holders,
 )
 from marin.datakit.decon_keys import (
@@ -32,7 +36,7 @@ from marin.datakit.decon_keys import (
     text_stream,
     window_hashes,
 )
-from marin.datakit.decon_pairs import ITEM_SCHEMA, item_texts
+from marin.datakit.decon_tables import parquet_files, read_table
 from marin.datakit.normalize import NormalizedData
 
 PLANETS = "Which planet in our solar system has the largest number of known moons today?"
@@ -53,15 +57,20 @@ class QuestionInExcerpt:
     Each call leaves a file in *calls_dir*."""
 
     calls_dir: str
+    version: str = "question-in-excerpt"
 
     def load(self, items_dir: str, device: str):
-        texts = item_texts(items_dir)
+        questions = {
+            row["id"]: row["question"]
+            for path in parquet_files(items_dir)
+            for row in read_table(path, ["id", "question"]).to_pylist()
+        }
 
         def score(pairs: pd.DataFrame) -> np.ndarray:
             (Path(self.calls_dir) / uuid.uuid4().hex).write_text(str(len(pairs)))
             return np.array(
                 [
-                    1.0 if text_stream(texts[item].question) in text_stream(right) else 0.2
+                    1.0 if text_stream(questions[item]) in text_stream(right) else 0.2
                     for item, right in zip(pairs["item"], pairs["right"], strict=True)
                 ]
             )
@@ -131,15 +140,20 @@ def _source(tmp_path: Path) -> NormalizedData:
 
 
 def _mark(tmp_path: Path, keys: DeconKeys, scorer: QuestionInExcerpt):
-    return decon_source(
-        normalized=_source(tmp_path),
-        keys=keys,
-        scorer=scorer,
+    """The scan, score and mark stages of one source, as the pipeline's three steps run them."""
+    normalized = _source(tmp_path)
+    scan = scan_source(
+        normalized=normalized, keys=keys, output_path=str(tmp_path / "scan"), worker_resources=RESOURCES, max_workers=2
+    )
+    workers = ScoreWorkers(resources=RESOURCES, max_workers=1, pairs_per_worker=100, extras=())
+    scores = score_pairs(scan=scan, keys=keys, scorer=scorer, score_workers=workers, output_path=str(tmp_path / "score"))
+    return mark_source(
+        normalized=normalized,
+        scores=scores,
         cutoff=0.5,
-        output_path=str(tmp_path / "marks"),
         flagged_sample_size=4,
+        output_path=str(tmp_path / "marks"),
         worker_resources=RESOURCES,
-        score_workers=ScoreWorkers(resources=RESOURCES, max_workers=1, pairs_per_worker=100, environment=None),
         max_workers=2,
     )
 
@@ -182,6 +196,16 @@ def test_a_pair_below_the_cutoff_keeps_the_record_with_its_score(tmp_path):
     # b0 holds the key of the ducks item but not its whole question, so its pair scores 0.2.
     assert rows[0]["id"] == "b0" and not rows[0]["contaminated"]
     assert rows[0]["max_score"] == pytest.approx(0.2) and rows[0]["matched_items"] == []
+
+
+def test_a_record_lists_each_matched_item_once(tmp_path):
+    # A long record gives one pair per distinct excerpt, so one item can reach the cutoff twice.
+    path = tmp_path / "scores.parquet"
+    rows = {"record": ["r", "r"], "item": ["i", "i"], "eval": ["e", "e"], "right": ["a", "b"], "score": [0.9, 0.8]}
+    pq.write_table(pa.table(rows), str(path))
+    best, matched = _record_scores(str(path), cutoff=0.5)
+    assert matched == {"r": [("i", "e")]}
+    assert best["r"] == (0.9, "a")
 
 
 def test_a_rerun_scores_no_pair_again(tmp_path):

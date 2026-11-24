@@ -110,13 +110,21 @@ import argparse
 import logging
 import posixpath
 import threading
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
-from marin.datakit.decon import DeconAttributes, ScoreWorkers, decon_keys_step, decon_step
+from marin.datakit.decon import (
+    DeconAttributes,
+    ScoreWorkers,
+    decon_keys_step,
+    decon_mark_step,
+    decon_scan_step,
+    decon_score_step,
+)
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
@@ -368,11 +376,12 @@ class PipelineScale:
     dedup_max_parallelism: int = 4096
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
-    # Decontamination scores its pairs on its own workers (``CPU_SCORE_WORKERS`` where there are no GPUs).
-    decon_score: ScoreWorkers = field(default_factory=lambda: GPU_SCORE_WORKERS)
+    # Decontamination scores its pairs on its own workers: ``GPU_SCORE_WORKERS``, or ``CPU_SCORE_WORKERS`` on a
+    # cluster without GPUs (the GCP cluster). Every scale names them.
+    decon_score: ScoreWorkers = field(kw_only=True)
 
 
-DEFAULT_SCALE = PipelineScale()
+DEFAULT_SCALE = PipelineScale(decon_score=GPU_SCORE_WORKERS)
 """Production full-fleet sizing (every ``all_sources()`` entry, K=5000)."""
 
 SMOKE_SCALE = PipelineScale(
@@ -628,13 +637,15 @@ class DecontaminationSteps:
 
     items: StepSpec
     keys: StepSpec
+    scans: dict[str, StepSpec]
+    scores: dict[str, StepSpec]
     marks: dict[str, StepSpec]
     report: StepSpec
 
     @property
     def shared_pool_steps(self) -> list[StepSpec]:
-        """The stages that receive the shared Zephyr context."""
-        return [self.items, self.keys, *self.marks.values()]
+        """The stages that receive the shared Zephyr context; scoring runs on its own workers."""
+        return [self.keys, *self.scans.values(), *self.marks.values()]
 
 
 @dataclass(frozen=True)
@@ -772,22 +783,43 @@ def decontamination_steps(
         zephyr_context=zephyr_context,
         output_path_prefix=output_prefix,
     )
-    marks = {
-        name: decon_step(
-            name=f"datakit/decontam/{name}",
+    selected = {name: step for name, step in sources.items() if name in selected_names}
+    scans = {
+        name: decon_scan_step(
+            name=f"datakit/decontam/scan/{name}",
             normalized=normalize_step,
             keys=keys,
-            scorer=decon_models(),
-            cutoff=CUTOFF,
-            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
             worker_resources=worker_resources,
-            score_workers=scale.decon_score,
             max_workers=scale.pool.n_workers,
             zephyr_context=zephyr_context,
             output_path_prefix=output_prefix,
         )
-        for name, normalize_step in sources.items()
-        if name in selected_names
+        for name, normalize_step in selected.items()
+    }
+    scores = {
+        name: decon_score_step(
+            name=f"datakit/decontam/score/{name}",
+            scan=scans[name],
+            keys=keys,
+            scorer=decon_models(),
+            score_workers=scale.decon_score,
+            output_path_prefix=output_prefix,
+        )
+        for name in selected
+    }
+    marks = {
+        name: decon_mark_step(
+            name=f"datakit/decontam/{name}",
+            normalized=normalize_step,
+            scores=scores[name],
+            cutoff=CUTOFF,
+            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
+            worker_resources=worker_resources,
+            max_workers=scale.pool.n_workers,
+            zephyr_context=zephyr_context,
+            output_path_prefix=output_prefix,
+        )
+        for name, normalize_step in selected.items()
     }
     report = StepSpec(
         name="datakit/report/decontam",
@@ -799,7 +831,7 @@ def decontamination_steps(
             {name: read_artifact(step.output_path, DeconAttributes) for name, step in marks.items()},
         ),
     )
-    return DecontaminationSteps(items=items, keys=keys, marks=marks, report=report)
+    return DecontaminationSteps(items=items, keys=keys, scans=scans, scores=scores, marks=marks, report=report)
 
 
 def reference_datakit_steps(
@@ -1081,7 +1113,13 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [exact_dedup, decontamination.items, decontamination.keys]
+    all_steps: list[StepSpec] = [
+        exact_dedup,
+        decontamination.items,
+        decontamination.keys,
+        *decontamination.scans.values(),
+        *decontamination.scores.values(),
+    ]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
@@ -1115,6 +1153,17 @@ def shared_zephyr_context(scale: PipelineScale, name: str = "datakit-reference")
     )
 
 
+def require_prebuilt_inputs(steps: Iterable[StepSpec]) -> None:
+    """Fail before a run starts when a pre-built input (a step without a function, such as the prepared item
+    table or a registered sample source) is missing; the runner would fail only when it reached the step."""
+    missing = [f"{step.name} at {step.output_path}" for step in steps if step.fn is None and not step_is_built(step)]
+    if missing:
+        raise RuntimeError(
+            f"pre-built inputs are missing: {missing}. The decontamination item table is prepared with "
+            "`python -m experiments.datakit.decontam.items` (see its docstring)."
+        )
+
+
 def run_reference_steps(steps: DatakitSteps, zephyr_context: ZephyrContext, *, max_concurrent: int) -> None:
     """Run the reference DAG and hold the shared pool only while its stages need it.
 
@@ -1123,6 +1172,7 @@ def run_reference_steps(steps: DatakitSteps, zephyr_context: ZephyrContext, *, m
     succeeds. The dedicated normalize, embed, quality, fuzzy-cluster, and store
     pools then do not wait for hosts that idle shared workers hold.
     """
+    require_prebuilt_inputs(steps.all_steps)
     runner = StepRunner()
     runner.run(steps.sources.values(), max_concurrent=max_concurrent)
     stop = threading.Event()
@@ -1276,9 +1326,7 @@ def _require_built_steps(steps: dict[str, StepSpec], label: str) -> None:
 
 def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
     if target == "decon-keys":
-        _require_built_steps(
-            {"items": result.items}, "the prepared item table (python -m experiments.datakit.decontam.items)"
-        )
+        require_prebuilt_inputs([result.items])
         return [result.keys]
     if target == "decon-mark":
         missing = [step.name for step in (result.items, result.keys) if not step_is_built(step)]
