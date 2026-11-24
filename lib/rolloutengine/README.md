@@ -35,7 +35,8 @@ result = await engine.run_task(spec, model)
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
   task machine for it.
 - The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional
-  observer, `RolloutEngine(..., observer=...)`.
+  observer, `RolloutEngine(..., observer=...)`. `rolloutengine.finelog_observer.FinelogObserver` writes the
+  events to Finelog tables.
 
 `TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract. `TraceMode.MESSAGES` accepts chat
 endpoints that re-tokenize each request and records an all-zero loss mask. Never train on those rollouts:
