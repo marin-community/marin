@@ -100,7 +100,7 @@ def shrink_recorded_panel(binding: str) -> None:
 
 
 def small_learning_trial(preset: presets.Preset) -> presets.Preset:
-    """Exercise the initial and terminal scores with three recorded updates."""
+    """Exercise initial and terminal scores in three updates and shrink the recorded held-out selection."""
     assert preset.held_out_tasks is not None
     shrink_recorded_panel(preset.held_out_tasks)
     return replace(preset, updates=3, measured=range(1, 4))
@@ -296,7 +296,7 @@ def controls(write, name, **kwargs):
             score=0.49 + index * 0.01,
             **kwargs,
         )
-        for index in range(pin.replicates)
+        for index in range(len(pin.members))
     ]
 
 

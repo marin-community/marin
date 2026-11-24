@@ -28,10 +28,7 @@ from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_tests.fixtures import (
-    SELECTION_IDENTITY,
-    write_published_artifact,
-)
+from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 

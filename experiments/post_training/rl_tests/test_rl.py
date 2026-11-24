@@ -52,11 +52,11 @@ from experiments.post_training.rl_tests.fixtures import (
     shrink_recorded_panel,
     small_learning_trial,
     write_artifact_record,
+    write_json,
     write_published_artifact,
     write_receipt,
     write_skyrl_run_record,
 )
-from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
@@ -1222,7 +1222,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
-    _json(source / "exports/best_checkpoint.json", {"step": 2})
+    write_json(source / "exports/best_checkpoint.json", {"step": 2})
     staged = source.with_name("before-native-execution")
     source.rename(staged)
     native_calls = []

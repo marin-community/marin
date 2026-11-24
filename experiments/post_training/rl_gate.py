@@ -140,7 +140,7 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
     defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
     defaults = _control_defaults(preset, pin, defaults)
-    for index in range(pin.replicates):
+    for index in range(len(pin.members)):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
@@ -888,9 +888,8 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
 
 
 def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    native_index = pin.replicate_indices[index] if pin.replicate_indices else index
-    name = control_name(pin.preset, pin.commit, native_index, table=table)
-    retry = pin.retries[index] if pin.retries else 0
+    replicate, retry = pin.members[index]
+    name = control_name(pin.preset, pin.commit, replicate, table=table)
     return f"{name}-retry{retry}" if retry else name
 
 
@@ -927,7 +926,7 @@ def _gate_artifact(
             f"{_pinned_control_name(pin, index, table=table)}@{pin.revision}",
             control_path(preset, pin, index, table=table),
         )
-        for index in range(pin.replicates)
+        for index in range(len(pin.members))
         if index != leave_out
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
@@ -1012,8 +1011,8 @@ def command(table: ModelPresets) -> click.Command:
         "--leave-out",
         "leave_out",
         metavar="rN",
-        help="Compare control replicate N against the remaining controls. Each replicate should PASS; use it "
-        "after pinning new controls. Give this or --candidate.",
+        help="Compare pinned member N with the remaining controls and record its verdict. Keep every completed, "
+        "measured run. Give this or --candidate.",
     )
     @click.option(
         "--require",
@@ -1034,8 +1033,8 @@ def command(table: ModelPresets) -> click.Command:
         pin = control_pin(preset, table=table)
         index = None
         if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
-                raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
+            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= len(pin.members):
+                raise click.BadParameter(f"choose r0 through r{len(pin.members) - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
             candidate_name = _pinned_control_name(pin, index, table=table)
             preset = _control_placement(preset, pin)

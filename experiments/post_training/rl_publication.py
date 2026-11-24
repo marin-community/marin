@@ -283,7 +283,7 @@ def publish_controls(
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
     result = publish_runs(
-        [gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates)],
+        [gate.control_path(preset, pin, index, table=table) for index in range(len(pin.members))],
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,

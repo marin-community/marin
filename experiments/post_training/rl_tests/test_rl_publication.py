@@ -547,7 +547,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"].startswith("pinned-")
     ]
-    assert len(served_controls) == pin.replicates
+    assert len(served_controls) == len(pin.members)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

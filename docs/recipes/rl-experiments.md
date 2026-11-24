@@ -307,8 +307,9 @@ uv run python -m experiments.post_training.snowball_rl compare \
   --preset speed-medium --leave-out r0
 ```
 
-Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares one control
-replicate against the remaining controls with fixed default inputs.
+Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares one pinned member
+against the remaining controls with fixed default inputs. In `rN`, `N` is the pin slot. The stored
+run name can use a different replicate number or a retry suffix.
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ## Change a preset's default
@@ -330,9 +331,9 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
-   Source, revision and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
-5. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
-   Every leave-one-out verdict must PASS.
+   The source, revision and ordered members live in `snowball_rl.SNOWBALL.control_pins`.
+5. Run `snowball_rl compare --leave-out rN` for each pinned member and record the verdict. Keep every
+   completed, measured run regardless of verdict. Resubmit only after an infrastructure failure.
 
 ## Tasks and evaluation
 

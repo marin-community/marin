@@ -97,7 +97,7 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypa
     table = snowball_model.SNOWBALL
     preset = table.by_name["speed-medium"]
     pin = gate.control_pin(preset, table=table)
-    for index in range(pin.replicates):
+    for index in range(len(pin.members)):
         name = gate.control_name(pin.preset, pin.commit, index, table=table)
         if index != 1:
             recorded_runs(preset.name, name, speed=100 + index)
@@ -105,12 +105,7 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypa
             recorded_runs(preset.name, name + "-retry1", speed=100 + index, attempt_id=f"replacement-{index}")
         if index == 0:
             recorded_runs(preset.name, name + "-retry2", speed=100.5, attempt_id="additional-0")
-    updated = replace(
-        pin,
-        replicates=pin.replicates + 2,
-        retries=(1, 1) + (0,) * (pin.replicates - 2) + (0, 2),
-        replicate_indices=(*range(pin.replicates), 0, 0),
-    )
+    updated = replace(pin, members=((0, 1), (1, 1), (2, 0), (3, 0), (0, 0), (0, 2)))
     monkeypatch.setattr(
         snowball_model, "SNOWBALL", replace(table, control_pins={**table.control_pins, pin.preset: updated})
     )
@@ -137,7 +132,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     key = "policy/raw_grad_norm"
     pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
     control_roots = []
-    for index in range(pin.replicates):
+    for index in range(len(pin.members)):
         root = recorded_runs(
             preset.name,
             gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
@@ -652,7 +647,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             recorded_runs(
                 preset.name, gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL), score=0.5
             )
-            for index in range(pin.replicates)
+            for index in range(len(pin.members))
         ]
     else:
         control_roots = controls(recorded_runs, preset.name)
