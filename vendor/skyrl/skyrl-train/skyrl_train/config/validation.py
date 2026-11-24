@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import R3Transport, reference_model_required
 from skyrl_train.config.placement_geometry import num_rollout_gpus, validate_colocated_engine_geometry
+from skyrl_train.config.utils import generation_context_limit
 
 
 def validate_batch_invariant_config(cfg: DictConfig) -> None:
@@ -62,8 +63,7 @@ def validate_megatron_config(cfg: DictConfig):
             raise ValueError("Synthetic trainer sizing currently requires regular PPO")
         if not 0 <= profile.minimum_headroom_fraction < 1:
             raise ValueError("memory_profile.minimum_headroom_fraction must be in [0,1)")
-        trained = cfg.trainer.algorithm.get("max_seq_len")
-        if trained is not None and trained > profile.max_sequence_length:
+        if generation_context_limit(cfg.generator) > profile.max_sequence_length:
             raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
         if policy.megatron_config.get("moe_router_replay", False):
             raise ValueError("Synthetic trainer sizing requires native routing without rollout router replay")
