@@ -61,6 +61,9 @@ def _timeout() -> int:
 
 
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
+REFERENCE_TEXT_GROUP = re.compile(r"\\(?:text|mbox|mathrm)\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
+LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -108,7 +111,7 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     from math_verify.utils import timeout  # noqa: PLC0415
 
     value = strip_math_delimiters(text)
-    text_groups = list(re.finditer(r"\\(?:text|mbox|mathrm)\{(?!\s*(?:and|or)\s*\})", value))
+    text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
     strip_units = bool(text_groups)
     symbolic_text_group = False
     if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
@@ -123,16 +126,15 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         if value[text_group.end() + first_close :].strip() not in ("", "^2", "^{2}"):
             prefix = value[: text_group.start()].rstrip()
             upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
-            adjacent_symbol = text_group.start() > 0 and not value[text_group.start() - 1].isspace()
+            no_gap_before_group = text_group.start() > 0 and not value[text_group.start() - 1].isspace()
             if not re.fullmatch(r"[^\s~]+", group_contents) or (
-                prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol and not adjacent_symbol
+                prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol and not no_gap_before_group
             ):
                 return [], strip_units
             # A text symbol starting a term or adjacent to one is part of the expression.
             symbolic_text_group = True
             strip_units = False
         if text_group.start() == 0 and len(group_contents.split()) > 4:
-            # Long standalone text groups carry prose rather than a math answer.
             return [], strip_units
     latex = LatexExtractionConfig(boxed_match_priority=-1)
 
@@ -542,7 +544,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     reference_members = _split_members(spec.expected) if is_list else [spec.expected]
     if is_list:
         # A connector after a list comma normalizes to another leading comma.
-        reference_members = [re.sub(r"^\\text\{\s*(?:and|or)\s*\}\s*", "", member) for member in reference_members]
+        reference_members = [LEADING_LIST_CONNECTOR.sub("", member) for member in reference_members]
     with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
         references = [_parse_reference(member) for member in reference_members]
     expected = [parsed for parsed, _ in references]

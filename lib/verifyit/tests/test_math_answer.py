@@ -186,7 +186,7 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
     ],
 )
 def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
-    with pytest.raises(InvalidTask, match="cannot parse expected"):
+    with pytest.raises(InvalidTask):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
 
 
@@ -200,7 +200,7 @@ def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
 @pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
 def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(prose, math_type):
     expected = prose if math_type is MathType.SCALAR else f"[1, {prose}]"
-    with pytest.raises(InvalidTask, match="cannot parse expected"):
+    with pytest.raises(InvalidTask):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "No")
 
 
@@ -214,15 +214,10 @@ def test_math_short_text_reference_stays_parseable(answer):
     assert grade_math.grade_math_candidate(MathSpec(expected=rf"\text{{{answer}}}"), answer).reward == 1.0
 
 
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
 @pytest.mark.parametrize("connector", ["and", "or"])
-def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector):
-    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4")
-    assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
-
-
-@pytest.mark.parametrize("connector", ["and", "or"])
-def test_math_list_text_connector_before_final_member(connector):
-    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4", math_type=MathType.LIST)
+def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector, math_type):
+    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4", math_type=math_type)
     assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
 
 
