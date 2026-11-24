@@ -288,7 +288,7 @@ def main() -> None:
         repo_root=repo_root,
         disk_pool_root=args.local_disk_root,
         revision=args.revision,
-        adopted_survey={"uri": args.adopt_survey, "sha256": args.adopt_survey_sha} if args.adopt_survey else None,
+        adopted_survey={"uri": args.adopt_survey, "sha256": args.adopt_survey_sha256} if args.adopt_survey else None,
     )
     label = "BACKEND-VALIDATION-DRY-RUN" if args.mode == "dry-run" else "BACKEND-VALIDATION-SEALED"
     print(f"{label} {json.dumps(receipt)}", flush=True)
