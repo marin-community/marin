@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | — |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. On eight H100s, one pinned 67B diagnostic passed weight swap, a real tool turn, and all 32,768 full-context fused scorer targets. [Passing diagnostic][native-passing-diagnostic-evidence] | Repeat the 67B diagnostic before promoting native serving. Earlier diagnostics crossed the scorer's ratio bounds. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Qualify the current port with the full 67B inventory workload. |
-| Bounded 40-H100 backend pilot | Both arms completed two 32-group updates and two prompt-identical panels with a 512-token reply cap. Native took 35.73 lease seconds per admitted group, compared with 0.331 for vLLM. Policy-2 mean verifier scores were 0.08 and 0.20, respectively. | Keep vLLM serving for the quick loop. Measure native batching and tool-call termination on H100. |
+| Bounded 40-H100 backend pilot | Both arms completed two 32-group updates and two prompt-identical panels with a 512-token reply cap. Native took 35.73 lease seconds per admitted group, compared with 0.331 for vLLM. Policy-2 mean verifier scores were 0.08 and 0.20, respectively. | Keep vLLM serving for the quick loop. Test the optimized AgentX serving path on fixed RL bursts and tool-use prompts. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Evaluate carrying the typed batch envelope across Ray. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -2543,8 +2543,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
 
   On H100, compare a warmed batch of eight active requests against the
   measured 116.4 seconds for two warmed batches of four. Pin the short
-  inputs and seeds and check replay, occupancy and peak memory. The held
-  learner comparison uses the frozen four-request configuration.
+  inputs and seeds and check replay, occupancy and peak memory. The
+  earlier reference-attention probe used four requests. The completed
+  backend pilot allowed eight training requests and four evaluation requests.
 
   The warmed 57.0-second device decode measurement includes attention,
   expert computation and route capture. The engine already runs up to
@@ -2599,10 +2600,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   768 KV pages under the production admission budget. The snapshot's
   502-entry tensor manifest matched its original receipt. A CPU rehearsal
   verified all 64 timed binary replies, detected compilation during
-  warm-up and found none in the measured waves. The worker command fits
-  the prior eight-H100 allocation shape. H100 timing and peak memory
-  still need measurement. The matched inventory run supplies rollout
-  admission, optimizer and reward measurements.
+  warm-up and found none in the measured waves. Both H100 modes completed
+  their batches. The byte-exact audit rejected a replay frame for the first
+  request. The audit compared all batch geometries and both attention
+  modes together, so the first differing field and its cause remain open.
+  The harness retained aggregate timing only after a passing audit.
+  Preserve per-case timing and frame deltas for the next replay check.
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2721,12 +2724,79 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   different leaf group from its learners. The table covers one attempt per
   backend.
 
+  Both arms trained on 256 single-turn, tool-free trajectories. Native
+  admitted 113,218 response tokens and vLLM admitted 110,787. The native
+  trace joined all 256 model calls to 34 serialized serving exchanges.
+  Thirty exchanges ran at the eight-request cap. The worker calls took
+  2,283.266 seconds, or 99.84% of the 2,286.953-second admission time.
+  Native dispatch and return each took under 0.2 ms at the median. The
+  earlier four-request H100 probe assigned 57.0 of 58.2 seconds to
+  synchronized decode. The trace of the matched pilot times the whole
+  worker call.
+
+  Across all eight native serving H100s in the second admission window,
+  sampled GPU utilization averaged 93.8%, while the tensor pipelines
+  were active 0.13% of the time. The reference-blocked path batches FP32
+  query-key products over four pages and processes the softmax and value
+  recurrence one page at a time. The vLLM logs reported FlashAttention 3
+  and Triton MoE. The device counters cover the native serving process;
+  they do not distinguish individual kernels.
+
+  Native serves one batch at a time and returns after the batch drains.
+  vLLM continuously schedules requests across eight data-parallel ranks
+  and reported 127 running requests at peak in the second update. Both
+  warm optimizer calls took about 48 seconds. Of the second update's
+  1,484-second wall gap, 1,109 seconds came from rollout admission,
+  186 from publication, and 186 from checkpointing.
+
+  The AgentX H100 series on the inference branch used a different
+  checkpoint and a 64K serving workload at concurrency 128. Its first
+  fixed-batch arm achieved 47.82 output tokens per second. Continuous
+  admission with a larger KV cache reached 164.26. Later changes added
+  per-layer KV buffers, smaller expert kernels, shard-local sampling,
+  and two four-H100 replicas. The singleton decode repeat achieved 621.18
+  output tokens per second, against 590.24 for compiled plain vLLM on the
+  same AgentX workload. The reference-blocked RL worker admitted 49.51
+  response tokens per second. The AgentX series establishes the value of
+  the serving changes on its replay. Test the optimized serving stack
+  against the pinned RL policy and request bursts to measure transfer.
+  [AgentX H100 series][agentx-h100-serving]
+
+  The native training sampler sorts the full vocabulary twice even at
+  `top_p=1`. In a CPU lowering of the eight-position, 128,256-token
+  vocabulary sampler, omitting nucleus filtering removed both sorts and
+  preserved sampled IDs and scores on the same inputs and keys. The
+  inference branch already chooses the full-distribution fast path before
+  mapping the sampler over positions. Measure its effect on H100 with
+  the paged attention and expert kernels held fixed. [Batched sampler][agentx-batch-sampler]
+
   Tool use accounts for seven points of the eleven-point baseline score
-  gap. All 11 native tool-use responses reached the 512-token cap. On
-  replay of their saved tokens, the prepared evaluation stop rule found
-  eight complete calls at 63 to 223 tokens. The existing grader accepted
-  three. Use a separate H100 arm to measure the stop rule and native
-  batching changes on the same prompts.
+  gap and five points of the twelve-point policy-2 gap. All 11 native
+  tool-use responses reached the 512-token cap in each panel. A replay
+  that stopped at the first complete tool call recovered three correct
+  calls per panel. The same evaluator left eight and nine points of gap
+  at steps 0 and 2. At policy 2, seven of eight non-tool tasks that passed
+  only for vLLM hit the native cap and ended normally for vLLM. Compare
+  greedy outputs and teacher-forced raw scores on the same policy-0
+  weights, then vary sampling, tool stopping, and the reply cap separately.
+
+  Start with one eight-H100 serving host and the fixed RL prompts. Measure
+  the optimized engine first with replay disabled, then with exact-token
+  continuation, policy stamps, and the score and route payloads required
+  by the learner. The AgentX singleton path requires replay to be disabled.
+  Start from the route-capable AgentX branch, which already includes the
+  CUDA paged-attention path and binary endpoint. Bring over the verified
+  checkpoint-install helper and require both serving replicas to acknowledge
+  the same immutable policy. Reconcile position and route fields against
+  the selected learner's replay input before evaluating reward.
+  Use plain compiled vLLM for the backend comparison and vLLM with four
+  DSpark proposals for the cutover comparison. Gate the Megatron canary on
+  the live receiver, verified publication, and invalidation of old caches.
+  [Route-capable AgentX source][agentx-route-capable] ·
+  [Native checkpoint publication][native-checkpoint-publication] ·
+  [Megatron-to-Levanter handoff][megatron-levanter-handoff] ·
+  [Singleton replay guard][agentx-singleton-replay] ·
+  [DSpark comparison][dspark-h100-control]
 
 The prior FP8 comparison reported a 13% reduction in mean decode time
 and 5.7 minutes longer to reach a mean verifier score of 0.2901, the
@@ -2889,6 +2959,13 @@ arms. [Prior timing comparison][timing]
 [h100-canonical-replay-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.19%2Fh100-immutable-publication-retry.tar.zst
 [h100-cleanup-terminal-manifest]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fcheckpoints%2Fsnowball-inventory%2F2026.11.20.20%2Fterminal.json
 [h100-matched-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fh100-learner-smoke%2F2026.11.20.15%2Fquick-loop-matched-2026.11.20.15.tar.gz
+[agentx-h100-serving]: https://github.com/marin-community/marin/blob/15bc5e751c75f41743b15ec8c99597f077fc9d26/docs/reports/snowball-inference-status-2026-11-20.md#agentx-at-concurrency-128
+[agentx-batch-sampler]: https://github.com/marin-community/marin/blob/15bc5e751c75f41743b15ec8c99597f077fc9d26/lib/levanter/src/levanter/layers/sampler.py#L95-L110
+[agentx-singleton-replay]: https://github.com/marin-community/marin/blob/15bc5e751c75f41743b15ec8c99597f077fc9d26/lib/levanter/src/levanter/inference/engine.py#L1804-L1810
+[agentx-route-capable]: https://github.com/marin-community/marin/commit/3c9d26717a3108307f7f84eac9bf7605204e0d08
+[native-checkpoint-publication]: https://github.com/marin-community/marin/pull/12090
+[megatron-levanter-handoff]: https://github.com/marin-community/marin/blob/4d481270a1c1e0ec70a9e28c4a1a29b8f5693b31/docs/reports/snowball-megatron-levanter-handoff.md
+[dspark-h100-control]: https://github.com/marin-community/marin/pull/11975
 [original-hf-slice-reader]: https://github.com/marin-community/levanter/commit/fee2b33fced800a165672dcdffaaee14f16ff241
 [hf-loader-history]: https://github.com/marin-community/levanter/blob/10a4038ce305eb0100f1812958c2a8078b5a8a22/.agents/projects/gcs_serialization.md
 [hf-direct-loading]: https://github.com/marin-community/marin/pull/2348
