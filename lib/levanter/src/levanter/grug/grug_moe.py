@@ -420,16 +420,10 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError("x and token_valid must have shapes [T, D] and [T]")
         router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
         selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
-        capture = MoERouteCapture(
+        return PreparedMoERouteCapture(
             selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
-            token_valid=jax.lax.stop_gradient(token_valid),
+            token_valid=jax.lax.stop_gradient(token_valid.astype(jnp.bool_)),
             qb_alpha=jax.lax.stop_gradient(qb_alpha),
-        )
-        return prepare_moe_route_capture(
-            capture,
-            token_valid,
-            num_experts=router.shape[1],
-            num_experts_per_token=self.num_experts_per_token,
         )
 
     @named_call

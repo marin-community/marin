@@ -2628,9 +2628,12 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
     routerer = QBRoutedMoE(num_experts_per_token=2, batch_axes=("data",))
 
     with jax.set_mesh(mesh):
-        capture = routerer.capture_routes(x, token_valid, router=router, router_bias=router_bias)
+        capture_routes = jax.jit(
+            lambda gates: routerer.capture_routes(x, token_valid, router=gates, router_bias=router_bias)
+        )
+        capture = capture_routes(router)
         perturbed_router = router.at[:, 3].add(10.0)
-        perturbed_capture = routerer.capture_routes(x, token_valid, router=perturbed_router, router_bias=router_bias)
+        perturbed_capture = capture_routes(perturbed_router)
         assert not np.array_equal(np.asarray(capture.selected_experts), np.asarray(perturbed_capture.selected_experts))
         replayed, replay_stats = routerer(
             x,
