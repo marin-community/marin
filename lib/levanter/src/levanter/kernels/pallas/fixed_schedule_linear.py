@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 import math
 
 import jax
@@ -295,12 +296,36 @@ def _fixed_schedule_linear_fwd(x: jax.Array, w: jax.Array) -> tuple[jax.Array, t
     return _pallas_forward(x, w), (x, w)
 
 
+def _backward_local(
+    x: jax.Array, w: jax.Array, dy: jax.Array, row_axes: tuple[str, ...]
+) -> tuple[jax.Array, jax.Array]:
+    x_compute = x.astype(w.dtype)
+    dx = jax.lax.dot_general(
+        dy.astype(jnp.float32),
+        w.astype(jnp.float32),
+        (((1,), (1,)), ((), ())),
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+    # Preserve weight-dtype cotangent rounding before widening.
+    dx = jax.lax.optimization_barrier(dx.astype(w.dtype)).astype(x.dtype)
+    dw = jax.lax.dot_general(
+        x_compute.astype(jnp.float32),
+        dy.astype(jnp.float32),
+        (((0,), (0,)), ((), ())),
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+    if row_axes:
+        dw = jax.lax.psum(dw, row_axes)
+    return dx, dw.astype(w.dtype)
+
+
 def _fixed_schedule_linear_bwd(residual: tuple[jax.Array, jax.Array], dy: jax.Array) -> tuple[jax.Array, jax.Array]:
     x, w = residual
-    x_compute = x.astype(w.dtype)
     sharding = _validate_named_sharding(x, w)
     if sharding is not None:
-        x_sharding, x_spec, w_spec, x_public_spec, w_public_spec = sharding
+        x_sharding, x_spec, _, x_public_spec, w_public_spec = sharding
         dy_sharding = _array_sharding(dy)
         if not isinstance(dy_sharding, NamedSharding):
             raise FixedScheduleLinearUnsupportedError("dy must use explicit NamedSharding on a multi-device mesh")
@@ -321,33 +346,9 @@ def _fixed_schedule_linear_bwd(residual: tuple[jax.Array, jax.Array], dy: jax.Ar
         if dy_row_axes not in ((), x_row_axes):
             raise FixedScheduleLinearUnsupportedError("dy must be replicated or use the same row sharding as x")
         dy_aligned = jax.sharding.reshard(dy, NamedSharding(x_sharding.mesh, x_public_spec))
-        row_axes = _partition_axes(x_spec[0])
-
-        def backward_local(local_x: jax.Array, local_w: jax.Array, local_dy: jax.Array):
-            local_x_compute = local_x.astype(local_w.dtype)
-            local_dx = jax.lax.dot_general(
-                local_dy.astype(jnp.float32),
-                local_w.astype(jnp.float32),
-                (((1,), (1,)), ((), ())),
-                precision=jax.lax.Precision.HIGHEST,
-                preferred_element_type=jnp.float32,
-            )
-            # Preserve weight-dtype cotangent rounding before widening.
-            local_dx = jax.lax.optimization_barrier(local_dx.astype(local_w.dtype)).astype(local_x.dtype)
-            local_dw = jax.lax.dot_general(
-                local_x_compute.astype(jnp.float32),
-                local_dy.astype(jnp.float32),
-                (((0,), (0,)), ((), ())),
-                precision=jax.lax.Precision.HIGHEST,
-                preferred_element_type=jnp.float32,
-            )
-            if row_axes:
-                local_dw = jax.lax.psum(local_dw, row_axes)
-            local_dw = local_dw.astype(local_w.dtype)
-            return local_dx, local_dw
 
         local_dx, local_dw = jax.shard_map(
-            backward_local,
+            partial(_backward_local, row_axes=x_row_axes),
             mesh=x_sharding.mesh,
             in_specs=(x_public_spec, w_public_spec, x_public_spec),
             out_specs=(x_public_spec, w_public_spec),
@@ -357,23 +358,7 @@ def _fixed_schedule_linear_bwd(residual: tuple[jax.Array, jax.Array], dy: jax.Ar
             jax.sharding.reshard(local_dx, NamedSharding(x_sharding.mesh, x_public_spec)),
             jax.sharding.reshard(local_dw, NamedSharding(x_sharding.mesh, w_public_spec)),
         )
-    dx = jax.lax.dot_general(
-        dy.astype(jnp.float32),
-        w.astype(jnp.float32),
-        (((1,), (1,)), ((), ())),
-        precision=jax.lax.Precision.HIGHEST,
-        preferred_element_type=jnp.float32,
-    )
-    # Preserve weight-dtype cotangent rounding before widening.
-    dx = jax.lax.optimization_barrier(dx.astype(w.dtype)).astype(x.dtype)
-    dw = jax.lax.dot_general(
-        x_compute.astype(jnp.float32),
-        dy.astype(jnp.float32),
-        (((0,), (0,)), ((), ())),
-        precision=jax.lax.Precision.HIGHEST,
-        preferred_element_type=jnp.float32,
-    ).astype(w.dtype)
-    return dx, dw
+    return _backward_local(x, w, dy, row_axes=())
 
 
 fixed_schedule_linear.defvjp(_fixed_schedule_linear_fwd, _fixed_schedule_linear_bwd)

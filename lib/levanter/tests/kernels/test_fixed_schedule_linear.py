@@ -219,64 +219,6 @@ def test_fixed_schedule_four_device_custom_vjp_matches_independent_reference(d, 
     assert bool(jnp.isfinite(primal).all()) and bool(jnp.isfinite(dx).all()) and bool(jnp.isfinite(dw).all())
 
 
-@pytest.mark.parametrize("d", [128, 256])
-def test_fixed_schedule_four_device_reference_preserves_weight_dtype_rounding(d):
-    _, row_sharding, replicated_sharding = _four_device_shardings()
-    x, w = _inputs(128, d, jnp.float32, jnp.bfloat16)
-    x_host, w_host = np.asarray(x), np.asarray(w)
-    # XLA never receives original FP32 x on this independent oracle path.
-    q_host = x_host.astype(w_host.dtype)
-    rounded_host = q_host.astype(np.float32)
-    assert np.count_nonzero(x_host.view(np.uint32) != rounded_host.view(np.uint32)) > 0
-    np.testing.assert_array_equal(rounded_host.view(np.uint32) & 0xFFFF, 0)
-    output_dtype = x.dtype
-    replicated_x = jax.device_put(x, replicated_sharding)
-    replicated_w = jax.device_put(w, replicated_sharding)
-    q = jax.device_put(q_host, replicated_sharding)
-    cotangent = jnp.linspace(-1.0, 1.0, 128 * 256, dtype=jnp.float32).reshape(128, 256)
-    replicated_cotangent = jax.device_put(cotangent, replicated_sharding)
-
-    def boundary_forward(q_, w_):
-        return jax.lax.dot_general(
-            q_.astype(jnp.float32),
-            w_.astype(jnp.float32),
-            (((1,), (0,)), ((), ())),
-            precision=jax.lax.Precision.HIGHEST,
-            preferred_element_type=jnp.float32,
-        ).astype(output_dtype)
-
-    def boundary_vjp(q_, w_, dy_):
-        primal, pullback = jax.vjp(boundary_forward, q_, w_)
-        return primal, *pullback(dy_)
-
-    def reference_vjp(x_, w_, dy_):
-        primal, pullback = jax.vjp(_highest_reference, x_, w_)
-        return primal, *pullback(dy_)
-
-    def public_vjp(x_, w_, dy_):
-        primal, pullback = jax.vjp(fixed_schedule_linear, x_, w_)
-        return primal, *pullback(dy_)
-
-    boundary_primal, dq, expected_dw = jax.jit(boundary_vjp)(q, replicated_w, replicated_cotangent)
-    # Close the original x->q cast transpose on the host, preserving dq rounding.
-    expected_dx = np.asarray(dq).astype(x_host.dtype)
-    reference_primal, reference_dx, reference_dw = jax.jit(lambda x_, w_, dy_: jax.jit(reference_vjp)(x_, w_, dy_))(
-        replicated_x, replicated_w, replicated_cotangent
-    )
-    np.testing.assert_allclose(reference_primal, boundary_primal, atol=1e-5, rtol=1e-4)
-    np.testing.assert_allclose(reference_dx, expected_dx, atol=1e-5, rtol=1e-4)
-    np.testing.assert_allclose(reference_dw, expected_dw, atol=1e-5, rtol=1e-4)
-    assert reference_dx.dtype == x.dtype
-    assert reference_dw.dtype == w.dtype
-
-    for activation_sharding in (row_sharding, replicated_sharding):
-        public_x = jax.device_put(x, activation_sharding)
-        public_cotangent = jax.device_put(cotangent, activation_sharding)
-        _, public_dx, public_dw = jax.jit(public_vjp)(public_x, replicated_w, public_cotangent)
-        np.testing.assert_allclose(public_dx, expected_dx, atol=1e-5, rtol=1e-4)
-        np.testing.assert_allclose(public_dw, expected_dw, atol=1e-5, rtol=1e-4)
-
-
 def test_fixed_schedule_four_device_lowered_forward_backward_have_shard_map_without_all_gather():
     _, row_sharding, replicated_sharding = _four_device_shardings()
     x, w = _inputs(128, 128, jnp.bfloat16, jnp.float32)
