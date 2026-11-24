@@ -23,6 +23,7 @@ from rigging.log_setup import configure_logging
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from experiments.datakit.decontam.encoder.train import predict
+from experiments.datakit.decontam.encoder_models import MAX_INPUT_TOKENS
 from experiments.datakit.decontam.pair_text import OUTPUTS, item_texts, with_pair_text
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="storage prefix of the saved model")
     parser.add_argument("--pairs", required=True, help="pairs output with pairs/*.parquet")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--max-length", type=int, default=MAX_INPUT_TOKENS)
     parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for item texts")
     args = parser.parse_args()
     torch.backends.cuda.enable_cudnn_sdp(False)

@@ -25,6 +25,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
+from experiments.datakit.decontam.encoder_models import MAX_INPUT_TOKENS
 from experiments.datakit.decontam.pair_text import OUTPUTS, ItemText, item_texts, with_pair_text
 
 TARGET_PRECISION = 0.95
@@ -153,7 +154,7 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="pretrained encoder, for example jhu-clsp/mmBERT-base")
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch", type=int, default=16)
-    parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--max-length", type=int, default=MAX_INPUT_TOKENS)
     parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--data", required=True, help="directory with JUDGED_PAIRS and the synthetic pairs")
     parser.add_argument("--synthetic", required=True, help="file name in --data of the generic synthetic pairs")

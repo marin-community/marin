@@ -29,6 +29,7 @@ from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.config import CPU_SCORE_WORKERS
@@ -64,7 +65,7 @@ def testbed_sources(
     re-running the sampler.
     """
     if sample_root:
-        found = sample_sources(f"{marin_prefix()}/{sample_root}")
+        found = sample_sources(prefix_join(marin_prefix(), sample_root))
         return {name: step for name, step in found.items() if name not in exclude_sources}
     sources = [s for n, s in all_sources().items() if n not in exclude_sources] if exclude_sources else None
     steps = build_testbed_steps(target_total_tokens_b=target_total_tokens_b, sources=sources)

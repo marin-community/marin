@@ -447,9 +447,15 @@ def _located(readings_of: list[Reading], question: str, key: str, offset: int) -
     return readings_of[0], -1
 
 
-def excerpt(
-    readings_of: list[Reading], question_chars: int, question: str, key: str, offset: int
-) -> tuple[str, str, int]:
+class Excerpt(NamedTuple):
+    """The record text around an item, the stream of the reading it comes from, and the item's position in it."""
+
+    text: str
+    stream: str
+    at: int
+
+
+def excerpt(readings_of: list[Reading], question_chars: int, question: str, key: str, offset: int) -> Excerpt:
     """The record text around the item (``BEFORE`` characters before it, ``AFTER`` after its question), the
     reading's stream, and the item's position in that stream: where its question is, else an estimate from
     the key, or -1 when neither is found (the excerpt then starts at the record's start).
@@ -460,7 +466,7 @@ def excerpt(
     """
     reading, at = _located(readings_of, question, key, offset)
     start = reading.text_offset(max(at, 0)) - 1 if at >= 0 else 0
-    return reading.text[max(0, start - BEFORE) : start + question_chars + AFTER], reading.stream, at
+    return Excerpt(reading.text[max(0, start - BEFORE) : start + question_chars + AFTER], reading.stream, at)
 
 
 @dataclass(frozen=True)
@@ -468,8 +474,9 @@ class Candidate:
     """A stage-1 candidate: a record that holds an item's key, with the record text around the item.
 
     ``right`` is that excerpt (the right side of the model's (item, excerpt) pair), ``kind`` the key stream that
-    matched, ``record_chars`` the record's length, and ``located`` whether the excerpt is cut around the item's
-    question rather than around the key's first match; the last three are kept in the pair files for analysis.
+    matched, ``record_chars`` the record's length, and ``located`` whether the item's position was found (its
+    question, or an estimate from the key); when it was not, the excerpt starts at the record's start. The last
+    three are kept in the pair files for analysis.
     """
 
     record: str
@@ -549,17 +556,17 @@ def _pairs(
     found = table.found(np.concatenate([reading.hashes for reading in readings_of]))
     pairs: dict[str, Candidate] = {}
     for row in table.items_of(found):
-        located = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
-        if located["item"] in pairs:
+        locator = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
+        if locator["item"] in pairs:
             continue
         right, _, at = excerpt(
-            readings_of, located["question_chars"], located["question"], located["key"], located["offset"]
+            readings_of, locator["question_chars"], locator["question"], locator["key"], locator["offset"]
         )
-        pairs[located["item"]] = Candidate(
+        pairs[locator["item"]] = Candidate(
             record=record_id,
-            item=located["item"],
-            kind=located["kind"],
-            eval=located["eval"],
+            item=locator["item"],
+            kind=locator["kind"],
+            eval=locator["eval"],
             right=right,
             record_chars=record_chars,
             located=at >= 0,

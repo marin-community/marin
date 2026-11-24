@@ -305,10 +305,9 @@ a copy.
   Uncheatable document, a long code file) holds the item's key only if the copied part contains it.
 - **GPQA choice order is random.** lm-eval shuffles GPQA choices without a seed, so the question text,
   which shows the choices, changes between builds of the item table.
-- **Records over 5,000,000 characters are read in pieces** of that size that overlap by 9,000 characters
-  (`scan --records all`), so a hit and its excerpt lie in one piece; each shard's stats list their ids. An
-  item whose excerpt context is longer than the overlap (a long passage) can get a cut excerpt at a piece
-  edge.
+- **Records over 5,000,000 characters are read in pieces** of that size that overlap by 9,000 characters,
+  so a hit and its excerpt lie in one piece; each shard's scan stats count them (`long_records`). An item
+  whose excerpt context is longer than the overlap (a long passage) can get a cut excerpt at a piece edge.
 - **Cutting an excerpt is linear per record except in one rare case:** a stretch of more than 16,384
   characters with no whitespace, digit, punctuation or non-Latin letter whose body is not plain ASCII
   (fullwidth letters, combining marks, or LaTeX commands with nothing between them). There, H hits cost

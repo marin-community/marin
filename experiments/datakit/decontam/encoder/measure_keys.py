@@ -77,7 +77,7 @@ def make_measure(keys_path: str, output: str, width: int):
                     stats[f"{name}_pairs"] += len(items)
                 for item in items1:
                     # Reservoir sample of stage-1 (key 1) candidate rows for the classifier data.
-                    row = {"id": str(record["id"]), "item": str(item), "via": "key1", "kind": kind_of[item]}
+                    row = {"id": str(record["id"]), "item": str(item), "kind": kind_of[item]}
                     seen = stats["key1_pairs"]
                     if len(sample) < SAMPLE_ROWS_PER_SHARD:
                         sample.append(row)

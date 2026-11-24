@@ -157,7 +157,8 @@ PAIR = ("她把杯子清洗了\uff0c就去\u3002", ["她把杯子清洗了\uff0c
 
 
 def _layouts(question: str, choices: list[str]) -> dict[str, str]:
-    """The copy forms of gate G2, with the item's choices in order."""
+    """The planted copy forms (as ``experiments/datakit/decontam/encoder/planted.py`` writes them), with the
+    item's choices in order."""
     lettered = question + "\n" + "\n".join(f"{'ABCD'[k]}. {c}" for k, c in enumerate(choices))
     return {
         "plain": lettered,

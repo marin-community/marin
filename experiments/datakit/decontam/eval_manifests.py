@@ -35,8 +35,9 @@ class RequiredEvalSuite:
 class BestEffortEvalSuite:
     """A sealed eval manifest that lists the artifacts that loaded.
 
-    Only the exact artifacts in the manifest enter the item table. Artifacts must
-    be below the manifest directory.
+    The item table loads the manifest's required tasks through lm-eval; the
+    artifacts it lists are validated against their hashes and must be below the
+    manifest directory.
 
     Args:
         manifest_path: Manifest that lists the suite's artifacts.
@@ -69,8 +70,8 @@ def validate_required_manifest(
     *,
     text_field: str = "text",
     expected_source_catalog_sha256: str | None = None,
-) -> list[str]:
-    """Validate a sealed required suite and return its artifact paths: the manifest is complete, required and of
+) -> None:
+    """Validate a sealed required suite: the manifest is complete, required and of
     the expected version and source pins, it names exactly *expected_names*, and every artifact matches its
     record count and checksum."""
     manifest_storage = StoragePath(manifest_path)
@@ -106,7 +107,6 @@ def validate_required_manifest(
         )
 
     manifest_parent = os.path.dirname(manifest_path)
-    paths: list[str] = []
     for entry in benchmarks:
         name = entry.get("name")
         artifact = entry.get("artifact")
@@ -132,16 +132,14 @@ def validate_required_manifest(
                 raise ValueError(f"{name}: required eval artifact does not contain text field {text_field!r}")
         if actual_records != expected_records:
             raise ValueError(f"{name}: manifest expects {expected_records} records, artifact contains {actual_records}")
-        paths.append(artifact_path)
-    return paths
 
 
 def validate_best_effort_manifest(
     manifest_path: str,
     expected_corpus_version: str,
     required_tasks: Mapping[str, int],
-) -> list[str]:
-    """Validate a best-effort manifest and return its exact artifact paths."""
+) -> None:
+    """Validate a best-effort manifest and the exact artifacts it lists."""
     manifest_storage = StoragePath(manifest_path)
     if not manifest_storage.exists():
         raise ValueError(f"best-effort eval manifest does not exist: {manifest_path}")
@@ -173,7 +171,6 @@ def validate_best_effort_manifest(
         raise ValueError("best-effort eval manifest required_tasks must be an object")
 
     manifest_parent = os.path.dirname(manifest_path)
-    paths: list[str] = []
     artifact_records: dict[str, int] = {}
     for entry in artifacts:
         task = entry.get("task")
@@ -194,14 +191,12 @@ def validate_best_effort_manifest(
                 f"{task}: best-effort manifest expects {expected_records} records, artifact contains {actual_records}"
             )
         artifact_records[task] = actual_records
-        paths.append(artifact_path)
 
     if sorted(artifact_records) != sorted(included_tasks) or len(artifacts) != len(included_tasks):
         raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
     failures = required_task_failures(required_tasks, manifest_required_tasks, artifact_records)
     if failures:
         raise ValueError(f"best-effort eval manifest has incomplete required tasks: {failures}")
-    return paths
 
 
 def required_task_failures(

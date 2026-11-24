@@ -3,9 +3,9 @@
 
 """The decontamination model's input: an eval item's texts paired with a record excerpt.
 
-The item table holds one row per eval record (``marin.datakit.decon.ITEM_SCHEMA``). A pair is ``(left, right)``: ``left`` is
-the item in marked sections followed by the words of each section that the excerpt lacks
-(``pair_left``), and ``right`` is the record excerpt around the item's key. The model has two
+The item table holds one row per eval record (``marin.datakit.decon.ITEM_SCHEMA``). A pair is
+``(left, right)``: ``left`` is the item in marked sections followed by the words of each section that the
+excerpt lacks (``pair_left``), and ``right`` is the record excerpt around the item's key. The model has two
 outputs (``OUTPUTS``): the excerpt holds the item, and it holds the item with its answer.
 """
 
@@ -14,7 +14,6 @@ import unicodedata
 from typing import NamedTuple
 
 import pandas as pd
-
 from marin.datakit.decon_tables import parquet_files, read_frame
 
 # The model's outputs, in order: the excerpt holds the item; it holds the item with its answer.

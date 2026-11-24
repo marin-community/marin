@@ -89,7 +89,7 @@ for (const s of D.sources) {
 }
 document.getElementById("srcs").innerHTML = rows;
 document.getElementById("evals").innerHTML = D.eval_hits.length
-  ? `<div class="tablewrap"><table><tr><th class="wide">eval record</th><th>sampled hash hits</th></tr>` +
+  ? `<div class="tablewrap"><table><tr><th class="wide">eval</th><th>sampled flagged records</th></tr>` +
     D.eval_hits.map(e => `<tr><td class="wide">${esc(e.eval)}</td><td class="num">${fmt(e.hits)}</td></tr>`).join("") +
     `</table></div>`
   : `<div class="panel" style="color:var(--ink2)">no eval hits — no sampled flagged records to attribute</div>`;

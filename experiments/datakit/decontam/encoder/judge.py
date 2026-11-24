@@ -22,12 +22,11 @@ from openai import OpenAI
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.decontam.encoder.labels import JUDGE_MODELS
+from experiments.datakit.decontam.encoder.labels import JUDGE_MODELS, LABELS
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
 RUBRIC = Path(__file__).with_name("RUBRIC.md")
-LABELS = ("COPY", "EDITED", "VARIANT", "GENERIC", "UNRELATED", "UNSURE")
 ANSWERS = ("YES", "NO", "NA")
 ATTEMPTS = 3
 # GLM can spend a 4,096-token reply on reasoning and give no label (6.5% of replies at 4,096).

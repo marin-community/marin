@@ -37,6 +37,8 @@ HIGH_OVERLAP = 0.9
 SCORE_BINS = (0, 0.3, 0.9, 1.01)
 CONTAMINATED = frozenset({"COPY", "EDITED"})
 CLEAN = frozenset({"VARIANT", "GENERIC", "UNRELATED"})
+# Every label a judge may give, in the order RUBRIC.md lists them; UNSURE is neither contaminated nor clean.
+LABELS = ("COPY", "EDITED", "VARIANT", "GENERIC", "UNRELATED", "UNSURE")
 TEST_SHARE = 0.4
 SILVER_OVERLAP = 0.8
 # The two LLM judges that judge.py runs; a pair is labeled when both agree.

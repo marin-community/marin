@@ -37,7 +37,7 @@ import os
 import random
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import numpy as np
 import pandas as pd
@@ -184,8 +184,17 @@ class DeconAttributes(BaseModel):
 # --- Keys -------------------------------------------------------------------------------------------------
 
 
-def item_streams(items_dir: str, width: int) -> tuple[list[str], list[str], list[str], list[str]]:
-    """One entry per item and key stream (``decon_keys.key_streams``): item ids, stream kinds, streams, evals."""
+class ItemStreams(NamedTuple):
+    """One entry per item and key stream (``decon_keys.key_streams``), in parallel lists."""
+
+    ids: list[str]
+    kinds: list[str]
+    streams: list[str]
+    evals: list[str]
+
+
+def item_streams(items_dir: str, width: int) -> ItemStreams:
+    """Every key stream of every item of the item table."""
     ids, kinds, streams, evals = [], [], [], []
     for path in parquet_files(items_dir):
         for row in read_table(path, ["id", "eval", "question", "choices", "passage"]).to_pylist():
@@ -194,7 +203,7 @@ def item_streams(items_dir: str, width: int) -> tuple[list[str], list[str], list
                 kinds.append(str(kind))
                 streams.append(stream)
                 evals.append(row["eval"])
-    return ids, kinds, streams, evals
+    return ItemStreams(ids, kinds, streams, evals)
 
 
 def shared_holders(windows: Windows) -> np.ndarray:

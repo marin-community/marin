@@ -16,7 +16,6 @@ from collections import defaultdict
 from collections.abc import Iterator
 
 import pyarrow as pa
-import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from marin.datakit.decon_keys import WINDOW, KeyStream, excerpt, key_streams, record_readings, text_stream
 from marin.datakit.decon_tables import parquet_files, read_table, write_table
@@ -42,9 +41,6 @@ def shard_name(path: str) -> str:
 
 def join_items(items_root: str, stage1: str, output: str) -> None:
     sample = pa.concat_tables([read_table(path) for path in parquet_files(prefix_join(stage1, "sample"))])
-    # Stage 1 uses key 1 only. Older samples also hold candidates found only by key 2; their
-    # excerpt cannot be cut around the hit, so they are left out.
-    sample = sample.filter(pc.equal(sample.column("via"), "key1"))
     wanted = set(sample.column("item").to_pylist())
     rows = []
     for path in parquet_files(items_root):

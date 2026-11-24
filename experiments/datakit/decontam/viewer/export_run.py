@@ -70,7 +70,7 @@ def flagged_doc(row: dict, texts: dict[str, ItemText], evals: dict[str, str]) ->
         "evals": list(row["matched_evals"]),
         # The viewer highlights the question of each matched item in both columns.
         "highlights": [texts[item].question for item in items if item in texts],
-        "matched_evals": [
+        "matched_items": [
             {"item": item, "eval": evals.get(item, ""), "text": texts[item].question if item in texts else ""}
             for item in items
         ],
@@ -95,7 +95,7 @@ def export_marks(marks: dict[str, StepSpec], items_dir: str, samples_per_source:
                 "docs": total,
                 "flagged": contaminated,
                 "rate": contaminated / total if total else 0.0,
-                "top_families": evals.most_common(TOP_EVALS),
+                "top_evals": evals.most_common(TOP_EVALS),
                 "samples": [flagged_doc(row, texts, evals_of) for row in rows],
             }
         )

@@ -60,7 +60,7 @@ function hl(text,phrases){text=text||'';var parts=text.split(/(\\s+)/);
  var out='',open=false;for(var i=0;i<parts.length;i++){
   if(pm[i]&&!open){out+='<mark>';open=true}if(!pm[i]&&open){out+='</mark>';open=false}out+=esc(parts[i])}
  if(open)out+='</mark>';return out}
-function evcol(d){var ng=d.highlights||[];var e=(d.matched_evals||[]).map(function(e){
+function evcol(d){var ng=d.highlights||[];var e=(d.matched_items||[]).map(function(e){
   return '<div class=evblock><div class=evh><span class=chip>'+esc(''+e.eval)+'</span> '+esc(e.item)+
    '</div><pre class=ev>'+hl(e.text,ng)+'</pre></div>'}).join('');
  return e||'<span class=meta>(eval text unavailable)</span>'}
@@ -68,7 +68,7 @@ function toggle(i){var r=document.getElementById('d'+i);r.classList.toggle('open
  if(r.dataset.filled)return;r.dataset.filled=1;var s=DATA.sources[i],h='';
  (s.samples||[]).forEach(function(d){var ng=d.highlights||[];
   h+='<div class=doc><span class=meta>score <span class=hi>'+d.max_score.toFixed(3)+
-   '</span> · '+(d.matched_evals||[]).length+' matched items · '+esc(d.id)+' · '+esc((d.evals||[]).join(', '))+'</span>'+
+   '</span> · '+(d.matched_items||[]).length+' matched items · '+esc(d.id)+' · '+esc((d.evals||[]).join(', '))+'</span>'+
    '<div class=cols>'+
     '<div class=col><div class=colh>document · '+esc(s.name)+'</div><pre>'+hl(d.text,ng)+'</pre></div>'+
     '<div class=col><div class=colh>matched eval items</div>'+evcol(d)+'</div>'+
@@ -82,7 +82,7 @@ function render(S){var f=(document.getElementById('flt').value||'').toLowerCase(
   var rc=s.rate>=0.005?'neg':s.rate>0?'hi':'zero';
   b+='<tr class=src onclick=toggle('+i+')><td>'+esc(s.name)+'</td><td class=num>'+s.docs.toLocaleString()+
    '</td><td class=num>'+s.flagged.toLocaleString()+'</td><td class="num rate '+rc+'">'+(100*s.rate).toFixed(3)+
-   '%</td><td>'+chips((s.top_families||[]).slice(0,6))+'</td></tr>'+
+   '%</td><td>'+chips((s.top_evals||[]).slice(0,6))+'</td></tr>'+
    '<tr class=docs id=d'+i+'><td colspan=5></td></tr>'});
  document.getElementById('tb').innerHTML=b}
 document.addEventListener('DOMContentLoaded',function(){render(DATA.sources);document.getElementById('flt').oninput=function(){render(DATA.sources)}});
@@ -106,7 +106,7 @@ def render_run(run: dict, *, summary_html: str = "") -> str:
         "<table><thead><tr>"
         "<th onclick=sortBy('name')>source</th><th class=num onclick=sortBy('docs')>docs</th>"
         "<th class=num onclick=sortBy('flagged')>flagged</th><th class=num onclick=sortBy('rate')>rate</th>"
-        "<th>top eval families</th></tr></thead><tbody id=tb></tbody></table>"
+        "<th>top evals</th></tr></thead><tbody id=tb></tbody></table>"
     )
     data = json.dumps(run).replace("</", "<\\/")  # script-safe embed
     return f"<!doctype html><meta charset=utf-8><title>decon {run['label']}</title><style>{_CSS}{head}<main>{summary_html}{table}</main><script>const DATA={data};</script>{_JS}"

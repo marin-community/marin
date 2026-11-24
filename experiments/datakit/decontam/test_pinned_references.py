@@ -20,6 +20,7 @@ from marin.datakit.decon_keys import KeyTable, record_pairs
 
 from experiments.datakit.decontam import pinned_references
 from experiments.datakit.decontam.eval_manifests import validate_required_manifest
+from experiments.datakit.decontam.items import item_row
 from experiments.datakit.decontam.pinned_references import (
     ReferenceFile,
     prepare_references,
@@ -39,21 +40,7 @@ def stage_one_candidates(tmp_path_factory):
     root = tmp_path_factory.mktemp("reference-behavior")
     items = root / "items"
     items.mkdir()
-    rows = [
-        {
-            "id": name,
-            "eval": name,
-            "suite": "coverage",
-            "question": sample["text"],
-            "choices": [],
-            "answer": "",
-            "prompt": "",
-            "passage": "",
-            "choices_mode": "none",
-            "reason": "",
-        }
-        for name, sample in SAMPLES.items()
-    ]
+    rows = [item_row(name, name, "coverage", sample["text"]) for name, sample in SAMPLES.items()]
     pq.write_table(pa.Table.from_pylist(rows, schema=ITEM_SCHEMA), items / "references.parquet")
     reference = root / "reference.parquet"
     pq.write_table(pa.Table.from_pylist([{"id": "r", "text": "an unrelated document about gardening"}]), reference)

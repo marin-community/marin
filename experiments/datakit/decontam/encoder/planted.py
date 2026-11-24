@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Planted-copy check of the frozen configuration (gate G2).
+"""Planted-copy check of stage 1 and stage 2.
 
 A Zephyr job over the item table plants copies of sampled items, in several forms, into real
 record text, and checks stage 1 on each: does the planted record hold the item's key 1, read as

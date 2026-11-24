@@ -265,7 +265,7 @@ def item_row(
     choices_mode: str = "none",
     reason: str = "",
 ) -> dict[str, Any]:
-    """One row of the item table (see ``SCHEMA``)."""
+    """One row of the item table (see ``marin.datakit.decon.ITEM_SCHEMA``)."""
     return {
         "id": record_id,
         "eval": eval_name,
@@ -497,6 +497,10 @@ class ItemTable(BaseModel):
     counters: dict[str, int | float]
 
 
+def _part_report_path(output_path: str, part: int) -> str:
+    return prefix_join(output_path, f"report/part-{part:02d}.json")
+
+
 def _make_part(lmh_manifest_path: str, coverage_manifest_path: str, output_path: str, parts: int):
     """A ``map_shard`` function over part numbers: each part writes the items of its share of the required lm-eval
     tasks (part 0 also AA, Uncheatable and the pinned references) and its report."""
@@ -517,7 +521,7 @@ def _make_part(lmh_manifest_path: str, coverage_manifest_path: str, output_path:
                     counts = summary(result.rows) if result.rows else {"items": 0}
                     report[result.name] = {"error": result.error, **counts}
                     logger.info("%s: %d items %s", result.name, counts["items"], result.error)
-            report_path = prefix_join(output_path, f"report/part-{part:02d}.json")
+            report_path = _part_report_path(output_path, part)
             StoragePath(report_path).write_text(json.dumps(report, indent=1))
             yield {"part": part, "evals": len(report)}
 
@@ -558,7 +562,7 @@ def build_items(
     )
     report: dict[str, Any] = {}
     for part in range(parts):
-        report.update(json.loads(StoragePath(prefix_join(output_path, f"report/part-{part:02d}.json")).read_text()))
+        report.update(json.loads(StoragePath(_part_report_path(output_path, part)).read_text()))
     expected = expected_records(lmh_manifest_path, coverage_manifest_path)
     failures = [
         f"{name}: {report.get(name, {}).get('items', 0)} items, expected {count} "
