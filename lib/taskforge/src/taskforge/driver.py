@@ -14,6 +14,7 @@ import sys
 import traceback
 from collections import Counter
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -44,7 +45,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.stages.classify import replayable_grade
+from taskforge.stages.classify import replay_rule
 from taskforge.wiring import endpoint_source, install, runtime
 
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
@@ -128,8 +129,8 @@ async def one(args: argparse.Namespace) -> None:
         return
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
-    wp = Workpiece(proposal.header.id, proposal)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
+    wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
     try:
         async with checkpoints.running():
             source = endpoint_source(
@@ -140,32 +141,34 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log, install=install)
+                wp[0] = await run_workpiece(
+                    proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
+                )
     except* (Superseded, CorruptJournal, PublicationFailed):
         raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
         if checkpoints.stopped is not None:
             raise  # A stopped writer records nothing more; the failure beside the stop keeps its identity.
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        wp[0] = wp[0].with_(terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete(reasons(error))))
+        await log.record(StageCompleted(None, "", "Held", wp[0].round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         if checkpoints.stopped is not None:
             raise
         detail = traceback.format_exc()
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+        wp[0] = wp[0].with_(terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete((f"bug: {detail}",))))
+        await log.record(StageCompleted(None, "", "bug", wp[0].round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
             raise error.exceptions[0] from None
         raise
     finally:
         if checkpoints.stopped is None:
-            # A terminal head needs the workpiece that reached it. A cancelled run holds an earlier value, even after
-            # its terminal event is durable, so it publishes a checkpoint that the next launch resumes by replay.
+            # A terminal head needs the workpiece that reached it. A cancelled run holds its last stage's start, even
+            # after its terminal event is durable, so it publishes a checkpoint that the next launch resumes by replay.
             status = fold(tuple(record.event for record in log.records))
-            matched = wp.terminal is not None and (status.round, status.terminal) == (wp.round, wp.terminal)
-            await checkpoints.finish(status if matched else Status(), wp)
+            matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
+            await checkpoints.finish(status if matched else Status(), wp[0])
 
 
 async def run(args: argparse.Namespace) -> None:

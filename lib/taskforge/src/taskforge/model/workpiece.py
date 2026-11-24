@@ -9,7 +9,7 @@ nested payloads and must replace them; persistence boundaries serialize snapshot
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import TypedDict, Unpack
+from typing import Annotated, TypedDict, Unpack
 
 from pydantic import TypeAdapter
 from taskcompendium.models import TaskSpec
@@ -18,7 +18,7 @@ from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, ToolSchema
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import BandOutcome, Decision, ValidationResult
+from taskforge.model.review import OMIT_NONE, BandOutcome, Decision, ValidationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +30,14 @@ class Submission:
     @property
     def digest(self) -> str:
         return digest((self.task, self.controls))
+
+
+@dataclass(frozen=True, slots=True)
+class Fallback:
+    """The submission a revision that leaves the acceptance band falls back to, and where it placed."""
+
+    submission: Submission
+    band: BandOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +62,7 @@ class WorkpieceChanges(TypedDict, total=False):
     evidence: tuple[ValidationResult, ...]
     decisions: tuple[Decision, ...]
     terminal: Terminal | None
-    too_easy_baseline: Submission | None
+    fallback: Fallback | None
     accepted_with: BandOutcome | None
 
 
@@ -68,7 +76,7 @@ class Workpiece:
     evidence: tuple[ValidationResult, ...] = ()
     decisions: tuple[Decision, ...] = ()
     terminal: Terminal | None = None
-    too_easy_baseline: Submission | None = None
+    fallback: Annotated[Fallback | None, OMIT_NONE] = None
     accepted_with: BandOutcome | None = None
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":

@@ -26,11 +26,13 @@ from lib.taskforge.tests.resources.inference_fakes import (
 from pydantic import TypeAdapter
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.models import GradedRollout, ModelRequest, TaskRolloutSpec, TraceMode
-from rolloutengine.test_support import arithmetic_task, rollout_spec
+from rolloutengine.models import GradedRollout, ModelRequest, Rollout, TaskRolloutSpec, TraceMode
+from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_spec
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge import wiring
-from taskforge.effects.issues import Hold, Restart
+from taskforge.effects.events import Resolved
+from taskforge.effects.issues import Restart
 from taskforge.llm import glm_provider
 from taskforge.llm.client import (
     CONFIRMATION_INTERVAL,
@@ -44,12 +46,14 @@ from taskforge.llm.client import (
 )
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ReasoningEffort, RetryPolicy
+from taskforge.lowering import requirements
 from taskforge.model.content_hash import json_value
-from taskforge.model.llm import FinishReason
+from taskforge.model.llm import FinishReason, ToolCall
 from taskforge.model.review import Cause
 from taskforge.policy import load_policy
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
-from taskforge.stages.classify import trial_cause
+from taskforge.resources.sandbox.factories import shellsim_factory
+from taskforge.stages.classify import replayable_grade, trial_cause
 from taskforge.wiring import provider_policy, solver_turn
 
 DEFAULTS = Path(__file__).parents[2] / "src/taskforge/policy/defaults"
@@ -291,12 +295,39 @@ async def test_an_outage_that_outlasts_the_turn_deadline_restarts_never_a_trial(
 
 
 # Review 2026-11-21: an unknown 400 wording was restarted twice by the rollout wrapper and the coordinator.
-async def test_a_solver_request_the_server_rejects_holds_at_once_with_its_status_and_reason() -> None:
+async def test_a_solver_request_the_server_rejects_holds_its_slot_at_once_with_its_status_and_reason() -> None:
     reason = "the prompt exceeds the input token budget"
     provider = ScriptedProvider((Fails(AttemptOutcome.REJECTED, status=400, detail=reason), segment("12")))
-    with pytest.raises(Hold, match=f"HTTP 400: {reason}"):
-        await rollout(client(provider, Time()))
-    assert len(provider.bodies) == 1
+    result = await rollout(client(provider, Time()))
+    assert trial_cause(result, SPEC.task) is Cause.HELD and "RequestRejected: " in (result.grade.error or "")
+    assert f"HTTP 400: {reason}" in (result.grade.error or "") and len(provider.bodies) == 1
+
+
+# Review 2026-11-21: a refusal on turn two recorded an empty rollout, dropping the paid first step.
+async def test_a_later_turn_refusal_keeps_the_paid_rollout_prefix_and_its_usage() -> None:
+    shell = ToolCall("c1", "shell", json.dumps({"command": "echo hi"}))
+    provider = ScriptedProvider(
+        (segment("", (shell,), FinishReason.TOOL_CALLS), Fails(AttemptOutcome.REJECTED, status=400))
+    )
+    machine = rollout_spec(
+        arithmetic_task(environment_requirements=requirements(image=None)),
+        machine=machine_runtime(backend="shellsim"),
+        trace=TraceMode.MESSAGES,
+        model_turn_timeout=5.0,
+    )
+    engine = RolloutEngine({"shellsim": shellsim_factory()}, {"shell": ShellHarness(command_timeout=None)})
+    resource = RolloutResource(engine, partial(solver_turn, client(provider), LLMPolicy()), "solver")
+    result = await run_rollout(SolverRollout(machine, 0, 0), resource, notify=lambda _: None)
+    assert trial_cause(result, machine.task) is Cause.HELD and len(provider.bodies) == 2
+    (step,) = result.rollout.conversations[0].steps
+    assert step.turn.metadata["usage"]["prompt_tokens"] == 10 and step.turn.metadata["usage"]["completion_tokens"] == 5
+
+
+# Review 2026-11-21: a model whose stop text was "held" and whose answer graded 1.0 was a missing slot.
+def test_no_model_output_reads_as_a_recorded_refusal() -> None:
+    answered = GradedRollout(Rollout("arithmetic:0:0", (), "held"), GradeResult(Outcome.GRADED, 1.0))
+    assert trial_cause(answered, SPEC.task) is None
+    assert replayable_grade(Resolved(SolverRollout(SPEC, 0, 0), (), answered))
 
 
 async def test_cancelling_a_solver_rollout_propagates() -> None:

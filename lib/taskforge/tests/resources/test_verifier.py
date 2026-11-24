@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Literal, override
+from typing import Literal, cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
 from lib.taskforge.tests.stage_fakes import OVER_CREDITED
-from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.models import GradedRollout, Model, ModelRequest, ModelTurn, Rollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
     Backend,
@@ -39,10 +41,10 @@ from taskforge.lowering import (
 )
 from taskforge.model.controls import Candidate
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.rollouts import RolloutResource, SolverRollout
+from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.resources.verifier import RoundVerifier
-from taskforge.stages.validate import claim_result
+from taskforge.stages.validate import claim_result, solver_batch
 
 SCRIPT = b"""
 from pathlib import Path
@@ -402,6 +404,67 @@ async def test_solver_machines_run_concurrently_before_shared_grading() -> None:
     finally:
         await pool.close()
     assert all(machine.closed for machine in factory.machines)
+
+
+class Admissions:
+    """The round verifier's engine, recording the run of every attempt it starts."""
+
+    def __init__(self, engine: RolloutEngine) -> None:
+        self.engine, self.started = engine, list[str]()
+        self.machine_factories = engine.machine_factories
+
+    async def run_task(
+        self,
+        spec: TaskRolloutSpec,
+        model: Model,
+        *,
+        run_id: str | None = None,
+        verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+    ) -> GradedRollout:
+        assert run_id is not None
+        self.started.append(run_id)
+        return await self.engine.run_task(spec, model, run_id=run_id, verifier=verifier)
+
+
+async def test_batch_slots_generate_before_verifier_admission_and_a_grade_is_admitted_before_its_attempt() -> None:
+    """A solver slot leases the verifier inside its grading, so its wait counts against its verifier deadline and
+    never holds back generation; a replayed candidate leases it before its attempt starts, outside every deadline."""
+    factory = CountedFactory()
+    pool, resource = setup(factory)
+    admissions = Admissions(pool.engine)
+    pool.engine = cast(RolloutEngine, admissions)
+    candidate = event()
+    task = candidate.spec.task.model_copy(update={"environment_requirements": requirements(image=None)})
+    spec = candidate.spec.model_copy(update={"task": task, "task_machine": machine_runtime(backend="shellsim")})
+    generated, everyone = [0], asyncio.Event()
+
+    async def model(request: ModelRequest) -> ModelTurn:
+        generated[0] += 1
+        if generated[0] == 3:
+            everyone.set()
+        return await twelve(request)
+
+    ctx = Context(log=EventLog())
+    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(pool.rollouts, model, "test"))
+    await pool.lock.acquire()  # a grade holds the verifier
+    held = True
+    try:
+        slots = asyncio.create_task(solver_batch(ctx, spec, "validation", 0, (), 0, 3, concurrency=3, heartbeat=300.0))
+        await asyncio.wait_for(everyone.wait(), 30)  # each slot generated while the verifier was held
+        grade = asyncio.create_task(resource.grade(candidate))
+        await asyncio.sleep(0)  # the grade runs up to its admission
+        assert sorted(admissions.started) == ["arithmetic:0:0", "arithmetic:1:0", "arithmetic:2:0"]
+        pool.lock.release()
+        held = False
+        results, graded = await slots, await grade
+        assert len(admissions.started) == 4 and admissions.started[3].endswith(":grade:0")
+        leases = [trial.grade.diagnostics["verifier_lease"] for trial in results if trial.grade is not None]
+        assert graded.reward == 1 and sorted((*leases, graded.diagnostics["verifier_lease"])) == [1, 2, 3, 4]
+    finally:
+        if held:
+            pool.lock.release()
+        await pool.close()
+    await ctx.drain()
 
 
 async def test_shared_verifier_cleanup_warns_and_releases_ownership(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -141,9 +141,10 @@ head; the first then fails with `Superseded` at its next checkpoint and publishe
 Readers follow only the chunks the head names. A root in any other journal format, including the
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
-defect direction with observed and deserved grades), fails with an error naming both formats and exits 4
+defect direction with observed and deserved grades) and format 4 (trials hydrated without a detail, a too-easy
+baseline in place of a digest-bound fallback), fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 4` and reports the
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 5` and reports the
 rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
@@ -226,8 +227,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
   the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
-  reverting to the earlier submission if the hardening broke something.
+  out of band, too easy or too hard, gets one band-only revision round and is then accepted at its own placement,
+  tagged `accepted_with: too_easy` or `too_hard`. Only a faulted revision, or one at a placement the policy never
+  accepts (`band.accept_too_easy: false`), reverts to the stored fallback.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each

@@ -63,6 +63,7 @@ from taskforge.harness.role import install_env
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.lowering import GRADING_MACHINE, TOOL_HARNESS, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
+from taskforge.resources import execution
 from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
@@ -109,6 +110,32 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
     assert "ImagePullBackOff" in str(failure.value)
     assert engine.run_ids == ["arithmetic:4:2"]
+
+
+# Review 2026-11-21: the solver batch narrowed the executor's retry to failures before the first model turn, so a lost
+# controller after the model acted moved from the earlier executor's and live Forge's in-place retry to a stage replay.
+@pytest.mark.parametrize(
+    "failure",
+    [MachineUnavailable("controller unavailable"), MachineCancelled("parent job terminated"), ExecSetupFailed("ws")],
+    ids=["unavailable", "cancelled", "exec setup"],
+)
+async def test_a_retryable_failure_after_the_model_acted_retries_inside_the_executor(
+    failure: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def instant(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(execution, "sleep", instant)
+    unavailable = RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.ADVANCE)
+    unavailable.__cause__ = failure
+    engine = FakeEngine((unavailable,) * execution.MAX_ATTEMPTS)
+    notes: list[Event[None]] = []
+    with pytest.raises(Restart, match="exhausted its retry budget"):
+        resource = RolloutResource(engine, twelve, "config")
+        await run_rollout(SolverRollout(rollout_spec(arithmetic_task()), 0, 0), resource, notify=notes.append)
+    # Each start called the model inside the executor before the fault: three starts, three calls, one effect.
+    assert len(engine.run_ids) == len(engine.replies) == 3
+    assert len(notes) == 2 and all(isinstance(note, Retrying) for note in notes)
 
 
 async def test_grading_runs_real_engine_without_inference() -> None:

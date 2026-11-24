@@ -4,6 +4,7 @@
 """Bind real adapters and executable policy at the process boundary."""
 
 import logging
+import math
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -318,16 +319,18 @@ def build_config(
         adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
     )
     budget = Budget(
-        policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
+        policy.setting("budget.max_modify_rounds", int),
+        policy.setting("budget.max_validation_retries", int),
+        policy.setting("budget.max_missing_trials", int),
     )
+    slots, beat = policy.setting("solver.concurrency", int), policy.setting("solver.heartbeat_interval", float)
+    if slots < 1 or not 0 < beat < math.inf or budget.max_missing_trials < 0:
+        raise ValueError("solver.concurrency, solver.heartbeat_interval or budget.max_missing_trials is out of range")
     band = BandRules(
         policy.setting("band.low", float),
         policy.setting("band.high", float),
-        (
-            frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})
-            if policy.setting("band.accept_too_easy", bool)
-            else frozenset({BandOutcome.IN_BAND})
-        ),
+        frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_HARD, BandOutcome.TOO_EASY})
+        - (set() if policy.setting("band.accept_too_easy", bool) else {BandOutcome.TOO_EASY}),
     )
     return TaskforgeConfig(policy, author, adversary, default_review, band, budget)
 

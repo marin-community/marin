@@ -10,6 +10,7 @@ again.
 
 import logging
 from collections.abc import Callable
+from functools import reduce
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -22,12 +23,13 @@ from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Accept, BandOutcome, Budget, Decision, Incomplete, Modify, Reject, Retry
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
+from taskforge.stages.rules import better
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -47,37 +49,50 @@ STAGE_REPLAY_ATTEMPTS = 3
 """Bound consecutive interrupted reconstructions of one stage visit; effect executors alone own retries."""
 
 
+def digest_of(fallback: Fallback | None) -> str | None:
+    return None if fallback is None else fallback.submission.digest
+
+
 def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Policy) -> Workpiece:
     """Record a review decision and apply it: terminal, a revision round, or unchanged for a retry.
 
-    A ``Modify`` past ``budget.max_modify_rounds`` becomes ``Abandon``. An ``Accept`` with ``revert``
-    falls back to the too-easy baseline, the submission validated before the hardening round.
+    A ``Modify`` past ``budget.max_modify_rounds`` becomes ``Abandon``; one keeps the fallback its ``fallback`` digest
+    names. An ``Accept`` with ``restore`` accepts the fallback, which must carry that digest.
     """
     if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
         decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
-        case Accept():
-            if decision.revert and wp.too_easy_baseline is None:
-                raise ValueError("Cannot revert hardening without the too-easy baseline")
+        case Accept(band, _, restore):
+            if restore is not None and (
+                wp.fallback is None or (digest_of(wp.fallback), wp.fallback.band) != (restore, band)
+            ):
+                raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
             return wp.with_(
                 terminal=Terminal.ACCEPTED,
-                submission=wp.too_easy_baseline if decision.revert else wp.submission,
-                accepted_with=BandOutcome.TOO_EASY if decision.band is BandOutcome.TOO_EASY else None,
+                submission=wp.fallback.submission if wp.fallback and restore else wp.submission,
+                accepted_with=None if band is BandOutcome.IN_BAND else band,
             )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
             return wp.with_(terminal=Terminal.ABANDONED)
-        case Modify(findings):
+        case Modify(findings, placement, fallback):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
+            current = Fallback(wp.submission, placement) if wp.submission and placement else None
+            named = [option for option in (current, wp.fallback) if option and digest_of(option) == fallback]
+            kept = reduce(better, named) if named else None
+            if digest_of(kept) != fallback:
+                raise ValueError(
+                    f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"
+                )
             system = tuple(message for message in wp.session.messages if message.role == "system")
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),
-                too_easy_baseline=wp.submission if decision.placement is BandOutcome.TOO_EASY else wp.too_easy_baseline,
+                fallback=kept,
             )
         case Retry():
             return wp
@@ -115,7 +130,9 @@ async def run_workpiece(
     log: EventLog,
     *,
     install: Callable[[Context, Resources], None],
+    reached: Callable[[Workpiece], None] = lambda _: None,
 ) -> Workpiece:
+    """``reached`` sees the workpiece each stage visit starts from, for a caller's diagnosis of an unexpected failure."""
     ctx = Context(log=log)
     wp = Workpiece(proposal.header.id, proposal)
     stage = Stage.AUTHOR
@@ -127,6 +144,7 @@ async def run_workpiece(
             install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
             while True:
+                reached(wp)
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:

@@ -15,6 +15,17 @@ from taskcompendium.grading_result import GradeResult
 
 from taskforge.model.controls import Candidate
 
+OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exclude_if=lambda value: value == "")
+"""Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
+default (``None`` or ``""``, marked ``Annotated[T, OMIT_NONE]`` or ``OMIT_EMPTY``), so adding it changes no existing
+serialised bytes, and no other valid value encodes like it. Canonical content digests still visit every field; a
+change of meaning bumps the journal format."""
+
+
+def nonempty(digest: str | None) -> None:
+    if digest == "":
+        raise ValueError("An empty string is never a digest")
+
 
 class Cause(StrEnum):
     """Why a trial has no grade. Incomplete evaluation cannot support acceptance."""
@@ -33,6 +44,8 @@ class Cause(StrEnum):
     INVALID_TASK = "invalid_task"
     VERIFIER_SKIPPED = "verifier_skipped"
     NO_GRADE = "no_grade"
+    HELD = "held"
+    """A solver slot whose effect held: typed missing evidence, never a failed trial."""
 
 
 class BandOutcome(StrEnum):
@@ -49,10 +62,15 @@ class RejectKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Accept:
+    """``restore`` names, by digest, the earlier submission accepted in place of the current one."""
+
     band: BandOutcome
     reasons: tuple[str, ...] = ()
-    revert: bool = False
+    restore: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["accept"] = "accept"
+
+    def __post_init__(self) -> None:
+        nonempty(self.restore)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,9 +82,15 @@ class Reject:
 
 @dataclass(frozen=True, slots=True)
 class Modify:
+    """``fallback`` names, by digest, the submission the next round falls back to."""
+
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
+    fallback: Annotated[str | None, OMIT_NONE] = None
     kind: Literal["modify"] = "modify"
+
+    def __post_init__(self) -> None:
+        nonempty(self.fallback)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +131,6 @@ class BandRules:
     def __post_init__(self) -> None:
         if not 0 <= self.low <= self.high <= 1:
             raise ValueError("the solve-rate band must satisfy 0 <= low <= high <= 1")
-        if self.accepted - {BandOutcome.IN_BAND, BandOutcome.TOO_EASY}:
-            raise ValueError("too-hard tasks cannot be accepted")
 
     def place(self, solve_rate: float) -> BandOutcome:
         if solve_rate < self.low:
@@ -123,6 +145,7 @@ class TrialResult:
     trial: int
     grade: GradeResult | None
     cause: Cause | None = None
+    detail: Annotated[str, OMIT_EMPTY] = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +299,8 @@ class ValidationResult:
 class Budget:
     max_modify_rounds: int
     max_validation_retries: int
+    max_missing_trials: int
+    """Solver slots a round may lack and still be placed over its scored ones; more hold it."""
 
 
 VALIDATION_RESULT = TypeAdapter(ValidationResult)

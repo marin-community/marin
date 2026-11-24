@@ -5,6 +5,7 @@
 """Classify completed grades and interrupted trials without discarding evidence."""
 
 import math
+from collections.abc import Callable, Sequence
 from types import MappingProxyType
 
 from rolloutengine.models import (
@@ -18,8 +19,10 @@ from taskcompendium.models import NoGrader, TaskSpec
 
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import Hold
+from taskforge.effects.log import Record
 from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
+from taskforge.resources.rollouts import refused
 
 # One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
 # has none: the grader_infra_unavailable observer holds validation before review sees such a grade.
@@ -30,6 +33,7 @@ CAUSE_DECISIONS = MappingProxyType(
         Cause.NO_GRADE: Retry,
         Cause.BUDGET_EXHAUSTED: Reject,
         Cause.GENERATION_LIMIT: Incomplete,
+        Cause.HELD: Incomplete,
         Cause.GRADER_MISSING_REWARD: Modify,
         Cause.GRADER_EMPTY_REWARD: Modify,
         Cause.GRADER_INVALID_REWARD: Modify,
@@ -74,13 +78,20 @@ def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | Non
 
 def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     stop = result.rollout.stop_reason
+    if refused(result):
+        return Cause.HELD
     if stop == TOTAL_TURN_TIMEOUT_STOP_REASON:
         return Cause.AGENT_TIMEOUT
     if stop == MAX_TURNS_STOP_REASON:
         return Cause.BUDGET_EXHAUSTED
-    if stop in (LENGTH_STOP_REASON, "context"):
+    if generation_limited(result):
         return Cause.GENERATION_LIMIT
     return grade_cause(result.grade, task)
+
+
+def generation_limited(result: GradedRollout) -> bool:
+    """The solver's generation reached its limit: a definitive failed trial whatever the grade says."""
+    return result.rollout.stop_reason in (LENGTH_STOP_REASON, "context")
 
 
 async def grader_infra_unavailable(event: Resolved[object]) -> None:
@@ -91,7 +102,18 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
-    """Resume successful evidence, but reevaluate unavailable infrastructure."""
+    """Resume successful evidence, generation cutoffs and slot holds, but reevaluate unavailable grading. A cutoff is
+    exempt only without a grade (no answer reached the grader); a graded answer cut at its limit whose grader failed
+    is retried like any grader infrastructure failure."""
     value = event.value
+    if isinstance(value, GradedRollout) and generation_limited(value) and grade_cause(value.grade) is Cause.NO_GRADE:
+        return True
     grade = value.grade if isinstance(value, GradedRollout) else value
-    return not isinstance(grade, GradeResult) or grade_cause(grade) not in (Cause.GRADER_INFRA, Cause.NO_GRADE)
+    unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
+    return refused(event.value) or not unavailable
+
+
+def replay_rule(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:
+    """``replayable_grade``, except that an explicit resume runs the slot holds an earlier launch recorded again."""
+    stale = {id(record.event) for record in previous if resume and isinstance(record.event, Resolved)}
+    return lambda event: replayable_grade(event) and not (id(event) in stale and refused(event.value))

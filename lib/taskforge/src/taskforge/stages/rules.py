@@ -6,6 +6,7 @@
 
 import math
 from collections import Counter
+from dataclasses import replace
 
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -26,7 +27,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import Workpiece
+from taskforge.model.workpiece import Fallback, Workpiece
 from taskforge.stages.classify import CAUSE_DECISIONS
 
 
@@ -54,39 +55,78 @@ def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
     )
 
 
+def missing(trial: TrialResult) -> bool:
+    """A solver slot without a score (held, timed out or ungraded): never a failed trial, never a zero."""
+    cause = trial.cause or (Cause.NO_GRADE if trial.grade is None else None)
+    return cause not in (None, Cause.GENERATION_LIMIT) and CAUSE_DECISIONS.get(cause) not in (Modify, Reject)
+
+
+def tagged(band: BandOutcome) -> tuple[str, ...]:
+    return () if band is BandOutcome.IN_BAND else (f"accepted_with: {band}",)
+
+
+def better(candidate: Fallback, stored: Fallback) -> Fallback:
+    """In band beats out of band; between equals, the later submission."""
+    return stored if stored.band is BandOutcome.IN_BAND and candidate.band is not BandOutcome.IN_BAND else candidate
+
+
+def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
+    """The one choice of the submission to fall back to, or accept: the stored fallback while the policy accepts its
+    band, against the current submission at ``placement`` when the policy accepts that. Returning the stored object
+    itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot tell rounds
+    apart."""
+    kept = workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
+    if workpiece.submission is None or placement is None or placement not in band.accepted:
+        return kept
+    current = Fallback(workpiece.submission, placement)
+    return current if kept is None else better(current, kept)
+
+
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    """Owner's ruling (2026-11-12): placement tags a task and never filters it. An out-of-band task gets one band-only
+    round within the shared budget and is then accepted tagged; a clean revision is placed on its own evidence and a
+    faulted one restores the fallback, named by digest and band."""
     result = workpiece.evidence[-1]
-    decision = assess(result, band)
+    decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
         retryable = [
             t.cause or (Cause.NO_GRADE if t.grade is None else None) for t in (*result.solver, *result.controls)
         ]
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
-        if cause is not None and retries < budget.max_validation_retries:
+        held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
+        if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
-    # A too-easy task gets one hardening round and is then accepted with `accepted_with: too_easy`.
-    # If the hardening moved it out of the too-easy band, the pre-hardening submission is restored.
-    if isinstance(decision, Modify) and BandOutcome.TOO_EASY in band.accepted:
-        if workpiece.too_easy_baseline is not None:
-            revert = decision.placement is not BandOutcome.TOO_EASY
-            reasons = ("accepted_with: too_easy",)
-            if revert:
-                reasons += ("Hardening regressed; reverted to the previously validated submission", *decision.findings)
-            return Accept(BandOutcome.TOO_EASY, (*reasons, *exhausted_notes(result)), revert=revert)
-        if decision.placement is BandOutcome.TOO_EASY and workpiece.round >= budget.max_modify_rounds:
-            reasons = ("accepted_with: too_easy", "Shared modification budget exhausted", *exhausted_notes(result))
-            return Accept(BandOutcome.TOO_EASY, reasons)
-    return decision
+    if not isinstance(decision, Modify):
+        return decision
+    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
+    final = workpiece.fallback is not None or workpiece.round >= budget.max_modify_rounds
+    chosen = fallback_for(workpiece, placement, band)
+    if (placement is not None and not final) or chosen is None:
+        return replace(decision, fallback=None if chosen is None else chosen.submission.digest)
+    notes = exhausted_notes(result)
+    if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
+        why = (
+            "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
+        )
+        return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
+    fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
+    why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
+    return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
 
 
-def assess(result: ValidationResult, band: BandRules) -> Decision:
+def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:
+    """Decide on ``result``: a round lacking more than ``max_missing`` solver scores is incomplete, and one lacking
+    fewer is placed over the slots that have one."""
     if result.lowering_error is not None:
         decision = Modify if result.lowering_cause is Cause.INVALID_TASK else Incomplete
         return decision((f"Lowering failed: {result.lowering_error}",))
     if not result.solver or not result.controls:
         return Incomplete(("Required solver or control evidence is absent",))
-    trials = (*result.solver, *result.controls, *(f for a in result.adversary for f in a.findings))
+    scored = tuple(trial for trial in result.solver if not missing(trial))
+    absent = len(result.solver) - len(scored)
+    solver = scored if absent <= max_missing else result.solver
+    trials = (*solver, *result.controls, *(f for a in result.adversary for f in a.findings))
     causes = Counter(
         t.cause or (Cause.NO_GRADE if t.grade is None else None)
         for t in trials
@@ -103,6 +143,8 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         if trial.status is AdversaryStatus.FAILED
         for reason in trial.reasons or ("Adversary search is incomplete (reason unavailable)",)
     )
+    unavailable += tuple(f"solver trial {t.trial}: {t.detail}" for t in solver if t.detail)
+    unavailable += ("No solver trial has a score",) * (not scored)
     if unavailable:
         return Incomplete(unavailable)
     if causes[Cause.BUDGET_EXHAUSTED]:
@@ -126,17 +168,14 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     )
     if findings:
         return Modify(findings)
-    solved = sum(
-        passed(trial.grade)
-        for trial in result.solver
-        if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
-    )
-    place = band.place(solved / len(result.solver))
+    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
+    place = band.place(solved / len(scored))
+    notes = (f"{absent} of {len(result.solver)} solver trials have no score; placed over {len(scored)}",) * bool(absent)
     if place is BandOutcome.IN_BAND and place in band.accepted:
-        return Accept(place, exhausted_notes(result))
-    finding = f"{solved} of {len(result.solver)} trials solved: {place}"
+        return Accept(place, (*notes, *exhausted_notes(result)))
+    finding = f"{solved} of {len(scored)} trials solved: {place}"
     if place is BandOutcome.TOO_EASY:
         finding += (
             ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
         )
-    return Modify((finding,), placement=place)
+    return Modify((finding, *notes), placement=place)
