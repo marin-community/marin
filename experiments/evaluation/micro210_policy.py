@@ -16,16 +16,21 @@ LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfc
 LEGACY_POLICY_REVISION = "2026.11.18"
 LEGACY_POLICY_COMMIT = "6ae1211cf3aa80beb0ca364b171f149a9506c05a"
 
+PRIOR_POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
+PRIOR_POLICY_VERSION = "2026.11.20"
+PRIOR_POLICY_REVISION = f"{PRIOR_POLICY_VERSION}-together"
+PRIOR_POLICY_COMMIT = "fa38e3eacc25137c9febe898119f08d65cc5ce88"
+
 POLICY_REPO = "open-athena/micro210-policy"
-POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
-POLICY_VERSION = "2026.11.20"
+POLICY_DIGEST = "9d850b9f05c13c7a56df4c0bd9db23e7c805c505018cd330b175519ddca2057e"
+POLICY_VERSION = "2026.11.23"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
-POLICY_COMMIT = "fa38e3eacc25137c9febe898119f08d65cc5ce88"
+POLICY_COMMIT = "7ab57cf5e33cacc98440bfcc2dfd452b94c44344"
 
 # The prepared table re-hosts benchmark items that must not be public, so it lives in a
 # private repository that CoreWeave tasks read with the standard HF_TOKEN.
 PREPARED_REPO = "open-athena/micro210-prepared-tasks"
-PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
+PREPARED_COMMIT = "2d33d7be129e6a93bb4279af8a4998a6915771a9"
 
 
 HARBOR_RUNTIME_FIELD_RENAMES = (
@@ -72,24 +77,31 @@ LEGACY_POLICY_REFERENCE = Micro210PolicyReference(
 )
 
 
+PRIOR_POLICY_REFERENCE = Micro210PolicyReference(
+    uri=f"hf://datasets/{POLICY_REPO}@{PRIOR_POLICY_COMMIT}/policy.json",
+    revision=PRIOR_POLICY_REVISION,
+    sha256=PRIOR_POLICY_DIGEST,
+    byte_size=121292,
+)
+
+
 POLICY_REFERENCE = Micro210PolicyReference(
     uri=f"hf://datasets/{POLICY_REPO}@{POLICY_COMMIT}/policy.json",
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
-    byte_size=121292,
+    byte_size=131430,
 )
 
-# The staged-in-regional-storage new version is re-added with its content digest after
-# the prepared table build; the default stays on the HF pin until the new policy and
-# private prepared table have immutable HF commit revisions.
-SPEC_POLICY_VERSION = "2026.11.23"
-SPEC_POLICY_REVISION = f"{SPEC_POLICY_VERSION}-together"
+# The 2026.11.23-together seal: every script-graded row's TaskSpec is self-contained, the
+# two unbuildable harbor slots are dropped, and the broken HumanEval/130 is swapped for
+# the image-free HumanEval/51. The seal's removals and swaps ride inside the policy
+# (task_changes) and the launcher binds this pin by content digest.
 
 
 # The prepared table re-hosts benchmark items that must not be public, so it lives in a
 # private repository that CoreWeave tasks read with the standard HF_TOKEN.
 PREPARED_REPO = "open-athena/micro210-prepared-tasks"
-PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
+PREPARED_COMMIT = "2d33d7be129e6a93bb4279af8a4998a6915771a9"
 
 
 @dataclass(frozen=True)

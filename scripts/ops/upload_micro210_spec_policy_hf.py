@@ -16,8 +16,8 @@ from huggingface_hub import HfApi, create_repo
 
 from experiments.evaluation.micro210_policy import (
     POLICY_REPO,
+    POLICY_REVISION,
     PREPARED_REPO,
-    SPEC_POLICY_REVISION,
 )
 from experiments.evaluation.micro210_spec_grading import driver_sha256
 from scripts.ops.upload_micro210_policy_hf import prepare_hf_token, publish_version, read_and_verify
@@ -71,7 +71,7 @@ def main() -> None:
         raise SystemExit("HF identity is not an open-athena member; refusing to publish")
     raw = arguments.policy.read_bytes()
     policy = json.loads(raw)
-    if policy["policy_version"] != SPEC_POLICY_REVISION:
+    if policy["policy_version"] != POLICY_REVISION:
         raise ValueError("Staged policy version differs from its pin")
     if policy["grader_embed"]["driver_sha256"] != driver_sha256():
         raise ValueError("Staged policy driver digest differs from the committed driver")
@@ -91,8 +91,8 @@ def main() -> None:
         policy_commit = publish_version(
             api,
             POLICY_REPO,
-            SPEC_POLICY_REVISION,
-            f"Publish Micro210 policy {SPEC_POLICY_REVISION}",
+            POLICY_REVISION,
+            f"Publish Micro210 policy {POLICY_REVISION}",
             POLICY_CARD,
             raw,
             "policy.json",
@@ -102,8 +102,8 @@ def main() -> None:
         prepared_commit = publish_version(
             api,
             PREPARED_REPO,
-            SPEC_POLICY_REVISION,
-            f"Publish Micro210 prepared tasks {SPEC_POLICY_REVISION}",
+            POLICY_REVISION,
+            f"Publish Micro210 prepared tasks {POLICY_REVISION}",
             PREPARED_CARD,
             str(prepared_path),
             "rollouts.parquet",

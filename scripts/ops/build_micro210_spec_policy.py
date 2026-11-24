@@ -27,7 +27,7 @@ from experiments.evaluation.micro210_inputs import (
     reject_fixed_choice_positions,
     truthfulqa_choice_task,
 )
-from experiments.evaluation.micro210_policy import POLICY_REFERENCE, SPEC_POLICY_REVISION, SPEC_POLICY_VERSION
+from experiments.evaluation.micro210_policy import POLICY_REVISION, POLICY_VERSION, PRIOR_POLICY_REFERENCE
 from experiments.evaluation.micro210_spec_grading import (
     HARBOR_PI_ADAPTER_PATCH,
     MBPP_FLOAT_TOLERANCE_PATCH,
@@ -50,7 +50,10 @@ def sha256(path: Path) -> str:
 def verify_source(source_rollouts: Path, source_policy: Path) -> dict:
     """Verify the frozen 2026.11.20-together pins and return the parsed policy."""
     old_policy_bytes = source_policy.read_bytes()
-    if len(old_policy_bytes) != POLICY_REFERENCE.byte_size or sha256(source_policy) != POLICY_REFERENCE.sha256:
+    if (
+        len(old_policy_bytes) != PRIOR_POLICY_REFERENCE.byte_size
+        or sha256(source_policy) != PRIOR_POLICY_REFERENCE.sha256
+    ):
         raise ValueError("Source policy does not match the frozen Micro210 policy reference")
     old_policy = json.loads(old_policy_bytes)
     if sha256(source_rollouts) != old_policy["prepared_rollouts_sha256"]:
@@ -184,7 +187,7 @@ def main() -> None:
         if missing := EXPECTED_CHOICE_BENCHMARKS - counts.keys():
             raise ValueError(f"Micro210 choice audit missed benchmark(s): {sorted(missing)}")
     digest = sha256(prepared)
-    location = str(StoragePath(PREPARED_ROOT) / SPEC_POLICY_VERSION / digest)
+    location = str(StoragePath(PREPARED_ROOT) / POLICY_VERSION / digest)
     rows = pq.read_table(prepared, columns=["task_id", "task_spec", "task_rollout_spec", "repetition_index"]).to_pylist()
 
     environment_path = arguments.output / "environment.json"
@@ -210,8 +213,8 @@ def main() -> None:
     if installed_agent.get("agent", {}).get("kwargs", {}).pop("mcp_adapter_version", None) is None:
         raise ValueError("The frozen policy does not carry the expected mcp_adapter_version pin")
     policy.update(
-        policy_version=SPEC_POLICY_REVISION,
-        previous_policy_sha256=POLICY_REFERENCE.sha256,
+        policy_version=POLICY_REVISION,
+        previous_policy_sha256=PRIOR_POLICY_REFERENCE.sha256,
         prepared_inputs_uri=location,
         prepared_rollouts_sha256=digest,
         task_environment_sha256=sha256(environment_path),

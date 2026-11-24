@@ -59,7 +59,7 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Relocation needs a new adoption identity even though the prepared bytes are unchanged.
-PREPARED_INPUTS_VERSION = "2026.11.23.1"
+PREPARED_INPUTS_VERSION = "2026.11.23.2"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 JUDGE_API_KEY = "JUDGE_API_KEY"
