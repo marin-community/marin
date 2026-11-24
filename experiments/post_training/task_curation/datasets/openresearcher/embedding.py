@@ -159,7 +159,7 @@ def visible_gpus(embed_python: str) -> int:
     return count
 
 
-def verify_entries(entries: list[dict], shards: list[Path]) -> int:
+def verify_entries(entries: list[dict], shards: list[Path], expected_documents: int = EXPECTED_DOCUMENTS) -> int:
     """Require one manifest entry per corpus shard, with internally consistent digests."""
     expected = sorted(shard.name for shard in shards)
     if sorted(entry["shard"] for entry in entries) != expected:
@@ -170,8 +170,8 @@ def verify_entries(entries: list[dict], shards: list[Path]) -> int:
         if rows != entry["documents"] or rows <= 0:
             raise ValueError(f"Vector shard row count disagrees with its manifest: {entry['vectors']}")
         total += entry["documents"]
-    if total != EXPECTED_DOCUMENTS:
-        raise ValueError(f"Corpus contains {total} embedded documents; expected {EXPECTED_DOCUMENTS}")
+    if total != expected_documents:
+        raise ValueError(f"Corpus contains {total} embedded documents; expected {expected_documents}")
     return total
 
 
@@ -183,7 +183,7 @@ def adopt_regional_parts(output: StoragePath, staged_output: Path) -> set[str]:
     regional_receipts = output / "part-receipts"
     if not regional_receipts.exists():
         return adopted
-    for receipt_path in sorted(regional_receipts.glob("*.json")):
+    for receipt_path in sorted((regional_receipts / "*.json").glob(), key=str):
         entry = json.loads(receipt_path.read_text())
         vectors_target = staged_output / "vectors" / entry["vectors"]
         docids_target = staged_output / "docids" / entry["docids"]
@@ -194,7 +194,9 @@ def adopt_regional_parts(output: StoragePath, staged_output: Path) -> set[str]:
                 adopted.add(entry["shard"])
                 continue
         for relative in (f"vectors/{entry['vectors']}", f"docids/{entry['docids']}"):
-            with (output / relative).open("rb") as reader, (staged_output / relative).open("wb") as writer:
+            target = staged_output / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with (output / relative).open("rb") as reader, target.open("wb") as writer:
                 shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
         vectors_target = staged_output / "vectors" / entry["vectors"]
         docids_target = staged_output / "docids" / entry["docids"]
@@ -232,9 +234,7 @@ def upload_completed_parts(output: StoragePath, staged_output: Path, uploaded: s
                 with source.open("rb") as reader, destination.open("wb", auto_mkdir=True) as writer:
                     shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
                 actual = file_sha256(StoragePath(str(destination)))
-                if actual != expected_sha or (
-                    expected_bytes is not None and destination.stat().st_size != expected_bytes
-                ):
+                if actual != expected_sha or (expected_bytes is not None and destination.size() != expected_bytes):
                     raise ValueError(f"Regional part upload differs: {relative}")
             (output / "part-receipts" / receipt_path.name).write_text(receipt_path.read_text())
             uploaded.add(name)
@@ -246,14 +246,22 @@ def upload_completed_parts(output: StoragePath, staged_output: Path, uploaded: s
 
 
 def run_workers(
-    config: EmbeddingConfig, shards: list[Path], model_manifest: list[dict], work: Path, output: StoragePath
+    config: EmbeddingConfig,
+    shards: list[Path],
+    model_manifest: list[dict],
+    work: Path,
+    output: StoragePath,
+    *,
+    gpu_count: int | None = None,
+    device: str = "cuda",
+    expected_documents: int = EXPECTED_DOCUMENTS,
 ) -> list[dict]:
     """Embed every corpus shard once across the visible GPUs, then verify each part."""
     staged_output = work / "embedding-output"
     staged_output.mkdir(parents=True, exist_ok=False)
     uploaded = adopt_regional_parts(output, staged_output)
-    gpus = visible_gpus(config.embed_python)
-    logger.info("Embedding %d corpus shards across %d GPUs", len(shards), gpus)
+    gpus = gpu_count if gpu_count is not None else visible_gpus(config.embed_python)
+    logger.info("Embedding %d corpus shards across %d %s workers", len(shards), gpus, device)
     workers = []
     for worker in range(min(gpus, len(shards))):
         plan = work / f"plan-{worker}.json"
@@ -266,6 +274,7 @@ def run_workers(
                     "shards": [str(shard) for shard in shards[worker::gpus]],
                     "model_manifest": model_manifest,
                     "max_tokens": config.max_embed_tokens,
+                    "device": device,
                 }
             )
         )
@@ -293,18 +302,28 @@ def run_workers(
             )
         )
     stop = threading.Event()
-    uploader = threading.Thread(target=upload_completed_parts, args=(output, staged_output, uploaded, stop), daemon=True)
+    uploader_error: list[BaseException] = []
+
+    def upload_until_done() -> None:
+        try:
+            upload_completed_parts(output, staged_output, uploaded, stop)
+        except BaseException as error:  # noqa: BLE001 - surfaced after the workers finish
+            uploader_error.append(error)
+
+    uploader = threading.Thread(target=upload_until_done, daemon=True)
     uploader.start()
     failures = [number for number, worker in enumerate(workers) if worker.wait() != 0]
     stop.set()
     uploader.join()
+    if uploader_error:
+        raise RuntimeError(f"Regional part upload failed: {uploader_error[0]!r}") from uploader_error[0]
     if failures:
         raise RuntimeError(f"Embedding workers failed: {failures}")
     entries = []
     for worker in range(len(workers)):
         entries.extend(json.loads((staged_output / f"worker-manifest-{worker}.json").read_text()))
     entries.sort(key=lambda entry: entry["shard"])
-    total = verify_entries(entries, shards)
+    total = verify_entries(entries, shards, expected_documents)
     logger.info("Embedded %d documents; verifying regional uploads", total)
     manifest = json.dumps(entries, indent=2) + "\n"
     (output / "shard-manifest.json").write_text(manifest)

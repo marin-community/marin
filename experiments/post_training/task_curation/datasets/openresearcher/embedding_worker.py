@@ -148,14 +148,15 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    if not torch.cuda.is_available():
-        raise RuntimeError("The embedding worker requires a CUDA device")
     plan = json.loads(Path(args.plan).read_text())
     model_dir, output = Path(args.model_dir), Path(args.output)
     verify_model(model_dir, plan["model_manifest"])
+    device = plan.get("device", "cuda")
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("The embedding worker requires a CUDA device")
     tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, padding_side="left")
     model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.bfloat16, local_files_only=True)
-    model.to("cuda").eval()
+    model.to(device).eval()
     if model.config.hidden_size != EMBEDDING_DIM:
         raise ValueError(
             f"Pinned encoder hidden size {model.config.hidden_size} differs from the dense contract {EMBEDDING_DIM}"
