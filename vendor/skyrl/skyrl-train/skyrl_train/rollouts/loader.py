@@ -129,10 +129,10 @@ class PromptLoader:
     after that it waits until the prompt order offers it again.
 
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
-    every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
-    offers it again with a fresh count. The same rejections follow an infrastructure failure, so a prompt must be
-    able to return. Quarantine keeps enough prompts for one batch, or enough in each family for every open batch
-    when batches specify groups per family. Retry counts and quarantine restart empty when a run resumes.
+    every sample, is quarantined for ``QUARANTINE_STEPS`` completed batches. Quarantine keeps enough prompts for one
+    batch, or enough in each family for every open batch when batches specify groups per family. When that minimum
+    keeps a failing prompt in rotation, the loader gives one quarantined prompt in the same pool an early retry.
+    A usable group ends quarantine early. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -178,6 +178,7 @@ class PromptLoader:
         self._unusable_groups: dict[str, int] = {}
         # Quarantined uid to the training step that releases it.
         self._quarantined: dict[str, int] = {}
+        self._early_retries: set[str | None] = set()
         self._step = 0
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
@@ -185,10 +186,11 @@ class PromptLoader:
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
-        """Offer a prompt in the requested family whose uid is neither live nor quarantined.
+        """Offer a non-live prompt in the requested family.
 
-        Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
-        a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
+        Prompts awaiting regeneration come first, followed by a pending early quarantine retry. A family lease
+        advances only that family's seeded pass. Without a family lease, two batches' worth of draws precede a
+        scan that can pick a row the order weights at zero.
         """
 
         def eligible(uid: str) -> bool:
@@ -198,10 +200,27 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
+        if family in self._early_retries:
+            self._early_retries.remove(family)
+            uid = next(
+                (
+                    uid
+                    for uid in self._quarantined
+                    if uid not in live and (family is None or self._families.get(uid) == family)
+                ),
+                None,
+            )
+            if uid is not None:
+                # Rotate candidates so one persistent failure cannot take every early retry.
+                self._quarantined[uid] = self._quarantined.pop(uid)
+                return self._offer(self._uid_rows[uid])
         if family is not None:
             return self._next_family_prompt(live, family)
-        # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
-        if len(live) + len(self._quarantined) >= self._uid_count:
+        # An early retry can be both live and quarantined.
+        if (
+            len(live) + len(self._quarantined) >= self._uid_count
+            and len(self._quarantined.keys() | live) >= self._uid_count
+        ):
             return None
         for _ in range(self._draw_limit):
             index = self._order.next_index()
@@ -234,6 +253,9 @@ class PromptLoader:
     def retry(self, prompt: dict) -> None:
         """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
         uid = prompt["uid"]
+        # A stale early retry stays quarantined until another offer or the cooldown ends.
+        if uid in self._quarantined:
+            return
         count = self._stale_retries.pop(uid, 0)
         if count >= self._max_stale_retries:
             self._retries_exhausted += 1
@@ -247,6 +269,9 @@ class PromptLoader:
             return
         if disposition not in UNUSABLE_GROUP_REJECTIONS:
             self._unusable_groups.pop(uid, None)
+            self._quarantined.pop(uid, None)
+            return
+        if uid in self._quarantined:
             return
         count = self._unusable_groups.get(uid, 0) + 1
         if count < self._max_unusable_groups:
@@ -256,13 +281,18 @@ class PromptLoader:
         family = self._families.get(uid)
         if family is not None and family in self._family_minimums:
             minimum = self._family_minimums[family]
-            usable = len(self._family_rows[family]) - sum(self._families.get(uid) == family for uid in self._quarantined)
+            quarantined = sum(self._families.get(uid) == family for uid in self._quarantined)
+            usable = len(self._family_rows[family]) - quarantined
             scope = f" in family {family!r}"
         else:
+            family = None
             minimum = self._batch_size
-            usable = self._uid_count - len(self._quarantined)
+            quarantined = len(self._quarantined)
+            usable = self._uid_count - quarantined
             scope = ""
         if usable <= minimum:
+            if quarantined:
+                self._early_retries.add(family)
             logger.warning(
                 "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
                 "requires {} usable prompts{}",
@@ -293,6 +323,7 @@ class PromptLoader:
         """
         self._step += 1
         self._quarantined = {uid: release for uid, release in self._quarantined.items() if release > self._step}
+        self._early_retries.clear()
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
         return {
             **self._order.observe(groups),

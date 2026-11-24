@@ -3,6 +3,7 @@
 import pytest
 from loguru import logger
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_train.group_admission import AdmissionRejection
 from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
 
@@ -75,6 +76,67 @@ def test_usable_group_resets_the_count():
     assert "0" in offered(prompts, 4)
 
 
+@pytest.mark.parametrize("family", [None, "agentic"])
+def test_recovered_prompt_fills_the_missing_group(family: str | None):
+    if family is None:
+        prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=3)
+        live = set()
+    else:
+        prompts = PromptLoader(
+            Prompts(5),
+            SeededPasses(5, seed=0, shuffle=False),
+            batch_size=3,
+            max_stale_retries=1,
+            max_unusable_groups=3,
+            families={"0": family, "1": family, "2": family, "3": "math", "4": "math"},
+            family_minimums={family: 2, "math": 1},
+        )
+        # A quarantine in another pool precedes the one that can fill this slot.
+        for _ in range(3):
+            prompts.record_disposition("3", UNUSABLE)
+        live = {"4"}
+
+    for _ in range(3):
+        prompts.record_disposition("0", UNUSABLE)
+    kept = prompts.next_prompt(live=live, family=family)
+    assert kept is not None and kept["uid"] == "1"
+    live.add(kept["uid"])
+
+    # With one group missing, prompt 2 keeps failing and the cooldown clock cannot advance.
+    for _ in range(3):
+        failed = prompts.next_prompt(live=live, family=family)
+        assert failed is not None and failed["uid"] == "2"
+        prompts.record_disposition(failed["uid"], UNUSABLE)
+
+    recovered = prompts.next_prompt(live=live, family=family)
+    assert recovered is not None and recovered["uid"] == "0"
+    assert recovered.get(FAMILY_COLUMN) == family
+    prompts.record_disposition(recovered["uid"], "consumed")
+    assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == (0.0 if family is None else 1.0)
+
+
+def test_failed_early_retry_preserves_quarantine_and_rotates_candidates():
+    prompts = loader(num_rows=4, batch_size=2, max_unusable_groups=1)
+    for uid in ("0", "1", "3"):
+        prompts.record_disposition(uid, UNUSABLE)
+
+    live = {"2"}
+    first = prompts.next_prompt(live=live)
+    assert first is not None and first["uid"] == "0"
+    live.add(first["uid"])
+    other = prompts.next_prompt(live=live)
+    assert other is not None and other["uid"] == "3"
+
+    live.remove(first["uid"])
+    prompts.record_disposition(first["uid"], UNUSABLE)
+    live.add(other["uid"])
+    assert prompts.next_prompt(live=live) is None
+    live.remove(other["uid"])
+    prompts.record_disposition(other["uid"], UNUSABLE)
+    next_retry = prompts.next_prompt(live=live)
+    assert next_retry is not None and next_retry["uid"] == "1"
+
+
 def test_quarantine_keeps_enough_prompts_for_each_open_batch():
     families = {str(index): "agentic" if index >= 7 else "math" for index in range(10)}
     prompts = PromptLoader(
@@ -89,6 +151,7 @@ def test_quarantine_keeps_enough_prompts_for_each_open_batch():
     for uid in ("7", "8", "9"):
         prompts.record_disposition(uid, UNUSABLE)
 
+    assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
     first = prompts.next_prompt(live=(), family="agentic")
     assert first is not None
     second = prompts.next_prompt(live={first["uid"]}, family="agentic")
@@ -140,5 +203,5 @@ def test_quarantine_keeps_one_batch_of_prompts():
         prompts.record_disposition(uid, UNUSABLE)
         prompts.record_disposition(uid, UNUSABLE)
 
-    assert sorted(set(offered(prompts, 6))) == ["1", "2", "3"]
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
+    assert sorted(set(offered(prompts, 6))) == ["1", "2", "3"]
