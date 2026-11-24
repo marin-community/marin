@@ -113,7 +113,7 @@ flowchart TD
         KM["train K-means + K views<br/>datakit/cluster/train_centroids"]
     end
 
-    ITEMS["eval item table<br/>datakit/decontam/_items"]
+    ITEMS["eval item table (prepared per region)<br/>datakit/decontam/items/&lt;version&gt;"]
     KEYS["rarest 20-char key per item (cross-source counts)<br/>datakit/decontam/_keys"]
     EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
     DEDUP["fuzzy candidate clusters (cross-source)<br/>datakit/dedup"]
@@ -171,9 +171,11 @@ flowchart TD
 
 The decontamination stages (`marin.datakit.decon`) mark the records that hold a copy of an eval item:
 
-1. `datakit/decontam/_items` builds the item table: one row per eval record of the sealed AA, Uncheatable,
-   LMH and pinned-reference corpora, with its question, choices, answer and passage. A required eval that
-   fails to load, or that has another record count than its manifest, fails the step.
+1. The item table holds one row per eval record of the sealed AA, Uncheatable, LMH and pinned-reference
+   corpora, with its question, choices, answer and passage. It is prepared once per region at
+   `datakit/decontam/items/<ITEMS_VERSION>` with `python -m experiments.datakit.decontam.items` (cpu and
+   lm_eval extras, `HF_TOKEN`). A required eval that fails to load, or that has another record count than its
+   manifest, fails the build.
 2. `datakit/decontam/_keys` chooses each item's key: the 20-character window of its normalized letters and
    digits that the fewest records of a reference sample hold (two shards per source).
 3. `datakit/decontam/<source>` scans every record for keys (stage 1), scores each record–item pair with two
@@ -185,8 +187,7 @@ The attributes have the input's shard names and row order: `id`, `partition_id`,
 `outputs/flagged_sample/`. The measurements behind the method are in
 [`decontam/encoder/README.md`](decontam/encoder/README.md).
 
-Each region that runs the stages needs the eval corpus, the pinned references and the models under its
-`MARIN_PREFIX`. Score workers sync the `gpu` extra for the CUDA build of torch; where there are no GPUs (the
+Each region that runs the stages needs the item table and the models under its `MARIN_PREFIX`. Score workers sync the `gpu` extra for the CUDA build of torch; where there are no GPUs (the
 GCP ferries), `CPU_SCORE_WORKERS` scores on CPU.
 
 ## Evaluation references
@@ -203,12 +204,12 @@ Prepare the supplement with
 `python -m experiments.datakit.decontam.pinned_references` on a CPU worker in
 the output bucket's region, with the usual `cpu` and `datakit` extras and
 regional `MARIN_PREFIX`. Source commits, input/output SHA-256 values and exact
-counts are sealed in its manifest. Then run the reference pipeline with
-`--target decon-items` to build a new item table. Existing marks require
+counts are sealed in its manifest. Then prepare a new item table (bump
+`ITEM_BUILDER_REVISION` or the reference version). Existing marks require
 an explicit rebuild to use it.
 
 The supplement currently exists only under `s3://marin-us-east-02a/marin`.
-Because its manifest is required, `--target decon-items` fails against
+Because its manifest is required, the item table build fails against
 `gs://marin-us-central2` or `gs://marin-eu-west4` until the supplement is
 prepared there with the command above and that region's `MARIN_PREFIX`.
 

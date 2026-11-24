@@ -38,11 +38,12 @@ JSON dump loses about a third of its windows, because `\n` before a word reads a
 
 ## Pipeline
 
-The production stages are pipeline targets (see the `reference_pipeline.py` docstring):
+The item table is prepared once per region (`python -m experiments.datakit.decontam.items`); the other
+production stages are pipeline targets (see the `reference_pipeline.py` docstring):
 
-| Target | Library | Output |
+| Stage | Code | Output |
 |---|---|---|
-| `decon-items`: one row per required eval record (question, choices, answer, passage) | `experiments/datakit/decontam/items.py` | `items/<part>.parquet`, `report.json` |
+| Item table: one row per required eval record (question, choices, answer, passage) | `experiments/datakit/decontam/items.py` | `items/<eval>.parquet`, `report.json` |
 | `decon-keys`: count candidate windows in two reference shards per source, keep the rarest | `marin.datakit.decon.build_keys`, `decon_keys` | `keys.parquet`, `locators.parquet` |
 | `decon-mark`: scan, GPU scoring, marks per source | `marin.datakit.decon.decon_source`, `decon_pairs` | `outputs/main/`, `outputs/flagged_sample/` |
 
@@ -68,7 +69,7 @@ source (seed 7) from the shards that are not reference shards of the keys.
 
 The research steps run on Iris (`cw-us-east-02a`), at interactive priority. `$T` is a scratch prefix, for
 example `s3://marin-us-east-08a/tmp/ttl=7d/$USER`; `$ITEMS` and `$KEYS` are the output directories of the
-`decon-items` and `decon-keys` steps. GPU jobs need `--disk 100GB`: the default 5 GB disk is too small for
+item table and of the `decon-keys` step. GPU jobs need `--disk 100GB`: the default 5 GB disk is too small for
 the model and the pairs.
 
 ```bash
@@ -178,8 +179,8 @@ plain, parenthesized, extra-option, no-line-break and JSON-escaped (once and twi
 Markdown. Almost all misses are ZhoBLiMP: its items are two short Chinese sentences (97% shorter than a
 key), so a separator between them (a number, a JSON field name) breaks every window. In the planted
 stage-2 check (iteration 13, cutoff 0.9) no planted passage without its question was flagged; real
-records are less clean (see the limits). With the template-free keys (`prepare --windows content`, `choose --tie
-shared`), stage 1 finds 95.98% (96.02% with the earlier keys on the same item table).
+records are less clean (see the limits). With the production keys (windows outside the eval template, ties to the window that the fewest items
+share), stage 1 finds 95.98% (96.02% with the earlier keys on the same item table).
 
 **Validation.** Two sets, weighted to their pools, with an item-clustered stratified bootstrap 5% bound.
 Set 19: 1,239 pairs from 114 measure shards that no earlier step used (every flag of iteration 15, a
@@ -232,8 +233,8 @@ ASDiv, HumanEval, PIQA, GSM8K, MRPC, HellaSwag, MedQA, CoLA, BBQ and FDA (12-20 
 that hold 22,362 removals, among them SQuAD 0.54, RACE 0.58, SST-2 0.59, DROP 0.35, TurBLiMP 0.35, HLE
 0.33, QNLI 0.32, simple co-occurrence bias 0.11, SciCode 0.06 and QQP 0.05.
 
-**Whole catalog with the template-free keys.** A second run read every shard with `prepare --windows
-content` and `choose --tie shared` keys (oversized records in pieces, in the same pass): 0.256% of records
+**Whole catalog with the template-free keys.** A second run read every shard with the production
+keys (oversized records in pieces, in the same pass): 0.256% of records
 got a candidate, 76.5 million pairs, all scored by iteration 16. Its removal check (set 26) drew 20 removed
 records per family and band uniformly within each, so it measures every cutoff from 0.5 up: 0.5 reaches
 0.731 [0.666] and fails the floor; 0.6, the lowest passing cutoff, reaches 0.783 [0.714]. A fresh check of
@@ -265,7 +266,7 @@ a copy.
 
 - **The earlier keys miss about a fifth of clear catalog copies.** On 3,020 records in 2,000 sampled
   catalog shards that the block rule of PR #10836 marks (an eval question with all its choices), stage 1
-  with the earlier keys (`--windows whole --tie earliest`) gives a candidate for 79.8% (MMLU 93%, HumanEval
+  with the earlier keys (windows over the whole stream, ties to the earliest window) gives a candidate for 79.8% (MMLU 93%, HumanEval
   100%, GSM8K 46%), and the first run removes 78.7% of these records. A rendered GSM8K question starts with
   "Question:", and the bare question's windows occur in the reference shards (GSM8K copies are common), so
   the rarest window spans the prompt and a record with the bare question lacks it. Planted copies (G2)
@@ -282,7 +283,7 @@ a copy.
   candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
   following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.
   Stage 2 flags 373 of its records at 0.3 (11 at 0.5); the 5 checked by hand are other instances of the
-  template. With `--tie shared` the shard has 89,043 pairs.
+  template. With the shared tie order the shard has 89,043 pairs.
 - **1,052 items (0.07%) have no key:** every key stream is shorter than a window once reduced to letters
   and digits (BBH 552: multi-step arithmetic and boolean expressions such as "not ( True ) and ( True )
   is"; ZhoBLiMP 477; AGIEval 15, Gaokao math cloze items that are mostly LaTeX).

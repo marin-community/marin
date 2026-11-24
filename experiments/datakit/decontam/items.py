@@ -22,10 +22,18 @@ lm-eval tasks follow one rule, with no per-task field names:
   letter), or the target text.
 
 AA rows take the question from the first text field of the benchmark and the
-answer from its answer fields; Uncheatable records are free text. Every record
-of the manifests either gets an item or a ``reason``.
+answer from its answer fields; Uncheatable records and the pinned references are
+free text. Every record of the manifests either gets an item or a ``reason``.
+
+The table is prepared once per region and version (``ITEMS_VERSION``), like the
+eval corpus, and the reference pipeline reads it (``prepared_items_step``). Prepare
+it on a CPU worker in the region, with the cpu and lm_eval extras and HF_TOKEN::
+
+    uv run iris --cluster=cw-us-east-02a job run --extra=cpu --extra=lm_eval --cpu 1 --memory 4GB \
+        -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.datakit.decontam.items
 """
 
+import dataclasses
 import json
 import logging
 import os
@@ -41,30 +49,62 @@ from marin.datakit.decon_keys import WINDOW, text_stream
 from marin.datakit.decon_pairs import ITEM_SCHEMA
 from marin.datakit.decon_tables import read_table, write_table
 from marin.datakit.source_key import DatakitArtifactPath
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
-from experiments.datakit.decontam.eval_manifests import CorpusGate
+from experiments.datakit.decontam.eval_manifests import (
+    BestEffortEvalSuite,
+    CorpusGate,
+    RequiredEvalManifest,
+    RequiredEvalSuite,
+)
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
     patch_hf_dataset_loading,
 )
+from experiments.datakit.decontam.pinned_references import (
+    COVERAGE_MANIFEST,
+    COVERAGE_RELATIVE,
+    COVERAGE_VERSION,
+    reference_catalog,
+    reference_sources_sha256,
+)
 from experiments.datakit.decontam.prepare_eval_corpus import (
     _PASSAGE_FIELDS,
+    AA_BENCHMARK_NAMES,
     AA_EVALS,
+    AA_MANIFEST_RELATIVE,
+    EVAL_CORPUS_VERSION,
+    EVALS_RELATIVE,
+    LMH_MANIFEST_RELATIVE,
+    UNCHEATABLE_BENCHMARK_NAMES,
+    UNCHEATABLE_MANIFEST_RELATIVE,
     UNCHEATABLE_RECORDS,
     AARecordType,
     _aa_records,
     _iter_aa_rows,
     _row_identifier,
     _uncheatable_records,
+    required_lmh_tasks,
 )
 
 logger = logging.getLogger(__name__)
+
+# Bump when the builder changes what it writes; a new corpus or reference version also names a new table.
+ITEM_BUILDER_REVISION = 1
+ITEMS_VERSION = f"{EVAL_CORPUS_VERSION}+{COVERAGE_VERSION}+r{ITEM_BUILDER_REVISION}"
+ITEMS_RELATIVE = f"datakit/decontam/items/{ITEMS_VERSION}"
+ITEMS_STEP_NAME = "datakit/decontam/items"
+# Parts of the build; each loads its share of the lm-eval tasks (about 15 minutes each).
+ITEM_PARTS = 4
+PART_RESOURCES = ResourceConfig(cpu=4, ram="32g", disk="200g")
 
 WINDOWS = (10, 13, 16, WINDOW)
 LENGTH_BINS = (0, 10, 20, 30, 50, 70, 100, 200, 10**9)
@@ -504,12 +544,11 @@ def build_items(
     output_path: str,
     parts: int,
     worker_resources: ResourceConfig,
-    zephyr_context: ZephyrContext | None = None,
 ) -> ItemTable:
     """Build the item table of the required evals under *output_path* once *gate* passes, and fail unless every
     required eval loaded with exactly its sealed record count."""
     gate.check()
-    context = zephyr_context or ZephyrContext(name="decon-items", resources=worker_resources, max_workers=parts)
+    context = ZephyrContext(name="decon-items", resources=worker_resources, max_workers=parts)
     context.execute(
         Dataset.from_list(list(range(parts))).map_shard(
             _make_part(lmh_manifest_path, coverage_manifest_path, output_path, parts)
@@ -538,33 +577,59 @@ def build_items(
     )
 
 
-def decon_items_step(
-    *,
-    name: str,
-    gate: CorpusGate,
-    lmh_manifest_path: str,
-    coverage_manifest_path: str,
-    parts: int,
-    worker_resources: ResourceConfig,
-    zephyr_context: ZephyrContext | None = None,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """A StepSpec for :func:`build_items`; its output holds ``items/*.parquet``."""
-    return StepSpec(
-        name=name,
-        fn=lambda output_path: build_items(
-            gate=gate,
-            lmh_manifest_path=lmh_manifest_path,
-            coverage_manifest_path=coverage_manifest_path,
-            output_path=output_path,
-            parts=parts,
-            worker_resources=worker_resources,
-            zephyr_context=zephyr_context,
+def required_gate() -> CorpusGate:
+    """The sealed corpora under the current storage prefix that the item table must cover."""
+    eval_root = prefix_join(marin_prefix(), EVALS_RELATIVE)
+    return CorpusGate(
+        corpus_version=EVAL_CORPUS_VERSION,
+        required_suites=(
+            RequiredEvalSuite(prefix_join(eval_root, AA_MANIFEST_RELATIVE), AA_BENCHMARK_NAMES),
+            RequiredEvalSuite(prefix_join(eval_root, UNCHEATABLE_MANIFEST_RELATIVE), UNCHEATABLE_BENCHMARK_NAMES),
         ),
-        hash_attrs={
-            "corpus_version": gate.corpus_version,
-            "coverage_versions": [manifest.version for manifest in gate.required_manifests],
-            "parts": parts,
-        },
-        output_path_prefix=output_path_prefix,
+        required_manifests=(
+            RequiredEvalManifest(
+                path=coverage_manifest_path(),
+                version=COVERAGE_VERSION,
+                names=tuple(source.name for source in reference_catalog()),
+                source_catalog_sha256=reference_sources_sha256(reference_catalog()),
+            ),
+        ),
+        best_effort_suite=BestEffortEvalSuite(
+            prefix_join(eval_root, LMH_MANIFEST_RELATIVE), EVAL_CORPUS_VERSION, required_lmh_tasks()
+        ),
     )
+
+
+def coverage_manifest_path() -> str:
+    return prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST)
+
+
+def prepared_items_step() -> StepSpec:
+    """The prepared item table of the current storage prefix, as a step that the pipeline reads but never runs."""
+    return StepSpec(
+        name=ITEMS_STEP_NAME,
+        override_output_path=prefix_join(marin_prefix(), ITEMS_RELATIVE),
+        hash_attrs={"version": ITEMS_VERSION},
+    )
+
+
+def main() -> None:
+    configure_logging(logging.INFO)
+    registered = prepared_items_step()
+    lmh_manifest = prefix_join(prefix_join(marin_prefix(), EVALS_RELATIVE), LMH_MANIFEST_RELATIVE)
+    build = dataclasses.replace(
+        registered,
+        fn=lambda output_path: build_items(
+            gate=required_gate(),
+            lmh_manifest_path=lmh_manifest,
+            coverage_manifest_path=coverage_manifest_path(),
+            output_path=output_path,
+            parts=ITEM_PARTS,
+            worker_resources=PART_RESOURCES,
+        ),
+    )
+    StepRunner().run([build])
+
+
+if __name__ == "__main__":
+    main()

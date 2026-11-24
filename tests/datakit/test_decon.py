@@ -17,11 +17,10 @@ from marin.datakit.decon import (
     ATTRIBUTE_SCHEMA,
     DeconKeys,
     ScoreWorkers,
-    Tie,
     build_keys,
     decon_source,
     located_questions,
-    tie_values,
+    shared_holders,
 )
 from marin.datakit.decon_keys import (
     KeyStream,
@@ -140,7 +139,7 @@ def _mark(tmp_path: Path, keys: DeconKeys, scorer: QuestionInExcerpt):
         output_path=str(tmp_path / "marks"),
         flagged_sample_size=4,
         worker_resources=RESOURCES,
-        score_workers=ScoreWorkers(resources=RESOURCES, max_workers=1, environment=None),
+        score_workers=ScoreWorkers(resources=RESOURCES, max_workers=1, pairs_per_worker=100, environment=None),
         max_workers=2,
     )
 
@@ -208,7 +207,7 @@ def test_a_shared_tie_keys_each_item_off_the_question_stem_that_other_items_shar
     counts = np.zeros(len(hashes), dtype=np.int64)
     stem_windows = set(window_hashes(text_stream(stem)).tolist())
     earliest = keys_table(windows, counts).column("key1_hash").to_pylist()
-    shared = keys_table(windows, counts, tie=tie_values(windows, Tie.SHARED))
+    shared = keys_table(windows, counts, tie=shared_holders(windows))
     assert all(key in stem_windows for key in earliest)
     assert not any(key in stem_windows for key in shared.column("key1_hash").to_pylist())
 
@@ -218,7 +217,7 @@ def test_two_key_streams_of_one_item_count_as_one_holder_of_a_shared_window():
     hashes, owners, offsets = candidate_windows(streams)
     ids = np.array(["gsm8k-0", "gsm8k-0"], dtype=object)
     windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION, KeyStream.UNLETTERED], dtype=object))
-    assert set(tie_values(windows, Tie.SHARED).tolist()) == {1}
+    assert set(shared_holders(windows).tolist()) == {1}
 
 
 def test_an_excerpt_lands_on_the_exact_copy_after_a_changed_version_when_the_prompt_text_is_left_out():

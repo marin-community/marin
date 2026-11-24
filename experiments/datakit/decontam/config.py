@@ -25,18 +25,20 @@ REFERENCE_SHARDS_PER_SOURCE = 2
 REFERENCE_SEED = 11
 FLAGGED_SAMPLE_SIZE = 8
 # Production scores on H100s, about 50 GPU-hours per pass over the whole catalog. The workers sync the gpu extra
-# for the CUDA build of torch, since a driver launched with the cpu extra has the CPU build.
+# for the CUDA build of torch, since a driver launched with the cpu extra has the CPU build. One worker per
+# million pairs of a source is about 40 minutes of an H100 at the measured 425 pairs per second, so a worker's
+# start (the gpu sync and 2.4 GB of models) is a small part of its time.
 GPU_SCORE_WORKERS = ScoreWorkers(
     resources=ResourceConfig.with_gpu("H100", count=1, cpu=8, ram="64g", disk="100g"),
     max_workers=30,
+    pairs_per_worker=1_000_000,
     environment=create_environment(extras=["gpu"]),
 )
 # The GCP cluster that runs the ferries has no GPUs; there the workers score on CPU in the driver's environment.
+# CPU throughput is not measured.
 CPU_SCORE_WORKERS = ScoreWorkers(
-    resources=ResourceConfig(cpu=8, ram="16g", disk="20g"), max_workers=16, environment=None
+    resources=ResourceConfig(cpu=8, ram="16g", disk="20g"), max_workers=16, pairs_per_worker=10_000, environment=None
 )
-# Parts of the item table build; each loads its share of the lm-eval tasks.
-ITEM_PARTS = 4
 
 
 def decon_models() -> EncoderModels:

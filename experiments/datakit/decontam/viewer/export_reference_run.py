@@ -23,14 +23,10 @@ from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.datakit.decontam.prepare_eval_corpus import AA_BENCHMARK_NAMES, EVAL_CORPUS_VERSION
 from experiments.datakit.decontam.viewer.export_run import export_marks
 from experiments.datakit.decontam.viewer.report import render_run
-from experiments.datakit.reference_pipeline import (
-    AA_BENCHMARK_NAMES,
-    EVAL_CORPUS_VERSION,
-    decontamination_steps,
-    select_sources,
-)
+from experiments.datakit.reference_pipeline import decontamination_steps, select_sources
 
 logger = logging.getLogger(__name__)
 

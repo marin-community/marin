@@ -10,9 +10,11 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 - ``sample``: a pre-built testbed sample registered as already-normalized
   sources (``--sample-prefix``), K=64 -- a true end-to-end run on real data.
 
-Decontamination (:mod:`marin.datakit.decon`) has four stages that you can run separately:
+Decontamination (:mod:`marin.datakit.decon`) has three stages that you can run separately:
 
-- ``decon-items`` builds the eval item table from the sealed eval corpus v6.
+The eval item table is prepared once per region (``python -m experiments.datakit.decontam.items``); the
+stages read it:
+
 - ``decon-keys`` chooses each item's rarest key over reference shards of every source.
 - ``decon-mark`` marks each selected source: key scan, encoder scoring on GPU workers, marks.
 - ``decon-report`` reads completed marks and writes the validation report.
@@ -69,7 +71,7 @@ domain centroids (``None`` trains them inline).
 Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
 resolved by :func:`rigging.filesystem.cluster_config.marin_prefix` -- unset (the normal iris-
 worker case) it falls back to the in-region bucket, so source artifacts, the
-eval corpus (``eval_corpus_root()``), and every output land in-region. Override via
+eval corpus, the decontamination item table and models, and every output land in-region. Override via
 ``iris job run -e MARIN_PREFIX <bucket>``.
 
 Submit the sample-mode end-to-end run on iris::
@@ -100,8 +102,8 @@ data gets a different output path per region). Two consequences:
   store exactly, replicate those bytes (pass the trained centroids as
   ``domain_centroids``) rather than recomputing inline.
 
-The decontamination item table enters the hash by ``EVAL_CORPUS_VERSION`` and the coverage version, and the
-models by ``MODELS_VERSION``, not by their paths.
+The decontamination item table enters the hash by ``ITEMS_VERSION`` and the models by ``MODELS_VERSION``,
+not by their paths.
 """
 
 import argparse
@@ -145,7 +147,7 @@ from marin.processing.tokenize.attributes import (
     tokenize_attributes_step,
 )
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
@@ -164,35 +166,11 @@ from experiments.datakit.decontam.config import (
     CUTOFF,
     FLAGGED_SAMPLE_SIZE,
     GPU_SCORE_WORKERS,
-    ITEM_PARTS,
     REFERENCE_SEED,
     REFERENCE_SHARDS_PER_SOURCE,
     decon_models,
 )
-from experiments.datakit.decontam.eval_manifests import (
-    BestEffortEvalSuite,
-    CorpusGate,
-    RequiredEvalManifest,
-    RequiredEvalSuite,
-)
-from experiments.datakit.decontam.items import decon_items_step
-from experiments.datakit.decontam.pinned_references import (
-    COVERAGE_MANIFEST,
-    COVERAGE_RELATIVE,
-    COVERAGE_VERSION,
-    reference_catalog,
-    reference_sources_sha256,
-)
-from experiments.datakit.decontam.prepare_eval_corpus import (
-    AA_BENCHMARK_NAMES,
-    AA_MANIFEST_RELATIVE,
-    EVAL_CORPUS_VERSION,
-    EVALS_RELATIVE,
-    LMH_MANIFEST_RELATIVE,
-    UNCHEATABLE_BENCHMARK_NAMES,
-    UNCHEATABLE_MANIFEST_RELATIVE,
-    required_lmh_tasks,
-)
+from experiments.datakit.decontam.items import prepared_items_step
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
     EMBEDDING_ATTR_DATA_VERSION,
@@ -762,11 +740,6 @@ def zephyr_datakit_steps(
     )
 
 
-def eval_corpus_root() -> str:
-    """Return the evaluation corpus path for the current storage prefix."""
-    return prefix_join(marin_prefix(), EVALS_RELATIVE)
-
-
 def decontamination_steps(
     sources: dict[str, StepSpec],
     *,
@@ -787,35 +760,7 @@ def decontamination_steps(
         raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
 
     worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
-    eval_root = eval_corpus_root()
-    gate = CorpusGate(
-        corpus_version=EVAL_CORPUS_VERSION,
-        required_suites=(
-            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
-            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
-        ),
-        required_manifests=(
-            RequiredEvalManifest(
-                path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
-                version=COVERAGE_VERSION,
-                names=tuple(source.name for source in reference_catalog()),
-                source_catalog_sha256=reference_sources_sha256(reference_catalog()),
-            ),
-        ),
-        best_effort_suite=BestEffortEvalSuite(
-            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, required_lmh_tasks()
-        ),
-    )
-    items = decon_items_step(
-        name="datakit/decontam/_items",
-        gate=gate,
-        lmh_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
-        coverage_manifest_path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
-        parts=ITEM_PARTS,
-        worker_resources=worker_resources,
-        zephyr_context=zephyr_context,
-        output_path_prefix=output_prefix,
-    )
+    items = prepared_items_step()
     keys = decon_keys_step(
         name="datakit/decontam/_keys",
         items=items,
@@ -1330,9 +1275,10 @@ def _require_built_steps(steps: dict[str, StepSpec], label: str) -> None:
 
 
 def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
-    if target == "decon-items":
-        return [result.items]
     if target == "decon-keys":
+        _require_built_steps(
+            {"items": result.items}, "the prepared item table (python -m experiments.datakit.decontam.items)"
+        )
         return [result.keys]
     if target == "decon-mark":
         missing = [step.name for step in (result.items, result.keys) if not step_is_built(step)]
@@ -1355,10 +1301,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--target",
-        choices=("all", "decon-items", "decon-keys", "decon-mark", "decon-report"),
+        choices=("all", "decon-keys", "decon-mark", "decon-report"),
         default="all",
         help=(
-            "all: complete reference DAG. decon-items: eval item table. decon-keys: item keys over reference "
+            "all: complete reference DAG. decon-keys: item keys over reference "
             "shards. decon-mark: per-source marks from completed preparation stages. decon-report: report "
             "from completed marks."
         ),

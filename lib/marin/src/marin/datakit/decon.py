@@ -30,12 +30,12 @@ import functools
 import io
 import json
 import logging
+import math
 import os
 import random
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -113,20 +113,6 @@ FLAGGED_SCHEMA = pa.schema(
 _SCORE_COLUMNS = ["record", "item", "eval", "right", "score"]
 
 
-class WindowSource(StrEnum):
-    """Where an item stream's candidate windows come from."""
-
-    WHOLE = "whole"
-    CONTENT = "content"  # outside the prefix and suffix that all of the eval's streams of that kind share
-
-
-class Tie(StrEnum):
-    """How equally rare windows are ordered before the earliest offset."""
-
-    EARLIEST = "earliest"
-    SHARED = "shared"  # held by the fewest other items (shared prompt text such as a common question stem)
-
-
 class DeconKeys(BaseModel):
     """Outcome of :func:`build_keys`: each item stream's key and the locator table the scan reads.
 
@@ -179,11 +165,10 @@ def item_streams(items_dir: str, width: int) -> tuple[list[str], list[str], list
     return ids, kinds, streams, evals
 
 
-def tie_values(windows: Windows, tie: Tie) -> np.ndarray | None:
-    """One ``keys_table`` tie value per candidate window."""
+def shared_holders(windows: Windows) -> np.ndarray:
+    """For each candidate window, how many items hold it: equally rare windows go to the one that the fewest other
+    items share (``keys_table``'s tie order), which keeps keys off shared prompt text such as a common stem."""
     hashes, owners, _, ids, _ = windows
-    if tie == Tie.EARLIEST:
-        return None
     _, item_numbers = np.unique(ids, return_inverse=True)
     items = item_numbers[owners].astype(np.int64)
     pairs = np.unique(np.stack([hashes.view(np.int64), items], axis=1), axis=0)
@@ -305,8 +290,6 @@ def build_keys(
     reference_shards: Sequence[str],
     output_path: str,
     width: int = WINDOW,
-    windows: WindowSource = WindowSource.CONTENT,
-    tie: Tie = Tie.SHARED,
     worker_resources: ResourceConfig,
     max_workers: int,
     zephyr_context: ZephyrContext | None = None,
@@ -317,8 +300,7 @@ def build_keys(
         raise ValueError("build_keys needs reference shards")
     ids, kinds, streams, evals = item_streams(items_dir, width)
     groups = [f"{e}\t{k}" for e, k in zip(evals, kinds, strict=True)]
-    bounds = template_bounds(streams, groups, width) if windows == WindowSource.CONTENT else None
-    hashes, owners, offsets = candidate_windows(streams, width, bounds)
+    hashes, owners, offsets = candidate_windows(streams, width, template_bounds(streams, groups, width))
     candidates = Windows(hashes, owners, offsets, np.array(ids, dtype=object), np.array(kinds, dtype=object))
     windows_path = prefix_join(output_path, _WINDOWS_FILENAME)
     _save_windows(candidates, windows_path)
@@ -331,7 +313,7 @@ def build_keys(
         Dataset.from_list(list(reference_shards)).map_shard(_make_count(windows_path, counts_dir, width)),
         map_task_resources=worker_resources,
     )
-    table = keys_table(candidates, _window_counts(candidates, counts_dir), width, tie_values(candidates, tie))
+    table = keys_table(candidates, _window_counts(candidates, counts_dir), width, shared_holders(candidates))
     keys_path = prefix_join(output_path, KEYS_FILENAME)
     write_table(table, keys_path)
     locators = locator_table(table, items_dir, width)
@@ -375,12 +357,13 @@ class PairScorer(Protocol):
 
 @dataclass(frozen=True)
 class ScoreWorkers:
-    """The workers that score the pairs: up to *max_workers* of *resources*. A GPU in *resources* makes the scorer
-    run on CUDA. *environment* gives the workers their own dependencies (the CUDA build of torch) when the
-    driver's lack them; ``None`` reuses the driver's environment."""
+    """The workers that score the pairs: one per *pairs_per_worker* pairs of a source, up to *max_workers*, of
+    *resources*. A GPU in *resources* makes the scorer run on CUDA. *environment* gives the workers their own
+    dependencies (the CUDA build of torch) when the driver's lack them; ``None`` reuses the driver's."""
 
     resources: ResourceConfig
     max_workers: int
+    pairs_per_worker: int
     environment: EnvironmentConfig | None
 
     @property
@@ -638,14 +621,20 @@ def decon_source(
         Dataset.from_list(files).map_shard(_make_scan(keys.locators_path, pairs_dir, stats_dir, keys.width)),
         map_task_resources=worker_resources,
     )
-    pair_files = parquet_files(pairs_dir)
-    if pair_files:
-        groups = [pair_files[i : i + SCORE_GROUP_FILES] for i in range(0, len(pair_files), SCORE_GROUP_FILES)]
+    pending = [
+        path
+        for path in parquet_files(pairs_dir)
+        if not StoragePath(prefix_join(scores_dir, os.path.basename(path))).exists()
+    ]
+    if pending:
+        groups = [pending[i : i + SCORE_GROUP_FILES] for i in range(0, len(pending), SCORE_GROUP_FILES)]
+        pairs = sum(stats["pairs"] for stats in scan.results)
+        workers = min(score_workers.max_workers, len(groups), math.ceil(pairs / score_workers.pairs_per_worker))
         ZephyrContext(
             name="decon-score",
             resources=score_workers.resources,
             worker_environment=score_workers.environment,
-            max_workers=min(score_workers.max_workers, len(groups)),
+            max_workers=max(workers, 1),
         ).execute(
             Dataset.from_list(groups).map_shard(_make_score(scorer, keys.items_dir, scores_dir, score_workers.device)),
             map_task_resources=score_workers.resources,
@@ -681,8 +670,6 @@ def decon_keys_step(
     worker_resources: ResourceConfig,
     max_workers: int,
     width: int = WINDOW,
-    windows: WindowSource = WindowSource.CONTENT,
-    tie: Tie = Tie.SHARED,
     zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
@@ -697,8 +684,6 @@ def decon_keys_step(
             reference_shards=reference_shards(directories, shards_per_source, seed),
             output_path=output_path,
             width=width,
-            windows=windows,
-            tie=tie,
             worker_resources=worker_resources,
             max_workers=max_workers,
             zephyr_context=zephyr_context,
@@ -712,8 +697,6 @@ def decon_keys_step(
             "shards_per_source": shards_per_source,
             "seed": seed,
             "width": width,
-            "windows": str(windows),
-            "tie": str(tie),
         },
         output_path_prefix=output_path_prefix,
     )

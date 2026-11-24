@@ -71,6 +71,8 @@ def test_output_prefix_routes_every_step_without_changing_identity():
 
     assert routed.keys() == default.keys()
     for name, step in routed.items():
+        if step.fn is None:
+            continue  # a pre-built input, such as the prepared item table, stays where it was prepared
         assert step.output_path.startswith("gs://marin-test-region/tmp/ttl=1d/ferry/"), name
         assert step.name_with_hash == default[name].name_with_hash, name
 
