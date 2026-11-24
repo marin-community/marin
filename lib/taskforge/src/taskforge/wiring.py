@@ -384,13 +384,14 @@ def build_config(
         policy.setting("budget.max_modify_rounds", int),
         policy.setting("budget.max_validation_retries", int),
         policy.setting("budget.max_missing_trials", int),
+        policy.setting("budget.final_revisions", int),
     )
     slots, beat = policy.setting("solver.concurrency", int), policy.setting("solver.heartbeat_interval", float)
     confirmation = policy.setting("solver.confirmation_k", int)
-    if slots < 1 or not 0 < beat < math.inf or min(budget.max_missing_trials, confirmation) < 0:
+    if slots < 1 or not 0 < beat < math.inf or min(budget.max_missing_trials, budget.final_revisions, confirmation) < 0:
         raise ValueError(
-            "solver.concurrency, solver.heartbeat_interval, budget.max_missing_trials or solver.confirmation_k is out "
-            "of range"
+            "solver.concurrency, solver.heartbeat_interval, budget.max_missing_trials, budget.final_revisions or "
+            "solver.confirmation_k is out of range"
         )
     band = BandRules(
         policy.setting("band.low", float),

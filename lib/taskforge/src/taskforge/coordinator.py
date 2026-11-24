@@ -6,7 +6,7 @@
 The author submits, validation gathers evidence for that submission, and review decides. A ``Modify``
 decision starts the next round with a fresh author session; ``Retry`` validates the same submission
 again. An ``Accept`` goes on to the confirmation step, whose record review decides once more: a final
-acceptance, or the final review's one ``Revise``, which starts a round as ``Modify`` does.
+acceptance, or a final-review ``Revise`` (``budget.final_revisions``), which starts a round as ``Modify`` does.
 """
 
 import logging
@@ -26,7 +26,6 @@ from taskforge.model.review import (
     Abandon,
     Accept,
     BandOutcome,
-    Budget,
     Decision,
     Decline,
     FindingResponse,
@@ -39,7 +38,6 @@ from taskforge.model.review import (
 )
 from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
-from taskforge.policy import Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
@@ -69,13 +67,18 @@ def digest_of(fallback: Fallback | None) -> str | None:
     return None if fallback is None else fallback.submission.digest
 
 
-def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Policy) -> Workpiece:
+def apply_decision(wp: Workpiece, decision: Decision, config: TaskforgeConfig) -> Workpiece:
     """Record a review decision and apply it: terminal, a revision round, or unchanged for a retry.
 
     A ``Modify`` past ``budget.max_modify_rounds`` becomes ``Abandon``; one keeps the fallback its ``fallback`` digest
     names. An ``Accept`` with ``restore`` accepts the fallback, which must carry that digest; it is terminal once it
-    decides on a confirmation record, or when ``solver.confirmation_k`` is 0.
+    decides on a confirmation record, or when ``solver.confirmation_k`` is 0, and never at a band ``config.band``
+    refuses, whatever review rule decided it: a pending acceptance may still go to its confirmation.
+
+    Raises:
+        ValueError: The decision is a terminal acceptance at a refused band, or names a fallback it cannot keep.
     """
+    budget, policy = config.budget, config.policy
     if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
         decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
     wp = replace(wp, decisions=(*wp.decisions, decision))
@@ -92,6 +95,9 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 )
             confirmed = bool(wp.evidence) and wp.evidence[-1].confirms is not None
             final = confirmed or not policy.setting("solver.confirmation_k", int)
+            if final and band not in config.band.accepted:
+                setting = "band.accept_too_easy is false" if band is BandOutcome.TOO_EASY else "config.band refuses it"
+                raise ValueError(f"A review rule published a terminal acceptance at {band}, but {setting}")
             return replace(
                 wp,  # a pending acceptance's placement is its decision's band, published only once final
                 terminal=Terminal.ACCEPTED if final else None,
@@ -122,6 +128,9 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 detail += "\n\n" + policy.prompt("author.notes").render(notes=finding_lines(notes, len(review)))
             kind = "review" if isinstance(decision, Modify) else "the final review"
             prompt = policy.prompt("author.revision").render(kind=kind, detail=detail)
+            if isinstance(decision, Revise):  # after rendering, so no template can drop it; recorded, so replay keeps it
+                ordinal = sum(isinstance(d, Revise) for d in wp.decisions)
+                prompt += f"\n\nThis is final revision {ordinal} of {budget.final_revisions}."
             sent = (FindingResponse(len(wp.evidence) - 1, f, Response.REQUESTED) for f in (*review, *notes))
             return replace(
                 wp,
@@ -168,14 +177,12 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
             return replace(wp, submission=submission, session=session), Stage.VALIDATE
         case Stage.AUTHOR, Stopped():
             wp = answered(wp, (), Response.STOPPED)
-            stopped = apply_decision(
-                replace(wp, session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
-            )
+            stopped = apply_decision(replace(wp, session=result.session), author_stopped(wp, result.summary), config)
             return stopped, None if stopped.terminal is not None else Stage.CONFIRM
         case Stage.VALIDATE | Stage.CONFIRM, Validated(evidence):
             return replace(wp, evidence=(*wp.evidence, evidence)), Stage.REVIEW
         case Stage.REVIEW, Decided(decision):
-            wp = apply_decision(wp, decision, config.budget, config.policy)
+            wp = apply_decision(wp, decision, config)
             if wp.terminal is not None:
                 return wp, None
             following = Stage.CONFIRM if isinstance(decision, Accept) else Stage.AUTHOR

@@ -105,7 +105,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 11); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 12); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -132,11 +132,14 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 11` and reports the
-rest. Formats 8 to 10 differ: their rows mean the same at format 11, so `report` reads them, but the driver refuses
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 12` and reports the
+rest. Formats 8 to 11 differ: their rows decode at format 12, so `report` reads them, but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
-format or a fresh output prefix as the way on. Their author calls embedded a schema reference this writer does not
-reproduce, so a resumed author would buy different answers that the recorded sandbox history then refuses. Format 11
+format or a fresh output prefix as the way on. Format 12 words two author requests otherwise: a final revision's
+request ends with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt,
+so a resumed format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema
+reference in their author calls that this writer does not reproduce, so a resumed author would buy different
+answers that the recorded sandbox history then refuses. Format 11
 adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
 root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
@@ -300,10 +303,23 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
   out of band gets one band-only revision round within the shared budget and is then accepted at its own
   placement, tagged `accepted_with: <band>`; only a fault or the author stopping reverts to the stored fallback.
+  `band.accept_too_easy` (default true) false refuses a too-easy placement on every path: a round asks for revision
+  rounds within the shared budget, then restores a stored fallback (which only an accepted band can be) or is
+  abandoned; a final revision's round goes on to its confirmation, which places it again; and a confirmation
+  placed too easy asks for a final revision while `budget.final_revisions` has one left, else abandons the task
+  (`Confirmation revision failed`, or `Confirmation failed` when no revision was allowed, naming the placement,
+  the setting and the spent budget; a final revision's finding is listed unresolved only when the final review
+  reports it again or the author declined it).
+  The coordinator enforces it for any review rule (`TaskforgeConfig.review`): a terminal acceptance at a band
+  `config.band` refuses raises `ValueError` naming the setting, while a pending one still goes to its confirmation.
   As in live Forge, in this order: a clean revision placed outside its fallback's band is accepted at its new
   placement, tagged; a round with review findings is a defect round, not the band-only one, even out of band;
   and the band-only round is spent only by a round revised for its placement alone.
-- **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
+- **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`, and `budget.final_revisions` (default 1,
+  at least 0): the revisions the final review may ask for, outside `budget.max_modify_rounds` (below). Each
+  final revision request ends with its ordinal (`This is final revision N of M.`, counted from the recorded
+  decisions and appended after `author.revision` renders, so a custom template cannot drop it): two identical
+  requests are two author attempts, and a restart of either replays it.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
   name needs a prompt `adversary.brief.<name>` (`prompts/adversary/brief/<name>.md`); a user prompt
@@ -388,17 +404,20 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   several): shipped notes, an earlier finding an account blames and the earlier-claim recheck keep a finding
   while any one group's citations all still occur, so a revision that changes one cited trial never takes down
   the version citing another.
-  As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
-  `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
+  The placement over every scored trial re-tags the acceptance in any band the policy accepts (a refused band:
+  above); `note` findings are the acceptance's notes. A new `revise`
   finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:
   a restore discards the revisions after the round it restores, and a later decline overrides) or a fault buys
-  one revision
-  outside the shared modification budget, validated as any round; the final review's notes go to the
+  a revision outside the shared modification budget while `budget.final_revisions` has one left, validated as
+  any round; the final review's notes go to the
   author beside it as optional. A finding repeated from an earlier report buys nothing and is kept once.
-  That revision keeps no fallback: a clean revision is accepted at its placement whatever the band and
+  A final revision keeps no fallback: a clean revision is accepted at its placement whatever the band and
   confirmed again, its round findings are notes, and a fault or an author stop abandons the task
-  (`Confirmation revision failed`, naming the unresolved finding). After it any `revise` finding is a note,
-  and the acceptance ships every earlier note, optional note and new note the shipped trials still support,
+  (`Confirmation revision failed`, naming the unresolved finding). With no final revision left, any `revise`
+  finding is a note and a confirmation fault abandons the task (`Confirmation failed` when none was allowed). A
+  final revision's finding is named unresolved only when the last final review reports it again or the author's
+  latest answer to it on the kept history is a decline.
+  The acceptance ships every earlier note, optional note and new note the shipped trials still support,
   each once, in a version whose quotes occur in them (the confirmation record's `notes`).
   `accepted_with` is published only on a final acceptance. Missing confirmation evidence
   (`confirmation_trials`, `transcripts`, `solve_review`) is named once, never a hold.

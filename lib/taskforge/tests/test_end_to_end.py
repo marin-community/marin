@@ -2259,16 +2259,23 @@ FORMAT_10_HELD = Path(__file__).parent / "fixtures" / "format10-author-held-root
 author turns and their commands, without an author reference row."""
 
 
-async def test_a_held_format_10_root_is_refused_before_claim_and_the_report_still_reads_it(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+FORMAT_11_HELD = Path(__file__).parent / "fixtures" / "format11-author-held-root.json.gz"
+"""The whole root the format-11 writer (2b214c6c20) published for the held first launch of ``held_after_stamp``: three
+author turns and their commands, after its author reference row."""
+
+
+@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11)])
+async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
-    """Its author calls embedded a reference this writer does not reproduce, so resuming it would buy answers its
-    recorded sandbox history refuses; the driver refuses it untouched and names the ways on."""
-    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), FORMAT_10_HELD)
+    """A format-10 root's author calls embedded a reference this writer does not reproduce, and a format-11 root's
+    author requests were worded otherwise; the driver refuses either untouched and names the ways on."""
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
-    with pytest.raises(UnsupportedFormat, match="format 10, not 11: resume it with the writer of its format") as raised:
+    expected = f"format {found}, not {checkpoint.JOURNAL_FORMAT}: resume it with the writer of its format"
+    with pytest.raises(UnsupportedFormat, match=expected) as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert tree(destination) == before

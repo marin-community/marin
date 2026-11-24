@@ -691,7 +691,7 @@ the confirmation step's."""
 def reviewed(wp: Workpiece, settings: Mapping[str, object] | None = None) -> Workpiece:
     wp = replace(wp, session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({**UNCONFIRMED, **(settings or {})}), {})
-    return apply_decision(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy)
+    return apply_decision(wp, default_review(wp, setup.band, setup.budget), setup)
 
 
 def revised(submission: Submission, label: str) -> Submission:
@@ -810,18 +810,16 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
     setup = build_config(load_policy(DEFAULTS_DIR), {})
     wp = replace(workpiece, session=Conversation((Message(Role.SYSTEM, "author"),), ()))
     with pytest.raises(ValueError, match="Cannot restore"):
-        apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup.budget, setup.policy)
+        apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup)
     with pytest.raises(ValueError, match="Cannot keep"):
-        apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup.budget, setup.policy)
+        apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup)
     stored = replace(wp, fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY, 0))
     assert stored.fallback is not None
     with pytest.raises(ValueError, match="Cannot restore"):  # the right digest, the wrong band
-        apply_decision(
-            stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup.budget, setup.policy
-        )
+        apply_decision(stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup)
     # Two candidates with one digest: the current submission at its own placement, as the review rule chose it.
     same = replace(wp, fallback=Fallback(submission, BandOutcome.IN_BAND, 0))
-    kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup.budget, setup.policy)
+    kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup)
     assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY, len(same.evidence) - 1)
 
 
@@ -1025,7 +1023,9 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
-    after = apply_decision(replace(wp, session=author), decision, setup.budget, setup.policy.overlaid(UNCONFIRMED))
+    after = apply_decision(
+        replace(wp, session=author), decision, replace(setup, policy=setup.policy.overlaid(UNCONFIRMED))
+    )
     if isinstance(decision, Accept):
         assert f"false_accept: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):

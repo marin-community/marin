@@ -75,11 +75,15 @@ from taskforge.model.review import (
     Accept,
     Attribution,
     BandOutcome,
+    BandRules,
+    Budget,
     Cause,
     ControlResult,
+    Decision,
     Decline,
     EvidenceKind,
     FindingKind,
+    FindingResponse,
     Incomplete,
     MissingEvidence,
     Modify,
@@ -328,14 +332,23 @@ async def test_a_restored_fallback_is_confirmed_on_its_own_round(proposal: TaskP
 
 
 @pytest.mark.parametrize("accept_too_easy", [True, False])
-async def test_a_task_out_of_band_after_eight_trials_is_accepted_tagged(
+async def test_a_task_too_easy_after_eight_trials_is_tagged_or_revised_then_abandoned(
     proposal: TaskProposal, accept_too_easy: bool
 ) -> None:
-    """Two of three solved places in band; seven of eight is too easy, and live Forge tags it whatever
-    ``band.accept_too_easy`` says, for a confirmed task is never filtered."""
+    """Two of three solved places in band; seven of eight is too easy. Accepting too easy, the confirmation tags it;
+    refusing it, the final revision is asked for, and a revision that is still too easy over its eight is abandoned."""
     engine = Trials(lambda trial, attempt: GradeResult(Outcome.GRADED, float(trial != 1)))
-    wp, _ = await run(proposal, engine, Reviewer(), setup(**{"band.accept_too_easy": accept_too_easy}))
+    config = setup(**{"band.accept_too_easy": accept_too_easy})
+    wp = await run_workpiece(
+        proposal, config, bundle(engine, Reviewer(), (*script(), *RESUBMIT)), EventLog(), install=install
+    )
     final = wp.decisions[-1]
+    if not accept_too_easy:
+        assert kinds(wp) == ["accept", "revise", "accept", "abandon"] and wp.terminal is Terminal.ABANDONED
+        revise = wp.decisions[1]
+        assert isinstance(revise, Revise) and revise.placement is BandOutcome.TOO_EASY
+        assert isinstance(final, Abandon) and "band.accept_too_easy is false" in final.reasons[0]
+        return
     assert wp.terminal is Terminal.ACCEPTED and wp.accepted_with is BandOutcome.TOO_EASY
     assert isinstance(final, Accept) and final.band is BandOutcome.TOO_EASY
     assert final.reasons[:2] == ("accepted_with: too_easy", "Confirmation: 7 of 8 trials solved: too_easy")
@@ -356,13 +369,58 @@ async def test_a_revise_finding_buys_one_revision_outside_a_spent_budget(proposa
     assert [e.confirms for e in wp.evidence] == [None, 0, None, 2]
     assert len(engine.runs) == 16 and sorted(s for s in engine.runs if s[1] == 3) == [(t, 3) for t in range(3, 8)]
     assert isinstance(live.inference, FakeInference)
-    assert "Revise the task and controls after the final review:" in live.inference.requests[4].conversation[1].content
+    opening = live.inference.requests[4].conversation[1].content
+    assert opening.startswith("Revise the task and controls after the final review:")
+    assert opening.endswith("\n\nThis is final revision 1 of 1.")
     last = reviewer.finals_seen[-1]
     assert "Final review of validation record 1 (this submission, 8 trials):" in last
     assert "first Edit: check equality Outcome: given to the author, who revised the task." in last
     final = wp.decisions[-1]
     assert isinstance(final, Accept) and final.notes == (finding(4, what="second"),)
-    assert "The final review's revision is used: its revise findings are recorded as notes" in final.reasons
+    assert "No final revision is left: the final review's revise findings are recorded as notes" in final.reasons
+
+
+@pytest.mark.parametrize("revisions", [0, 2])
+async def test_budget_final_revisions_sets_how_many_revisions_the_final_review_buys(
+    proposal: TaskProposal, revisions: int
+) -> None:
+    """Each final review asks for a new revision; past ``budget.final_revisions`` its revise finding is a note."""
+    asked = [found(3 + i, what=f"revision {i}") for i in range(revisions + 1)]
+    engine, reviewer = Trials(), Reviewer(finals=[([finding], []) for finding in asked])
+    live = bundle(engine, reviewer, (*script(), *(RESUBMIT * revisions)))
+    config = setup(**{"budget.final_revisions": revisions})
+    wp = await run_workpiece(proposal, config, live, EventLog(), install=install)
+    assert kinds(wp) == ["accept", *(["revise", "accept"] * revisions), "accept"] and wp.round == revisions
+    final = wp.decisions[-1]
+    assert wp.terminal is Terminal.ACCEPTED and isinstance(final, Accept)
+    assert final.notes == (finding(3 + revisions, what=f"revision {revisions}"),)
+
+
+@pytest.mark.parametrize(
+    "prompt", [{}, {"author.revision": "Address these findings:\n\n{detail}"}], ids=["stock", "custom"]
+)
+async def test_each_final_revision_is_a_fresh_author_attempt_that_a_restart_replays(
+    proposal: TaskProposal, prompt: dict[str, str]
+) -> None:
+    asked = found(3, what="still accepts 13")
+    engine, reviewer = Trials(), Reviewer(finals=[([asked], []), ([asked], [])])
+    live = bundle(engine, reviewer, (*script(), *RESUBMIT, *RESUBMIT))
+    log, config = EventLog(), setup(**{"budget.final_revisions": 2, **prompt})
+    wp = await run_workpiece(proposal, config, live, log, install=install)
+    assert kinds(wp) == ["accept", "revise", "accept", "revise", "accept", "accept"]
+    assert isinstance(live.inference, FakeInference)
+    assert len(live.inference.requests) == len(script()) + 2 * len(RESUBMIT)
+    openings = [r.conversation[1].content for r in live.inference.requests if len(r.conversation) == 2]
+    assert [o.rsplit("\n\n", 1)[1] for o in openings[1:]] == [f"This is final revision {n} of 2." for n in (1, 2)]
+    cold = bundle(Trials(), Reviewer(), ())
+    replayed = await run_workpiece(proposal, config, cold, EventLog(replay_from=log.records), install=install)
+    assert isinstance(cold.inference, FakeInference) and not cold.inference.requests and replayed == wp
+
+
+def test_a_confirmation_fault_without_a_final_revision_abandons(proposal: TaskProposal) -> None:
+    config = setup(**{"budget.final_revisions": 0})
+    decision = default_review(confirming(proposal, [graded(3, INVALID)]), config.band, config.budget)
+    assert isinstance(decision, Abandon) and any("invalid_task" in reason for reason in decision.reasons)
 
 
 async def test_note_findings_alone_accept_with_notes(proposal: TaskProposal) -> None:
@@ -496,6 +554,96 @@ def test_the_final_revision_s_round_decides_as_live_forge(
         assert f"Unresolved final-review finding: {REVISE.description}" in decision.reasons
 
 
+EASY = tuple(TrialResult(i, GradeResult(Outcome.GRADED, 1.0)) for i in range(2))
+REFUSED = ("round", "last round", "revision with a fallback", "author stop", "final revision's round", "confirmation")
+
+
+def refusing(proposal: TaskProposal, path: str, config: TaskforgeConfig) -> Workpiece:
+    """The workpiece, after ``path``'s decision, of each path that could accept a too-easy task."""
+    session = Conversation((Message(Role.SYSTEM, "author"),), ())
+    easy = ValidationResult(SUBMISSION.digest, EASY, CONTROLS, (), review=SolveReview("v", ReviewEnd.REPORTED))
+    fresh = Workpiece("w", proposal, submission=SUBMISSION, evidence=(easy,), session=session)
+    kept = Fallback(SUBMISSION, BandOutcome.IN_BAND, 0)
+    if path == "round":
+        return apply_decision(fresh, default_review(fresh, config.band, config.budget), config)
+    if path == "last round":
+        last = replace(fresh, round=config.budget.max_modify_rounds)
+        return apply_decision(last, default_review(last, config.band, config.budget), config)
+    revised = replace(fresh, round=1, evidence=(confirmed(proposal, False, False, False, True).evidence[0], easy))
+    if path == "revision with a fallback":
+        revised = replace(revised, fallback=kept)
+        return apply_decision(revised, default_review(revised, config.band, config.budget), config)
+    if path == "author stop":
+        stopped = Stopped(StopReason.CONTEXT_LIMIT, session, "window full")
+        return advance(replace(revised, fallback=kept), Stage.AUTHOR, stopped, config)[0]
+    if path == "final revision's round":
+        wp = after_revise(proposal, easy)
+        return apply_decision(wp, default_review(wp, config.band, config.budget), config)
+    wp = replace(confirmed(proposal, False, False, False, False), session=session)
+    return apply_decision(wp, default_review(wp, config.band, config.budget), config)
+
+
+@pytest.mark.parametrize("path", REFUSED)
+@pytest.mark.parametrize("accept_too_easy", [True, False])
+def test_with_too_easy_refused_no_path_accepts_a_too_easy_task(
+    proposal: TaskProposal, path: str, accept_too_easy: bool
+) -> None:
+    """``band.accept_too_easy`` false holds on every path: a round asks for hardening, a restore keeps an accepted
+    fallback, a final revision's round is placed again by its confirmation, and a confirmation asks for the final
+    revision. True accepts the confirmation tagged."""
+    config = setup(**{"band.accept_too_easy": accept_too_easy})
+    wp = refusing(proposal, path, config)
+    shipped = wp.decisions[-1]
+    if not accept_too_easy and isinstance(shipped, Accept) and shipped.band is BandOutcome.TOO_EASY:
+        assert path == "final revision's round" and wp.terminal is None
+    expected = {
+        "round": "modify",
+        "last round": "accept" if accept_too_easy else "abandon",
+        "revision with a fallback": "accept",
+        "author stop": "accept",
+        "final revision's round": "accept",
+        "confirmation": "accept" if accept_too_easy else "revise",
+    }
+    assert shipped.kind == expected[path]
+    if path == "confirmation":
+        assert (wp.accepted_with is BandOutcome.TOO_EASY) is accept_too_easy
+
+
+@pytest.mark.parametrize("repeated", [False, True], ids=["repaired, then refused", "reported again"])
+async def test_a_refused_confirmation_names_its_placement_setting_and_budget_and_only_open_findings(
+    proposal: TaskProposal, repeated: bool
+) -> None:
+    asked = found(3, what="still accepts 13")
+    engine = Trials(lambda trial, attempt: GradeResult(Outcome.GRADED, 1.0 if attempt >= 2 else float(trial % 2 == 0)))
+    reviewer = Reviewer(finals=[([asked], []), ([asked] if repeated else [], [])])
+    live = bundle(engine, reviewer, (*script(), *RESUBMIT))
+    config = setup(**{"band.accept_too_easy": False})
+    wp = await run_workpiece(proposal, config, live, EventLog(), install=install)
+    assert kinds(wp) == ["accept", "revise", "accept", "abandon"] and wp.terminal is Terminal.ABANDONED
+    why = (
+        f"{CONFIRMATION_REVISION_FAILED}: confirmation placed too_easy (8 of 8 trials solved); band.accept_too_easy is "
+        "false and budget.final_revisions (1) is spent"
+    )
+    unresolved = ("Unresolved final-review finding: still accepts 13",) * repeated
+    abandoned = wp.decisions[-1]
+    assert isinstance(abandoned, Abandon) and abandoned.reasons == (why, *unresolved)
+
+
+@pytest.mark.parametrize("last", [Response.REVISED, Response.DECLINED], ids=["revised last", "declined last"])
+def test_a_refused_confirmation_reads_the_latest_answer_to_a_final_revision_finding(
+    proposal: TaskProposal, last: Response
+) -> None:
+    config = setup(**{"band.accept_too_easy": False, "budget.final_revisions": 2})
+    wp = confirmed(proposal, False, False, True, False)  # clean final review, 6 of 6 solved: too easy
+    answers = (Response.DECLINED, Response.REVISED, last)
+    responses = tuple(FindingResponse(review, REVISE, answer) for review, answer in enumerate(answers))
+    wp = replace(wp, decisions=(wp.decisions[0], *wp.decisions), responses=responses)  # both final revisions spent
+    decision = default_review(wp, config.band, config.budget)
+    unresolved = ("Unresolved final-review finding: revise me",) * (last is Response.DECLINED)
+    assert isinstance(decision, Abandon) and decision.reasons[1:] == unresolved
+    assert "budget.final_revisions (2) is spent" in decision.reasons[0]
+
+
 def test_a_restore_confirms_the_round_the_selector_chose(proposal: TaskProposal) -> None:
     """A restore's acceptance confirms its stored fallback's round, though a later round has the same digest."""
     config = setup()
@@ -512,7 +660,7 @@ def test_a_restore_confirms_the_round_the_selector_chose(proposal: TaskProposal)
         session=Conversation((Message(Role.SYSTEM, "author"),), ()),
     )
     decision = default_review(wp, config.band, config.budget)
-    pending = apply_decision(wp, decision, config.budget, config.policy)
+    pending = apply_decision(wp, decision, config)
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and pending.terminal is None
     assert pending.submission == SUBMISSION
 
@@ -712,8 +860,8 @@ async def test_a_confirmation_outage_beside_another_hold_is_a_manual_hold(propos
 
 
 async def test_a_clean_final_revision_reaches_its_confirmation_whatever_the_band_setting(proposal: TaskProposal) -> None:
-    """With ``band.accept_too_easy`` false, the revision solved 3/3 and was abandoned after 11 solves; its own
-    confirmation places it in band at 5/8 (owner's decision c: placement on the combined record is tagged)."""
+    """With ``band.accept_too_easy`` false, the final revision's round solves 3 of 3, too easy, and is not refused
+    there: its confirmation places it again, in band at 5 of 8."""
 
     def grade(trial: int, attempt: int) -> GradeResult:
         solved = {2: True, 3: trial in (3, 4)}.get(attempt, trial % 2 == 0)
@@ -816,9 +964,7 @@ def test_responses_are_kept_by_originating_review_across_a_stop_and_several_roun
         result = ValidationResult(
             SUBMISSION.digest, BASE, CONTROLS, (), review=SolveReview(f"v{n}", ReviewEnd.REPORTED, (f,))
         )
-        wp = apply_decision(
-            replace(wp, evidence=(*wp.evidence, result)), Modify(("x",), review=(f,)), config.budget, config.policy
-        )
+        wp = apply_decision(replace(wp, evidence=(*wp.evidence, result)), Modify(("x",), review=(f,)), config)
         assert wp.session is not None
         if n < 2:
             declined = (Decline(f, f"reason {n}"),) if n == 0 else ()
@@ -860,11 +1006,11 @@ def test_a_pending_acceptance_publishes_no_placement(proposal: TaskProposal) -> 
     """A provisional too-easy acceptance sent back by the final review and abandoned carried ``accepted_with``."""
     config = setup()
     wp = replace(confirming(proposal, ()), decisions=(), evidence=confirming(proposal, ()).evidence[:1])
-    pending = apply_decision(wp, Accept(BandOutcome.TOO_EASY), config.budget, config.policy)
+    pending = apply_decision(wp, Accept(BandOutcome.TOO_EASY), config)
     assert pending.terminal is None and pending.accepted_with is None
-    abandoned = apply_decision(pending, Abandon(("author stopped",)), config.budget, config.policy)
+    abandoned = apply_decision(pending, Abandon(("author stopped",)), config)
     assert abandoned.terminal is Terminal.ABANDONED and abandoned.accepted_with is None
-    final = apply_decision(confirming(proposal, ()), Accept(BandOutcome.TOO_EASY), config.budget, config.policy)
+    final = apply_decision(confirming(proposal, ()), Accept(BandOutcome.TOO_EASY), config)
     assert final.terminal is Terminal.ACCEPTED and final.accepted_with is BandOutcome.TOO_EASY
 
 
@@ -1322,3 +1468,20 @@ async def test_each_review_builds_its_evidence_index_and_digests_it_once(
     wp, _ = await run(proposal, Trials(), Reviewer())
     assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
     assert (built, digested) == ([3, 8], [3, 8])
+
+
+def always_too_easy(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    return Accept(BandOutcome.TOO_EASY)
+
+
+@pytest.mark.parametrize("confirmation_k", [0, 5])
+async def test_no_review_rule_publishes_a_terminal_acceptance_at_a_refused_band(
+    proposal: TaskProposal, confirmation_k: int
+) -> None:
+    config = replace(
+        setup(**{"band.accept_too_easy": False, "solver.confirmation_k": confirmation_k}), review=always_too_easy
+    )
+    engine = Trials()
+    with pytest.raises(ValueError, match=r"terminal acceptance at too_easy, but band\.accept_too_easy is false"):
+        await run(proposal, engine, Reviewer(), config)
+    assert len(engine.runs) == 3 + confirmation_k  # a pending acceptance went on to its confirmation
