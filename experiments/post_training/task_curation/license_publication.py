@@ -435,13 +435,22 @@ def check_publication(
             }
     if result.verdict is LicenseCheckVerdict.FAIL and lineage is not None:
         record = lineage.get(source_id)
-        if record is not None and (record.get("dataset_id"), record.get("revision")) == (result.dataset_id, result.revision):
+        resolved = (result.dataset_id, result.revision)
+        wrapper = evidence.get("receipt", {}).get("resolved_source") or {}
+        if record is None or (record.get("dataset_id"), record.get("revision")) not in (resolved, (wrapper.get("dataset_id"), wrapper.get("revision"))):
+            record = None
+            for candidate in lineage.values():
+                pin = (candidate.get("dataset_id"), candidate.get("revision"))
+                if pin in (resolved, (wrapper.get("dataset_id"), wrapper.get("revision"))):
+                    record = candidate
+                    break
+        if record is not None:
             identifier = lineage_folder_identifier(record)
             return {
                 **evidence,
                 "verdict": LicenseCheckVerdict.PASS.value,
                 "folder_lineage": {
-                    "source_id": source_id, "folder": record.get("source_id"),
+                    "source_id": record.get("source_id"),
                     "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
                     "identifier": identifier,
                     "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
