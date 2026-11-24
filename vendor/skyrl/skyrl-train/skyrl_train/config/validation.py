@@ -56,8 +56,8 @@ def validate_megatron_config(cfg: DictConfig):
         for name in ("max_sequence_length", "valid_token_counts", "minimum_headroom_fraction"):
             if name not in profile:
                 raise ValueError(f"Trainer sizing requires an explicit memory_profile.{name}")
-        if str(policy.optimizer_config.optimizer).lower() not in ("adam", "adamw"):
-            raise ValueError("Synthetic trainer sizing currently requires Adam")
+        if str(policy.optimizer_config.optimizer).lower() not in ("adam", "adamw", "muonh"):
+            raise ValueError("Synthetic trainer sizing requires Adam or MuonH")
         if cfg.trainer.algorithm.get("policy_loss_type", "regular") != "regular":
             raise ValueError("Synthetic trainer sizing currently requires regular PPO")
         if not 0 <= profile.minimum_headroom_fraction < 1:
