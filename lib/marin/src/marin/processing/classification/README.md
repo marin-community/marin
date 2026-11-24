@@ -5,7 +5,7 @@ This directory contains classification-adjacent post-processing workflows:
 - Deduplication in [`deduplication/`](./deduplication)
 - Attribute-driven dataset filtering in [`consolidate.py`](./consolidate.py)
 
-Decontamination has moved to [`marin.datakit.decon`](../../datakit/decon.py) — it consumes datakit-normalized Parquet and emits a co-partitioned Parquet attributes dataset (`id`, `partition_id`, `contaminated`, `max_overlap`).
+Decontamination has moved to [`marin.datakit.decon`](../../datakit/decon.py) — it consumes datakit-normalized Parquet and emits a co-partitioned Parquet attributes dataset (`id`, `partition_id`, `contaminated`, `max_score`, `matched_items`).
 
 ## Deduplication
 

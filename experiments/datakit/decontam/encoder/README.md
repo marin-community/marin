@@ -1,7 +1,9 @@
-# Two-stage decontamination with an encoder classifier (proof of concept)
+# Two-stage decontamination with an encoder classifier
 
-This directory holds a proof of concept for removing eval items from pretraining data. It works in
-two stages and uses one rule for all evals, with no values set per eval:
+This directory holds the research behind the decontamination stages of the reference pipeline
+(`marin.datakit.decon`, wired in `experiments/datakit/reference_pipeline.py`): the label sets, the
+classifier training, and the measurements that chose each setting. The method uses one rule for all evals,
+with no values set per eval:
 
 1. **Stage 1, the wide net.** Each eval item gets up to three key streams: its question; for a
    question shorter than a key, the question and its choices without letters; and its passage, when
@@ -18,13 +20,9 @@ two stages and uses one rule for all evals, with no values set per eval:
    or above the cutoff that the [cutoff rule](#cutoff-rule) chooses.
 
 The text stream of a text is its lowercase letters and digits, after NFKC folding and with LaTeX
-commands removed. Spacing, punctuation, Markdown and markup do not change it. The text streams, key
-streams, key choice, key table and per-record candidates live in the library module
-`marin.datakit.decon_keys`; this directory holds the pipelines, the item table, the label sets and
-the classifier.
-Stage 1 reads each record three ways: as it is, and with its JSON string escapes read once and
-twice. Without this, a copy stored in a JSON dump loses about a third of its windows, because
-`\n` before a word reads as a LaTeX command.
+commands removed. Spacing, punctuation, Markdown and markup do not change it. Stage 1 reads each record
+three ways: as it is, and with its JSON string escapes read once and twice. Without this, a copy stored in a
+JSON dump loses about a third of its windows, because `\n` before a word reads as a LaTeX command.
 
 ## What counts as a copy
 
@@ -40,62 +38,55 @@ twice. Without this, a copy stored in a JSON dump loses about a third of its win
 
 ## Pipeline
 
+The production stages are pipeline targets (see the `reference_pipeline.py` docstring):
+
+| Target | Library | Output |
+|---|---|---|
+| `decon-items`: one row per required eval record (question, choices, answer, passage) | `experiments/datakit/decontam/items.py` | `items/<part>.parquet`, `report.json` |
+| `decon-keys`: count candidate windows in two reference shards per source, keep the rarest | `marin.datakit.decon.build_keys`, `decon_keys` | `keys.parquet`, `locators.parquet` |
+| `decon-mark`: scan, GPU scoring, marks per source | `marin.datakit.decon.decon_source`, `decon_pairs` | `outputs/main/`, `outputs/flagged_sample/` |
+
+The research steps in this directory:
+
 | Step | Module | Output |
 |---|---|---|
-| Item table: one row per required eval record (question, choices, answer, passage) | `items.py` | `items/<eval>.parquet` |
-| Key choice: count candidate windows of every key stream in reference shards, keep the rarest | `rarest_key.py prepare, count, choose` | `keys.parquet` (one row per item and stream) |
-| Candidate volume, and a sample of key-1 candidates, on measure shards | `rarest_key.py measure` | `measure/*.json`, `sample/*.parquet` |
+| Candidate volume, and a sample of key-1 candidates, on measure shards | `measure_keys.py` | `measure/*.json`, `sample/*.parquet` |
 | Candidate pairs: the record text around each sampled key hit | `pairs.py items, extract` | `pairs/*.parquet` |
 | Synthetic pairs with exact labels | `synthetic.py generic, context` | one parquet |
 | Label sets from real candidates | `labels.py sample`, `judge.py`, `RUBRIC.md` | batches, `<model>/batch_*.jsonl` |
 | Silver negatives: real candidates with low word overlap | `labels.py silver` | one parquet |
 | Fine-tuning (one H100) | `train.py` | `model/`, `results.json`, `test_scores.parquet` |
-| Scoring pairs with a saved model | `score.py` | one parquet |
+| Scoring pairs with one saved model | `score.py` | one parquet |
 | Planted copies in 14 forms, stage 1 and stage 2 (gate G2) | `planted.py` | `stats/*.json`, `pairs/*.parquet` |
-| Whole catalog: locator table, scan (resumable), GPU scoring in parts, removal list | `catalog.py locate, scan, collect`, `candidates.py`, `catalog_score.py` | `pairs/`, `scores/`, `removed.parquet`, `summary.json` |
 
 Pairs and label rows store an item id. Training, scoring and context synthesis read the item's texts
-from the item table (`tables.item_texts`), so a fix of the table reaches every stored label.
-
-`sources.json` lists the 160 normalized sources of the sample. `rarest_key.py` draws one measure
-shard per source (seed 7) and two other reference shards per source (seed 11), in list order. A
-validation sample uses another seed and `--exclude-shards` with the earlier runs' `shards.json`, so
-it shares no shard with them; copy the first run's `keys.parquet` into its output to keep the keys
-frozen.
+from the item table (`decon_pairs.item_texts`), so a fix of the table reaches every stored label.
+`sources.json` lists the 160 normalized sources of the sample. `measure_keys.py` draws one measure shard per
+source (seed 7) from the shards that are not reference shards of the keys.
 
 ## Commands
 
-All steps run on Iris (`cw-us-east-02a`), at interactive priority. `$T` is a scratch prefix, for
-example `s3://marin-us-east-08a/tmp/ttl=7d/$USER`. GPU jobs need `--disk 100GB`: the default 5 GB
-disk is too small for the model and the pairs.
+The research steps run on Iris (`cw-us-east-02a`), at interactive priority. `$T` is a scratch prefix, for
+example `s3://marin-us-east-08a/tmp/ttl=7d/$USER`; `$ITEMS` and `$KEYS` are the output directories of the
+`decon-items` and `decon-keys` steps. GPU jobs need `--disk 100GB`: the default 5 GB disk is too small for
+the model and the pairs.
 
 ```bash
-# Item table (4 parts, about 15 minutes each).
-iris --cluster=cw-us-east-02a job run --extra=cpu --extra=lm_eval --memory 32GB --cpu 4 --disk 200GB \
-  --enable-extra-resources -e MARIN_PREFIX s3://marin-us-east-02a/marin --job-name decon-items-0 -- \
-  python -m experiments.datakit.decontam.encoder.items \
-  --manifest s3://marin-us-east-02a/marin/datakit/decontam/evals/aa-index-v4.1.1-v6/lmh/_manifest.json \
-  --output $T/items-table --part 0 --parts 4
-ITEMS=$T/items-table/items
-
-# Stage 1, one step after the other. prepare and choose run in the job itself (32 GB); count and
-# measure start one Zephyr worker per shard (--ram per worker).
-STAGE1=(--sources experiments/datakit/decontam/encoder/sources.json --input-root s3://marin-us-east-02a/marin/normalized
-        --items $ITEMS --output $T/stage1)
-for step in prepare count choose measure; do
-  iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 4 --disk 50GB --enable-extra-resources \
-    --job-name decon-$step -- python -m experiments.datakit.decontam.encoder.rarest_key $step $STAGE1 --ram 24g
-done
+# Candidate volume and the stage-1 sample (one Zephyr worker per measure shard).
+iris --cluster=cw-us-east-02a job run --extra=cpu --job-name decon-measure -- \
+  python -m experiments.datakit.decontam.encoder.measure_keys --keys $KEYS \
+  --sources experiments/datakit/decontam/encoder/sources.json --input-root s3://marin-us-east-02a/marin/normalized \
+  --output $T/stage1 --ram 24g
 
 # Candidate pairs (items: one job; extract: one Zephyr worker per sample file), then scores.
-PAIRS=(--stage1 $T/stage1 --items $ITEMS --output $T/pairs)
+PAIRS=(--stage1 $T/stage1 --items $ITEMS/items --output $T/pairs)
 iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 4 --disk 50GB --enable-extra-resources \
   --job-name decon-pairs-items -- python -m experiments.datakit.decontam.encoder.pairs items $PAIRS
 iris --cluster=cw-us-east-02a job run --extra=cpu --job-name decon-pairs-extract -- \
   python -m experiments.datakit.decontam.encoder.pairs extract $PAIRS
 GPU=(--extra=gpu --gpu H100x1 --enable-extra-resources --memory 64GB --cpu 8 --disk 100GB -e TOKENIZERS_PARALLELISM false)
 iris --cluster=cw-us-east-02a job run $GPU --job-name decon-score -- python -m experiments.datakit.decontam.encoder.score \
-  --model $T/train/<tag>/model --items $ITEMS --pairs $T/pairs --output $T/pairs/scored_<tag>.parquet
+  --model $T/train/<tag>/model --items $ITEMS/items --pairs $T/pairs --output $T/pairs/scored_<tag>.parquet
 
 # Label set: sample pairs, judge them with GLM and DeepSeek (GLM_BULK_TOKEN from Secret Manager,
 # project hai-gcp-models), and keep the pairs both judges agree on. Copy the batches to $T/labels/<set>.
@@ -111,11 +102,11 @@ python -m experiments.datakit.decontam.encoder.labels merge --set label/<set> --
 # is seen in training through synthetic or silver pairs.
 CPU=(--extra=cpu --memory 16GB --cpu 2 --disk 20GB --enable-extra-resources)
 iris --cluster=cw-us-east-02a job run $CPU --job-name decon-synth-generic -- \
-  python -m experiments.datakit.decontam.encoder.synthetic generic --items $ITEMS \
+  python -m experiments.datakit.decontam.encoder.synthetic generic --items $ITEMS/items \
   --hosts "s3://marin-us-east-02a/marin/normalized/*/outputs/main/part-00000-*.parquet" \
   --exclude-items $EXCLUDE --output $T/data/synthetic_generic.parquet
 iris --cluster=cw-us-east-02a job run $CPU --job-name decon-synth-context -- \
-  python -m experiments.datakit.decontam.encoder.synthetic context --items $ITEMS \
+  python -m experiments.datakit.decontam.encoder.synthetic context --items $ITEMS/items \
   --candidates $T/pairs/scored_<tag>.parquet --exclude-items $EXCLUDE --output $T/data/synthetic_ctx.parquet
 iris --cluster=cw-us-east-02a job run $CPU --job-name decon-silver -- \
   python -m experiments.datakit.decontam.encoder.labels silver --scored $T/pairs/scored_<tag>.parquet \
@@ -126,28 +117,14 @@ iris --cluster=cw-us-east-02a job run $CPU --job-name decon-silver -- \
 for seed in 0 1; do
   iris --cluster=cw-us-east-02a job run $GPU -e OMP_NUM_THREADS 8 --job-name decon-train-s$seed -- \
     python -m experiments.datakit.decontam.encoder.train --tag <tag>-s$seed --seed $seed --model jhu-clsp/mmBERT-base \
-    --data $T/data --synthetic synthetic_generic.parquet --items $ITEMS --extra $T/data/<set>.parquet \
+    --data $T/data --synthetic synthetic_generic.parquet --items $ITEMS/items --extra $T/data/<set>.parquet \
     --extra $T/data/silver.parquet --extra $T/data/synthetic_ctx.parquet --output $T/train
 done
-
-# Whole catalog: locator table, scan (one Zephyr worker per shard; records over 5,000,000 characters
-# are read in overlapping pieces), scores on 30 GPUs, then the removal list at the cutoff.
-C=$T/catalog
-iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 4 --disk 50GB --enable-extra-resources \
-  --job-name decon-catalog-locate -- python -m experiments.datakit.decontam.encoder.catalog locate \
-  --stage1 $T/stage1 --items $ITEMS --output $C
-iris --cluster=cw-us-east-02a job run --extra=cpu --job-name decon-catalog-scan -- \
-  python -m experiments.datakit.decontam.encoder.catalog scan --sources experiments/datakit/decontam/encoder/sources.json \
-  --input-root s3://marin-us-east-02a/marin/normalized --output $C --records all --ram 32g
-for k in $(seq 0 29); do
-  iris --cluster=cw-us-east-02a job run $GPU --no-wait --job-name decon-catalog-score-p$k -- \
-    python -m experiments.datakit.decontam.encoder.catalog_score --output $C --scores $C/scores \
-    --models $T/train/<tag>-s0/model $T/train/<tag>-s1/model --items $ITEMS --part $k --parts 30
-done
-iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 8 --enable-extra-resources \
-  --job-name decon-catalog-collect -- python -m experiments.datakit.decontam.encoder.catalog collect \
-  --output $C --scores $C/scores --cutoff 0.5
 ```
+
+A new model goes to production as a copy of `<run>/model/` under
+`<MARIN_PREFIX>/datakit/decontam/models/<name>` in each region, with `MODEL_NAMES` and `MODELS_VERSION` in
+`experiments/datakit/decontam/config.py` updated.
 
 ## Model
 

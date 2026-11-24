@@ -1,32 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import random
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 from marin.datakit.decon_keys import (
     WINDOW,
-    KeyStream,
-    Windows,
-    excerpt,
     item_stream,
-    keys_table,
-    record_readings,
-    text_stream,
     window_hashes,
 )
+from marin.datakit.decon_pairs import ItemText, pair_left
 
-from experiments.datakit.decontam.encoder import candidates, rarest_key
-from experiments.datakit.decontam.encoder.catalog import located_questions
-from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
-from experiments.datakit.decontam.encoder.tables import ItemText
-from experiments.datakit.decontam.encoder.train import pair_left
+from experiments.datakit.decontam.items import lmh_item, shared_values
 
 
 class _Task:
@@ -120,31 +108,6 @@ def test_a_target_template_that_renders_key_names_reads_the_field_values():
         },
     }
     assert lmh_item("drop", "drop-0", drop, doc, set())["answer"] == "Tom Brady"
-
-
-def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overlap(tmp_path: Path):
-    streams = [
-        text_stream("Which of the following best describes the fallacy of equivocation in arguments?"),
-        text_stream("short"),
-    ]
-    hashes, owners, offsets = rarest_key.candidate_windows(streams)
-    np.savez(
-        tmp_path / "windows.npz",
-        hashes=hashes,
-        owners=owners,
-        offsets=offsets,
-        ids=np.array(["a", "b"], dtype=object),
-        kinds=np.array(["question", "question"], dtype=object),
-    )
-    (tmp_path / "counts").mkdir()
-    # Later windows are rarer in the reference sample.
-    counts = np.arange(len(hashes), 0, -1).astype(np.uint32)
-    np.savez(tmp_path / "counts" / "part-00000.npz", hashes=hashes, counts=counts)
-    rarest_key.choose(str(tmp_path))
-    keys = pd.read_parquet(tmp_path / "keys.parquet").set_index("id")
-    assert keys.loc["a", "key1_offset"] == offsets[owners == 0].max()
-    assert keys.loc["a", "key2_hash"] != 0 and keys.loc["a", "key2_hash"] != keys.loc["a", "key1_hash"]
-    assert keys.loc["b", "key1_hash"] == 0
 
 
 def test_synthetic_question_without_its_answer_counts_for_the_question_output_only():
@@ -278,60 +241,3 @@ def test_a_generic_stem_shared_by_several_items_is_not_their_passage():
     item = lmh_item("mmlu_x", "mmlu_x-0", task, docs[0], shared_values(docs))
     assert item["passage"] == ""
     assert item["question"].startswith("Which of the following statements is correct?")
-
-
-def test_a_shared_tie_keys_each_item_off_the_question_stem_that_other_items_share():
-    stem = "Which of the following propositions is an immediate consequence of the given premises?"
-    questions = [
-        f"{stem} {premise}" for premise in ("Henry rides a red bicycle daily", "Mara bakes seven loaves weekly")
-    ]
-    streams = [text_stream(q) for q in questions]
-    hashes, owners, offsets = rarest_key.candidate_windows(streams)
-    ids = np.array(["formal-0", "formal-1"], dtype=object)
-    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION] * 2, dtype=object))
-    # No window occurs in the reference sample, so the tie order decides the keys.
-    counts = np.zeros(len(hashes), dtype=np.int64)
-    stem_windows = set(window_hashes(text_stream(stem)).tolist())
-    earliest = keys_table(windows, counts).column("key1_hash").to_pylist()
-    shared = keys_table(windows, counts, tie=rarest_key.tie_values(windows, rarest_key.Tie.SHARED))
-    assert all(key in stem_windows for key in earliest)
-    assert not any(key in stem_windows for key in shared.column("key1_hash").to_pylist())
-
-
-def test_two_key_streams_of_one_item_count_as_one_holder_of_a_shared_window():
-    streams = [text_stream("Henry made two stops during his sixty mile bike trip")] * 2
-    hashes, owners, offsets = rarest_key.candidate_windows(streams)
-    ids = np.array(["gsm8k-0", "gsm8k-0"], dtype=object)
-    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION, KeyStream.UNLETTERED], dtype=object))
-    assert set(rarest_key.tie_values(windows, rarest_key.Tie.SHARED).tolist()) == {1}
-
-
-def test_a_scan_refuses_an_output_written_with_other_records(tmp_path):
-    marker = tmp_path / "shard.json"
-    assert not candidates.done_marker(str(marker), candidates.Records.ALL)
-    marker.write_text(json.dumps({"read": "short"}))
-    assert candidates.done_marker(str(marker), candidates.Records.SHORT)
-    with pytest.raises(ValueError):
-        candidates.done_marker(str(marker), candidates.Records.ALL)
-
-
-def test_an_excerpt_lands_on_the_exact_copy_after_a_changed_version_when_the_prompt_text_is_left_out():
-    stem = "Jan has three times the number of pets as Marcia. Marcia has two more pets than Cindy."
-    questions = {
-        "gsm8k-0": f"Question: {stem} If Cindy has four pets, how many total pets do the three have?\nAnswer:",
-        "gsm8k-1": "Question: Henry made two stops during his sixty mile bike trip, how far did he go?\nAnswer:",
-    }
-    question = located_questions(questions, {"gsm8k-0": "gsm8k", "gsm8k-1": "gsm8k"})["gsm8k-0"]
-    assert question == text_stream(f"{stem} If Cindy has four pets, how many total pets do the three have?")
-    changed = f"{stem} If Cindy has ten pets, how many pets does Jan have?"
-    record = (
-        f'test_a = "{changed}"\n'
-        + "x = 1\n" * 1000
-        + f'test_b = "{stem} If Cindy has four pets, how many total pets do the three have?"\n'
-    )
-    full = text_stream(questions["gsm8k-0"])
-    key, offset = full[8:28], 8
-    with_prompt, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), full, key, offset)
-    without, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), question, key, offset)
-    assert "four pets, how many total" not in with_prompt
-    assert "four pets, how many total" in without

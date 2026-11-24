@@ -22,6 +22,7 @@ from rigging.filesystem.cluster_config import check_path_in_region, region_from_
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.config import CPU_SCORE_WORKERS
 from experiments.datakit.reference_pipeline import (
     ClusterConfig,
     FuzzyClusterConfig,
@@ -69,6 +70,8 @@ TIER3_SCALE = PipelineScale(
     store=StoreConfig(task_count=256, worker=ResourceConfig(cpu=2, ram="16g", disk="32g")),
     dedup_max_parallelism=1024,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="16g"),
+    # The GCP cluster has no GPUs.
+    decon_score=CPU_SCORE_WORKERS,
 )
 
 

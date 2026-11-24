@@ -126,10 +126,10 @@ def test_a_catalog_record_yields_one_pair_per_item_with_the_text_around_it():
     record = "intro " * 400 + "Q: " + question + " A: Saturn." + " outro" * 900
     pairs = record_pairs("r1", record, table, locators)
     # Both streams of the item match, but the record gets one pair for the item.
-    assert [pair["item"] for pair in pairs] == ["planets-0"]
-    assert question in pairs[0]["right"] and len(pairs[0]["right"]) < len(record)
+    assert [pair.item for pair in pairs] == ["planets-0"]
+    assert question in pairs[0].right and len(pairs[0].right) < len(record)
     escaped = json.dumps({"text": "Q: " + question.replace(" ", "\n")})
-    assert [pair["item"] for pair in record_pairs("r2", escaped, table, locators)] == ["planets-0"]
+    assert [pair.item for pair in record_pairs("r2", escaped, table, locators)] == ["planets-0"]
     assert record_pairs("r3", "nothing about planets here " * 20, table, locators) == []
 
 
@@ -185,7 +185,7 @@ def test_each_planted_layout_is_found_or_a_listed_miss(name, item):
     table, locators = _index(*item)
     host = "Some unrelated record text. " * 40
     for form, copy in _layouts(*item).items():
-        found = [pair["item"] for pair in record_pairs("r", f"{host}\n{copy}\n{host}", table, locators)]
+        found = [pair.item for pair in record_pairs("r", f"{host}\n{copy}\n{host}", table, locators)]
         assert found == ([] if (name, form) in MISSED else ["item-0"]), form
 
 
@@ -358,6 +358,20 @@ def test_a_long_record_keeps_the_whole_excerpt_of_a_hit_near_a_piece_edge():
     text = filler[:11_000] + copy + filler[: 30_000 - 11_000]
     whole = record_pairs("r", text, table, locators)
     pieced = long_record_pairs("r", text, table, locators, size=12_000, overlap=4_600)
-    assert [p["item"] for p in pieced] == ["item-0"]
-    assert pieced[0]["right"] == whole[0]["right"]
-    assert pieced[0]["record_chars"] == len(text)
+    assert [p.item for p in pieced] == ["item-0"]
+    assert pieced[0].right == whole[0].right
+    assert pieced[0].record_chars == len(text)
+
+
+def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overlap():
+    streams = [
+        text_stream("Which of the following best describes the fallacy of equivocation in arguments?"),
+        text_stream("short"),
+    ]
+    hashes, owners, offsets = candidate_windows(streams)
+    windows = Windows(hashes, owners, offsets, np.array(["a", "b"], dtype=object), np.array([KeyStream.QUESTION] * 2))
+    # Later windows are rarer in the reference sample.
+    keys = keys_table(windows, np.arange(len(hashes), 0, -1)).to_pandas().set_index("id")
+    assert keys.loc["a", "key1_offset"] == offsets[owners == 0].max()
+    assert keys.loc["a", "key2_hash"] != 0 and keys.loc["a", "key2_hash"] != keys.loc["a", "key1_hash"]
+    assert keys.loc["b", "key1_hash"] == 0

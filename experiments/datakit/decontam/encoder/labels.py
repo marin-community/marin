@@ -27,10 +27,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from marin.datakit.decon_tables import read_frame, write_frame
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
-
-from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 EXCERPT = 3000

@@ -19,6 +19,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from marin.datakit.decon_keys import WINDOW, KeyStream, excerpt, key_streams, record_readings, text_stream
+from marin.datakit.decon_tables import parquet_files, read_table, write_table
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
@@ -26,9 +27,17 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
-from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-
 logger = logging.getLogger(__name__)
+
+# Path segment under which the normalized pretraining shards live.
+NORMALIZED = "/normalized/"
+
+
+def shard_name(path: str) -> str:
+    """A flat name for one normalized shard: its path below ``normalized/``, with ``/`` written as ``__``."""
+    if NORMALIZED not in path:
+        raise ValueError(f"{path} is not under a {NORMALIZED} prefix")
+    return path.split(NORMALIZED, 1)[1].replace("/", "__")
 
 
 def join_items(items_root: str, stage1: str, output: str) -> None:
@@ -120,7 +129,7 @@ def main() -> None:
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("step", choices=["items", "extract"])
-    parser.add_argument("--stage1", required=True, help="stage-1 output with keys.parquet and sample/*.parquet")
+    parser.add_argument("--stage1", required=True, help="measure_keys.py output with sample/*.parquet")
     parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet)")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

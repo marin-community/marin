@@ -61,17 +61,17 @@ function hl(text,ngrams){text=text||'';var parts=text.split(/(\\s+)/);
   if(pm[i]&&!open){out+='<mark>';open=true}if(!pm[i]&&open){out+='</mark>';open=false}out+=esc(parts[i])}
  if(open)out+='</mark>';return out}
 function evcol(d){var ng=d.matched_ngrams||[];var e=(d.matched_evals||[]).map(function(e){
-  return '<div class=evblock><div class=evh><span class=chip>'+esc(''+e.family)+' x'+e.hits+'</span> '+esc(e.eval_id)+
+  return '<div class=evblock><div class=evh><span class=chip>'+esc(''+e.eval)+'</span> '+esc(e.item)+
    '</div><pre class=ev>'+hl(e.text,ng)+'</pre></div>'}).join('');
  return e||'<span class=meta>(eval text unavailable)</span>'}
 function toggle(i){var r=document.getElementById('d'+i);r.classList.toggle('open');
  if(r.dataset.filled)return;r.dataset.filled=1;var s=DATA.sources[i],h='';
  (s.samples||[]).forEach(function(d){var ng=d.matched_ngrams||[];
-  h+='<div class=doc><span class=meta>overlap <span class=hi>'+d.max_overlap.toFixed(3)+
-   '</span> · '+d.n_matched+' matched ngrams · '+esc(d.id)+' · '+chips(d.families)+'</span>'+
+  h+='<div class=doc><span class=meta>score <span class=hi>'+d.max_score.toFixed(3)+
+   '</span> · '+(d.matched_evals||[]).length+' matched items · '+esc(d.id)+' · '+esc((d.evals||[]).join(', '))+'</span>'+
    '<div class=cols>'+
     '<div class=col><div class=colh>document · '+esc(s.name)+'</div><pre>'+hl(d.text,ng)+'</pre></div>'+
-    '<div class=col><div class=colh>matched eval text</div>'+evcol(d)+'</div>'+
+    '<div class=col><div class=colh>matched eval items</div>'+evcol(d)+'</div>'+
    '</div></div>'});
  r.cells[0].innerHTML=h||'<span class=meta>(no sampled docs)</span>'}
 function sortBy(k){var S=DATA.sources.slice();var asc=(window._sk===k)?!window._asc:false;window._sk=k;window._asc=asc;

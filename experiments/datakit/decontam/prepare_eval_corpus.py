@@ -69,13 +69,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
-from marin.datakit.decon import required_task_failures
 from marin.datakit.download.http_session import build_retrying_session
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
+from experiments.datakit.decontam.eval_manifests import required_task_failures
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,

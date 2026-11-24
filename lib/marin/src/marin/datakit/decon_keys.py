@@ -26,6 +26,7 @@ import os
 import re
 import unicodedata
 from collections.abc import Iterator
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -462,6 +463,19 @@ def excerpt(
     return reading.text[max(0, start - BEFORE) : start + question_chars + AFTER], reading.stream, at
 
 
+@dataclass(frozen=True)
+class Candidate:
+    """A stage-1 candidate: a record that holds an item's key, with the record text around the item."""
+
+    record: str
+    item: str
+    kind: str
+    eval: str
+    right: str
+    record_chars: int
+    located: bool
+
+
 def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, width: int = WINDOW) -> Iterator[str]:
     """Pieces of *text* of at most *size* characters. Consecutive pieces share at least *overlap* characters, so
     every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until its text
@@ -505,31 +519,31 @@ def long_record_pairs(
     width: int = WINDOW,
     size: int = MAX_DOC_CHARS,
     overlap: int = PIECE_OVERLAP,
-) -> list[dict]:
+) -> list[Candidate]:
     """``record_pairs`` for a long record: each of its ``readings`` (JSON escapes read on the whole record, as for a
     short record) is cut into ``pieces``, and each piece is scanned as that reading. One pair per item, the one with
     the longest excerpt (a hit near a piece's edge has its context cut there and whole in the next piece)."""
-    found: dict[str, dict] = {}
+    found: dict[str, Candidate] = {}
     for reading in readings(text):
         for piece in pieces(reading, size, overlap, width):
             for pair in _pairs(record_id, [Reading(piece, width)], len(text), table, locators):
-                best = found.get(pair["item"])
-                if best is None or len(pair["right"]) > len(best["right"]):
-                    found[pair["item"]] = pair
+                best = found.get(pair.item)
+                if best is None or len(pair.right) > len(best.right):
+                    found[pair.item] = pair
     return list(found.values())
 
 
-def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
-    """One pair per item whose key-1 window a reading of *text* holds; an item keyed by several streams
+def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[Candidate]:
+    """One candidate per item whose key-1 window a reading of *text* holds; an item keyed by several streams
     takes the first locator row found."""
     return _pairs(record_id, record_readings(text, width), len(text), table, locators)
 
 
 def _pairs(
     record_id: str, readings_of: list[Reading], record_chars: int, table: KeyTable, locators: pa.Table
-) -> list[dict]:
+) -> list[Candidate]:
     found = table.found(np.concatenate([reading.hashes for reading in readings_of]))
-    pairs: dict[str, dict] = {}
+    pairs: dict[str, Candidate] = {}
     for row in table.items_of(found):
         located = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
         if located["item"] in pairs:
@@ -537,13 +551,13 @@ def _pairs(
         right, _, at = excerpt(
             readings_of, located["question_chars"], located["question"], located["key"], located["offset"]
         )
-        pairs[located["item"]] = {
-            "record": record_id,
-            "item": located["item"],
-            "kind": located["kind"],
-            "eval": located["eval"],
-            "right": right,
-            "record_chars": record_chars,
-            "located": at >= 0,
-        }
+        pairs[located["item"]] = Candidate(
+            record=record_id,
+            item=located["item"],
+            kind=located["kind"],
+            eval=located["eval"],
+            right=right,
+            record_chars=record_chars,
+            located=at >= 0,
+        )
     return list(pairs.values())

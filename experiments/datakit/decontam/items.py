@@ -26,9 +26,9 @@ answer from its answer fields; Uncheatable records are free text. Every record
 of the manifests either gets an item or a ``reason``.
 """
 
-import argparse
 import json
 import logging
+import os
 import re
 from collections import Counter
 from collections.abc import Iterator
@@ -36,11 +36,18 @@ from itertools import pairwise
 from typing import Any, NamedTuple, Protocol
 
 import pyarrow as pa
+from fray.types import ResourceConfig
 from marin.datakit.decon_keys import WINDOW, text_stream
+from marin.datakit.decon_pairs import ITEM_SCHEMA
+from marin.datakit.decon_tables import read_table, write_table
+from marin.datakit.source_key import DatakitArtifactPath
+from marin.execution.step_spec import StepSpec
+from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset, ShardInfo
 
-from experiments.datakit.decontam.encoder.tables import write_table
+from experiments.datakit.decontam.eval_manifests import CorpusGate
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
@@ -61,21 +68,6 @@ logger = logging.getLogger(__name__)
 
 WINDOWS = (10, 13, 16, WINDOW)
 LENGTH_BINS = (0, 10, 20, 30, 50, 70, 100, 200, 10**9)
-
-SCHEMA = pa.schema(
-    [
-        ("id", pa.string()),
-        ("eval", pa.string()),
-        ("suite", pa.string()),
-        ("question", pa.string()),
-        ("choices", pa.list_(pa.string())),
-        ("answer", pa.string()),
-        ("prompt", pa.string()),
-        ("passage", pa.string()),
-        ("choices_mode", pa.string()),
-        ("reason", pa.string()),
-    ]
-)
 
 
 def _stream_len(text: str) -> int:
@@ -436,46 +428,143 @@ def summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    configure_logging(logging.INFO)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--manifest", required=True, help="the sealed lm-eval manifest (lmh/_manifest.json) of the corpus"
-    )
-    parser.add_argument("--output", required=True)
-    parser.add_argument(
-        "--part", type=int, required=True, help="this part of the lm-eval task list; part 0 also does AA and Uncheatable"
-    )
-    parser.add_argument("--parts", type=int, required=True)
-    args = parser.parse_args()
+def coverage_rows(manifest_path: str) -> Iterator[EvalRows]:
+    """The pinned reference suite (``pinned_references``): each record's text is the item."""
+    manifest = json.loads(StoragePath(manifest_path).read_text())
+    parent = os.path.dirname(manifest_path)
+    for entry in manifest["benchmarks"]:
+        name = entry["name"]
+        try:
+            records = read_table(prefix_join(parent, entry["artifact"]), ["id", "text"]).to_pylist()
+        except Exception as error:
+            yield EvalRows(name, [], f"load: {error!r}"[:300])
+            continue
+        yield EvalRows(name, [item_row(record["id"], name, "coverage", record["text"]) for record in records], "")
 
-    with StoragePath(args.manifest).open("r") as source:
-        manifest = json.load(source)
-    expected = {artifact["task"]: artifact["records"] for artifact in manifest["artifacts"]}
+
+class ItemTable(BaseModel):
+    """Outcome of :func:`build_items`: one row per record of the required evals (``decon_pairs.ITEM_SCHEMA``).
+
+    Attributes:
+        items_dir: Directory of ``<eval>.parquet`` item files.
+        report_path: Per-eval counts (``summary``), with the sealed record count of each eval.
+        counters: ``evals`` and ``items``.
+    """
+
+    items_dir: DatakitArtifactPath
+    report_path: DatakitArtifactPath
+    counters: dict[str, int | float]
+
+
+def _make_part(lmh_manifest_path: str, coverage_manifest_path: str, output_path: str, parts: int):
+    """A ``map_shard`` function over part numbers: each part writes the items of its share of the required lm-eval
+    tasks (part 0 also AA, Uncheatable and the pinned references) and its report."""
+
+    def build(numbers: Iterator[int], shard: ShardInfo) -> Iterator[dict]:
+        manifest = json.loads(StoragePath(lmh_manifest_path).read_text())
+        leaves_of = manifest["required_tasks"]
+        for part in numbers:
+            sources = [lmh_rows(sorted(leaves_of)[part::parts], leaves_of)]
+            if part == 0:
+                sources += [aa_rows(), uncheatable_rows(), coverage_rows(coverage_manifest_path)]
+            report = {}
+            for source in sources:
+                for result in source:
+                    if result.rows:
+                        table = pa.Table.from_pylist(result.rows, schema=ITEM_SCHEMA)
+                        write_table(table, prefix_join(output_path, f"items/{result.name}.parquet"))
+                    counts = summary(result.rows) if result.rows else {"items": 0}
+                    report[result.name] = {"error": result.error, **counts}
+                    logger.info("%s: %d items %s", result.name, counts["items"], result.error)
+            report_path = prefix_join(output_path, f"report/part-{part:02d}.json")
+            StoragePath(report_path).write_text(json.dumps(report, indent=1))
+            yield {"part": part, "evals": len(report)}
+
+    return build
+
+
+def expected_records(lmh_manifest_path: str, coverage_manifest_path: str) -> dict[str, int]:
+    """The sealed record count of every required eval: each leaf of the required lm-eval tasks, every AA and
+    Uncheatable benchmark, and every pinned reference."""
+    lmh = json.loads(StoragePath(lmh_manifest_path).read_text())
+    records = {artifact["task"]: artifact["records"] for artifact in lmh["artifacts"]}
+    expected = {leaf: records[leaf] for leaves in lmh["required_tasks"].values() for leaf in leaves}
     expected.update({cfg.name: cfg.expected_records for cfg in AA_EVALS})
     expected.update({f"uncheatable-{subset}": count for subset, count in UNCHEATABLE_RECORDS.items()})
-    leaves_of = manifest["required_tasks"]
-    names = sorted(leaves_of)[args.part :: args.parts]
-    sources = [lmh_rows(names, leaves_of)]
-    if args.part == 0:
-        sources += [aa_rows(), uncheatable_rows()]
-    report = {}
-    for source in sources:
-        for result in source:
-            if result.rows:
-                table = pa.Table.from_pylist(result.rows, schema=SCHEMA)
-                write_table(table, prefix_join(args.output, f"items/{result.name}.parquet"))
-            counts = summary(result.rows) if result.rows else {"items": 0}
-            entry = {"error": result.error, "expected_records": expected.get(result.name), **counts}
-            report[result.name] = entry
-            logger.info(
-                "%s: %d items (expected %s) %s", result.name, entry["items"], entry["expected_records"], result.error
-            )
-    StoragePath(prefix_join(args.output, f"report/part-{args.part:02d}.json")).write_text(json.dumps(report, indent=1))
-    logger.info(
-        "part %d done: %d evals, %d items", args.part, len(report), sum(entry["items"] for entry in report.values())
+    coverage = json.loads(StoragePath(coverage_manifest_path).read_text())
+    expected.update({entry["name"]: entry["expected_records"] for entry in coverage["benchmarks"]})
+    return expected
+
+
+def build_items(
+    *,
+    gate: CorpusGate,
+    lmh_manifest_path: str,
+    coverage_manifest_path: str,
+    output_path: str,
+    parts: int,
+    worker_resources: ResourceConfig,
+    zephyr_context: ZephyrContext | None = None,
+) -> ItemTable:
+    """Build the item table of the required evals under *output_path* once *gate* passes, and fail unless every
+    required eval loaded with exactly its sealed record count."""
+    gate.check()
+    context = zephyr_context or ZephyrContext(name="decon-items", resources=worker_resources, max_workers=parts)
+    context.execute(
+        Dataset.from_list(list(range(parts))).map_shard(
+            _make_part(lmh_manifest_path, coverage_manifest_path, output_path, parts)
+        ),
+        map_task_resources=worker_resources,
+    )
+    report: dict[str, Any] = {}
+    for part in range(parts):
+        report.update(json.loads(StoragePath(prefix_join(output_path, f"report/part-{part:02d}.json")).read_text()))
+    expected = expected_records(lmh_manifest_path, coverage_manifest_path)
+    failures = [
+        f"{name}: {report.get(name, {}).get('items', 0)} items, expected {count} "
+        f"({report.get(name, {}).get('error') or 'count differs'})"
+        for name, count in expected.items()
+        if name not in report or report[name]["error"] or report[name]["items"] != count
+    ]
+    if failures:
+        raise ValueError(f"the item table is incomplete for {len(failures)} required evals: {failures[:20]}")
+    report_path = prefix_join(output_path, "report.json")
+    merged = {name: {**entry, "expected_records": expected.get(name)} for name, entry in report.items()}
+    StoragePath(report_path).write_text(json.dumps(merged, indent=1))
+    return ItemTable(
+        items_dir=prefix_join(output_path, "items"),
+        report_path=report_path,
+        counters={"evals": len(report), "items": sum(entry["items"] for entry in report.values())},
     )
 
 
-if __name__ == "__main__":
-    main()
+def decon_items_step(
+    *,
+    name: str,
+    gate: CorpusGate,
+    lmh_manifest_path: str,
+    coverage_manifest_path: str,
+    parts: int,
+    worker_resources: ResourceConfig,
+    zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """A StepSpec for :func:`build_items`; its output holds ``items/*.parquet``."""
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: build_items(
+            gate=gate,
+            lmh_manifest_path=lmh_manifest_path,
+            coverage_manifest_path=coverage_manifest_path,
+            output_path=output_path,
+            parts=parts,
+            worker_resources=worker_resources,
+            zephyr_context=zephyr_context,
+        ),
+        hash_attrs={
+            "corpus_version": gate.corpus_version,
+            "coverage_versions": [manifest.version for manifest in gate.required_manifests],
+            "parts": parts,
+        },
+        output_path_prefix=output_path_prefix,
+    )

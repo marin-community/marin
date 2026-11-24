@@ -16,7 +16,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
-from marin.datakit.decon import NGramConfig, _record_feature_status
+from marin.datakit.decon_keys import WINDOW, text_stream
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -201,13 +201,12 @@ def prepare_references(output_root: str, sources: tuple[ReferenceSource, ...]) -
     if StoragePath(manifest_path).exists():
         raise ValueError(f"Reference release already exists: {manifest_path}; choose a new version")
     entries = []
-    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2)
     for source in sources:
         records = list(reference_records(_reference_rows(source), source))
         if len(records) != source.expected_records:
             raise ValueError(f"{source.name}: expected {source.expected_records} records, extracted {len(records)}")
-        if any(not _record_feature_status(record["text"], ngram)[1] for record in records):
-            raise ValueError(f"{source.name}: a benchmark record cannot match itself")
+        if any(len(text_stream(record["text"])) < WINDOW for record in records):
+            raise ValueError(f"{source.name}: a benchmark record is too short to have a decontamination key")
         artifact = prefix_join(source.name, "eval.parquet")
         output_path = prefix_join(output_root, artifact)
         _write_parquet(output_path, iter(records))
