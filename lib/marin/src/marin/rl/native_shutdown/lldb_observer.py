@@ -12,6 +12,8 @@ import lldb  # pyrefly: ignore[missing-import]  # supplied by the LLDB interpret
 from stack_safety import identity  # pyrefly: ignore[missing-import]  # standalone sibling asset
 
 LIMIT = 1024 * 1024
+_MAX_FRAMES_PER_THREAD = 8
+_DETACH_RESERVE_SECONDS = 0.2
 
 
 def atomic_json(path, value):
@@ -30,18 +32,98 @@ def run(debugger, command, result, internal_dict):
         "traced_runtime_acceptance_qualified": False,
         "phase": "settings",
         "errors": [],
+        "frames_complete": False,
+        "main_thread_id": settings["pid"],
+        "threads_seen": 0,
+        "threads_captured": 0,
+        "frames_written": 0,
+        "max_frames_per_thread": _MAX_FRAMES_PER_THREAD,
+        "output_bytes_seen": 0,
+        "trace_bytes_written": 0,
+        "output_truncated": False,
+        "late_cleanup_frame": False,
+        "libxla_frame_present": False,
+        "frame_marker_present": False,
     }
     process = None
-    trace = bytearray()
+    trace = None
+
+    def journal(phase, **fields):
+        receipt.update(phase=phase, journal_monotonic=time.monotonic(), **fields)
+        atomic_json(settings["lldb_receipt_path"], receipt)
 
     def execute(text):
         response = lldb.SBCommandReturnObject()
         debugger.GetCommandInterpreter().HandleCommand(text, response)
         if not response.Succeeded():
             raise RuntimeError((response.GetError() or "LLDB command failed")[:300])
-        return (response.GetOutput() or "").encode()
+
+    def write_trace(text):
+        data = text.encode()
+        receipt["output_bytes_seen"] += len(data)
+        if receipt["output_bytes_seen"] > LIMIT:
+            receipt["output_truncated"] = True
+            raise RuntimeError("OutputLimitExceeded")
+        assert trace is not None
+        written = trace.write(data)
+        receipt["trace_bytes_written"] += written or 0
+        if written != len(data):
+            raise OSError("Incomplete native stack write")
+
+    def capture_budget(deadline):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Native stack capture reached its detach reserve")
+
+    def capture_thread(thread, deadline, *, main):
+        thread_id = thread.GetThreadID()
+        write_trace(f"thread tid={thread_id} main={str(main).lower()}\n")
+        captured = 0
+        if not main:
+            # The streamed frame prefix retains the per-frame cursor. Avoid
+            # thousands of atomic JSON rewrites while the target is stopped.
+            receipt.pop("active_frame_index", None)
+            journal("thread_frames", active_thread_id=thread_id)
+        for index in range(_MAX_FRAMES_PER_THREAD):
+            capture_budget(deadline)
+            if main:
+                journal("frame_unwind", active_thread_id=thread_id, active_frame_index=index)
+            frame = thread.GetFrameAtIndex(index)
+            capture_budget(deadline)
+            if not frame.IsValid():
+                break
+            pc = frame.GetPC()
+            if pc == lldb.LLDB_INVALID_ADDRESS:
+                raise RuntimeError("Stopped frame has no program counter")
+            # FileIO is unbuffered: even blocked module/symbol resolution or
+            # SIGKILL leaves the numeric prefix, without a qualifying verdict.
+            write_trace(f"frame #{index}: {pc:#x} ")
+            if main:
+                journal("frame_symbol", active_thread_id=thread_id, active_frame_index=index)
+            module = frame.GetModule().GetFileSpec().GetFilename() or "<unknown>"
+            capture_budget(deadline)
+            write_trace(module + " ")
+            symbol = frame.GetFunctionName()
+            capture_budget(deadline)
+            if not symbol:
+                symbol = frame.GetSymbol().GetName()
+                capture_budget(deadline)
+            symbol = symbol or "<unknown>"
+            symbol = symbol.replace("\n", " ").replace("\r", " ")
+            write_trace(symbol + "\n")
+            receipt["late_cleanup_frame"] |= "late_cleanup" in symbol
+            receipt["libxla_frame_present"] |= any(name in module for name in ("libjax", "libxla", "xla_extension"))
+            captured += 1
+            receipt["frames_written"] += 1
+            receipt["frame_marker_present"] = True
+        if not captured:
+            raise RuntimeError("Stopped thread has no readable frames")
+        receipt["threads_captured"] += 1
+        journal("thread_complete", active_thread_id=thread_id, completed_thread_frames=captured)
 
     try:
+        descriptor = os.open(settings["trace_path"], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        trace = os.fdopen(descriptor, "wb", buffering=0)
+        journal("settings")
         for text in [
             "settings set auto-confirm true",
             "settings set use-color false",
@@ -53,7 +135,7 @@ def run(debugger, command, result, internal_dict):
             execute(text)
         if identity(settings["pid"]).starttime != settings["starttime"]:
             raise RuntimeError("Pre-attach identity changed")
-        receipt["phase"] = "pre_ACK_attach"
+        journal("pre_ACK_attach")
         debugger.SetAsync(False)
         target = debugger.CreateTarget("")
         error = lldb.SBError()
@@ -67,6 +149,7 @@ def run(debugger, command, result, internal_dict):
             LLDB_process_unique_id=process.GetUniqueID(),
             pre_ACK_numeric_attach_count=1,
         )
+        journal("pre_ACK_continue")
         debugger.SetAsync(True)
         error = process.Continue()
         if not error.Success():
@@ -80,7 +163,7 @@ def run(debugger, command, result, internal_dict):
             settings["ready_path"],
             {"pid": settings["pid"], "starttime": settings["starttime"], "nonce": settings["nonce"], "running": True},
         )
-        receipt["phase"] = "await_binary_ACK_marker"
+        journal("await_binary_ACK_marker")
         deadline = time.monotonic() + 10
         while not Path(settings["ack_path"]).exists():
             if time.monotonic() > deadline:
@@ -90,6 +173,7 @@ def run(debugger, command, result, internal_dict):
         if ack["pid"] != settings["pid"] or ack["nonce"] != settings["nonce"]:
             raise RuntimeError("ACK identity mismatch")
         receipt["ack"] = ack
+        journal("await_capture")
         if settings.get("fault") == "hang":
             time.sleep(20)
         if settings.get("fault") == "crash":
@@ -103,10 +187,11 @@ def run(debugger, command, result, internal_dict):
                 return
             time.sleep(0.005)
         started = time.monotonic()
-        receipt.update(phase="capture", capture_started_monotonic=started)
+        journal("capture", capture_started_monotonic=started)
         if process.GetState() == lldb.eStateExited:
-            receipt.update(status="target_exited_no_sample", phase="done")
+            receipt.update(status="target_exited_no_sample", phase="done", target_exit_status=process.GetExitStatus())
             return
+        journal("stop_requested")
         error = process.Stop()
         if not error.Success():
             raise RuntimeError("Stop failed: " + str(error))
@@ -115,24 +200,46 @@ def run(debugger, command, result, internal_dict):
             time.sleep(0.002)
         if process.GetState() != lldb.eStateStopped:
             raise RuntimeError("Target did not stop for stack")
-        stack = execute("thread backtrace -c 8 all")
-        images = execute("image list -o -f")
-        combined = stack + b"\n=== MODULES (not frames) ===\n" + images
-        trace.extend(combined[:LIMIT])
-        receipt.update(output_bytes_seen=len(combined), output_truncated=len(combined) > LIMIT)
-        if len(combined) > LIMIT:
-            raise RuntimeError("OutputLimitExceeded")
-        receipt["late_cleanup_frame"] = "late_cleanup" in stack.decode(errors="replace")
-        receipt["libxla_frame_present"] = any(name in stack for name in [b"libjax", b"libxla", b"xla_extension"])
-        receipt["frame_marker_present"] = b"frame #0" in stack
+        # The external guardian still ends at ACK+2.95. Reserve detach time
+        # inside that window and the original inner one-second bound.
+        deadline = min(started + 1, ack["monotonic_ns"] / 1e9 + 2.95) - _DETACH_RESERVE_SECONDS
+        journal("main_thread")
+        capture_budget(deadline)
+        main = process.GetThreadByID(settings["pid"])
+        capture_budget(deadline)
+        if not main.IsValid() or main.GetThreadID() != settings["pid"]:
+            raise RuntimeError("Bound Linux main thread is unavailable")
+        capture_thread(main, deadline, main=True)
+        journal("thread_inventory")
+        count = process.GetNumThreads()
+        capture_budget(deadline)
+        receipt["threads_seen"] = count
+        seen = set()
+        for index in range(count):
+            capture_budget(deadline)
+            journal("thread_lookup", active_thread_index=index)
+            thread = process.GetThreadAtIndex(index)
+            capture_budget(deadline)
+            thread_id = thread.GetThreadID()
+            if not thread.IsValid() or thread_id in seen:
+                raise RuntimeError("Stopped thread inventory is incomplete")
+            seen.add(thread_id)
+            if thread_id != settings["pid"]:
+                capture_thread(thread, deadline, main=False)
+        if receipt["threads_captured"] != count:
+            raise RuntimeError("Stopped thread coverage differs")
+        capture_budget(deadline)
+        receipt["frames_complete"] = True
+        journal("detach")
         error = process.Detach(False)
         if not error.Success():
             raise RuntimeError("Detach failed: " + str(error))
         receipt["stop_backtrace_detach_seconds"] = time.monotonic() - started
         if receipt["stop_backtrace_detach_seconds"] > 1:
             raise TimeoutError("Inner Stop/backtrace/Detach exceeded1second")
-        receipt.update(status="collected", phase="done", native_stack_qualified=receipt["frame_marker_present"])
+        receipt.update(status="collected", phase="done", native_stack_qualified=True)
     except Exception as error:
+        receipt["error_phase"] = receipt["phase"]
         receipt["errors"].append({"type": type(error).__name__, "message": str(error)[:400]})
         result.SetError(str(error)[:400])
     finally:
@@ -141,6 +248,7 @@ def run(debugger, command, result, internal_dict):
             and process.IsValid()
             and process.GetState() not in (lldb.eStateExited, lldb.eStateDetached)
         ):
+            journal("final_detach")
             error = process.Detach(False)
             receipt["final_detach_success"] = error.Success()
             if not error.Success():
@@ -148,7 +256,8 @@ def run(debugger, command, result, internal_dict):
         if receipt["errors"]:
             receipt["status"] = "error"
             receipt["native_stack_qualified"] = False
-        Path(settings["trace_path"]).write_bytes(trace)
+        if trace is not None:
+            trace.close()
         receipt["stack_write_completed_monotonic"] = time.monotonic()
         receipt["LLDB_receipt_prepare_monotonic"] = time.monotonic()
         atomic_json(settings["lldb_receipt_path"], receipt)

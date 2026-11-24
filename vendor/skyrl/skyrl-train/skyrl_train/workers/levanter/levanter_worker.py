@@ -387,9 +387,7 @@ class LevanterHostWorker:
         return output
 
     def _prepare_shutdown_observer(self):
-        if self.process_id != 0 or not self.cfg.trainer.policy.levanter_config.get(
-            "diagnostic_shutdown_observer", False
-        ):
+        if not self.cfg.trainer.policy.levanter_config.get("diagnostic_shutdown_observer", False):
             return
         if self._shutdown_observer is not None:
             raise RuntimeError("A shutdown observer already owns this child")

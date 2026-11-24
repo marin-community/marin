@@ -1355,8 +1355,9 @@ def test_guardian_owner_gone_before_pidfd_open_terminates_only_bound_target(tmp_
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("process_id", [0, 2])
 @pytest.mark.skipif(sys.platform != "linux", reason="Requires actual Linux pidfds, LLDB and /proc")
-def test_public_worker_retry_keeps_original_child_after_missing_observer_receipt(tmp_path, monkeypatch):
+def test_public_worker_retry_keeps_original_child_after_missing_observer_receipt(tmp_path, monkeypatch, process_id):
     if not Path("/usr/bin/lldb").is_file() or shutil.which("timeout") is None:
         pytest.skip("Requires the Linux observer image's LLDB and GNU timeout")
     host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
@@ -1371,12 +1372,12 @@ def test_public_worker_retry_keeps_original_child_after_missing_observer_receipt
     replacement.write_text("#!/bin/sh\nprintf created > " + shlex.quote(str(created)) + "\nexit 70\n")
     replacement.chmod(0o700)
     config.trainer.policy.levanter_config.python_executable = str(replacement)
-    worker = host.LevanterHostWorker(config, 0)
+    worker = host.LevanterHostWorker(config, process_id)
     worker.initialization_config = host._runtime_config(
         config,
         model_path="unused-local-path",
         num_training_steps=1,
-        process_id=0,
+        process_id=process_id,
         coordinator_address="unused-local-address",
     )
     # An uninitialized actual protocol child is an ownership control only. This
@@ -1433,3 +1434,32 @@ def test_public_worker_retry_keeps_original_child_after_missing_observer_receipt
             child.close()
         else:
             raise RuntimeError("Unknown observer cleanup; isolated integration task teardown is required")
+
+
+@pytest.mark.parametrize("process_id", [0, 1, 2, 3])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_shutdown_observation_covers_each_opted_in_native_worker(tmp_path, monkeypatch, process_id, enabled):
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    config = host.OmegaConf.load(Path(host.__file__).parents[2] / "config/ppo_base_config.yaml")
+    config.trainer.policy.levanter_config.diagnostic_shutdown_observer = enabled
+    worker = host.LevanterHostWorker(config, process_id)
+    worker.child = SimpleNamespace(process=SimpleNamespace(pid=7321))
+    monkeypatch.setenv("SKYRL_DEBUG_ARTIFACT_DIR", str(tmp_path))
+
+    class GuardianProcessBoundary:
+        # Portable selection coverage stops at the real Linux subprocess
+        # boundary; pidfd/ptrace lifetime qualification remains a Linux control.
+        def __init__(self, process, destination, native_rank):
+            self.destination = destination
+            self.target = {"pid": process.pid, "native_rank": native_rank}
+
+        def wait_ready(self):
+            (self.destination / "guardian-ready.json").write_text(json.dumps(self.target))
+
+    monkeypatch.setattr(host, "ShutdownObserver", GuardianProcessBoundary)
+    worker._prepare_shutdown_observer()
+    ready = tmp_path / "guardian-ready.json"
+    if enabled:
+        assert json.loads(ready.read_text()) == {"pid": 7321, "native_rank": process_id}
+    else:
+        assert not ready.exists()
