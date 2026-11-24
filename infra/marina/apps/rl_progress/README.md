@@ -15,7 +15,6 @@ the recorded model. The issue number links to GitHub, and the opt-out is shown i
 Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
 The attempt's EvalDash filter finds evaluations that enter the catalog after publication.
 Terminal publication looks up catalog records for the exact run and attempt.
-Re-publication adds newly discovered links to the existing row.
 The attempt details link to a grader report when one was published. It shows
 training and evaluation success rates and verifier coverage by task and subset,
 with failure counts and grading latency by subset.
@@ -35,7 +34,7 @@ The app's release migration creates its `rl_runs` table in the application schem
 Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
 attempts of the same model, preset, user and composed comparison configuration. Repeat
 publication refreshes that attempt's record. Null provenance fields, issue, gate, gate result and
-grader report fields preserve their stored values. EvalDash IDs in a publication replace the stored list.
+grader report fields preserve their stored values.
 The app uses format 1. A terminal record takes precedence over a
 running update for the same attempt. An explicit EvalDash ID list replaces
 the stored list.
