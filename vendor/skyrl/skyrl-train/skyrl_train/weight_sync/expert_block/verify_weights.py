@@ -83,7 +83,8 @@ class ReplicaReport:
 
 # Bytes compared per all-reduce. Each chunk is copied to int32 twice, for the group minimum and
 # maximum, so it needs eight times this much memory on a GPU the trainer already fills.
-REPLICA_COMPARE_CHUNK_BYTES = 16 << 20
+# The 32-rank production group returned incorrect MIN/MAX values with 64 MiB int32 buffers (#11649).
+REPLICA_COMPARE_CHUNK_BYTES = 4 << 20
 
 
 def compare_replicas(
