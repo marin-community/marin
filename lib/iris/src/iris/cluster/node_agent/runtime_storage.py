@@ -59,7 +59,7 @@ def configure(config_path: Path, nvme: Path) -> None:
         raise ValueError("runsc config must be a regular file")
     source = config_path.read_text()
     settings = tomllib.loads(source)
-    if "log_path" not in settings and "debug-log" not in settings["runsc_config"]:
+    if "log_path" not in settings and "debug-log" not in settings.get("runsc_config", {}):
         logger.info("runsc logging is disabled in %s; skipping runtime log setup", config_path)
         return
     # Both paths are host mounts; the init container's root is an overlay filesystem.

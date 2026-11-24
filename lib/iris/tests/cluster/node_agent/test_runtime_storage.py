@@ -96,13 +96,14 @@ def test_configure_refuses_to_place_runtime_logs_on_host_root(tmp_path):
     assert not (nvme / "iris-runtime").exists()
 
 
-def test_configure_leaves_config_with_logging_disabled_untouched(tmp_path):
+@pytest.mark.parametrize("source", [LOGGING_DISABLED_CONFIG, 'log_level = "info"\n'])
+def test_configure_leaves_config_with_logging_disabled_untouched(tmp_path, source):
     config = tmp_path / "etc/containerd/runsc.toml"
     config.parent.mkdir(parents=True)
-    config.write_text(LOGGING_DISABLED_CONFIG)
+    config.write_text(source)
     # Same filesystem as the config: setup must not need NVMe when there is nothing to redirect.
     nvme = tmp_path / "nvme"
     nvme.mkdir()
     configure(config, nvme)
-    assert config.read_text() == LOGGING_DISABLED_CONFIG
+    assert config.read_text() == source
     assert not (nvme / "iris-runtime").exists()
