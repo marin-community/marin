@@ -504,18 +504,14 @@ def test_preflight_requires_runtime_judge_for_primary_and_peer_model_access(
     )
     judge = None if authority == "missing-judge" else "judge-alias"
     if authority == "runtime":
-        report = _preflight_one(
-            path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
-        )
+        report = _preflight_one(path, {}, judge, host_environment={})
         assert report["benchmark_metadata"]["n_benchmark"] == 1
     else:
         diagnostic = (
             "host judge" if authority == "missing-judge" else "judge_access='runtime'"
         )
         with pytest.raises(ValueError, match=diagnostic):
-            _preflight_one(
-                path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
-            )
+            _preflight_one(path, {}, judge, host_environment={})
 
 
 def test_preflight_validates_later_peer_aliases_after_primary_model_endpoint(
@@ -557,27 +553,6 @@ def test_preflight_validates_later_peer_aliases_after_primary_model_endpoint(
         _preflight_one(path, {}, "judge-alias", host_environment={})
 
 
-def test_preflight_daytona_requires_target_before_resolving_tasks(
-    tmp_path, prepared_task
-):
-    path = tmp_path / "policy.json"
-    path.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "daytona"},
-                "agents": [{"name": "terminus-2"}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    with pytest.raises(ValueError, match="DAYTONA_TARGET"):
-        _preflight_one(path, {}, None, host_environment={})
-    report = _preflight_one(
-        path, {}, None, host_environment={"DAYTONA_TARGET": "test-target"}
-    )
-    assert report["benchmark_metadata"]["n_benchmark"] == 1
-
-
 @pytest.mark.parametrize("backend", ["local", "daytona"])
 def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     tmp_path, prepared_task, backend
@@ -593,11 +568,10 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
         )
     )
     kwargs = {"thinking_format": "chat-template"}
-    host = {"DAYTONA_TARGET": "test-target"}
     with pytest.raises(
         ValueError, match="Standalone Pi requires a prepared main image"
     ):
-        _preflight_one(path, kwargs, None, host_environment=host)
+        _preflight_one(path, kwargs, None, host_environment={})
     manifest = prepared_task / "environment/shellbox-images.json"
     manifest.write_text(
         json.dumps(
@@ -610,7 +584,7 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
         )
     )
     with pytest.raises(ValueError, match="(must match|conflicts with).*prepared"):
-        _preflight_one(path, kwargs, None, host_environment=host)
+        _preflight_one(path, kwargs, None, host_environment={})
     manifest.write_text(
         json.dumps(
             {
@@ -621,7 +595,7 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
             }
         )
     )
-    report = _preflight_one(path, kwargs, None, host_environment=host)
+    report = _preflight_one(path, kwargs, None, host_environment={})
     assert report["benchmark_metadata"]["n_benchmark"] == 1
 
 

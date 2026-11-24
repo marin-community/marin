@@ -21,6 +21,9 @@ test = [
     "pytest>=8.3",
     "pytest-asyncio",
     "pytest-timeout",
+    # The Finelog observer is optional: its tests need the client and the in-process server.
+    "marin-finelog",
+    "marin-finelog-server >= 0.2.0.dev0",
     "marin-shellbox[daytona,shellsim]",
     "marin-taskcompendium[pipeline]",
 ]

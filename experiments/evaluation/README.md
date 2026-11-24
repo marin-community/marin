@@ -90,7 +90,9 @@ from the task-curation catalog. Named menus select exact protocol variants, incl
 shots and raw/chat transport. Missing corpus dependencies build before inference.
 The artifact graph binds their completed roots into execution; an evaluation launch
 does not publish a catalog snapshot. Catalog publication uses the curation workflow.
-The standalone `task_driver` also accepts already published corpus roots.
+The standalone `task_driver` also accepts already published corpus roots. `trivial_replies` scores replies that
+ignore the task on those roots; see the
+[trivial-reply floor](../../docs/references/evaluation-tasks.md#trivial-reply-floor).
 
 A benchmark owns its pinned population, partitions and supported protocol builders. Shot count is a protocol parameter. Chat and completion formats compile into separate immutable artifacts before inference; callers do not name those artifacts.
 
