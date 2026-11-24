@@ -12,12 +12,15 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
 from fray.types import ResourceConfig
 from levanter.adaptor import AdaptorExportConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerHooks
@@ -25,6 +28,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
+    hf_to_levanter,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint
@@ -162,6 +166,26 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
+
+
+def test_conversion_transports_nested_values_omitted_from_fingerprint(monkeypatch):
+    factor = next(field for field in dataclasses.fields(DefaultRotaryEmbeddingsConfig) if field.name == "factor")
+    monkeypatch.setattr(factor, "metadata", {"fingerprint_omit_value": 1.0})
+    default = LlamaConfig()
+    modified = dataclasses.replace(default, rope=DefaultRotaryEmbeddingsConfig(factor=2.0))
+    for architecture in (default, modified):
+        monkeypatch.setattr(
+            "marin.experiment.checkpoints.resolve_lm_config", lambda *_, architecture=architecture: architecture
+        )
+        handle = hf_to_levanter("fixture/llama", model_type="llama", hf_revision="fixture", version="test-dev")
+        encoded = materialized_config(handle.step, _PREFIX).model_config_json
+        assert encoded["rope"]["factor"] == architecture.rope.factor
+        assert draccus.decode(LlamaConfig, encoded) == architecture
+        fingerprint_rope = json.loads(handle.step.fingerprint_payload())["model_config_json"]["rope"]
+        if architecture is default:
+            assert "factor" not in fingerprint_rope
+        else:
+            assert fingerprint_rope["factor"] == 2.0
 
 
 class _ExportTrainer:

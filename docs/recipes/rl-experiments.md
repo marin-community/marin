@@ -391,6 +391,11 @@ identifies one native execution, including a resumed execution. In `resolved-lau
 are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
 when recording a result.
 
+For quick-loop training time, use `elapsed_excluding_eval_seconds` from the
+`Training run completed` line in the SkyRL training driver logs. The timer runs from
+tracker setup through shutdown and subtracts all inline evaluation time, including
+step-zero and final evaluations when enabled.
+
 | Sink | Where to find the run |
 |---|---|
 | W&B | Open the attempt's `wandb_url` from status. The Snowball project is `marin-snowball-rl` in the launch's W&B team. The model tag identifies Snowball runs in that project. |
