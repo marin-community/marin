@@ -168,8 +168,13 @@ def _seal_slice_document(path: str, document) -> ArtifactRef:
 
 
 def _slice_declarations_ref(plan: ReleasePlan) -> ArtifactRef:
-    """Seal the slice's declarations document (the real declaration set) once."""
-    return _seal_slice_document(f"{slice_root(plan)}/declarations.json", _declarations_document())
+    """The slice's declarations document: the plan's re-bound served export.
+
+    The plan's prior_declarations pin IS the current served state (the
+    coordinator's re-bindings land there); the slices review that document, not
+    a separate ungated read that would carry stale bindings.
+    """
+    return ArtifactRef(**plan.pins.prior_declarations.model_dump(mode="json"))
 
 
 def _census_inputs_document(plan: ReleasePlan, source: str) -> tuple[str, str]:
