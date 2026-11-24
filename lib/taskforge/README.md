@@ -16,7 +16,7 @@ This file covers how to run it.
 | `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
 | `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
 | `src/taskforge/harness/` | the role runner (`role.py`: machine, hydration, scope, session, close for every model role), the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `report`, `finish`, web) |
-| `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
+| `src/taskforge/stages/` | `author`, `validate`, `review`, `confirm`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
 | `src/taskforge/llm/` | the model client (the one retry owner), the `Provider` protocol and its GLM default, model profiles, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
@@ -28,8 +28,9 @@ This file covers how to run it.
 
 ## The workflow
 
-author → submit → validate → review. On *modify*, a new author conversation starts, seeded with the
-findings and the previous submission's files; on *retry*, the same submission is validated again.
+author → submit → validate → review → confirm → review. On *modify*, a new author conversation starts,
+seeded with the findings and the previous submission's files; on *retry*, the same submission is validated
+again. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
 
 On every author entry, including revision rounds, the workspace holds the proposal, the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
@@ -121,7 +122,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 7); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 8); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -144,9 +145,11 @@ replayed by content, without owners) and format 3 (adversary findings with an ex
 defect direction with observed and deserved grades), format 4 (trials hydrated without a detail, a too-easy
 baseline in place of a digest-bound fallback), format 5 and format 6 (no solve-review: its acceptances name no
 missing evidence although none ran, and a resumed format-6 round would buy a review its recorded history lacks),
+format 7 (no confirmation step: its acceptances end at the validation round and name no missing confirmation, and a
+resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 7` and reports the
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 8` and reports the
 rest. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
 header cannot tell apart: Taskforge before decision-model grading, whose readers cannot decode a `decision_model.read` row,
 and the first decision-model writers, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
@@ -185,7 +188,7 @@ enters it without the flag, and `run` parks such proposals until the decision mo
 or, on a gateway without that route, until a `one --probe` child exits 10 because its own reader's last physical
 outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual. Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-format-7 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
+format-8 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
 author's system prompt embeds the pinned reference, so a wording-only change in TaskCompendium's schema does not
 affect it.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
@@ -227,7 +230,9 @@ with the storage credentials above. It reads each journal head and its chunks co
 then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
-their scopes. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+their scopes. The confirmation step reports apart, once: its solver slots as `role=confirmation` and its final
+review as `role=final_review`, never also under `solver` or `solve_review`; a judge call during it is
+`role=judge`. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;
 acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
 uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
@@ -302,6 +307,47 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   transcript (`transcripts`; an interrupted trial is reviewed by its prefix, and only a round where no
   trial recorded a message skips the review). Missing evidence never holds a task. The review runs over
   any set of trials, so a later step can pass its own prompts and report tool.
+- **Confirmation**: `solver.confirmation_k` (5) more solver trials of the submission an acceptance ships,
+  then a final review over all of them; 0 makes the acceptance final at its validation round. The shipped
+  round is the one the acceptance chose (a restored fallback's included), and its scored trials and
+  transcripts are read from the journal, never bought again. That holds for completed slots whose results the
+  journal can reuse: an answer generated in full whose grading then failed is generated again today, so a grading
+  outage can repeat a fully generated answer (a follow-up will checkpoint the generation). The new slots number past that round's
+  indices under their own attempt, through the same solver batch, concurrency, heartbeat and
+  `budget.max_missing_trials` allowance (a refused slot beyond it holds). The batch and its grade observers
+  settle as validation's do, so an outage beside another hold is a manual hold, and only a pure
+  decision-model outage parks for automatic relaunch. Controls and adversaries do not run again. The
+  confirmation record is assessed as a validation round first, before the final reviewer is asked: an invalid
+  task or a grader fault in the new trials is the author's to repair and an exhausted trial budget rejects, never a
+  denominator entry, and a record that rejects or is incomplete is decided without the final review. Only
+  valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
+  slot without a score is named (`confirmation_trials`) and excluded. The final review
+  (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
+  checks and replay identity, is shown every earlier report with what became of each finding (the
+  author's response recorded against the review that gave it: revised, declined with its reason, stopped,
+  a note, or not acted on; a revision a restore discarded says so), and sorts its new findings into `revise` and `note`. An account may blame a
+  trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A
+  finding given both dispositions is refused. In every report, round or final, each submitted version of a
+  finding is checked against the evidence first, and the versions that survive become one finding carrying
+  their distinct citations, so a stale copy never hides a valid one and the author answers one number. The
+  finding keeps each surviving version's citations as its own group (`groups`, stored only when there are
+  several): shipped notes, an earlier finding an account blames and the earlier-claim recheck keep a finding
+  while any one group's citations all still occur, so a revision that changes one cited trial never takes down
+  the version citing another.
+  As in live Forge, the placement over every scored trial re-tags the acceptance in any band, and
+  `band.accept_too_easy` does not refuse it; `note` findings are the acceptance's notes. A new `revise`
+  finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:
+  a restore discards the revisions after the round it restores, and a later decline overrides) or a fault buys
+  one revision
+  outside the shared modification budget, validated as any round; the final review's notes go to the
+  author beside it as optional. A finding repeated from an earlier report buys nothing and is kept once.
+  That revision keeps no fallback: a clean revision is accepted at its placement whatever the band and
+  confirmed again, its round findings are notes, and a fault or an author stop abandons the task
+  (`Confirmation revision failed`, naming the unresolved finding). After it any `revise` finding is a note,
+  and the acceptance ships every earlier note, optional note and new note the shipped trials still support,
+  each once, in a version whose quotes occur in them (the confirmation record's `notes`).
+  `accepted_with` is published only on a final acceptance. Missing confirmation evidence
+  (`confirmation_trials`, `transcripts`, `solve_review`) is named once, never a hold.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

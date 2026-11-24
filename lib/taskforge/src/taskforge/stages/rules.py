@@ -6,6 +6,7 @@
 
 import math
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import replace
 
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -26,9 +27,15 @@ from taskforge.model.review import (
     Modify,
     Reject,
     RejectKind,
+    Response,
     Retry,
+    ReviewFinding,
+    Revise,
+    SolveReview,
     TrialResult,
     ValidationResult,
+    same,
+    unique,
 )
 from taskforge.model.workpiece import Fallback, Workpiece
 from taskforge.stages.classify import CAUSE_DECISIONS
@@ -104,14 +111,19 @@ def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: Band
     return workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
 
 
+def shipped(decision: Accept, workpiece: Workpiece) -> int:
+    """The evidence index of the round whose submission ``decision`` ships: the stored fallback's round for a restore
+    (a digest cannot tell two rounds apart), else the latest."""
+    return workpiece.fallback.evidence if decision.restore and workpiece.fallback else len(workpiece.evidence) - 1
+
+
 def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
-    """An acceptance with what the round of its accepted submission went without, and that round's review findings as
-    notes: the stored fallback's round for a restore (a digest cannot tell two rounds apart), else the latest. A
-    restore also carries that round's placement denominator and adversary exhaustion, which its decision did not."""
+    """An acceptance with what the round it ships (``shipped``) went without, and that round's review findings as
+    notes. A restore also carries that round's placement denominator and adversary exhaustion, which its decision did
+    not."""
     if not isinstance(decision, Accept):
         return decision
-    shipped = workpiece.fallback.evidence if decision.restore and workpiece.fallback else -1
-    result = workpiece.evidence[shipped] if workpiece.evidence else None
+    result = workpiece.evidence[shipped(decision, workpiece)] if workpiece.evidence else None
     review = result.review if result is not None else None
     if decision.restore and result is not None:
         decision = replace(decision, reasons=(*decision.reasons, *unscored(result), *exhausted_notes(result)))
@@ -122,9 +134,23 @@ def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
     return replace(decision, reasons=(*decision.reasons, *why), missing=missing, notes=notes)
 
 
+def final_revision(workpiece: Workpiece) -> Revise | None:
+    """The final review's revision, once one was asked for: the workpiece then keeps no fallback."""
+    return next((item for item in workpiece.decisions if isinstance(item, Revise)), None)
+
+
+def unrevised(revise: Revise, why: str, details: Sequence[str] = ()) -> Abandon:
+    """Owner's decisions (a, b), 2026-11-21: a fault in, or the author stopping, the final review's one revision
+    abandons the task; nothing ships against a revise finding. The abandonment keeps why and the finding."""
+    unresolved = (f"Unresolved final-review finding: {finding.description}" for finding in revise.review)
+    return Abandon((f"{CONFIRMATION_REVISION_FAILED}: {why}", *details, *revise.findings, *unresolved))
+
+
 def author_stopped(workpiece: Workpiece, summary: str) -> Decision:
     """Owner's ruling (2026-11-13): an author stopping reverts to the stored fallback, or abandons without one."""
     why = f"author stopped: {summary}"
+    if revise := final_revision(workpiece):
+        return unrevised(revise, why)
     if workpiece.fallback is None:
         return Abandon((why,))
     kept = workpiece.fallback
@@ -145,8 +171,14 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     task gets one band-only round (``band_only``) within the shared budget and is then accepted tagged. Review findings
     join a round's modification, or turn its acceptance into one at its placement, while the shared budget has a round
     left, and are the acceptance's notes after. A faulted revision restores the fallback, named by digest and band.
+
+    After the final review's revision (``Revise``) a clean round is accepted at its placement whatever the band, and
+    goes on to its confirmation; review findings are notes, and a fault abandons the task, as live Forge does: that
+    revision keeps no fallback. A confirmation record is ``confirmation_review``'s.
     """
     result = workpiece.evidence[-1]
+    if result.confirms is not None:
+        return confirmation_review(workpiece, band)
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
         retryable = [
@@ -158,7 +190,11 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
     left, stored, notes = workpiece.round < budget.max_modify_rounds, workpiece.fallback, exhausted_notes(result)
+    revise = final_revision(workpiece)
     review = result.review.findings if result.review is not None else ()
+    if revise and isinstance(decision, Modify) and decision.placement is not None:  # clean: its confirmation places it
+        final = "Placement is final after the final review's revision"
+        decision = Accept(decision.placement, (*tagged(decision.placement), final, *decision.findings[1:], *notes))
     placement = decision.placement if isinstance(decision, Modify) and decision.placement in band.accepted else None
     if isinstance(decision, Modify) and placement is not None:  # a clean round out of band
         if stored is not None and placement is not stored.band:
@@ -171,20 +207,80 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
             why = ""
         if why:
             decision = Accept(placement, (*tagged(placement), why, *decision.findings[1:], *notes))
-    if isinstance(decision, Accept) and review and left:
+    if isinstance(decision, Accept) and review and left and not revise:
         decision = Modify((band_line(result, band)[1],), decision.band)
         placement = decision.placement
     if not isinstance(decision, Modify):
         return accepted(decision, workpiece)
     chosen = fallback_for(workpiece, placement, band)
+    fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
+    if revise:  # only a fault is left here: a clean revision was accepted above
+        return unrevised(revise, f"the revision {fault}", decision.findings)
     if placement is not None or chosen is None:  # a round to revise, or a fault with nothing to restore
         return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
-    fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
     label = "Revision fault" if decision.placement is None else "Revision placement"  # a band the policy refuses
     faults = (f"{label}: {finding}" for finding in decision.findings)
     restored = Accept(chosen.band, (*tagged(chosen.band), why, *faults), chosen.submission.digest)
     return accepted(restored, workpiece)
+
+
+CONFIRMATION_REVISION_FAILED = "Confirmation revision failed"
+"""The first reason of the ``Abandon`` when the final review's one revision has a fault and nothing can be kept."""
+
+
+def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
+    """Live Forge's decision on a confirmation record, after the round's own assessment: a fault in the new trials (an
+    invalid task, a grader fault) or an exhausted trial budget is decided as validation decides it, so only valid
+    scores and generation limits are placed; unscored slots are named and excluded (owner's decision e). The placement
+    of the shipped submission over every scored trial re-tags it, accepted whatever the band (decision c).
+
+    The final review's NEW revise findings, or a fault, buy its one revision outside the shared budget (``Revise``,
+    decision d); a finding an earlier review gave counts again only as a failed fix, after the author revised for it.
+    After that revision they are notes. The acceptance ships the record's notes (decision f: every earlier and new
+    note its trials still support, each once) and its missing evidence, each item once: never a hold."""
+    result, pending = workpiece.evidence[-1], workpiece.decisions[-1]
+    assert isinstance(pending, Accept), "a confirmation follows the acceptance it confirms"
+    review, revise = result.review, final_revision(workpiece)
+    decision = assess(result, band, len(result.solver))  # every unscored slot excluded; held ones held in the batch
+    if isinstance(decision, Reject | Incomplete):
+        return decision
+    fixed = failed_fixes(workpiece, result.confirms)
+    known = {same(f) for earlier in workpiece.evidence[:-1] if earlier.review for f in earlier_findings(earlier.review)}
+    asked = () if review is None else review.findings
+    fresh = tuple(f for f in asked if same(f) not in known or same(f) in fixed)
+    faults = decision.findings if isinstance(decision, Modify) and decision.placement is None else ()
+    place, line = band_line(result, band)
+    if faults and revise:
+        return unrevised(revise, "its confirmation has a fault", faults)
+    if (faults or fresh) and not revise:
+        notes = (*(f for f in asked if f not in fresh), *(() if review is None else review.notes))
+        return Revise(faults or (line,), fresh, notes=unique(notes), placement=None if faults else place)
+    reasons = (*tagged(place), f"Confirmation: {line.split('. ')[0]}", *unscored(result))
+    reasons += ("The final review's revision is used: its revise findings are recorded as notes",) * bool(
+        revise and asked
+    )
+    absent = [trial.trial for trial in result.solver if missing(trial)]
+    found = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no final review ran"),) if review is None else review.missing
+    found += (MissingEvidence(EvidenceKind.CONFIRMATION_TRIALS, f"solver trials {absent} have no score"),) * bool(absent)
+    kept = tuple(reason for reason in pending.reasons if reason not in tagged(pending.band))
+    return Accept(place, (*reasons, *kept), missing=tuple(dict.fromkeys((*pending.missing, *found))), notes=result.notes)
+
+
+def failed_fixes(workpiece: Workpiece, shipped: int | None) -> set[tuple[str, str, str]]:
+    """The findings (``same``) whose latest response on the history leading to evidence record ``shipped`` says the
+    author revised for them: a repeat of one is evidence the fix failed. A response to that record or later, or one a
+    restore discarded, belongs to another history; a later decline overrides an earlier revision."""
+    latest = {
+        same(r.finding): r.response
+        for r in workpiece.responses
+        if shipped is not None and r.review < shipped and not r.discarded
+    }
+    return {key for key, response in latest.items() if response is Response.REVISED}
+
+
+def earlier_findings(review: SolveReview) -> tuple[ReviewFinding, ...]:
+    return (*review.findings, *review.notes)
 
 
 def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:

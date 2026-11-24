@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 7; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 8; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,8 +32,17 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 7
-"""Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
+JOURNAL_FORMAT = 8
+"""Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
+terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
+round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
+finding (``responses``, each marked ``discarded`` once a restore drops the revision it answered), a final
+revision's optional notes, a confirmation record's shipped ``notes`` and a review finding's citation ``groups``: each
+is omitted at its default (``OMIT_*`` in ``model/review.py``), and a fault revision omits its placement
+(``OMIT_NONE``). This reader reads every earlier
+format-8 row, including the interim null placement; the interim readers before it cannot read a fault revision whose
+placement is omitted. Those interim revisions never wrote or read a root outside tests, so the format stays 8.
+Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
 names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
 Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement
 supersedes, and a `decision_model.read` row, which format-5 readers cannot decode.

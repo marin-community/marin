@@ -97,11 +97,21 @@ class Context:
                     chain[-1].observed.append(run)
         return record
 
-    async def emit[T](self, event: Event[T]) -> T:
+    def _handler(self, event: Event[object]) -> tuple[_Handler | None, tuple[Resource, ...], tuple[Fingerprint, ...]]:
         chain = self._chain.get()
         handler = next((h for s in reversed(chain) for h in reversed(s.handlers) if isinstance(event, h.etype)), None)
         uses = () if handler is None or handler.resource is None else (handler.resource,)
-        fingerprints = tuple(resource.fingerprint() for resource in uses)
+        return handler, uses, tuple(resource.fingerprint() for resource in uses)
+
+    def recorded[T](self, event: Event[T]) -> T | None:
+        """``event``'s result as ``emit`` would replay it, without executing or recording anything; None when the log
+        holds none, so a reader of earlier evidence never buys it again."""
+        value = self._log.lookup(event, self._handler(event)[2])
+        return None if isinstance(value, Missing) else value
+
+    async def emit[T](self, event: Event[T]) -> T:
+        chain = self._chain.get()
+        handler, uses, fingerprints = self._handler(event)
         if handler is not None and not cached(fingerprints):
             attempt = next((scope.attempt for scope in reversed(chain) if scope.attempt is not None), None)
             if attempt is None:

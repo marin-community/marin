@@ -106,11 +106,13 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                         role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
                         # The reviewer runs beside the adversaries: its request names it by its own tools.
                         role = "solve_review" if reviewing(event.request) else role
+                        # The confirmation step's reviewer is its final review; its judge calls stay the judge's.
+                        role = "final_review" if role == "solve_review" and scopes["confirm"] else role
                         tokens[role].update(asdict(event.value.usage))
                     elif isinstance(event.request, SolverRollout):
                         for conversation in event.value.rollout.conversations:
                             for step in conversation.steps:
-                                tokens["solver"].update(
+                                tokens["confirmation" if scopes["confirm"] else "solver"].update(
                                     step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})
                                 )
                 previous = stamp
@@ -130,7 +132,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
         count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in accepted)
         rate = count / min(hours, since_hours or hours)
         lines.append(f"accepted_per_hour window_hours={hours} count={count} rate={rate:.3f}")
-    for role in ("author", "solver", "adversary", "solve_review", "judge"):
+    for role in ("author", "solver", "adversary", "solve_review", "judge", "confirmation", "final_review"):
         usage = " ".join(f"{name}={tokens[role][name + '_tokens']}" for name in ("prompt", "cached", "completion"))
         lines.append(f"tokens role={role} {usage}")
     for key in (

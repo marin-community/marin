@@ -250,3 +250,38 @@ async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred
     lines = await report(str(tmp_path / "root"))
     assert "tokens role=adversary prompt=37 cached=0 completion=5" in lines
     assert "tokens role=solve_review prompt=11 cached=0 completion=3" in lines
+
+
+async def test_a_judge_call_inside_the_confirmation_is_charged_to_the_judge(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    """Review 2026-11-21: a VerifyIt judge callback under the confirmation scope was reported as
+    final-review usage, though no final reviewer ran; the reviewer's own request there is the final review's."""
+    index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
+    tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())
+    judge = Resolved(
+        InferenceRequest((), (), LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=37, completion_tokens=5))
+    )
+    review = Resolved(
+        InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11, completion_tokens=3))
+    )
+    events = (
+        ScopeEntered("workpiece"),
+        ScopeEntered("confirm"),
+        ScopeEntered("judge"),
+        judge,
+        ScopeExited("judge", False),
+        ScopeEntered("solve_review.final"),
+        review,
+        ScopeExited("solve_review.final", False),
+        ScopeExited("confirm", False),
+        StageCompleted(Stage.REVIEW, "", "Accepted", terminal=Terminal.ACCEPTED),
+    )
+    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    await sink.local.write(records)
+    await sink.finish(Status(terminal=Terminal.ACCEPTED), Workpiece("w", proposal, terminal=Terminal.ACCEPTED))
+    lines = await report(str(tmp_path / "root"))
+    assert "tokens role=judge prompt=37 cached=0 completion=5" in lines
+    assert "tokens role=final_review prompt=11 cached=0 completion=3" in lines

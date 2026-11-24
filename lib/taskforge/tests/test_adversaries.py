@@ -577,11 +577,17 @@ LATER_SETTINGS = frozenset(
         "decision_model.retry_interval",
         *(f"solve_review.{name}" for name in ("model", "context_tokens", "system", "user", "nudge")),
         "author.review",
+        "solver.confirmation_k",
+        "solve_review.final.system",
+        "solve_review.final.user",
+        "solve_review.final.nudge",
+        "author.notes",
     }
 )
-"""The entries the default policy gained after this fixture was recorded (by the solver batch, the decision model, then
-the solve-review); none enters a replay key of a recorded effect: the decision-model ones while
-``decision_model.model`` is empty, the solve-review ones only the solve-review's own."""
+"""The entries the default policy gained after this fixture was recorded (by the solver batch, the decision model, the
+solve-review, then the confirmation step); none enters a replay key of a recorded effect: the decision-model ones while
+``decision_model.model`` is empty, the solve-review ones only the solve-review's own, the confirmation ones only the
+confirmation step's."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record

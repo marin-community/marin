@@ -6,21 +6,24 @@
 """Completed validation evidence and the decisions made from it."""
 
 import math
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter
+from pydantic.json_schema import SkipJsonSchema
 from taskcompendium.grading_result import GradeResult
 
 from taskforge.model.controls import Candidate
 
 OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exclude_if=lambda value: value == "")
 OMIT_NOTHING = Field(exclude_if=lambda value: value == ())
+OMIT_FALSE = Field(exclude_if=lambda value: value is False)
 """Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
-default (``None``, ``""`` or ``()``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY`` or ``OMIT_NOTHING``), so
-adding it changes no existing serialised bytes, and no other valid value encodes like it. Canonical content digests
-still visit every field; a change of meaning bumps the journal format."""
+default (``None``, ``""``, ``()`` or ``False``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY``, ``OMIT_NOTHING`` or
+``OMIT_FALSE``), so adding it changes no existing serialised bytes, and no other valid value encodes like it.
+Canonical content digests still visit every field; a change of meaning bumps the journal format."""
 
 
 def nonempty(digest: str | None) -> None:
@@ -87,6 +90,36 @@ class ReviewFinding:
     description: Text
     edit: Text
     citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
+    groups: Annotated[SkipJsonSchema[tuple[tuple[Citation, ...], ...]], OMIT_NOTHING] = ()
+    """Stored only, never in a tool schema: when a report gave this finding in several independently valid versions,
+    each version's citations, of which ``citations`` is the union. Empty for one version, whose group is
+    ``citations``; each group is checked on its own against later evidence (``supports``)."""
+
+
+def supports(finding: ReviewFinding) -> tuple[tuple[Citation, ...], ...]:
+    """The independently sufficient citation groups of ``finding``."""
+    return finding.groups or (finding.citations,)
+
+
+def grouped(finding: ReviewFinding, groups: Sequence[tuple[Citation, ...]]) -> ReviewFinding:
+    """``finding`` supported by ``groups`` (distinct, in order): their union as its citations, kept as groups when
+    there is more than one."""
+    groups = tuple(dict.fromkeys(groups))
+    union = tuple(dict.fromkeys(c for group in groups for c in group))
+    return replace(finding, citations=union, groups=groups if len(groups) > 1 else ())
+
+
+def same(finding: ReviewFinding) -> tuple[str, str, str]:
+    """A finding's identity across reports: what it says is wrong and the edit, not the trials it quotes."""
+    return finding.kind, finding.description, finding.edit
+
+
+def unique(findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
+    """``findings`` with each (``same``) finding once, at its first occurrence."""
+    first: dict[tuple[str, str, str], ReviewFinding] = {}
+    for finding in findings:
+        first.setdefault(same(finding), finding)
+    return tuple(first.values())
 
 
 class Attribution(StrEnum):
@@ -109,6 +142,7 @@ class EvidenceKind(StrEnum):
 
     SOLVE_REVIEW = "solve_review"
     TRANSCRIPTS = "transcripts"
+    CONFIRMATION_TRIALS = "confirmation_trials"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +163,8 @@ class ReviewEnd(StrEnum):
 class SolveReview:
     """One solve-review of the evidence index whose digest is ``evidence``. ``findings`` passed their citation checks
     and ``dropped`` did not, each beside why; ``missing`` is the evidence it went without (its own report, or complete
-    transcripts)."""
+    transcripts). A final review sorts its surviving findings: ``findings`` send the task back, ``notes`` ship with it.
+    """
 
     evidence: str
     end: ReviewEnd
@@ -137,6 +172,7 @@ class SolveReview:
     dropped: tuple[tuple[ReviewFinding, str], ...] = ()
     accounts: tuple[TrialAccount, ...] = ()
     missing: tuple[MissingEvidence, ...] = ()
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +181,29 @@ class Decline:
 
     finding: ReviewFinding
     reason: Text
+
+
+class Response(StrEnum):
+    """What became of a finding a review sent to the author: still ``requested`` until the author's visit ends."""
+
+    REQUESTED = "requested"
+    REVISED = "revised"
+    DECLINED = "declined"
+    STOPPED = "stopped"
+
+
+@dataclass(frozen=True, slots=True)
+class FindingResponse:
+    """The author's ``response`` to ``finding`` of the solve-review of evidence record ``review``, and a decline's
+    ``reason``: kept on the workpiece, so it outlives the submission that declined it, a restore and later rounds."""
+
+    review: int
+    finding: ReviewFinding
+    response: Response
+    reason: Annotated[str, OMIT_EMPTY] = ""
+    discarded: Annotated[bool, OMIT_FALSE] = False
+    """The revision it answered was discarded by a restore: it stays in the history, and never speaks for the
+    restored submission."""
 
 
 class RejectKind(StrEnum):
@@ -192,6 +251,19 @@ class Modify:
 
 
 @dataclass(frozen=True, slots=True)
+class Revise:
+    """The final review's one revision, outside the shared modification budget: ``findings`` is the band line of every
+    trial of the confirmed submission, or its faults (``placement`` None), ``review`` the final review's revise
+    findings and ``notes`` its notes, which the author sees as optional. It keeps no fallback."""
+
+    findings: tuple[str, ...]
+    review: tuple[ReviewFinding, ...]
+    kind: Literal["revise"] = "revise"
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
+    placement: Annotated[BandOutcome | None, OMIT_NONE] = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True, slots=True)
 class Retry:
     cause: Cause
     count: int
@@ -217,7 +289,7 @@ class Abandon:
             raise ValueError("Abandon requires non-empty reasons")
 
 
-type Decision = Annotated[Accept | Reject | Modify | Retry | Incomplete | Abandon, Field(discriminator="kind")]
+type Decision = Annotated[Accept | Reject | Modify | Revise | Retry | Incomplete | Abandon, Field(discriminator="kind")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +466,12 @@ class ValidationResult:
     lowering_error: str | None = None
     lowering_cause: Cause | None = None
     review: Annotated[SolveReview | None, OMIT_NONE] = None
+    confirms: Annotated[int | None, OMIT_NONE] = None
+    """A confirmation record: the evidence index of the validation round whose submission it confirms. Its ``solver``
+    holds that round's scored trials and the new ones, its ``review`` the final review."""
+    notes: Annotated[tuple[ReviewFinding, ...], OMIT_NOTHING] = ()
+    """A confirmation record's: the notes an acceptance on it ships, each once, in a version whose citations check
+    against its trials (``shipped_notes``)."""
 
 
 @dataclass(frozen=True, slots=True)

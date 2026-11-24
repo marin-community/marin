@@ -5,11 +5,13 @@
 
 The author submits, validation gathers evidence for that submission, and review decides. A ``Modify``
 decision starts the next round with a fresh author session; ``Retry`` validates the same submission
-again.
+again. An ``Accept`` goes on to the confirmation step, whose record review decides once more: a final
+acceptance, or the final review's one ``Revise``, which starts a round as ``Modify`` does.
 """
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
@@ -20,7 +22,21 @@ from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import Abandon, Accept, BandOutcome, Budget, Decision, Incomplete, Modify, Reject, Retry
+from taskforge.model.review import (
+    Abandon,
+    Accept,
+    BandOutcome,
+    Budget,
+    Decision,
+    Decline,
+    FindingResponse,
+    Incomplete,
+    Modify,
+    Reject,
+    Response,
+    Retry,
+    Revise,
+)
 from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
 from taskforge.policy import Policy
@@ -57,7 +73,8 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
     """Record a review decision and apply it: terminal, a revision round, or unchanged for a retry.
 
     A ``Modify`` past ``budget.max_modify_rounds`` becomes ``Abandon``; one keeps the fallback its ``fallback`` digest
-    names. An ``Accept`` with ``restore`` accepts the fallback, which must carry that digest.
+    names. An ``Accept`` with ``restore`` accepts the fallback, which must carry that digest; it is terminal once it
+    decides on a confirmation record, or when ``solver.confirmation_k`` is 0.
     """
     if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
         decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
@@ -68,18 +85,26 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                 wp.fallback is None or (digest_of(wp.fallback), wp.fallback.band) != (restore, band)
             ):
                 raise ValueError(f"Cannot restore {restore} at {band}: the fallback is {wp.fallback}")
-            return wp.with_(
-                terminal=Terminal.ACCEPTED,
+            if restore is not None and wp.fallback is not None:  # the revisions after the restored round are discarded
+                after = wp.fallback.evidence
+                wp = wp.with_(
+                    responses=tuple(replace(r, discarded=r.discarded or r.review >= after) for r in wp.responses)
+                )
+            confirmed = bool(wp.evidence) and wp.evidence[-1].confirms is not None
+            final = confirmed or not policy.setting("solver.confirmation_k", int)
+            return wp.with_(  # a pending acceptance's placement is its decision's band, published only once final
+                terminal=Terminal.ACCEPTED if final else None,
                 submission=wp.fallback.submission if wp.fallback and restore else wp.submission,
-                accepted_with=None if band is BandOutcome.IN_BAND else band,
+                accepted_with=band if final and band is not BandOutcome.IN_BAND else None,
             )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
             return wp.with_(terminal=Terminal.ABANDONED)
-        case Modify(findings, placement, fallback, _, review):
+        case Modify(findings, placement, _, _, review) | Revise(findings, review, placement=placement):
             if wp.session is None:
                 raise ValueError("Cannot revise without an author session")
+            fallback = decision.fallback if isinstance(decision, Modify) else None  # the final revision keeps none
             current = Fallback(wp.submission, placement, len(wp.evidence) - 1) if wp.submission and placement else None
             named = [option for option in (current, wp.fallback) if option and digest_of(option) == fallback]
             kept = named[0] if named else None  # the current submission over a stored one of its digest
@@ -88,19 +113,44 @@ def apply_decision(wp: Workpiece, decision: Decision, budget: Budget, policy: Po
                     f"Cannot keep {fallback} as the fallback: it is neither the submission nor the fallback"
                 )
             system = tuple(message for message in wp.session.messages if message.role == "system")
+            notes = decision.notes if isinstance(decision, Revise) else ()
             detail = "\n".join(findings)
             if review:
                 detail += "\n\n" + policy.prompt("author.review").render(findings=finding_lines(review))
-            prompt = policy.prompt("author.revision").render(kind="review", detail=detail)
+            if notes:  # numbered after the revise findings, so ``declined`` names either kind
+                detail += "\n\n" + policy.prompt("author.notes").render(notes=finding_lines(notes, len(review)))
+            kind = "review" if isinstance(decision, Modify) else "the final review"
+            prompt = policy.prompt("author.revision").render(kind=kind, detail=detail)
+            sent = (FindingResponse(len(wp.evidence) - 1, f, Response.REQUESTED) for f in (*review, *notes))
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), wp.session.tool_schemas),
                 fallback=kept,
+                responses=(*wp.responses, *sent),
             )
         case Retry():
             return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
+
+
+def answered(wp: Workpiece, declined: tuple[Decline, ...], response: Response) -> Workpiece:
+    """``wp`` with each finding still requested of the author answered: declined with its reason, else ``response``."""
+    reasons = {decline.finding: decline.reason for decline in declined}
+    return wp.with_(
+        responses=tuple(
+            (
+                r
+                if r.response is not Response.REQUESTED
+                else (
+                    replace(r, response=Response.DECLINED, reason=reasons[r.finding])
+                    if r.finding in reasons
+                    else replace(r, response=response)
+                )
+            )
+            for r in wp.responses
+        )
+    )
 
 
 def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) -> tuple[Workpiece, Stage | None]:
@@ -111,19 +161,22 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
     """
     match stage, result:
         case Stage.AUTHOR, Submitted(submission, session):
+            wp = answered(wp, submission.declined, Response.REVISED)
             return wp.with_(submission=submission, session=session), Stage.VALIDATE
         case Stage.AUTHOR, Stopped():
+            wp = answered(wp, (), Response.STOPPED)
             stopped = apply_decision(
                 wp.with_(session=result.session), author_stopped(wp, result.summary), config.budget, config.policy
             )
-            return stopped, None
-        case Stage.VALIDATE, Validated(evidence):
+            return stopped, None if stopped.terminal is not None else Stage.CONFIRM
+        case Stage.VALIDATE | Stage.CONFIRM, Validated(evidence):
             return wp.with_(evidence=(*wp.evidence, evidence)), Stage.REVIEW
         case Stage.REVIEW, Decided(decision):
             wp = apply_decision(wp, decision, config.budget, config.policy)
             if wp.terminal is not None:
                 return wp, None
-            return wp, Stage.VALIDATE if isinstance(decision, Retry) else Stage.AUTHOR
+            following = Stage.CONFIRM if isinstance(decision, Accept) else Stage.AUTHOR
+            return wp, Stage.VALIDATE if isinstance(decision, Retry) else following
     raise ValueError(f"{stage} returned {type(result).__name__}, which has no transition")
 
 

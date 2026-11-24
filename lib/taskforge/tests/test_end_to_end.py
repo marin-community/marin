@@ -38,7 +38,16 @@ from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
+from rolloutengine.models import (
+    Graded,
+    GradedRollout,
+    Model,
+    Rollout,
+    RolloutEvent,
+    RolloutInterrupted,
+    RolloutOperation,
+    TaskRolloutSpec,
+)
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
 from taskcompendium.decision_model import DecisionModelRequest
@@ -94,6 +103,7 @@ from taskforge.model.review import (
     Incomplete,
     Modify,
     Retry,
+    ReviewEnd,
     TrialResult,
 )
 from taskforge.model.stage import Stage
@@ -215,20 +225,60 @@ def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
     )
 
 
-SETTINGS: Mapping[str, object] = {"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1}
+SETTINGS: Mapping[str, object] = {
+    "solver.k": 2,
+    "adversary.roster": [],
+    "budget.max_modify_rounds": 1,
+    "solver.confirmation_k": 0,
+}
+"""Without the confirmation step, for the tests that count pre-confirmation events; ``CONFIRMING`` runs the
+ordinary accept, partial-validation resume, confirmation-outage recovery and restored-fallback cases at the shipped
+default, and ``test_confirmation.py`` the step itself."""
+
+CONFIRMING: Mapping[str, object] = {key: value for key, value in SETTINGS.items() if key != "solver.confirmation_k"}
+SHIPPED_K = load_policy(DEFAULTS_DIR).setting("solver.confirmation_k", int)
+"""The confirmation count ``CONFIRMING`` inherits from the shipped policy."""
 
 
-def config() -> TaskforgeConfig:
-    return build_config(load_policy(DEFAULTS_DIR).overlaid(SETTINGS), {})
+def config(settings: Mapping[str, object] = SETTINGS) -> TaskforgeConfig:
+    return build_config(load_policy(DEFAULTS_DIR).overlaid(settings), {})
+
+
+def confirming(driver_args: Namespace) -> None:
+    """Run the driver at the shipped confirmation default."""
+    overlay = Path(driver_args.policy)
+    settings = {key: value for key, value in json.loads(overlay.read_text()).items() if key != "solver.confirmation_k"}
+    overlay.write_text(json.dumps(settings))
+
+
+def confirmed_by(wp: Workpiece, reviewer: InferenceClient, started: Sequence[str], round_: int = 0) -> None:
+    """``wp`` accepted on the confirmation record of evidence index ``round_``: its two scored slots, then the shipped
+    ``SHIPPED_K`` slots under the confirmation's attempt (``started`` the engine's run ids), read by a final review
+    that reported."""
+    record, final = wp.evidence[-1], wp.decisions[-1]
+    assert wp.terminal is Terminal.ACCEPTED and isinstance(final, Accept) and record.confirms == round_
+    assert SHIPPED_K > 0 and [trial.trial for trial in record.solver] == list(range(2 + SHIPPED_K))
+    attempt = len(wp.evidence) - 1
+    assert sorted(run for run in started if run.endswith(f":{attempt}")) == [
+        f"arithmetic:{t}:{attempt}" for t in range(2, 2 + SHIPPED_K)
+    ]
+    assert record.review is not None and record.review.end is ReviewEnd.REPORTED
+    assert isinstance(reviewer, CleanReviewer) and "Earlier solve-review reports" in str(
+        reviewer.requests[-1].conversation
+    )
+    assert any(reason.startswith("Confirmation: ") for reason in final.reasons)
 
 
 async def test_workflow_accepts_and_records_stage_sequence(proposal: TaskProposal) -> None:
-    log = EventLog()
-    wp = await run_workpiece(proposal, config(), resources(Envs(), script()), log, install=install)
-    assert wp.terminal == Terminal.ACCEPTED
+    log, bundle = EventLog(), resources(Envs(), script())
+    wp = await run_workpiece(proposal, config(CONFIRMING), bundle, log, install=install)
     stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
-    assert stages == ["author", "validate", "review"]
+    assert stages == ["author", "validate", "review", "confirm", "review"]
     assert fold(tuple(record.event for record in log.records)).terminal == "accepted"
+    engine = bundle.rollouts.engine
+    assert isinstance(engine, SolverEngine)
+    confirmed_by(wp, bundle.role_inference["solve_review"], engine.started)
+    assert sorted(engine.started)[:2] == ["arithmetic:0:0", "arithmetic:1:0"] and len(engine.started) == 7
 
 
 async def test_crash_resume_replays_commands_without_repeating_inference(proposal: TaskProposal, tmp_path: Path) -> None:
@@ -264,23 +314,39 @@ class FirstRoundSolves(Engine):
         return GradedRollout(Rollout(run_id, (transcript("12"),), "stop"), grade)
 
 
+class RevisionFaults(SolverEngine):
+    """Every trial solves (too easy), except that the revision's validation (attempt 1) grades the task invalid."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        solved = await super().run_task(spec, model, run_id=run_id)
+        fault = run_id is not None and run_id.endswith(":1")
+        grade = GradeResult(Outcome.INVALID_TASK, None, "bad task") if fault else GradeResult(Outcome.GRADED, 1.0)
+        return replace(solved, grade=grade)
+
+
 # Review 2026-11-21: a faulted revision resubmitted the same task and controls with new notes; review
 # chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
-# the faulted round's notes shipped as a clean acceptance.
+# the faulted round's notes shipped as a clean acceptance. At the shipped default the restore is confirmed on its own
+# round (index 0), not the faulted one of the same digest.
 async def test_a_faulted_resubmission_with_the_same_digest_restores_the_stored_submission(
     proposal: TaskProposal,
 ) -> None:
     resubmit = (*script()[:3], call("submit", {"notes": "revised notes"}, "submit"))
     bundle = resources(Envs(), (*script(), *resubmit))
-    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=FirstRoundSolves()))
-    wp = await run_workpiece(proposal, config(), bundle, EventLog(), install=install)
-    first, final = wp.decisions
+    bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=RevisionFaults(2)))
+    wp = await run_workpiece(proposal, config(CONFIRMING), bundle, EventLog(), install=install)
+    first, restore, final = wp.decisions
     assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY
-    assert isinstance(final, Accept) and wp.terminal is Terminal.ACCEPTED and wp.round == 1
+    assert isinstance(restore, Accept) and wp.round == 1
     assert wp.evidence[0].task_digest == wp.evidence[1].task_digest  # the digest cannot tell the rounds apart
-    assert wp.submission is not None and wp.submission.notes == "done" and final.restore == wp.submission.digest
-    assert any(reason.startswith("The revision has a fault; restored submission") for reason in final.reasons)
-    assert wp.accepted_with is BandOutcome.TOO_EASY
+    assert wp.submission is not None and wp.submission.notes == "done" and restore.restore == wp.submission.digest
+    assert any(reason.startswith("The revision has a fault; restored submission") for reason in restore.reasons)
+    engine = bundle.rollouts.engine
+    assert isinstance(engine, SolverEngine)
+    confirmed_by(wp, bundle.role_inference["solve_review"], engine.started)
+    assert wp.evidence[-1].solver[:2] == wp.evidence[0].solver  # the restored round's own slots
+    assert isinstance(final, Accept) and final.band is BandOutcome.TOO_EASY and wp.accepted_with is BandOutcome.TOO_EASY
 
 
 async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
@@ -1948,6 +2014,7 @@ async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_s
 async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_call(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    confirming(driver_args)
     first = resources(Envs(), script())
     first = replace(first, rollouts=replace(first.rollouts, engine=SolverEngine(2, restart=1)))
     resumed = resources(Envs(), ())
@@ -1966,10 +2033,55 @@ async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_c
     assert sorted(first.rollouts.engine.started)[0].endswith(":0:0")
     driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
     await driver.one(driver_args)
-    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    wp = published_workpiece(destination)
     assert not resumed.inference.repeated
-    assert executions(resumed) == (0, 1)
+    assert executions(resumed) == (0, 6)  # the unfinished validation slot, then the five confirmation slots
     assert isinstance(resumed.rollouts.engine, SolverEngine) and resumed.rollouts.engine.started[0].endswith(":1:0")
+    confirmed_by(wp, resumed.role_inference["solve_review"], resumed.rollouts.engine.started)
+    assert isinstance(reviewer := resumed.role_inference["solve_review"], CleanReviewer) and len(reviewer.requests) == 2
+
+
+class ConfirmationOutage(SolverEngine):
+    """``SolverEngine``, except that confirmation slot 4 meets a decision-model outage while it is graded."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        if run_id == "arithmetic:4:1":
+            self.started.append(run_id)
+            error = RolloutInterrupted(Rollout(run_id, (), "interrupted"), RolloutOperation.GRADE)
+            error.__cause__ = OUTAGE
+            raise error
+        return await super().run_task(spec, model, run_id=run_id)
+
+
+async def test_a_confirmation_outage_parks_and_the_next_launch_buys_only_what_it_left_unbought(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decision-model outage in the confirmation batch parks the root (exit 75); the next launch, unasked, replays
+    the validation, its review and the finished confirmation slots, and buys slot 4, the slots the outage kept from
+    starting, and the final review."""
+    confirming(driver_args)
+    first = replace(
+        resources(Envs(), script()), rollouts=replace(resources(Envs(), ()).rollouts, engine=ConfirmationOutage(2))
+    )
+    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), ()))
+    resumed = replace(resumed, rollouts=replace(resumed.rollouts, engine=SolverEngine(1)))
+    serve(monkeypatch, first, resumed)
+    assert await driver.one(driver_args) == driver.DEFERRED
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    held = published_workpiece(destination)
+    assert held.terminal is Terminal.HELD and isinstance(last := held.decisions[-1], Incomplete)
+    assert last.awaits == "decision_model" and held.accepted_with is None
+    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
+    resumed.inference.served = {event_digest(request) for request in first.inference.requests}
+    assert await driver.one(driver_args) == 0  # driver_args.resume_held stays False
+    before, engine = first.rollouts.engine, resumed.rollouts.engine
+    assert isinstance(before, SolverEngine) and isinstance(engine, SolverEngine)
+    finished = {run for run in before.started if run != "arithmetic:4:1"}
+    assert engine.started[0] == "arithmetic:4:1"
+    assert not finished & set(engine.started)  # slots the outage stopped before they started are bought now, once
+    confirmed_by(published_workpiece(destination), resumed.role_inference["solve_review"], [*finished, *engine.started])
+    assert isinstance(reviewer := resumed.role_inference["solve_review"], CleanReviewer) and len(reviewer.requests) == 1
 
 
 N4_JOURNAL = Path(__file__).parent / "fixtures" / "n4-held-drift.jsonl.gz"

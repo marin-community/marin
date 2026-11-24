@@ -12,14 +12,24 @@ checks read the same index: a citation is valid when it quotes text the reviewer
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import override
 
 from taskforge.effects.context import Context
 from taskforge.harness.protocol import ReturnRequest, Tool, ToolResult
 from taskforge.harness.tools.base import ValidatedTool
 from taskforge.model.content_hash import digest
-from taskforge.model.review import Attribution, Citation, ReviewEnd, ReviewFinding, SolveReview, TrialAccount
+from taskforge.model.review import (
+    Attribution,
+    Citation,
+    ReviewEnd,
+    ReviewFinding,
+    SolveReview,
+    TrialAccount,
+    grouped,
+    same,
+    supports,
+)
 
 PAGE_ROOM = 120
 """Characters each reply keeps free for its continuation line; headers are counted against the page itself."""
@@ -201,31 +211,55 @@ def citation_problem(evidence: Evidence, citation: Citation) -> str | None:
 def checked(
     evidence: Evidence, findings: Sequence[ReviewFinding]
 ) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
+    """Each finding kept with its citation groups (``supports``) whose citations all check against ``evidence``, or
+    dropped with every problem when none does: one group's failure never takes another's support with it."""
     kept, dropped = [], []
     for finding in findings:
-        problems = [problem for c in finding.citations if (problem := citation_problem(evidence, c)) is not None]
-        if problems:
-            dropped.append((finding, "; ".join(problems)))
+        problems = {
+            group: [p for c in group if (p := citation_problem(evidence, c)) is not None] for group in supports(finding)
+        }
+        if valid := [group for group, found in problems.items() if not found]:
+            kept.append(grouped(finding, valid))
         else:
-            kept.append(finding)
+            dropped.append((finding, "; ".join(p for found in problems.values() for p in found)))
     return kept, dropped
+
+
+def consolidated(
+    evidence: Evidence, findings: Sequence[ReviewFinding]
+) -> tuple[list[ReviewFinding], list[tuple[ReviewFinding, str]]]:
+    """``findings`` as one record per (``same``) finding: every submitted version is checked against ``evidence``
+    first, and the versions that survive become one finding, at its first surviving version: one number for the
+    author, the union of their citations, and each version's citations kept as its own group (``grouped``), so a
+    later check can keep a version another one's failure would otherwise take down. Every version that fails is
+    dropped with its reasons, as ``checked`` drops it."""
+    kept, dropped = checked(evidence, findings)
+    merged: dict[tuple[str, str, str], ReviewFinding] = {}
+    for finding in kept:
+        first = merged.setdefault(same(finding), finding)
+        merged[same(finding)] = grouped(first, (*supports(first), *supports(finding)))
+    return list(merged.values()), dropped
 
 
 def report(
     evidence: Evidence,
     findings: Sequence[ReviewFinding],
     accounts: Sequence[TrialAccount],
+    earlier: Sequence[ReviewFinding] = (),
 ) -> ToolResult | ReturnRequest[SolveReview]:
     """The review, once its accounts cover every trial that did not pass and a failure blamed on a task defect has a
-    finding that survives its citations and cites that trial; any other finding whose citations fail is dropped with
-    its reason, never trusted and never refused back to the reviewer."""
+    finding that survives its citations and cites that trial: a submitted one, or an ``earlier`` report's whose
+    citations all still check against this evidence. Any submitted finding whose citations fail is dropped with its
+    reason, never trusted and never refused back to the reviewer; the versions of one finding are ``consolidated``, so
+    each finding is one record and one number for the author."""
     accounted = [account.trial for account in accounts]
     trials = {source.name for source in evidence.sources.values()}
     problems = [f"trial {trial} is not a solver trial" for trial in accounted if f"{TRIAL}{trial}" not in trials]
     problems += [f"account for trial {trial} once" for trial in set(accounted) if accounted.count(trial) > 1]
     problems += [f"trial {trial} did not pass and needs an account" for trial in evidence.unpassed - set(accounted)]
-    kept, dropped = checked(evidence, findings)
-    cited = {citation.source for finding in kept for citation in finding.citations}
+    kept, dropped = consolidated(evidence, [replace(f, groups=()) for f in findings])  # a reviewer sets no groups
+    supported = (*kept, *checked(evidence, earlier)[0])  # an earlier claim is rechecked against these trials
+    cited = {citation.source for finding in supported for citation in finding.citations}
     why = "".join(f" ({reason})" for _, reason in dropped)
     problems += [
         f"trial {account.trial} is attributed to a task defect, but no surviving finding cites "
@@ -239,6 +273,15 @@ def report(
     return ReturnRequest("report", review)
 
 
+FINDING_FIELDS = (
+    "Each finding has `kind` (ambiguous_prompt, grader_defect, answer_leak, environment_problem), `description` (what "
+    "is wrong), `edit` (the concrete change to the task that removes it) and `citations`: one or more {source, start, "
+    "end, quote}, where quote is text copied verbatim from parts start..end of that source. `accounts` gives every "
+    "trial that did not pass one {trial, attribution, reason}: solver (the outcome reflects the solver's own work), "
+    "defect (a finding you report produced it) or uninformative (it ended for reasons that say nothing about the task)."
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ReportArgs:
     findings: tuple[ReviewFinding, ...]
@@ -249,14 +292,7 @@ class ReportArgs:
 class ReportTool(ValidatedTool[ReportArgs]):
     evidence: Evidence
     name = "report"
-    description = (
-        "Finish the review. `findings` is empty when the trials show no task defect. Each finding has `kind` "
-        "(ambiguous_prompt, grader_defect, answer_leak, environment_problem), `description` (what is wrong), `edit` "
-        "(the concrete change to the task that removes it) and `citations`: one or more {source, start, end, quote}, "
-        "where quote is text copied verbatim from parts start..end of that source. `accounts` gives every trial that "
-        "did not pass one {trial, attribution, reason}: solver (the outcome reflects the solver's own work), defect (a "
-        "finding you report produced it) or uninformative (it ended for reasons that say nothing about the task)."
-    )
+    description = "Finish the review. `findings` is empty when the trials show no task defect. " + FINDING_FIELDS
     args_type = ReportArgs
 
     @override
@@ -264,6 +300,45 @@ class ReportTool(ValidatedTool[ReportArgs]):
         return report(self.evidence, args.findings, args.accounts)
 
 
-def evidence_tools(evidence: Evidence, report_tool: type[ReportTool]) -> Mapping[str, Tool[object]]:
+@dataclass(frozen=True, slots=True)
+class FinalReportArgs:
+    revise: tuple[ReviewFinding, ...]
+    note: tuple[ReviewFinding, ...]
+    accounts: tuple[TrialAccount, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FinalReportTool(ValidatedTool[FinalReportArgs]):
+    """The final review's exit: the round review's checks over its new findings, sorted into revise and note. An
+    account may blame a trial on an ``earlier`` report's finding while that finding's quotes still check against the
+    trials (``report``)."""
+
+    evidence: Evidence
+    earlier: tuple[ReviewFinding, ...] = ()
+    name = "report"
+    description = (
+        "Finish the review with the NEW findings only (none an earlier report already gave). `revise` lists those "
+        "severe enough that the task should go back to its author; `note` lists those the task can be accepted with, "
+        "recorded as notes. Both are empty when the trials show nothing new. An account may attribute a trial to a "
+        "defect an earlier report gave without repeating it, while that report's quotes from the trial still occur "
+        "in it. " + FINDING_FIELDS
+    )
+    args_type = FinalReportArgs
+
+    @override
+    async def run(self, ctx: Context, args: FinalReportArgs) -> ToolResult | ReturnRequest[SolveReview]:
+        if both := {same(f) for f in args.revise} & {same(f) for f in args.note}:
+            named = "; ".join(description for _, description, _ in sorted(both))
+            return ToolResult(f"Invalid report: give each finding one disposition, revise or note ({named}).")
+        outcome = report(self.evidence, (*args.revise, *args.note), args.accounts, self.earlier)
+        if isinstance(outcome, ToolResult):
+            return outcome
+        required = {same(f) for f in args.revise}
+        revise = tuple(f for f in outcome.payload.findings if same(f) in required)
+        note = tuple(f for f in outcome.payload.findings if same(f) not in required)
+        return ReturnRequest("report", replace(outcome.payload, findings=revise, notes=note))
+
+
+def evidence_tools(evidence: Evidence, report_tool: Callable[[Evidence], Tool[object]]) -> Mapping[str, Tool[object]]:
     tools = (ListTool(evidence), ReadTool(evidence), SearchTool(evidence), report_tool(evidence))
     return {tool.schema.name: tool for tool in tools}

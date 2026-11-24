@@ -10,7 +10,7 @@ confirmation step's final review) passes its own, not a new path. Decision rules
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 
 from pydantic import TypeAdapter
@@ -21,7 +21,8 @@ from taskcompendium.runtime.resources import resource_bytes, resource_inventory,
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.harness.protocol import Returned, Stopped
+from taskforge.harness.loop import AgenticHarness
+from taskforge.harness.protocol import Returned, Stopped, Tool
 from taskforge.harness.role import Fresh, Visit, sitting
 from taskforge.harness.tools.evidence import (
     RESOURCE,
@@ -33,13 +34,24 @@ from taskforge.harness.tools.evidence import (
     ReportTool,
     SearchTool,
     Source,
+    consolidated,
     evidence_tools,
     source_listing,
 )
 from taskforge.model.controls import CONTROLS
 from taskforge.model.proposal import TaskProposal, render
-from taskforge.model.review import EvidenceKind, MissingEvidence, ReviewEnd, ReviewFinding, SolveReview, TrialResult
-from taskforge.model.workpiece import Submission
+from taskforge.model.review import (
+    Accept,
+    EvidenceKind,
+    MissingEvidence,
+    Response,
+    ReviewEnd,
+    ReviewFinding,
+    SolveReview,
+    TrialResult,
+    same,
+)
+from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.inference import InferenceRequest
 from taskforge.stages.rules import passed
@@ -176,12 +188,12 @@ def reviewing(request: InferenceRequest) -> bool:
     return {tool.name for tool in request.tools} >= {ListTool.name, ReadTool.name, SearchTool.name}
 
 
-def finding_lines(findings: Sequence[ReviewFinding]) -> str:
-    """Numbered findings with their quoted evidence, for the author."""
+def finding_lines(findings: Sequence[ReviewFinding], start: int = 0) -> str:
+    """Findings numbered from ``start`` with their quoted evidence, for the author."""
     return "\n".join(
         f"{number}. [{f.kind}] {f.description}\n   Edit: {f.edit}\n"
         + "\n".join(f"   Evidence {c.source} #{c.start}..{c.end}: {c.quote}" for c in f.citations)
-        for number, f in enumerate(findings)
+        for number, f in enumerate(findings, start)
     )
 
 
@@ -193,9 +205,11 @@ async def solve_review(
     submission: Submission,
     trials: Sequence[tuple[TrialResult, GradedRollout | None]],
     prompts: str = "solve_review",
-    report: type[ReportTool] = ReportTool,
+    report: Callable[[Evidence], Tool[object]] = ReportTool,
+    previous: str = "",
 ) -> SolveReview:
-    """Review ``trials`` of ``submission``; emits only the reviewer's inference effects.
+    """Review ``trials`` of ``submission``; emits only the reviewer's inference effects. The final review passes its
+    own prompts, its report tool and the earlier reports (``earlier_reports``) as the template's ``{previous}``.
 
     The opening ends with the index's version whatever the policy's template renders, so changed evidence never
     replays a recorded review.
@@ -216,12 +230,16 @@ async def solve_review(
             proposal=render(proposal),
             evidence=source_listing(index),
             version=index.version,  # an earlier template's slot
+            previous=previous,
         )
         + f"\n\nEvidence version: {index.version}",  # outside the template, so no overlay can drop it
     )
+    role = config.solve_review  # each kind of review is nudged toward its own report's fields
+    if isinstance(role.harness, AgenticHarness):
+        role = replace(role, harness=replace(role.harness, nudge=policy.prompt(f"{prompts}.nudge").template))
     async with sitting(
         ctx,
-        config.solve_review,
+        role,
         Visit(prompts, prompts, None, tools=evidence_tools(index, report)),
         resources,
     ) as session:
@@ -232,3 +250,55 @@ async def solve_review(
     reason = f"solve-review ended without a report: {reason}"
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, reason), *missing)
     return SolveReview(index.version, ReviewEnd.NO_REPORT, missing=missing)
+
+
+def earlier_reports(workpiece: Workpiece) -> str:
+    """Every solve-review of ``workpiece``, oldest first, each finding with what became of it, for the final review."""
+    current = workpiece.submission.digest if workpiece.submission else None
+    blocks = []
+    for index, result in enumerate(workpiece.evidence):
+        if (review := result.review) is None:
+            continue
+        kind = "Solve-review" if result.confirms is None else "Final review"
+        subject = "this submission" if result.task_digest == current else "an earlier submission"
+        head = f"{kind} of validation record {index} ({subject}, {len(result.solver)} trials):"
+        if review.end is not ReviewEnd.REPORTED:
+            blocks.append(f"{head} no report ({'; '.join(m.detail for m in review.missing)})")
+            continue
+        lines = [
+            f"- [{f.kind}] {f.description} Edit: {f.edit} Outcome: {fate(workpiece, index, f, f in review.notes)}."
+            for f in (*review.findings, *review.notes)
+        ]
+        blocks.append("\n".join((head, *lines)) if lines else f"{head} no findings.")
+    return "\n\n".join(blocks) or "No earlier solve-review reports."
+
+
+def shipped_notes(index: Evidence, findings: Sequence[ReviewFinding]) -> tuple[ReviewFinding, ...]:
+    """Each (``same``) finding of ``findings`` once, at its first occurrence, carrying the citations of its versions
+    that check against ``index`` (``consolidated``): a version quoting text the shipped trials lack is never
+    published, and a finding no version of which checks is not carried."""
+    chosen = {same(finding): finding for finding in consolidated(index, findings)[0]}
+    return tuple(chosen[key] for key in dict.fromkeys(map(same, findings)) if key in chosen)
+
+
+FATES = {
+    Response.REQUESTED: "given to the author, who has not answered yet",
+    Response.REVISED: "given to the author, who revised the task",
+    Response.DECLINED: "the author declined it: {reason}",
+    Response.STOPPED: "given to the author, who stopped without resubmitting",
+}
+
+
+DISCARDED = "; the driver then restored the version before that attempted fix, so this submission does not carry it"
+
+
+def fate(workpiece: Workpiece, index: int, finding: ReviewFinding, note: bool) -> str:
+    """What became of ``finding`` of the review of evidence record ``index``: the author's response recorded against
+    that review (a final review's ``note`` was sent as optional), else a note on an acceptance, else nothing."""
+    response = next((r for r in reversed(workpiece.responses) if (r.review, r.finding) == (index, finding)), None)
+    if response is not None:
+        sent = FATES[response.response].format(reason=response.reason) + (DISCARDED if response.discarded else "")
+        return sent.replace("given to the author", "given to the author as an optional note") if note else sent
+    if any(isinstance(d, Accept) and finding in d.notes for d in workpiece.decisions):
+        return "recorded as a note on the acceptance"
+    return "not acted on"
