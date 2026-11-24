@@ -4,10 +4,13 @@
 """Bounded GB200 diagnostics for the production MoE hero recipe."""
 
 import dataclasses
+import hashlib
+import json
 import os
 from datetime import timedelta
 
 import click
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
@@ -17,7 +20,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
@@ -71,6 +74,54 @@ from experiments.grug.moe_hero_ep.train import (
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
+
+
+def build_native_diagnostic_run(
+    config: GrugRunConfig, *, run_id: str, num_steps: int, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Bound an exact native SFT configuration without rebinding its data or optimizer schedule."""
+    special = config.trainer.special_tokens
+    if special is None or not special.start_step < num_steps <= special.start_step + 3:
+        raise ValueError("A native SFT memory diagnostic must take one to three updates from its initializer")
+    placement = config.trainer.expert_placement
+    if placement is None:
+        raise ValueError("A native SFT diagnostic requires the recorded initializer and expert placement")
+    name = f"grug/{run_id}"
+    version = resolve_version(name, version)
+
+    def build_config(ctx: StepContext) -> GrugRunConfig:
+        trainer = dataclasses.replace(
+            config.trainer.trainer,
+            id=run_id,
+            load_checkpoint_path=[placement.source_checkpoint],
+            training_budget=None,
+            native_telemetry_root=None,
+            record_device_memory=True,
+            tracker=dataclasses.replace(
+                config.trainer.trainer.tracker,
+                id=None,
+                name=run_id,
+                group="mochi-sft-memory-diagnostic",
+                replicate_path=ctx.output_path,
+            ),
+        )
+        return dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(config.trainer, trainer=trainer, save_checkpoints=False),
+            eval=None,
+            stop_after_steps=num_steps,
+            max_retries_failure=0,
+            max_task_failures=0,
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(name, version),
+        version=version,
+        artifact_type=HeroThroughputResult,
+        run=run_grug,
+        build_config=build_config,
+        deps=(),
+    )
 
 
 def build_diagnostic_run(
@@ -384,6 +435,10 @@ def build_diagnostic_run(
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option(
+    "--native-config", default=None, help="Pinned resolved native SFT JSON; keeps its model/data/optimizer/mesh."
+)
+@click.option("--native-config-sha256", default=None, help="Required SHA-256 of --native-config.")
+@click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
     default=1,
@@ -639,6 +694,8 @@ def build_diagnostic_run(
 @build_options
 def main(
     run_id: str,
+    native_config: str | None,
+    native_config_sha256: str | None,
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
@@ -677,6 +734,13 @@ def main(
     restore_from: str | None,
     long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if native_config is not None:
+        contents = StoragePath(native_config).read_bytes()
+        if hashlib.sha256(contents).hexdigest() != native_config_sha256:
+            raise ValueError("Native diagnostic configuration SHA-256 mismatch")
+        raw = json.loads(contents)
+        raw["resources"] = {key: value for key, value in raw["resources"].items() if value is not None}
+        return build_native_diagnostic_run(draccus.decode(GrugRunConfig, raw), run_id=run_id, num_steps=num_steps)
     return build_diagnostic_run(
         run_id=run_id,
         dp_racks=dp_racks,

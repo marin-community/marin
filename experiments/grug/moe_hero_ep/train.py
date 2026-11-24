@@ -1842,6 +1842,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+                if trainer.record_device_memory and current_step == restored_step:
+                    logger.info("Native memory diagnostic before compile: %s", jax.local_devices()[0].memory_stats())
+                    compiled = train_step.lower(state, batch).compile()
+                    logger.info("Native train-step compiled memory analysis: %s", compiled.memory_analysis())
+                    logger.info("Native memory diagnostic before execution: %s", jax.local_devices()[0].memory_stats())
+                    del compiled
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
@@ -1995,6 +2001,11 @@ def run_grug(config: GrugRunConfig) -> None:
         moe_implementation=config.model.moe_implementation,
         remat_mode=config.model.remat_mode,
     )
+    if trainer.record_device_memory:
+        logger.info(
+            "Native memory diagnostic runtime: %s",
+            {key: value for key, value in os.environ.items() if key.startswith(("XLA_", "NCCL_"))},
+        )
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

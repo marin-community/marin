@@ -47,6 +47,15 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+For a native SFT memory gate, `launch_diagnostics --native-config <resolved.json>
+--native-config-sha256 <sha256> --run-id <fresh-name> --num-steps <initializer-step+2>`
+uses the pinned model, data cursor, optimizer schedule, batch accumulation and fleet unchanged.
+Only the fresh tracker identity, one-to-three-update stop, disabled eval/checkpoint writes and
+memory instrumentation differ. The diagnostic restores only the recorded initializer, writes
+to its own artifact output and prints compiled memory analysis before executing the first step.
+Set runtime allocator/NCCL variables on the coordinator; the standard Grug dispatcher forwards
+them to the GPU gang. A successful restore alone does not qualify a memory configuration.
+
 ## Inference export
 
 Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes

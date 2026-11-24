@@ -23,8 +23,10 @@ from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.training_budget import TimeLimitedIterator, TrainingBudgetConfig, TrainingStopReason
 from levanter.utils.thread_utils import blocking_wait
+from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
+from experiments.grug.moe_hero_ep.launch_diagnostics import build_native_diagnostic_run
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, RouterBiasMode, SpecialTokenInit
@@ -321,6 +323,24 @@ def test_native_hero_restore_starts_the_new_epoch_and_scales_its_lr_tail(epoch_i
     for actual, wanted in zip(actual_batch, expected_batch, strict=True):
         np.testing.assert_array_equal(actual.tokens, wanted.tokens)
     assert native.first_readable_index() == start
+    diagnostic = build_native_diagnostic_run(config, run_id="memory-proof", num_steps=42, version="dev")
+    probe = diagnostic.build_config(StepContext.for_fingerprint(runtime_arg_keys=(), deps=()))
+    assert probe.model == config.model
+    assert probe.data == config.data
+    assert probe.optimizer == config.optimizer
+    assert probe.resources == config.resources
+    assert probe.trainer == replace(config.trainer, trainer=probe.trainer.trainer, save_checkpoints=False)
+    assert probe.trainer.trainer.num_train_steps == config.trainer.trainer.num_train_steps
+    assert probe.trainer.trainer.train_batch_size == 176
+    assert probe.trainer.trainer.load_checkpoint_path == [spec.initializer.destination]
+    assert probe.trainer.trainer.training_budget is None
+    assert probe.trainer.trainer.record_device_memory
+    assert probe.stop_step == 42
+    assert probe.eval is None
+    # A bounded probe stops early without re-scaling the production LR or resetting its data cursor.
+    assert probe.data.mixture_start_step == 40
+    assert config.trainer.save_checkpoints
+    assert config.stop_step == 40 + target_updates
     actual_exposure = step_exposure(recipe, recipe["sft_capacity"]["sources"], updates)
     assert actual_exposure["full_sft_coverage"]
     assert set(config.evaluation_data.components) == {"val"}
