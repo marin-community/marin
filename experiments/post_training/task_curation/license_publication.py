@@ -47,6 +47,7 @@ class LicensePublication:
     metadata: dict
     notice_files: tuple[Path, ...]
     attribution: str
+    license_table: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,7 +187,27 @@ def require_publication_license(
     require_license(receipt, source_id, dataset_id, revision, use, ban=None)
 
 
-def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: str) -> LicensePublication:
+def lineage_folder_identifier(record: dict) -> str:
+    """The folder's accepted upstream license identifier from its approved lineage decision.
+
+    The repackager ruling (repackager-license-follows-upstream-20261116) licenses each
+    folder under its original upstream. A folder's PASS analog is an approved decision
+    whose rationale names the accepted identifier ("accepted ... as MIT"); the parse is
+    fail-closed so an ambiguous record stops the publication.
+    """
+    source_id = record.get("source_id", "")
+    approved = [d for d in record.get("decisions", []) if d.get("approved")]
+    if not approved:
+        raise ValueError(f"Folder lineage lacks an approved decision: {source_id}")
+    match = re.search(r"as ([A-Za-z0-9._+-]+)\b", approved[-1].get("rationale", ""))
+    if match is None:
+        raise ValueError(f"Folder lineage decision does not name an accepted license identifier: {source_id}")
+    return match.group(1)
+
+
+def prepare_license_publication(
+    receipt: LicenseReceipt, output: Path, *, use: str, lineage: dict | None = None, folders: list[str] | None = None
+) -> LicensePublication:
     """Archive the pinned grant and notices after validating the exact input receipt."""
     require_publication_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use)
     package_evidence = [
@@ -249,37 +270,70 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
     observed = {item["source_url"] for item in provenance}
     if evidence_urls - observed:
         raise ValueError("Publication did not preserve every checked upstream license document")
-    check = check_license(receipt)
-    if check.verdict is LicenseCheckVerdict.PASS:
-        # The published card states the license the checker verified at the resolved
-        # source, not the upstream card's own declared field, which stays archived.
-        citation = next(
-            (item for item in source_evidence if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED),
-            None,
+    if lineage is not None:
+        # The repackager ruling (repackager-license-follows-upstream-20261116): the license
+        # follows each included folder's original upstream. One identifier -> that id on the
+        # card; several -> license: other, with the per-folder table returned to the caller
+        # for the card body. Non-PASS folders are excluded by the caller before publication.
+        included = folders if folders is not None else sorted(lineage)
+        if not included:
+            raise ValueError("Folder-lineage publication includes no folders")
+        license_table = []
+        identifiers = set()
+        evidence_urls = set()
+        for folder in included:
+            record = lineage.get(folder)
+            if record is None:
+                raise ValueError(f"Folder lineage receipt lacks the included folder: {folder}")
+            identifier = lineage_folder_identifier(record)
+            identifiers.add(identifier.lower())
+            license_table.append({
+                "folder": folder,
+                "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
+                "identifier": identifier,
+                "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
+            })
+            evidence_urls.update(record.get("decisions", [])[-1].get("evidence_urls", []))
+            evidence_urls.update(
+                item["url"] for item in record.get("evidence", [])
+                if isinstance(item, dict) and item.get("url", "").startswith("https://huggingface.co/")
+            )
+        ordered = sorted(identifiers)
+        metadata["license"] = ordered[0] if len(ordered) == 1 else "other"
+        metadata["license_evidence_urls"] = sorted(evidence_urls)
+    else:
+        check = check_license(receipt)
+        if check.verdict is LicenseCheckVerdict.PASS:
+            # The published card states the license the checker verified at the resolved
+            # source, not the upstream card's own declared field, which stays archived.
+            citation = next(
+                (item for item in source_evidence if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED),
+                None,
+            )
+            if citation is None:
+                raise ValueError("Publication has no checked permissive license evidence for its resolved source")
+            identifiers = sorted(set(citation.license_ids) - {"missing"})
+            metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+        elif "license" not in metadata:
+            identifiers = sorted({identifier for item in source_evidence for identifier in item.license_ids} - {"missing"})
+            if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
+                raise ValueError("Checked grant supplies no publishable permissive license identifier")
+            metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+        metadata["license_evidence_urls"] = sorted(
+            {
+                item.url
+                for item in source_evidence
+                if item.license_ids and license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED
+            }
         )
-        if citation is None:
-            raise ValueError("Publication has no checked permissive license evidence for its resolved source")
-        identifiers = sorted(set(citation.license_ids) - {"missing"})
-        metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
-    elif "license" not in metadata:
-        identifiers = sorted({identifier for item in source_evidence for identifier in item.license_ids} - {"missing"})
-        if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
-            raise ValueError("Checked grant supplies no publishable permissive license identifier")
-        metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+        license_table = ()
     # HF's card schema accepts its own lowercase identifier spellings.
     if isinstance(metadata.get("license"), str):
         metadata["license"] = metadata["license"].lower()
     elif isinstance(metadata.get("license"), list):
         metadata["license"] = [str(item).lower() for item in metadata["license"]]
     metadata["license_source"] = {"dataset_id": dataset_id, "revision": revision, "url": url}
-    metadata["license_evidence_urls"] = sorted(
-        {
-            item.url
-            for item in source_evidence
-            if item.license_ids and license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED
-        }
-    )
-    if not metadata["license_evidence_urls"]:
+    if not metadata.get("license_evidence_urls"):
         raise ValueError("Publication must retain pinned evidence URLs for its dataset grant")
     metadata["license_input"] = {"dataset_id": receipt.dataset_id, "revision": receipt.revision}
     record = output / "publication-provenance.json"
@@ -292,7 +346,7 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
         f"License source: [{dataset_id}@{revision}]({url}). "
         "Original notices and attribution are preserved in the accompanying upstream files.\n"
     )
-    return LicensePublication(metadata, tuple(notices), attribution)
+    return LicensePublication(metadata, tuple(notices), attribution, tuple(license_table))
 
 
 def licensed_dataset_card(body: str, publication: LicensePublication, *, pretty_name: str) -> str:

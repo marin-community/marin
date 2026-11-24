@@ -112,6 +112,65 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
     assert result.license_check["receipt"]["revision"] == revision
 
 
+def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
+    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    """The repackager ruling: the card states each included folder's upstream license."""
+    folder_notice = b"Folder-lineage attribution.\n"
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card, "endless_v2/NOTICE": folder_notice})
+    lineage = {
+        "FWeindel:validated-tasks/endless_v2": {
+            "source_id": "FWeindel:validated-tasks/endless_v2", "dataset_id": "FWeindel/validated-tasks",
+            "revision": REVISION,
+            "decisions": [{"kind": "exception", "approved": True,
+                           "rationale": "accepts Endless v1-v3 from obiwan96/endless-terminals@2" * 40 + " as MIT.",
+                           "evidence_urls": [PREFIX + "endless_v2"]}],
+            "evidence": [{"url": PREFIX + "endless_v2/README.md", "kind": "dataset_card",
+                          "sha256": hashlib.sha256(card).hexdigest(), "license_ids": ["missing"]}],
+        },
+    }
+    publication = license_publication.prepare_license_publication(
+        source_receipt(card), tmp_path / "published", use="train", lineage=lineage,
+        folders=["FWeindel:validated-tasks/endless_v2"])
+    assert publication.metadata["license"] == "mit"
+    assert len(publication.license_table) == 1
+    assert publication.license_table[0]["identifier"] == "MIT"
+    assert publication.license_table[0]["folder"] == "FWeindel:validated-tasks/endless_v2"
+    files = {path.name: path.read_bytes() for path in publication.notice_files}
+    assert files["UPSTREAM_endless_v2_NOTICE"] == folder_notice
+
+
+def test_publication_states_other_for_divergent_folder_licenses(tmp_path, monkeypatch):
+    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    """Several folders with different accepted identifiers publish license: other."""
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card})
+    lineage = {}
+    for folder, identifier in (("endless_v2", "MIT"), ("endless_v3", "Apache-2.0")):
+        lineage[f"FWeindel:validated-tasks/{folder}"] = {
+            "source_id": f"FWeindel:validated-tasks/{folder}", "dataset_id": "FWeindel/validated-tasks",
+            "revision": REVISION,
+            "decisions": [{"kind": "exception", "approved": True,
+                           "rationale": f"explicitly accepts the folder as {identifier}.",
+                           "evidence_urls": [PREFIX + folder]}],
+            "evidence": [],
+        }
+    publication = license_publication.prepare_license_publication(
+        source_receipt(card), tmp_path / "published", use="train", lineage=lineage,
+        folders=sorted(lineage))
+    assert publication.metadata["license"] == "other"
+    assert {row["identifier"] for row in publication.license_table} == {"MIT", "Apache-2.0"}
+
+
+def test_lineage_folder_identifier_requires_an_approved_decision():
+    with pytest.raises(ValueError, match="lacks an approved decision"):
+        license_publication.lineage_folder_identifier(
+            {"source_id": "fixture:folder", "decisions": [{"kind": "exception", "approved": False,
+                                                           "rationale": "accepts it as MIT"}]})
+    with pytest.raises(ValueError, match="does not name"):
+        license_publication.lineage_folder_identifier(
+            {"source_id": "fixture:folder", "decisions": [{"kind": "exception", "approved": True,
+                                                           "rationale": "no identifier here"}]})
+
+
 def test_publication_preserves_folder_lineage_license_documents(tmp_path, monkeypatch):
     """Folder-lineage upstreams keep license documents in per-dataset subfolders."""
     card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
