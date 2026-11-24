@@ -3,10 +3,9 @@
 
 """Shared comparison primitives for informal problems and Lean theorem statements.
 
-This module normalizes prose and theorem types, creates token n-grams,
-and computes Jaccard similarity. ``autoinformalization/deduplicate_and_split.py`` and ``eval_overlap.py`` share
-these operations so their text and Lean comparisons follow the same rules. It does not decide which
-rows to remove or how to split them.
+This module normalizes prose and theorem types, creates token n-grams, and computes Jaccard
+similarity. ``eval_overlap.py`` uses these operations to match NuminaMath-LEAN rows against Marin's
+frozen Lean evaluation problems. It does not decide which rows to remove.
 """
 
 import re

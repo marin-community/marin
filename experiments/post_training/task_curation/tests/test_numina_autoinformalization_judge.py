@@ -18,9 +18,8 @@ from experiments.post_training.task_curation.tests.lean_rows import numina_row, 
 
 
 @pytest.fixture
-def judge_spec(tmp_path, monkeypatch):
+def judge_spec(tmp_path):
     row = numina_row()
-    monkeypatch.setattr(auto, "TASK_SPLITS", {auto.row_key(row): "train"})
     recipe = next(source.config for source in auto.sources() if source.config.intended_use.value == "train")
     task = converted_task(recipe, row, inputs=prime_inputs(tmp_path))
     spec = verifyit_spec(task.grader)

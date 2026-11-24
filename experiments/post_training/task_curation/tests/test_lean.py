@@ -13,16 +13,9 @@ from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.lean import proofs
-from experiments.post_training.task_curation.datasets.lean.autoinformalization import dataset as auto
-from experiments.post_training.task_curation.datasets.lean.autoinformalization import (
-    deduplicate_and_split as numina_autoinformalization_manifest,
-)
 from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import human_statement
 from experiments.post_training.task_curation.datasets.lean.autoinformalization.dataset import (
     sources as informalization_sources,
-)
-from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import (
-    build_manifest,
 )
 from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
@@ -348,9 +341,8 @@ def test_only_rows_with_a_human_statement_and_proof_are_selected():
     assert not is_human_proof_row(numina_row(ground_truth_type="statement"), None)
 
 
-def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monkeypatch):
+def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path):
     row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(auto, "TASK_SPLITS", {auto.row_key(row): "train"})
     pipeline = INFORMALIZATION["train"]
     task = converted_task(pipeline, row, inputs=prime_inputs(tmp_path))
     prompt = task.context.events[0]
@@ -368,96 +360,10 @@ def test_auto_informalization_hides_the_human_statement_and_proof(tmp_path, monk
     assert golden.content == row["problem"]
 
 
-def test_auto_informalization_selects_only_rows_with_a_frozen_no_decision(monkeypatch):
-    row = numina_row(ground_truth_type="statement")
-    monkeypatch.setattr(auto, "TASK_SPLITS", {auto.row_key(row): "train"})
-    pipeline = INFORMALIZATION["train"]
-    assert pipeline.source.select(row, None)
-    changed = {**row, "problem": "Find the value of n + 0."}
-    assert not auto.is_train_row(changed, None)
-    assert not auto.is_eval_row(changed, None)
-
-
-def test_auto_informalization_deduplication_removes_exact_copies_and_groups_near_matches():
-    exact = numina_row(uuid="exact", ground_truth_type="statement", formal_ground_truth="")
-    exact_copy = {**exact}
-    words = [f"term{index}" for index in range(130)]
-    near_problem = " ".join(words)
-    words[65] = "replacement"
-    near_formal = (
-        "import Mathlib\n"
-        "theorem long_statement (a b c d e f g h i j : Nat) "
-        "(h0 : a = b) (h1 : b = c) (h2 : c = d) (h3 : d = e) "
-        ": a + b + c + d + e + f + g + h + i + j = a + b + c + d + e + f + g + h + i + j := by"
-    )
-    near = numina_row(uuid="near-a", problem=near_problem, formal_statement=near_formal)
-    near_variant = numina_row(
-        uuid="near-b",
-        problem=" ".join(words),
-        formal_statement=near_formal.replace("long_statement", "renamed_statement"),
-    )
-
-    manifest = build_manifest([exact, exact_copy, near, near_variant])
-    assert manifest["counts"]["removed_exact_duplicates"] == 1
-    assert manifest["counts"]["kept_rows"] == 3
-    exact_cluster = next(cluster for cluster in manifest["clusters"] if cluster["removed"])
-    assert set(exact_cluster["kept"]).isdisjoint(item["row"] for item in exact_cluster["removed"])
-    near_cluster = next(cluster for cluster in manifest["clusters"] if len(cluster["kept"]) == 2)
-    assert not near_cluster["removed"]
-    assert any(match["rule"] == "joint_near_match" for match in near_cluster["matches"])
-
-
 def test_human_statement_selection_does_not_require_a_complete_proof():
     row = numina_row(ground_truth_type="statement", formal_ground_truth="")
     assert is_human_statement_row(row, None)
     assert not is_human_proof_row(row, None)
-
-
-def test_identical_formal_inputs_with_different_references_share_a_split():
-    manifest = build_manifest(
-        [
-            numina_row(uuid="first", problem="Show that adding zero does nothing."),
-            numina_row(uuid="second", problem="For every natural n, prove n + 0 = n."),
-        ]
-    )
-    assert manifest["counts"]["kept_rows"] == 2
-    assert len(manifest["clusters"]) == 1
-    assert len(manifest["clusters"][0]["kept"]) == 2
-    assert not manifest["clusters"][0]["removed"]
-
-
-def test_long_near_matches_with_separated_edits_share_a_split():
-    # Each edit creates n-grams that no other row has; they must not use up the rare-n-gram candidate seeds.
-    words = [f"term{index}" for index in range(400)]
-    edited = [*words]
-    edited[100], edited[300] = "first", "second"
-    hypotheses = [f"(h{index} : n + {index} = {index} + n)" for index in range(80)]
-    changed = [*hypotheses]
-    changed[20], changed[60] = "(h20 : n + 2000 = 2000 + n)", "(h60 : n + 6000 = 6000 + n)"
-
-    def formal(parts):
-        return "import Mathlib\ntheorem t (n : Nat) " + " ".join(parts) + " : n = n := by"
-
-    manifest = build_manifest(
-        [
-            numina_row(uuid="first", problem=" ".join(words), formal_statement=formal(hypotheses)),
-            numina_row(uuid="second", problem=" ".join(edited), formal_statement=formal(changed)),
-        ]
-    )
-    assert len(manifest["clusters"]) == 1
-    assert [match["rule"] for match in manifest["clusters"][0]["matches"]] == ["joint_near_match"]
-
-
-def test_proof_training_overlap_moves_the_whole_cluster_to_train(monkeypatch):
-    monkeypatch.setattr(numina_autoinformalization_manifest, "PROOF_TRAIN_UUIDS", frozenset({"proof", "singleton"}))
-    monkeypatch.setattr(numina_autoinformalization_manifest, "split_for", lambda key: "eval")
-    proof = numina_row(uuid="proof")
-    variant = numina_row(uuid="variant")
-    singleton = numina_row(uuid="singleton", problem="A different problem", formal_statement="theorem t : True := by")
-    manifest = build_manifest([proof, variant, singleton])
-    assert manifest["counts"]["eval"] == 0
-    assert manifest["counts"]["train"] == 2
-    assert all(cluster["split"] == "train" for cluster in manifest["clusters"])
 
 
 OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"

@@ -1,17 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""NuminaMath-LEAN human statements as auto-informalization RL and evaluation tasks."""
+"""NuminaMath-LEAN human statements as auto-informalization RL and evaluation tasks.
 
-import json
-from collections.abc import Iterator
+The rows come from a cleaned Hugging Face dataset whose card describes its deduplication,
+split, answer-disclosure audit, and golden controls, and which publishes the audit files and
+curation scripts. Conversion still applies Marin's Lean toolchain and evaluation-overlap checks
+through ``statement_row_contract``, so those follow Marin's current toolchain and eval set.
+"""
+
 from dataclasses import asdict
-from pathlib import Path
-from typing import Any
 
-import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
@@ -21,11 +20,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.spec import RUBRIC_LABELS, JudgePromptFormat, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.lean.autoinformalization.deduplicate_and_split import row_key
 from experiments.post_training.task_curation.datasets.lean.numina import (
-    NUMINA_FILE,
-    NUMINA_REPO,
-    NUMINA_REVISION,
     PRIME_LISTS,
     excluded_by_prime,
     prime_list_source,
@@ -34,10 +29,9 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-QUALITY_FILE = Path(__file__).with_name("tasks.json")
-QUALITY = json.loads(QUALITY_FILE.read_text())
-TASK_SPLITS = {key: split for split, keys in QUALITY["tasks"].items() for key in keys}
-"""The split of every selected row, keyed by ``row_key``."""
+DATASET_REPO = "flufcloud/numinamath-lean-autoinformalization"
+DATASET_REVISION = "f40c2e60cfd0012dfdfc6f2fab880399d5e7b4b4"
+SPLIT_ROWS = {"train": 3070, "eval": 119}
 JUDGE_OUTPUT_TOKENS = 4096
 
 INSTRUCTIONS = """Translate the Lean 4 theorem statement below into a self-contained natural-language
@@ -76,25 +70,6 @@ Multiple-choice options and option letters are optional; their omission alone is
 The human reference is also the golden control; a failed control indicates an inconsistent pair or judge contract."""
 
 
-def indexed_rows(path: StoragePath, _context: ConversionContext | None) -> Iterator[dict[str, Any]]:
-    """Stream the pinned parquet with its stable row position available to the split manifest."""
-    index = 0
-    with path.open("rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        for batch in parquet.iter_batches(batch_size=1024, use_threads=False):
-            for row in batch.to_pylist():
-                yield {**row, "_numina_index": index}
-                index += 1
-
-
-def is_train_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
-    return TASK_SPLITS.get(row_key(row)) == "train"
-
-
-def is_eval_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
-    return TASK_SPLITS.get(row_key(row)) == "eval"
-
-
 def formal_source(prefix: str, statement: str) -> str:
     theorem = statement.rstrip().removesuffix(":=").rstrip()
     return f"{prefix.rstrip()}\n\n{theorem}".strip()
@@ -123,16 +98,16 @@ def convert(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejecti
     contract = statement_row_contract(data, lambda uuid: excluded_by_prime(uuid, context))
     if isinstance(contract, ImportRejection):
         return contract
-    split = TASK_SPLITS.get(row_key(data))
-    if split is None:
-        return unsupported("quality_not_cleared", "The row is absent from the active selection")
     formal = formal_source(contract.prefix, contract.statement)
     spec = judge_spec(formal, data["problem"])
     package = verifyit_package(spec, environment=required_grader_environment(context))
     prompt = TextMessage(role="user", content=INSTRUCTIONS.format(formal=formal))
     evidence = {
-        **{name: data[name] for name in ("uuid", "source", "problem_type", "question_type", "exam") if name in data},
-        "split": split,
+        **{
+            name: data[name]
+            for name in ("uuid", "numina_row", "source", "problem_type", "question_type", "exam")
+            if name in data
+        },
         "contract": asdict(contract),
     }
     task = conversation_task(row, events=(prompt,), package=package, evidence=evidence)
@@ -167,21 +142,16 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "single-turn",
                     "license:apache-2.0",
                 ),
-                count=len(QUALITY["tasks"][split]),
+                count=SPLIT_ROWS[split],
                 notes="Human-written Lean statements translated to natural language with binary semantic reward.",
             ),
             config=CurationRecipe(
                 name=f"lean-numina-auto-informalization-{split}",
                 source=HfSource(
-                    NUMINA_REPO,
-                    NUMINA_REVISION,
-                    (NUMINA_FILE,),
-                    SourceFormat.PARQUET,
-                    select=selector,
-                    read=indexed_rows,
+                    DATASET_REPO, DATASET_REVISION, (f"data/{split}-00000-of-00001.parquet",), SourceFormat.PARQUET
                 ),
                 convert=convert,
-                version=f"9-{QUALITY['report_sha256']}",
+                version="10",
                 intended_use=intended_use,
                 rubric=REVIEW_RUBRIC,
                 controls=CONTROLS,
@@ -189,8 +159,5 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 grader=GRADER_PACKAGES,
             ),
         )
-        for split, intended_use, selector in (
-            ("train", IntendedUse.TRAIN, is_train_row),
-            ("eval", IntendedUse.EVAL, is_eval_row),
-        )
+        for split, intended_use in (("train", IntendedUse.TRAIN), ("eval", IntendedUse.EVAL))
     ]
