@@ -535,9 +535,6 @@ class RayPPOTrainer:
 
         Cleanup errors remain warnings so teardown can continue.
         """
-        # Teacher cleanup can block or resist cancellation. Arm the process guard
-        # before any teardown awaits, including executor shutdown after asyncio.run.
-        self._start_exit_watchdog()
         if self._expert_block_sync is not None:
             await self._guarded_async(
                 self._expert_block_sync.close(),
@@ -586,12 +583,20 @@ class RayPPOTrainer:
             await self.context.close()
             await self._drain_checkpoint_upload()
         finally:
+            self._exit_watchdog = self._start_exit_watchdog()
             await self._teardown()
             self._shutdown_complete = True
 
+    def finish_shutdown(self) -> None:
+        """Disarm the process guard after the caller has joined the event-loop executor."""
+        watchdog = getattr(self, "_exit_watchdog", None)
+        if watchdog is not None:
+            watchdog.cancel()
+            self._exit_watchdog = None
+
     @staticmethod
-    def _start_exit_watchdog(timeout: int = 120) -> None:
-        """Start a daemon thread that force-exits the process after *timeout* seconds."""
+    def _start_exit_watchdog(timeout: int = 300) -> threading.Timer:
+        """Return a cancellable process-failure timer for stalled cleanup."""
 
         def _force_exit():
             logger.error(
@@ -602,6 +607,7 @@ class RayPPOTrainer:
         t = threading.Timer(timeout, _force_exit)
         t.daemon = True
         t.start()
+        return t
 
     async def train(self):
         """Run the rollout-buffer training loop, then release every resource it started."""
