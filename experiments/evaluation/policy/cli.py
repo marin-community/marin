@@ -99,9 +99,9 @@ def _print_table(columns: tuple[str, ...], rows: tuple[tuple[str, ...], ...]) ->
 
 
 def _run_summary(check: RunCheck) -> str:
-    """State, primary score, items scored, commit, and the first problem of a checked run."""
+    """State, primary score, items scored, commit, and the first problem or warning of a checked run."""
     record = check.record
-    parts = [check.state.value]
+    parts = [check.state.value + (" ⚠" if check.warnings else "")]
     for task in record.evaluation.tasks:
         if task.benchmark is not None and (
             (score := record.metrics.get(task.name, {}).get(task.benchmark.primary_metric)) is not None
@@ -112,9 +112,9 @@ def _run_summary(check: RunCheck) -> str:
         total = sum(coverage.n_benchmark or 0 for coverage in record.coverage.values())
         parts.append(f"{scored}/{total}")
     parts.append(f"@{record.provenance.git_sha[:7]}")
-    if check.problems:
-        more = f" (+{len(check.problems) - 1})" if len(check.problems) > 1 else ""
-        parts.append(f"[{check.problems[0]}{more}]")
+    if notes := (*check.problems, *check.warnings):
+        more = f" (+{len(notes) - 1})" if len(notes) > 1 else ""
+        parts.append(f"[{notes[0]}{more}]")
     return " ".join(parts)
 
 
@@ -278,7 +278,10 @@ def status(version: str, candidate_name: str | None, limit: int) -> None:
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @click.argument("run_ids", nargs=-1, required=True)
 def verify(version: str, run_ids: tuple[str, ...]) -> None:
-    """Check runs against the policy as this checkout resolves it, and exit non-zero if any is invalid."""
+    """Check runs against the policy as this checkout resolves it, and exit non-zero if any is invalid.
+
+    Warnings flag results far outside expectations without making a run invalid.
+    """
     policy = POLICIES[version]
     candidates = {candidate.model.location: candidate for candidate in policy.candidates}
     configure_coreweave_s3()
@@ -303,6 +306,8 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
         click.echo(f"{run_id}  {_run_summary(check)}")
         for problem in check.problems:
             click.echo(f"  {problem}")
+        for warning in check.warnings:
+            click.echo(f"  warning: {warning}")
         invalid |= check.state is RunState.INVALID
     if invalid:
         raise SystemExit(1)

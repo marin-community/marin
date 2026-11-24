@@ -10,10 +10,11 @@ from enum import StrEnum
 
 from evalrecords.records import EvalRunRecord, RunStatus, TaskCoverage, read_record, record_path
 from evalrecords.rollout_attempts import RUN_OBJECT
-from evalrecords.rollout_results import score_curated_record
+from evalrecords.rollout_results import score_curated_record, terminal_attempts
 from finestore.reader import ReadView
 from iris.rpc import job_pb2
 from marin.evaluation.runner import Evaluation, EvaluationBatch
+from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
 from experiments.evaluation.launch import (
     POLICY_RECORDS_PREFIXES,
@@ -26,6 +27,11 @@ from experiments.evaluation.policy.launch import launch_specs
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 
 _MAX_VALUE_CHARS = 60
+_SINGLE_TURN = frozenset({OperationKind.CHAT_GENERATION, OperationKind.TEXT_GENERATION})
+CAPPED_WARNING = 0.10
+"""Share of single-turn replies stopped by their output cap above which a run is flagged."""
+SCORED_WARNING = 0.95
+"""Share of a task's attempts scored below which the run is flagged."""
 
 
 class RunState(StrEnum):
@@ -59,6 +65,8 @@ class RunCheck:
     record: EvalRunRecord
     state: RunState
     problems: tuple[str, ...]
+    warnings: tuple[str, ...]
+    """Results far outside expectations, such as replies cut off by their cap; they do not change the state."""
 
 
 def expected_runs(
@@ -93,18 +101,54 @@ def _short(value: object) -> str:
     return text if len(text) <= _MAX_VALUE_CHARS else f"{text[:_MAX_VALUE_CHARS]}…"
 
 
-def served_window(record: EvalRunRecord) -> int | None:
-    """The context window the evaluator read from the server, from the run's archive."""
-    payload = ReadView(record.results_path).read_blob(RUN_OBJECT)
-    return None if payload is None else json.loads(payload)["config"]["model"]["context_window"]
-
-
 @dataclass(frozen=True)
 class RunEvidence:
-    """What a succeeded run's archive shows: its scored coverage and the window it read from the server."""
+    """What a succeeded run's archive shows: scored coverage, the window it read from the server, and how
+    many of its single-turn replies stopped at their output cap."""
 
     coverage: Mapping[str, TaskCoverage]
     window: int | None
+    replies: int
+    capped: int
+
+
+def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence:
+    """Read a succeeded run's archive; each reply's cap is the run budget or its protocol's own, if lower."""
+    reader = ReadView(record.results_path)
+    payload = reader.read_blob(RUN_OBJECT)
+    assert payload is not None, f"{record.results_path} has no {RUN_OBJECT}"
+    run = json.loads(payload)
+    budget = run["config"]["max_tokens"]
+    caps = {}
+    for entry in run["datasets"]:
+        protocol = EvaluationProtocol.model_validate(entry["protocol"])
+        if protocol.operation in _SINGLE_TURN:
+            assert protocol.sampling is not None
+            caps[entry["dataset"]] = min(budget, protocol.sampling.max_tokens or budget)
+    tokens = [
+        (row["completion_tokens"], caps[row["dataset"]])
+        for row in terminal_attempts(reader).values()
+        if row["dataset"] in caps and row["completion_tokens"] is not None
+    ]
+    return RunEvidence(
+        coverage=coverage,
+        window=run["config"]["model"]["context_window"],
+        replies=len(tokens),
+        capped=sum(used >= cap for used, cap in tokens),
+    )
+
+
+def run_warnings(evidence: RunEvidence) -> tuple[str, ...]:
+    """Flag a run whose replies mostly ran out of tokens or whose attempts mostly went unscored."""
+    warnings = []
+    if evidence.capped > CAPPED_WARNING * evidence.replies:
+        warnings.append(f"{evidence.capped}/{evidence.replies} replies hit their output cap")
+    warnings.extend(
+        f"{task}: scored {coverage.n_scored} of {coverage.n_attempted} attempts"
+        for task, coverage in sorted(evidence.coverage.items())
+        if coverage.n_scored < SCORED_WARNING * coverage.n_attempted
+    )
+    return tuple(warnings)
 
 
 def run_problems(
@@ -148,10 +192,11 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun) -> RunCheck:
     """Score a record from its archive and compare it with the run this checkout would launch."""
     if record.status is not RunStatus.SUCCEEDED:
         state, problems = run_problems(record, None, expected)
-        return RunCheck(record=record, state=state, problems=problems)
+        return RunCheck(record=record, state=state, problems=problems, warnings=())
     scored = score_curated_record(record)
-    state, problems = run_problems(record, RunEvidence(coverage=scored.coverage, window=served_window(record)), expected)
-    return RunCheck(record=scored, state=state, problems=problems)
+    evidence = run_evidence(record, scored.coverage)
+    state, problems = run_problems(record, evidence, expected)
+    return RunCheck(record=scored, state=state, problems=problems, warnings=run_warnings(evidence))
 
 
 def find_record(run_id: str) -> EvalRunRecord:

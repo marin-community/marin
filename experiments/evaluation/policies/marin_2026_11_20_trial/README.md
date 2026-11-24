@@ -23,7 +23,8 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
 
 - `launch` submits a candidate's evaluations. Re-running the same launch skips runs that
   succeeded and reruns ones that failed.
-- `status` shows each evaluation's full and smoke run: valid, invalid, or not run.
+- `status` shows each evaluation's full and smoke run: valid, invalid, or not run. A ⚠ marks a run
+  whose replies often hit their output cap or whose attempts often went unscored.
 - `verify` checks any run against the policy and names each field that differs.
 
 All three need `DAYTONA_TARGET` set (for the agentic evaluations) and CoreWeave credentials.

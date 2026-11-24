@@ -10,7 +10,14 @@ from evalrecords.records import RunStatus, TaskCoverage, read_record, record_pat
 from marin.evaluation.runner import _record
 
 from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY, QWEN
-from experiments.evaluation.policy.runs import ExpectedRun, RunEvidence, RunState, expected_runs, run_problems
+from experiments.evaluation.policy.runs import (
+    ExpectedRun,
+    RunEvidence,
+    RunState,
+    expected_runs,
+    run_problems,
+    run_warnings,
+)
 
 EVALUATIONS = {"aime24", "mrcr-32k"}
 
@@ -27,10 +34,18 @@ def _write(tmp_path, run: ExpectedRun, status: RunStatus = RunStatus.SUCCEEDED, 
     return read_record(record_path(str(tmp_path), run.evaluation.identity.run_id))
 
 
-def _evidence(run: ExpectedRun, *, attempted: int = 30, window: int | None = None) -> RunEvidence:
+def _evidence(
+    run: ExpectedRun, *, attempted: int = 30, scored: int | None = None, window: int | None = None, capped: int = 0
+) -> RunEvidence:
     return RunEvidence(
-        coverage={run.name: TaskCoverage(n_benchmark=30, n_attempted=attempted, n_scored=attempted)},
+        coverage={
+            run.name: TaskCoverage(
+                n_benchmark=30, n_attempted=attempted, n_scored=attempted if scored is None else scored
+            )
+        },
         window=run.batch.model.serve.max_model_len if window is None else window,
+        replies=attempted,
+        capped=capped,
     )
 
 
@@ -78,3 +93,19 @@ def test_different_inputs_name_the_fields_and_are_stale_only_from_another_commit
     state, problems = run_problems(elsewhere, _evidence(full), full)
     assert state is RunState.STALE
     assert any(problem.startswith("eval.curated.settings.source_limit:") for problem in problems)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "flagged"),
+    [
+        pytest.param({"capped": 3}, False, id="a-tenth-capped"),
+        pytest.param({"capped": 4}, True, id="over-a-tenth-capped"),
+        pytest.param({"scored": 29}, False, id="most-scored"),
+        pytest.param({"scored": 28}, True, id="too-few-scored"),
+    ],
+)
+def test_runs_far_outside_expectations_are_flagged_but_stay_valid(tmp_path, evidence, flagged):
+    run = _expected(None)["aime24"]
+    evidence = _evidence(run, **evidence)
+    assert run_problems(_write(tmp_path, run), evidence, run) == (RunState.VALID, ())
+    assert bool(run_warnings(evidence)) is flagged
