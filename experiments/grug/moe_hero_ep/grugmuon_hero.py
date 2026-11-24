@@ -217,6 +217,65 @@ def _newtonschulz_batched_syrk(
     return X.astype(orig_dtype)
 
 
+def _newtonschulz_4d_bank_sharded(
+    x: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    mesh_shape_items: list[tuple[str, int]],
+    orig_4d_spec: PartitionSpec,
+    bank_axes: tuple[str, ...],
+    steps: int,
+    eps: float,
+    coefficient_type: CoefficientType,
+    use_syrk: bool,
+) -> jax.Array:
+    """Run 4-D Newton-Schulz over a bank-sharded stack, splitting spare axes across layers."""
+    layers = x.shape[0]
+    bank_spec = bank_axes if len(bank_axes) > 1 else bank_axes[0]
+    orig_layer_spec = orig_4d_spec[0] if len(orig_4d_spec) > 0 else None
+    if orig_layer_spec is None:
+        bank_axis_set = set(bank_axes)
+        spare_axes = [(name, size) for name, size in mesh_shape_items if name not in bank_axis_set]
+        layer_axes = tuple(name for name, _ in spare_axes)
+        layer_shards = math.prod(size for _, size in spare_axes) if spare_axes else 1
+        layer_spec = layer_axes if len(layer_axes) > 1 else (layer_axes[0] if layer_axes else None)
+        pad = (-layers) % layer_shards if layer_shards > 1 else 0
+    else:
+        layer_spec = orig_layer_spec
+        pad = 0
+
+    distributed_4d_spec = PartitionSpec(layer_spec, bank_spec, None, None)
+    x_bf16 = x.astype(jnp.bfloat16)
+    if pad:
+        x_bf16 = jnp.pad(x_bf16, ((0, pad), (0, 0), (0, 0), (0, 0)))
+    x_distributed = reshard(x_bf16, distributed_4d_spec)
+    if use_syrk:
+
+        def local_update(stack):
+            local_layers, local_experts, local_d, local_last = stack.shape
+            flat = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
+            updated = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
+            return jax.lax.reshape(updated, stack.shape)
+
+    else:
+
+        def local_update(stack):
+            return jax.vmap(
+                jax.vmap(lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type))
+            )(stack)
+
+    updated_distributed = shard_map(
+        local_update,
+        mesh=mesh,
+        in_specs=distributed_4d_spec,
+        out_specs=distributed_4d_spec,
+        check_vma=False,
+    )(x_distributed)
+    updated = reshard(updated_distributed, orig_4d_spec)
+    if pad:
+        updated = updated[:layers]
+    return updated.astype(x.dtype)
+
+
 def _newtonschulz_4d_distributed(
     path,
     x: jax.Array,
@@ -254,26 +313,9 @@ def _newtonschulz_4d_distributed(
     # Gate on the bank's own split, not on "expert" alone: an expert=1, context>1 mesh still
     # splits the bank over context, and the merged 3-D path below would gather it whole.
     if math.prod(int(mesh.shape.get(axis, 1)) for axis in bank_axes) > 1:
-        distributed_4d_spec = PartitionSpec(None, bank_axes if len(bank_axes) > 1 else bank_axes[0], None, None)
-        x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
-        if use_syrk:
-
-            def local_syrk(stack):
-                local_layers, local_experts, local_d, local_last = stack.shape
-                flat = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
-                updated = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
-                return jax.lax.reshape(updated, stack.shape)
-
-            updated_distributed = shard_map(
-                local_syrk,
-                mesh=mesh,
-                in_specs=distributed_4d_spec,
-                out_specs=distributed_4d_spec,
-                check_vma=False,
-            )(x_distributed)
-        else:
-            updated_distributed = jax.vmap(jax.vmap(local_ns))(x_distributed)
-        return reshard(updated_distributed, orig_4d_spec).astype(x.dtype)
+        return _newtonschulz_4d_bank_sharded(
+            x, mesh, mesh_shape_items, orig_4d_spec, bank_axes, steps, eps, coefficient_type, use_syrk
+        )
 
     merged = layers * expert_count
 

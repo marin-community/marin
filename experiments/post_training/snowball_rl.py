@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.selection import (
     VALIDATION_FILENAME,
 )
 
-_PRESET_REVISION = "2026.11.24.1"
+_PRESET_REVISION = "2026.11.24.3"
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -66,6 +66,15 @@ DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+    ),
+    num_speculative_tokens=4,
+)
 
 _DEFAULT_MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -242,6 +251,7 @@ _snowball = partial(
     revision=_PRESET_REVISION,
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
+    default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -404,7 +414,11 @@ _PRESETS = (
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
         checkpoints="none",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        recipe=replace(
+            _GENERATING,
+            fixed_reply_tokens=4096,
+            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+        ),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
@@ -450,7 +464,7 @@ _PRESETS = (
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="asynchronous runtime unmeasured",
+        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
     ),
     _snowball(
         evaluations=(),
@@ -483,7 +497,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-checkpoint-eval",
-        revision="2026.11.24.2",
+        revision=_PRESET_REVISION,
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),

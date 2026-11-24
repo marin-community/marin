@@ -17,6 +17,8 @@ MATH_GRADER = Environment(
 )
 MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
 JUDGE_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "openai==2.24.0"))
+# The ARC-AGI-2 grid grader uses verifyit's JSON Schema mode.
+ARC_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "jsonschema==4.25.1", "pyyaml==6.0.3"))
 
 NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 NLTK_DATA_ROOT = "/srv/nltk_data"

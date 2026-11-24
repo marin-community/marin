@@ -29,7 +29,7 @@ from marin.execution.artifact import (
     validate_path_segment,
 )
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -410,17 +410,32 @@ def utc_millis(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
+def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator) -> RecipePatch:
+    workload = preset.recipe.layout.workload
+    if isinstance(workload, presets.Training) and workload.plan.colocate_all:
+        return preset.recipe.config
+    draft = preset.default_speculative_decoding
+    if draft is not None and (
+        model == preset.model
+        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
+    ):
+        return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=draft)))
+    return preset.recipe.config
+
+
 def _training_config(
     preset: presets.Preset,
     settings: tuple[str, ...],
+    model: SkyRLModelSource | ResolvedModelLocator,
 ) -> RecipePatch:
     recipe = preset.recipe
-    authored = recipe.config.to_skyrl()
+    recipe_config = _recipe_config_for_model(preset, model)
+    authored = recipe_config.to_skyrl()
     if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
-    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
+    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe_config)
     geometry = asdict(recipe.layout.megatron)
-    budget = recipe.config.context_budget
+    budget = recipe_config.context_budget
     assert budget is not None
     if recipe.fixed_reply_tokens is not None:
         budget = budget.replace(max_new_tokens_per_turn=recipe.fixed_reply_tokens)
@@ -445,9 +460,7 @@ def _training_config(
         for key, value in recipe.training_plan.config_values().items():
             if key.startswith("trainer."):
                 set_path(training_geometry, key, value)
-        recipe_config = recipe.config.merge(RecipePatch.from_document(training_geometry))
-    else:
-        recipe_config = recipe.config
+        recipe_config = recipe_config.merge(RecipePatch.from_document(training_geometry))
     config = recipe_config.merge(
         RecipePatch(
             context_budget=budget,
@@ -522,7 +535,8 @@ def run_spec(
     model_name: str | None = None,
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
-    config = _training_config(preset, settings)
+    model = (resume.model if resume is not None else None) or init or preset.model
+    config = _training_config(preset, settings, model)
     if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
         workers = config.trajectory_runner.rollout_workers
         required_cpus = workers.num_workers * workers.cpus_per_worker
@@ -566,7 +580,6 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    model = (resume.model if resume is not None else None) or init or preset.model
     initial_model_uri = None
     if preset.checkpoints == "best":
         prefix = run_prefix(preset)
