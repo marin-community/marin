@@ -1,20 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native and engine timeout producers persist the same task retry contract."""
+"""Engine timeout producers and training exports persist task retry identity."""
 
 import json
 from dataclasses import replace
 
 import pytest
-from harbor.models.trial.result import ExceptionInfo
-from harbor.trial.errors import (
-    AgentSetupTimeoutError,
-    AgentTimeoutError,
-    EnvironmentStartTimeoutError,
-    TrialTimeoutError,
-    VerifierTimeoutError,
-)
 from omegaconf import OmegaConf
 from rigging.task_errors import ErrorCategory, ErrorIdentity, RetryDisposition
 from rolloutengine.models import GradedRolloutInterrupted, Rollout, RolloutOperation
@@ -32,20 +24,21 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 @pytest.mark.parametrize("cause", [None, TimeoutError, PermissionError])
 @pytest.mark.parametrize(
-    "native_type, operation, disposition",
+    "exception_type, operation, disposition, category",
     [
-        (TrialTimeoutError, RolloutOperation.ATTEMPT, RetryDisposition.TRANSIENT),
-        (EnvironmentStartTimeoutError, RolloutOperation.START, RetryDisposition.TRANSIENT),
-        (AgentSetupTimeoutError, RolloutOperation.PREPARE, RetryDisposition.TRANSIENT),
-        (AgentTimeoutError, RolloutOperation.MODEL, RetryDisposition.UNKNOWN),
-        (VerifierTimeoutError, RolloutOperation.GRADE, RetryDisposition.UNKNOWN),
+        ("TrialTimeoutError", RolloutOperation.ATTEMPT, RetryDisposition.TRANSIENT, ErrorCategory.INFRASTRUCTURE),
+        (
+            "EnvironmentStartTimeoutError",
+            RolloutOperation.START,
+            RetryDisposition.TRANSIENT,
+            ErrorCategory.INFRASTRUCTURE,
+        ),
+        ("AgentSetupTimeoutError", RolloutOperation.PREPARE, RetryDisposition.TRANSIENT, ErrorCategory.INFRASTRUCTURE),
+        ("AgentTimeoutError", RolloutOperation.MODEL, RetryDisposition.UNKNOWN, ErrorCategory.AGENT),
+        ("VerifierTimeoutError", RolloutOperation.GRADE, RetryDisposition.UNKNOWN, ErrorCategory.UNKNOWN),
     ],
 )
-def test_timeout_identity_matches_across_native_engine_and_saved_records(native_type, operation, disposition, cause):
-    native_error = native_type("deadline expired")
-    if cause is not None:
-        native_error.__cause__ = cause("phase deadline")
-    native = ExceptionInfo.from_exception(native_error)
+def test_engine_timeout_identity_survives_serialization(exception_type, operation, disposition, category, cause):
     interruption = GradedRolloutInterrupted(
         Rollout("timeout", (), "error"), operation, GradeResult(Outcome.UNAVAILABLE, None)
     )
@@ -53,18 +46,12 @@ def test_timeout_identity_matches_across_native_engine_and_saved_records(native_
     if cause is not None:
         interruption.__cause__.__cause__ = cause("phase deadline")
     engine = _interruption_identity(interruption)
-    saved = ExceptionInfo(
-        exception_type=native_type.__name__,
-        exception_message="deadline expired",
-        exception_traceback="",
-        occurred_at=native.occurred_at,
-    )
-    for failure in (native, engine, saved):
-        persisted = ErrorIdentity.model_validate_json(failure.model_dump_json())
-        assert persisted.exception_type == native_type.__name__
-        assert persisted.category == native.category
-        expected = RetryDisposition.PERMANENT if cause is PermissionError and failure is not saved else disposition
-        assert persisted.retry_disposition is expected
+    persisted = ErrorIdentity.model_validate_json(engine.model_dump_json())
+    assert persisted.exception_type == exception_type
+    assert persisted.operation == operation.value
+    assert persisted.category is category
+    expected = RetryDisposition.PERMANENT if cause is PermissionError else disposition
+    assert persisted.retry_disposition is expected
 
 
 class EvidenceTokenizer:

@@ -4,10 +4,14 @@ import inspect
 
 import pytest
 from harbor.models.trial.result import ExceptionInfo
-from harbor.trial.errors import RuntimeServiceError
+from harbor.trial.errors import (
+    AgentSetupTimeoutError, AgentTimeoutError, EnvironmentStartTimeoutError,
+    RuntimeServiceError, TrialTimeoutError, VerifierTimeoutError,
+)
 from harbor_config.errors import ERROR_CATEGORIES, is_resume_retryable
 from rigging.task_errors import (
     ErrorCategory,
+    ErrorIdentity,
     RetryDisposition,
     error_category,
     errors_by_category,
@@ -199,3 +203,31 @@ def test_native_exception_identity_round_trips_with_transport_cause():
     assert restored.cause_type == "TimeoutError"
     assert restored.retry_disposition is RetryDisposition.TRANSIENT
     assert restored.exception_message == "trial failed"
+
+
+@pytest.mark.parametrize("cause", [None, TimeoutError, PermissionError])
+@pytest.mark.parametrize(
+    "native_type, disposition",
+    [
+        (TrialTimeoutError, RetryDisposition.TRANSIENT),
+        (EnvironmentStartTimeoutError, RetryDisposition.TRANSIENT),
+        (AgentSetupTimeoutError, RetryDisposition.TRANSIENT),
+        (AgentTimeoutError, RetryDisposition.UNKNOWN),
+        (VerifierTimeoutError, RetryDisposition.UNKNOWN),
+    ],
+)
+def test_native_timeout_identity_and_saved_records_survive_serialization(native_type, disposition, cause):
+    error = native_type("deadline expired")
+    if cause is not None:
+        error.__cause__ = cause("phase deadline")
+    native = ExceptionInfo.from_exception(error)
+    saved = ExceptionInfo(
+        exception_type=native_type.__name__, exception_message="deadline expired",
+        exception_traceback="", occurred_at=native.occurred_at,
+    )
+    for failure in (native, saved):
+        persisted = ErrorIdentity.model_validate_json(failure.model_dump_json())
+        assert persisted.exception_type == native_type.__name__
+        assert persisted.category == native.category
+        expected = RetryDisposition.PERMANENT if cause is PermissionError and failure is native else disposition
+        assert persisted.retry_disposition is expected
