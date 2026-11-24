@@ -4,15 +4,16 @@
 """Stage 1: choose the rarest 20-character key of each eval item, and measure its candidate volume.
 
 ``prepare``: for every item and key stream, up to ``WINDOWS_PER_ITEM`` evenly spaced windows
-of the stream (letters and digits) are candidate keys; with ``--windows content`` only windows
-outside the prefix and suffix that all of the eval's streams of that kind share.
+of the stream (letters and digits) are candidate keys: by default (``--windows content``) only
+windows outside the prefix and suffix that all of the eval's streams of that kind share, or with
+``--windows whole`` the whole stream.
 
 ``count``: a Zephyr job over reference shards counts in how many records each candidate window
 occurs; each worker writes sparse counts.
 
 ``choose``: sum the counts; each stream keeps its least frequent window and the next least
-frequent window that does not overlap it. Ties go to the earliest window, or with ``--tie
-shared`` to the window that the fewest other items hold.
+frequent window that does not overlap it. Ties go to the window that the fewest other items
+hold (``--tie shared``, the default), or to the earliest (``--tie earliest``).
 
 ``measure``: a Zephyr job over measure shards counts the records with a candidate and the
 candidate pairs, for the first window, key 1, and key 1 or 2; it also writes a sample of
@@ -148,7 +149,7 @@ def tie_values(windows: Windows, tie: Tie) -> np.ndarray | None:
     return holders[np.searchsorted(distinct, hashes.view(np.int64))]
 
 
-def choose(output: str, width: int = WINDOW, tie: Tie = Tie.EARLIEST) -> None:
+def choose(output: str, width: int = WINDOW, tie: Tie = Tie.SHARED) -> None:
     """Sum the reference counts of every candidate window and write each item's keys (``keys_table``)."""
     windows = load_windows(output)
     parts_hashes, parts_counts = [], []
@@ -276,9 +277,9 @@ def main() -> None:
         help="shards.json files of other stage-1 runs whose shards are not drawn; copy their keys.parquet to --output",
     )
     parser.add_argument("--measure-per-source", type=int, default=1, help="measure shards drawn per source")
-    parser.add_argument("--tie", type=Tie, default=Tie.EARLIEST, help="choose: how equally rare windows are ordered")
+    parser.add_argument("--tie", type=Tie, default=Tie.SHARED, help="choose: how equally rare windows are ordered")
     parser.add_argument(
-        "--windows", type=WindowSource, default=WindowSource.WHOLE, help="prepare: whole streams, or content only"
+        "--windows", type=WindowSource, default=WindowSource.CONTENT, help="prepare: whole streams, or content only"
     )
     args = parser.parse_args()
     if args.step == "prepare":

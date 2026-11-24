@@ -6,7 +6,9 @@ two stages and uses one rule for all evals, with no values set per eval:
 1. **Stage 1, the wide net.** Each eval item gets up to three key streams: its question; for a
    question shorter than a key, the question and its choices without letters; and its passage, when
    it has one. Each stream's key is its rarest 20-character window, where rarity is the count of
-   records that hold the window in a reference sample. A stream other than the question keeps its key
+   records that hold the window in a reference sample. Windows come from outside the prefix and suffix
+   that all of an eval's streams share (its prompt template, such as "Question: ... Answer:"), and among
+   equally rare windows the one that the fewest other items hold wins. A stream other than the question keeps its key
    only when no reference record holds that window, so a generic stem adds no load. A record that
    holds an item's key is a candidate for that item.
 2. **Stage 2, the classifier.** A fine-tuned multilingual encoder reads the pair `(left, right)`,
@@ -279,17 +281,20 @@ a copy.
 
 ## Limits
 
-- **Stage 1 misses about a fifth of clear catalog copies.** On 3,020 records in 2,000 sampled catalog
-  shards that the block rule of PR #10836 marks (an eval question with all its choices), stage 1 gives a
-  candidate for 79.8%: MMLU 93%, HumanEval 100%, GSM8K 46%; stage 2 removes 98.7% of those, so the run
-  removes 78.7% of these records (GSM8K 45%). Planted copies (G2) include the eval's prompt
-  text, so they did not show this. A rendered GSM8K question starts with "Question:", and the bare
-  question's windows occur in the reference shards (GSM8K copies are common), so the rarest window spans
-  the prompt and a record with the bare question lacks it. Two key options fix this (`rarest_key prepare
-  --windows content`, `choose --tie shared`); on the same 2,000 shards they raise the share to 99.0% (GSM8K 100%,
-  MMLU 98%) at 1.44 times the candidate pairs. `--windows content` leaves out of the candidate windows the prefix
-  and suffix that all of an eval's streams share; `--tie shared` breaks ties among equally rare windows by
-  the number of other items that hold the window. The second catalog run uses them (see above).
+- **The earlier keys miss about a fifth of clear catalog copies.** On 3,020 records in 2,000 sampled
+  catalog shards that the block rule of PR #10836 marks (an eval question with all its choices), stage 1
+  with the earlier keys (`--windows whole --tie earliest`) gives a candidate for 79.8% (MMLU 93%, HumanEval
+  100%, GSM8K 46%), and the first run removes 78.7% of these records. A rendered GSM8K question starts with
+  "Question:", and the bare question's windows occur in the reference shards (GSM8K copies are common), so
+  the rarest window spans the prompt and a record with the bare question lacks it. Planted copies (G2)
+  include the prompt text, so they did not show this. The default keys reach 99.0% at 1.44 times the
+  candidate pairs, and the second run removes 98.1% at 0.6. Copies of items whose evals share a real
+  question opening (MedConceptsQA, FDA) are found by the earlier keys and missed by the default ones more
+  often; see the overlap of the two lists above.
+- **A record with changed versions of an item before its exact copy can be missed.** When the whole
+  question (as stored, with its prompt text) is not in a record, the excerpt is cut at the key's first
+  match; in a LangChain test file that tells a GSM8K story about 20 times, mostly changed, the first match
+  is a changed version and the record is kept. 1 of 942 GSM8K clear copies is missed this way.
 - **Candidate load concentrates on shared question stems.** One Nemotron formal-logic shard holds 886,186
   candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
   following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.
