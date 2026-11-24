@@ -216,8 +216,10 @@ def publish_conversion(
     )
 
 
-def converter_revision() -> str:
-    """The landed revision the conversion runs from, read from its own checkout."""
+def converter_revision(explicit: str | None = None) -> str:
+    """The landed revision the conversion runs from: the bootstrap's archive revision, or the checkout."""
+    if explicit:
+        return explicit
     root = Path(__file__).resolve().parents[3]
     result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -231,6 +233,11 @@ def main() -> None:
     parser.add_argument("--output-root", required=True, help="The conversion output directory (local scratch).")
     parser.add_argument("--artifact-version", required=True, help="The release version suffix.")
     parser.add_argument("--limit", type=int, help="Convert only the first N rows (local validation slices).")
+    parser.add_argument(
+        "--converter-revision",
+        help="The landed revision the conversion runs from; the bootstrap passes the archive revision "
+        "because the extracted tree has no git checkout.",
+    )
     parser.add_argument(
         "--run", action="store_true", help="Publish the private release; omit to validate and plan only."
     )
@@ -248,7 +255,7 @@ def main() -> None:
     manifest = write_conversion_artifacts(
         converted, receipts, counts, output_root=args.output_root, source_id=source.info.id
     )
-    manifest["converter_revision"] = converter_revision()
+    manifest["converter_revision"] = converter_revision(args.converter_revision)
     manifest["mode"] = "publish" if args.run else "plan"
     manifest["cohort"] = {"repo": source.dataset.name, "revision": source.dataset.revision}
     if not args.run:

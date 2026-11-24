@@ -42,6 +42,7 @@ uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   --source-id "$SOURCE_ID" \
   --output-root "$OUTPUT_ROOT" \
   --artifact-version "$VERSION" \
+  --converter-revision "$REVISION" \
   --report "$OUTPUT_ROOT/conversion-result.json" \
   --run
 cat "$OUTPUT_ROOT/conversion-result.json"
