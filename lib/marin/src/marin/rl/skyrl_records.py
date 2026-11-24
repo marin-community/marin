@@ -173,7 +173,12 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, A
     current = read_stored_skyrl_attempt(run_output)
     config = read_skyrl_attempt_config(run_output, current)
     if config is None:
-        return None, {}
+        attempts = read_attempts(prefix_join(run_output, EXPORTS_SUBDIRECTORY))
+        return None, {
+            key: record
+            for key, record in attempts.items()
+            if record.config is not None and record.config["run"]["mode"] != "checkpoint_export"
+        }
     attempts = {
         attempt_id: record
         for attempt_id, record in read_attempts(config["artifacts"]["export_root"]).items()

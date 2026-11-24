@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
-from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_evaluations
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -49,6 +49,34 @@ def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
         return recorded_launch(attempt)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
+
+
+def native_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Multiply the stored native job window by its GPU allocation."""
+    result = attempt.native.result
+    if result.started_at is None or result.finished_at is None:
+        return None
+    seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
+    return seconds * launch.num_nodes * launch.gpus_per_node / 3600 if seconds > 0 else None
+
+
+def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Sum native allocations over the complete recorded checkpoint lineage."""
+    if not attempt.native.result.state.is_terminal:
+        return None
+    lineage = attempt_lineage(launch.export_root, attempt.attempt_id)
+    if not lineage or lineage[-1].record.resumed_step not in (None, 0):
+        return None
+    total = 0.0
+    for entry in lineage:
+        record = entry.record
+        if record.config is None:
+            return None
+        hours = native_gpu_hours(record, read_recorded_launch(record))
+        if hours is None:
+            return None
+        total += hours
+    return total
 
 
 def _selected_evaluation_record(
@@ -469,12 +497,7 @@ def read_measurements(
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
-    result = terminal.native.result
-    gpu_hours = None
-    if result.started_at and result.finished_at:
-        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
-        if seconds > 0:
-            gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
+    gpu_hours = native_gpu_hours(terminal, launch)
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
     return RunMeasurements(
         config=terminal.native.config,

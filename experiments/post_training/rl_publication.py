@@ -24,9 +24,8 @@ from finestore.rl.rl_progress import (
     GateResult,
     GraderReport,
 )
-from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_attempts, write_attempt
+from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_attempt_metrics, read_attempts, write_attempt
 from marin.execution.artifact import read_record
-from marin.rl import skyrl_records
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
@@ -35,6 +34,7 @@ from marin.rl.skyrl_records import (
     recorded_launch,
 )
 from pydantic import BaseModel, Field, ValidationError
+from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -115,14 +115,16 @@ def _terminal_measurements(
         and all(entry.record.metrics_started_at is not None for entry in history)
         and history[-1].record.resumed_step in (None, 0)
     )
-    metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
+    metrics = read_attempt_metrics(launch.export_root, attempt_id)
     invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
-    status = evaluation_status(run_output, preset, attempt, launch)
-    evaluations = list(status.evaluations)
-    failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
-    if status.evaluation_error is not None:
-        evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
+    evaluations = []
+    if result.state == "succeeded" or attempt.metrics_started_at is not None:
+        status = evaluation_status(run_output, preset, attempt, launch)
+        evaluations = list(status.evaluations)
+        failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
+        if status.evaluation_error is not None:
+            evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
     optimizer_steps = (
@@ -215,7 +217,7 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    terminal = result.state.is_terminal
+    terminal = result.state.is_terminal and unfinished_status != "running"
     if not terminal and unfinished_status is None:
         raise ValueError("A progress record requires a terminal native attempt")
     measured = (
@@ -245,7 +247,7 @@ def build_record(
         issue=attempt.issue,
         run_date=started or tracking.get("started_at") or (index.submitted_at if index is not None else None),
         started_at=started,
-        completed_at=finished,
+        completed_at=finished if terminal else None,
         planned_updates=preset.recipe.layout.workload.update_count(preset.updates),
         measured_updates=list(preset.measured),
         iris_job_id=result.iris_job_id or launch.coordinator_iris_job_id,
@@ -277,14 +279,36 @@ def build_record(
     )
 
 
-def lineage_issue(export_root: str, attempt_id: str, issue: int | None) -> int | None:
-    """Resolve the issue assigned to this native output's attempts."""
+class IssueConflict(ValueError):
+    """The native output already has a different assigned issue."""
+
+
+def lineage_issue(export_root: str, issue: int | None, *, reserve: bool = False) -> int | None:
+    """Read the run's issue and optionally reserve it against concurrent writers."""
     issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
+    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
+
+    def include_assignment() -> bool:
+        current = assignment.read()
+        if current is None:
+            return False
+        issues.add(int(current.data))
+        return True
+
+    reserved = include_assignment()
     if issue is not None:
         issues.add(issue)
     if len(issues) > 1:
-        raise ValueError(f"Attempt {attempt_id} has conflicting lineage issues: {sorted(issues)}")
-    return next(iter(issues), None)
+        raise IssueConflict(f"Run has conflicting lineage issues {sorted(issues)} at {export_root}")
+    assigned = next(iter(issues), None)
+    if assigned is not None and reserve and not reserved:
+        try:
+            assignment.write(str(assigned).encode(), expected_version=None)
+        except ConditionalWriteError:
+            include_assignment()
+            if len(issues) > 1:
+                raise IssueConflict(f"Run has conflicting lineage issues {sorted(issues)} at {export_root}") from None
+    return assigned
 
 
 def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecord]:
@@ -310,7 +334,7 @@ def publish_running(
     try:
         for attempt in _coordinator_attempts(path, coordinator).values():
             key = (attempt.index_run_id, attempt.attempt_id)
-            if key in published or attempt.native.result.state.is_terminal:
+            if key in published:
                 continue
             url = publish_result(
                 build_record(path, preset, table=table, attempt=attempt, unfinished_status="running"), service_url
@@ -352,7 +376,7 @@ def _read_publication_gate(
 
 def _link_issue(receipt: AttemptRecord, issue: int) -> AttemptRecord:
     export_root = recorded_launch(receipt).export_root
-    assigned = lineage_issue(export_root, receipt.attempt_id, issue)
+    assigned = lineage_issue(export_root, issue, reserve=True)
     write_attempt(export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, issue=assigned))
     return receipt.model_copy(update={"issue": assigned})
 
@@ -392,7 +416,7 @@ def publish_runs(
         report_error = str(error)
     for path, snapshot in snapshots.items():
         current_id, attempts = snapshot.current, snapshot.records
-        if current_id not in attempts:
+        if attempt_id is None and current_id not in attempts:
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
         selected = (
@@ -402,6 +426,12 @@ def publish_runs(
             result.unserved_records.append((path, attempt_id))
             result.errors.append(f"No stored native receipt at {path} for {attempt_id}")
         for selected_id, receipt in selected.items():
+            if (
+                attempt_id is None
+                and not receipt.native.result.state.is_terminal
+                and selected_id not in snapshot.interrupted
+            ):
+                continue
             destination = (receipt.index_run_id, selected_id)
             try:
                 current_report = report if selected_id == current_id else None

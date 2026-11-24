@@ -190,17 +190,27 @@ def test_release_archives_v9_rows_and_versions_retained_attempts(rl_progress_cli
     def query(sql, parameters=None):
         return request("http://localhost", "POST", query_path, json_body={"sql": sql, "parameters": parameters or {}})
 
-    # The v9 ingester stores an evaluation descriptor and separate baseline/final scores.
+    # Shape and measurements captured from the hosted v9 control listing.
     legacy = {
         "run_id": "checkpoints/snowball-rl/v9",
         "attempt_id": "av9",
-        "evaluation": {"name": "snowball-fixed-development", "task_count": 100, "version": "2026.11.06.1"},
-        "baseline": 0.31,
-        "final": 0.42,
+        "evaluation": {
+            "name": "test_panel",
+            "task_count": 1500,
+            "version": "rl-data/task-selection/snowball-test-panel@2026.11.06.1:88ee12a7",
+        },
+        "baseline": {"reward": 0.5280307370790129, "scored": 1500, "attempted": 1500},
+        "final": {"reward": 0.6195039305522064, "scored": 1500, "attempted": 1500},
         "preset": "learning-medium",
     }
     retained = progress_record()
     retained.pop("format_version")
+    archive = legacy | {"attempt_id": "previously-archived"}
+    query("CREATE TABLE rl_archived_runs (LIKE rl_runs INCLUDING ALL)")
+    query(
+        "INSERT INTO rl_archived_runs (run_id,attempt_id,record) VALUES (:run_id,:attempt_id,CAST(:record AS jsonb))",
+        {"run_id": archive["run_id"], "attempt_id": archive["attempt_id"], "record": json.dumps(archive)},
+    )
     for row in (legacy, retained):
         query(
             "INSERT INTO rl_runs (run_id,attempt_id,record) VALUES (:run_id,:attempt_id,CAST(:record AS jsonb))",
@@ -210,6 +220,7 @@ def test_release_archives_v9_rows_and_versions_retained_attempts(rl_progress_cli
     publish_release()
 
     assert query("SELECT record FROM rl_legacy_runs")["rows"] == [{"record": legacy}]
+    assert query("SELECT record FROM rl_archived_runs")["rows"] == [{"record": archive}]
     assert client.get(f"/a/{APPLET_ID}/api/runs").json() == {
         "runs": [_projection(retained | {"format_version": 1})],
         "skipped_records": [],

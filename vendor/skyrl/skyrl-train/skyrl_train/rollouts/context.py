@@ -254,7 +254,8 @@ class TrainingContext:
             return
         if summary["subsets"]:
             path, attempt_id = self._grader_report
-            write_grader_report(
+            await asyncio.to_thread(
+                write_grader_report,
                 path,
                 attempt_id,
                 {"training": summary["subsets"], "training_tasks": summary["tasks"]},

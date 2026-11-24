@@ -19,7 +19,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from finestore.rl.rl_progress import RunIndexIdentity
-from finestore.rl.run_records import AttemptRecord, read_attempt, read_evaluations, write_attempt
+from finestore.rl.run_records import AttemptRecord, LaunchResult, read_attempt, read_evaluations, write_attempt
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -671,7 +671,7 @@ def test_submission_exit_codes_and_publication_retries(
             write_receipt(source, receipt)
             write_attempt(
                 str(source / "exports"),
-                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=74),
+                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=73),
             )
             copy_evaluations(source, "native-0", "native-retry")
             for row in metrics.values():
@@ -796,7 +796,12 @@ def test_submission_exit_codes_and_publication_retries(
         return
     unavailable["value"] = False
     phase["retry"] = True
-    arguments[arguments.index("--issue") + 1] = "74"
+    issue_offset = arguments.index("--issue")
+    if case == "partial-retry":
+        arguments[issue_offset + 1] = "74"
+        refused = CliRunner().invoke(snowball.command(snowball_model.SNOWBALL, argv=tuple(arguments)), arguments)
+        assert refused.exit_code == 4 and "conflicting lineage issues" in refused.output
+    del arguments[issue_offset : issue_offset + 2]
     previously_published = len(published)
     repeated = CliRunner().invoke(
         snowball.command(
@@ -811,17 +816,20 @@ def test_submission_exit_codes_and_publication_retries(
     recovered = printed_status(repeated.output)
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
     assert {row["attempt_id"]: row["issue"] for row in recovered["runs"]} == (
-        {"native-retry": 74, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
+        {"native-retry": 73, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
     )
     if case == "mixed-native-failed":
         retry = next(row for row in published[previously_published:] if row["attempt_id"] == "native-retry")
-        assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and (retry["issue"] == 74)
+        assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and retry["issue"] == 73
     else:
         cached = next(row for row in published[previously_published:] if row["attempt_id"] == "native-0")
         assert cached["issue"] == 73
 
 
-def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(preset_table, recorded_runs, monkeypatch):
+@pytest.mark.parametrize("early_failure", [False, True])
+def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
+    preset_table, recorded_runs, monkeypatch, early_failure
+):
     table = snowball_model.SNOWBALL
     preset = replace(table.by_name["train-long"].with_updates(2), checkpoint_every=None, evaluations=())
     table = preset_table(preset)
@@ -829,6 +837,9 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(preset_t
     source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old")
     receipt = json.loads((source / "terminal.json").read_text())
     launch = receipt["config"]
+    if early_failure:
+        (source / "terminal.json").unlink()
+        (source / "resolved-launch.yaml").unlink()
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
@@ -848,23 +859,36 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(preset_t
     )
 
     def native_prepared(**kwargs):
-        index = RunIndexIdentity.model_validate_json(kwargs["environment"].env_vars[RUN_INDEX_ENV])
+        run_id = launch["run"]["id"]
+        index = RunIndexIdentity.model_validate(json.loads(kwargs["environment"].env_vars[RUN_INDEX_ENV])[run_id])
         launch["run"].update(attempt_id="native-indexed", coordinator_iris_job_id=str(job))
+        other_config = {
+            **launch,
+            "run": {**launch["run"], "attempt_id": "other-coordinator", "coordinator_iris_job_id": "/test-user/other"},
+        }
+        export_root = launch["artifacts"]["export_root"]
         write_attempt(
-            launch["artifacts"]["export_root"],
+            export_root,
+            AttemptRecord(run_id=run_id, attempt_id="other-coordinator", config=other_config, index=index),
+        )
+        write_attempt(
+            export_root,
             AttemptRecord(
-                run_id=launch["run"]["id"],
+                run_id=run_id,
                 attempt_id="native-indexed",
                 config=launch,
                 index=index,
-                metrics_started_at=receipt["result"]["started_at"],
-                elapsed_excluding_eval_seconds=123.0,
+                metrics_started_at=None if early_failure else receipt["result"]["started_at"],
+                elapsed_excluding_eval_seconds=None if early_failure else 123.0,
+                result=LaunchResult(state="failed", iris_job_id="/test-user/unschedulable") if early_failure else None,
             ),
         )
         return SimpleNamespace(job_id=job)
 
     def state():
         nonlocal running_observed
+        if early_failure:
+            return JobState.FAILED
         if not running_observed:
             running_observed = True
             return JobState.RUNNING
@@ -881,15 +905,31 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(preset_t
     arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
     result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=__name__), arguments)
     assert result.exit_code == 0, (result.output, result.exception)
+    grafana_link = next(
+        line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
+    )
     [follower] = followers
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(follower), entry_module=__name__), follower)
-    assert result.exit_code == 0, (result.output, result.exception)
+
+    @click.command()
+    def follow():
+        raise click.exceptions.Exit(snowball.main(table, argv=follower))
+
+    result = CliRunner().invoke(follow)
+    assert result.exit_code == int(early_failure), (result.output, result.exception)
+    assert [row.attempt_id for row in publications if row.status == "running"] == ["native-indexed"]
     running, terminal = [row for row in publications if row.attempt_id == "native-indexed"]
-    assert running.status == "running" and terminal.status == "succeeded"
+    assert running.status == "running" and terminal.status == ("failed" if early_failure else "succeeded")
     assert running.run_id == terminal.run_id
+    assert parse_qs(urlsplit(grafana_link).query)["var-run"] == [terminal.run_id]
     assert re.fullmatch(r"snowball-train-long-[^/]+-[0-9a-f]{8}", terminal.run_id)
-    assert terminal.gate_result is None and terminal.elapsed_excluding_eval_seconds == 123.0
+    assert terminal.gate_result is None
+    assert terminal.elapsed_excluding_eval_seconds == (None if early_failure else 123.0)
     assert terminal.artifact_uri == str(source)
+    if early_failure:
+        arguments = ["--preset", preset.name, "--run-output", str(source), "--attempt", "native-indexed"]
+        result = CliRunner().invoke(snowball.rl_publication.command(table), arguments)
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert publications[-1].status == "failed"
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
@@ -989,8 +1029,13 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
     _json(source / "exports/best_checkpoint.json", {"step": 2})
+    earlier = read_attempt(str(source / "exports"), "recorded-attempt")
+    assert earlier is not None
+    linked = earlier.model_copy(update={"issue": 73})
+    write_attempt(str(source / "exports"), linked)
     staged = source.with_name("before-native-execution")
     source.rename(staged)
+    write_attempt(str(source / "exports"), AttemptRecord(run_id=linked.run_id, attempt_id="earlier", issue=73))
     native_calls = []
 
     def native(command, *, env_vars=None):
@@ -1011,6 +1056,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         prepared = read_attempt(inspection["export"], inspection["attempt"])
         assert prepared is not None and prepared.index is not None
         assert prepared.index.model == table.model and prepared.index.preset == preset.name
+        assert prepared.issue == 73
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
@@ -1134,7 +1180,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
     assert published[-1].optimizer_steps == published[-1].planned_updates == 3
-    assert (published[-1].model, published[-1].issue) == ("snowball", None)
+    assert (published[-1].model, published[-1].issue) == ("snowball", 73)
 
     for mode in (
         "initializer-mismatch",

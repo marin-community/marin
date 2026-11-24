@@ -60,6 +60,7 @@ interface. Each preset's steps use its own `revision`.
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
   Add `--check-pin` to compare the current defaults with stored control receipts before opening an issue.
+  A gated candidate's status names the control pin and whether its revision matches the preset.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` to keep
   the terminal report in the current shell. A detached launch prints the path to its publication log.
@@ -306,7 +307,7 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 ## What a run writes
 
 The status block names the run's artifact output and native job, with its Iris URL and GPU-hours
-calculated from the recorded job window and allocation. Submission prints an open-ended
+summed from the recorded checkpoint lineage's native job windows and allocations. Submission prints an open-ended
 Grafana link immediately; terminal status prints the recorded native time window. For evaluation
 presets, `evaluations` lists scored and attempted answer counts and the means for each weight step.
 Train-long checks every scheduled evaluation, requires at least 99% of its tasks to score, and

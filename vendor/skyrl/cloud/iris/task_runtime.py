@@ -2329,8 +2329,13 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    attempt = read_attempt(str(launch_config.artifacts.export_root), str(launch_config.run.attempt_id))
-    run_id = attempt.index_run_id if attempt is not None else args.run_id
+    run_id = args.run_id
+    try:
+        attempt = read_attempt(str(launch_config.artifacts.export_root), str(launch_config.run.attempt_id))
+        if attempt is not None:
+            run_id = attempt.index_run_id
+    except Exception as error:
+        _log(f"[telemetry] attempt index unavailable ({type(error).__name__})")
     export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.

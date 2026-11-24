@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -28,7 +29,7 @@ from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
+from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
@@ -37,7 +38,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     copy_evaluations,
@@ -49,6 +50,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
+from infra.marina.tests.rl_progress_fixtures import grader_report
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -177,16 +179,17 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
-    report = {"training": {}, "training_tasks": {}, "evaluation": {"eval_lite/0": []}, "evaluation_tasks": {}}
+    report = grader_report()
     report_root = source / "exports" / "grader_reports"
     write_json(report_root / "other-attempt" / "grader_report.json", {"evaluation": {}})
     if case == "native-composed":
         write_json(report_root / "native-attempt" / "grader_report.json", report)
+    attempt = read_stored_skyrl_attempts(str(source))[1]["native-attempt"]
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
         table=table,
-        attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
+        attempt=attempt,
     ).model_dump(mode="json")
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
@@ -200,6 +203,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded"), (row["failed_facts"], row["evidence"])
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
+    if case in {"checkpoint-lineage", "lineage-unknown-grandparent"}:
+        assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
         assert row["grader_report"] == report
@@ -215,6 +220,22 @@ def test_control_publication_rejects_ungated_presets(monkeypatch, capsys):
     result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", "train-long"])
     assert result == 4
     assert "Choose a dashboard preset with controls" in capsys.readouterr().err
+
+
+def test_one_issue_is_reserved_when_publishers_disagree(tmp_path):
+    export_root = str(tmp_path / "exports")
+
+    def claim(issue):
+        try:
+            return publication.lineage_issue(export_root, issue, reserve=True)
+        except publication.IssueConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assigned = [issue for issue in executor.map(claim, (73, 74)) if issue is not None]
+
+    [winner] = assigned
+    assert publication.lineage_issue(export_root, None) == winner
 
 
 @pytest.mark.integration
@@ -373,6 +394,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
+        assert read_stored_skyrl_attempts(str(sources[index]))[1][f"native-{index}"].issue == 73 + index
         assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (

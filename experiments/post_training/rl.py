@@ -49,10 +49,12 @@ from marin.rl.skyrl import (
     skyrl_execution,
 )
 from marin.rl.skyrl_records import (
+    EXPORTS_SUBDIRECTORY,
     attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_attempt,
 )
+from pydantic import BaseModel, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output, username_segment
 
@@ -70,6 +72,7 @@ from experiments.post_training.rl_measurements import (
     RUN_INPUTS_FILENAME,
     RunInputs,
     evaluation_status,
+    lineage_gpu_hours,
     read_recorded_launch,
     run_inputs,
 )
@@ -80,6 +83,7 @@ _PUBLICATION_POLL_SECONDS = 10
 _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 logger = logging.getLogger(__name__)
+_SUBMITTED_INDEX = TypeAdapter(dict[str, RunIndexIdentity])
 
 
 @dataclass(frozen=True)
@@ -111,15 +115,16 @@ def _run_rl(
         path.parent.mkdirs()
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
     metadata = os.environ.get(RUN_INDEX_ENV)
-    if issue is not None or metadata is not None:
-        issue = rl_publication.lineage_issue(config.output.export_root, config.attempt_id, issue)
+    index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
+    if issue is not None or index is not None:
+        issue = rl_publication.lineage_issue(config.output.export_root, issue, reserve=True)
         write_attempt(
             config.output.export_root,
             AttemptRecord(
                 run_id=config.run_id,
                 attempt_id=config.attempt_id,
                 issue=issue,
-                index=RunIndexIdentity.model_validate_json(metadata) if metadata is not None else None,
+                index=index,
             ),
         )
     return run_skyrl(config, forward_env=forward_env)
@@ -280,10 +285,7 @@ def _status(
         grafana = attempt_grafana_url(receipt, launch) if receipt is not None and launch is not None else None
         status_path = StoragePath(get_status_path(path))
         iris_job_id = result.iris_job_id if result else None
-        gpu_hours = None
-        if result and launch and result.started_at and result.finished_at:
-            seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
-            gpu_hours = max(0, seconds) * launch.num_nodes * launch.gpus_per_node / 3600
+        gpu_hours = lineage_gpu_hours(receipt, launch) if receipt is not None and launch is not None else None
         state = (
             result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
         )
@@ -429,17 +431,84 @@ def run_index(
     )
 
 
-def _follow_detached(module: str, argv: tuple[str, ...], job: JobName, provenance: Provenance) -> str:
+class _PublicationWatch(BaseModel):
+    job: str
+    preset: str
+    prefix: str
+    outputs: tuple[str, ...]
+    gate: rl_gate.GateTarget | None
+    service_url: str | None
+
+
+def _publication_watch(
+    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, service_url: str | None
+) -> _PublicationWatch:
+    run = _from_handles(handles)
+    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    return _PublicationWatch(
+        job=str(job),
+        preset=preset.name,
+        prefix=prefix,
+        outputs=tuple(step.path(prefix) for step in run.runs),
+        gate=rl_gate.gate_target(run.gate) if run.gate is not None else None,
+        service_url=service_url,
+    )
+
+
+def _follow_detached(module: str, watch: _PublicationWatch) -> str:
     """Start the caller's publication watcher and return its local log path."""
     with tempfile.NamedTemporaryFile(prefix="marin-rl-publication-", suffix=".log", delete=False) as log:
         subprocess.Popen(
-            [sys.executable, "-m", module, "--follow-submission", str(job), provenance.to_json(), *argv],
+            [sys.executable, "-m", module, "_follow-publication", watch.model_dump_json()],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         return log.name
+
+
+def _watch_publication(
+    watch: _PublicationWatch, table: presets.ModelPresets
+) -> tuple[JobState, rl_publication.PublicationOutcome]:
+    preset = table.by_name[watch.preset]
+    published = set()
+    deadline = time.monotonic() + preset.recipe.layout.coordinator_timeout_hours * 3600
+    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
+        parent = client.job(JobName.from_wire(watch.job))
+        while True:
+            state = parent.state_only()
+            for output in watch.outputs:
+                rl_publication.publish_running(output, preset, table, watch.job, watch.service_url, published)
+            if is_job_finished(state):
+                break
+            if time.monotonic() >= deadline:
+                raise click.ClickException(
+                    f"Timed out waiting for {watch.job}. Repeat the original command with --wait."
+                )
+            time.sleep(_PUBLICATION_POLL_SECONDS)
+    gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
+    publication = rl_publication.publish_runs(
+        watch.outputs,
+        preset,
+        table=table,
+        gate_path=gate_path,
+        service_url=watch.service_url,
+        failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
+    )
+    return state, publication
+
+
+def _follow_command(table: presets.ModelPresets) -> click.Command:
+    @click.command(cls=RLCommand)
+    @click.argument("request_json")
+    def follow(request_json: str) -> None:
+        state, result = _watch_publication(_PublicationWatch.model_validate_json(request_json), table)
+        click.echo(json.dumps(result.to_dict()))
+        if state != JobState.SUCCEEDED or result.unserved_records:
+            raise click.exceptions.Exit(1)
+
+    return follow
 
 
 def _wait_for_run(
@@ -450,33 +519,15 @@ def _wait_for_run(
     table: presets.ModelPresets,
     service_url: str | None,
 ) -> None:
-    run = _from_handles(handles)
-    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
-    outputs = [step.path(prefix) for step in run.runs]
-    published = set()
-    deadline = time.monotonic() + preset.recipe.layout.coordinator_timeout_hours * 3600
-    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
-        parent = client.job(job)
-        while not is_job_finished(parent_state := parent.state_only()):
-            if time.monotonic() >= deadline:
-                raise click.ClickException(f"Timed out waiting for {job}. Repeat the original command with --wait.")
-            for path in outputs:
-                rl_publication.publish_running(path, preset, table, str(job), service_url, published)
-            time.sleep(_PUBLICATION_POLL_SECONDS)
+    watch = _publication_watch(job, handles, preset, service_url)
+    parent_state, publication = _watch_publication(watch, table)
     coordinator_error = (
         f"coordinator {job} is {parent_state}; required verdict unavailable"
         if parent_state != JobState.SUCCEEDED
         else None
     )
+    run = _from_handles(handles)
     run = replace(run, gate=rl_gate.completed_gate(run.gate))
-    publication = rl_publication.publish_runs(
-        outputs,
-        preset,
-        table=table,
-        gate_path=run.gate.path(prefix) if run.gate is not None else None,
-        service_url=service_url,
-        failed_coordinator=str(job) if coordinator_error is not None else None,
-    )
     snapshot = _status(
         run,
         preset,
@@ -501,6 +552,7 @@ def _submit_from_launcher(
     handles: list[ArtifactStep],
     max_concurrent: int,
     context: click.Context,
+    preset: presets.Preset,
 ) -> JobName:
     if module is None:
         specification = sys.modules["__main__"].__spec__
@@ -509,9 +561,12 @@ def _submit_from_launcher(
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
     index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
-    job = submit_or_run(
-        module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: index.model_dump_json()}, argv=argv
-    )
+    runs = _from_handles(handles).runs
+    indexed_runs = {
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
+    }
+    metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
+    job = submit_or_run(module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: metadata}, argv=argv)
     submitted = [
         {
             "name": step.name,
@@ -519,7 +574,7 @@ def _submit_from_launcher(
                 "run": grafana_url(index.run_id, execution.cluster, context.meta["rl_training_type"], submitted_at)
             },
         }
-        for step in _from_handles(handles).runs
+        for step in runs
         if (execution := skyrl_execution(step)) is not None
     ]
     result = {
@@ -528,9 +583,13 @@ def _submit_from_launcher(
         "submitted_at": submitted_at,
         "runs": submitted,
     }
-    if not context.params["wait"]:
-        result["publication_log"] = _follow_detached(module, argv, job, context.meta["rl_provenance"])
     _print_status(result)
+    if not context.params["wait"]:
+        try:
+            watch = _publication_watch(job, handles, preset, context.params["url"])
+            _print_status({"publication_log": _follow_detached(module, watch)})
+        except OSError as error:
+            logger.warning("Iris accepted %s. The publication watcher could not start (%s)", job, type(error).__name__)
     return job
 
 
@@ -554,15 +613,23 @@ def _run_command(
         context = click.get_current_context()
         options = context.params
         preset = table.by_name[options["preset_name"]]
-        job = context.meta.get("rl_follow_job")
-        if job is None:
-            job = _submit_from_launcher(entry_module, argv, handles, max_concurrent, context)
-        if options["wait"] or context.meta.get("rl_follow_job") is not None:
+        job = _submit_from_launcher(entry_module, argv, handles, max_concurrent, context, preset)
+        if options["wait"]:
             _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
     )(build_options_with_runner(checked, runner))
+
+
+def _validate_launch_issue(run: RLExperiment, preset: presets.Preset, issue: int) -> None:
+    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    for step in run.runs:
+        export = str(StoragePath(step.path(prefix)) / EXPORTS_SUBDIRECTORY)
+        try:
+            rl_publication.lineage_issue(export, issue)
+        except rl_publication.IssueConflict as error:
+            raise click.BadParameter(str(error), param_hint="--issue") from None
 
 
 def command(
@@ -574,7 +641,6 @@ def command(
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
-    @click.option("--follow-submission", type=(str, str), hidden=True)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
@@ -655,7 +721,6 @@ def command(
         issue: int | None,
         plan: bool,
         check_pin: bool,
-        follow_submission: tuple[str, str] | None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
@@ -667,15 +732,8 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
-        if follow_submission is not None:
-            if not do_run or get_job_info() is not None:
-                raise click.UsageError("A detached launcher needs --run on the submitting host")
-            follow_job, source = follow_submission
-            context.meta["rl_follow_job"] = JobName.from_wire(follow_job)
-            provenance = Provenance.from_json(source)
-        else:
-            provenance = _provenance(control=control)
-        from_launcher = follow_submission is None and get_job_info() is None
+        provenance = _provenance(control=control)
+        from_launcher = get_job_info() is None
         run = build_experiment(
             preset,
             table=table,
@@ -691,8 +749,6 @@ def command(
             provenance=provenance,
         )
         handles = (*run.runs, *((run.gate,) if run.gate else ()))
-        if follow_submission is not None:
-            return handles
         if from_launcher and (do_run or check_pin):
             assert run.inputs is not None
             validated = rl_gate.validate_candidate(
@@ -702,10 +758,18 @@ def command(
                 table=table,
             )
             if do_run:
+                if issue is not None:
+                    _validate_launch_issue(run, preset, issue)
                 context.meta["rl_training_type"] = validated["runtime"]["training_type"]
                 context.meta["rl_index"] = run_index(validated, preset, table, provenance, user=username_segment())
-                context.meta["rl_provenance"] = provenance
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
+        if preset.gated and not control:
+            pin = rl_gate.control_pin(preset, table=table, check_revision=False)
+            snapshot["control_pin"] = {
+                "commit": pin.commit,
+                "revision": pin.revision,
+                "current": pin.revision == table.by_name[pin.preset].revision,
+            }
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
@@ -735,7 +799,9 @@ def main(
     """Run the selected preset table's CLI, retaining Click's exit status."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if args and args[0] in {"compare", "publish"}:
+        if args and args[0] == "_follow-publication":
+            selected, args = _follow_command(table), args[1:]
+        elif args and args[0] in {"compare", "publish"}:
             if init is not None and args[0] == "compare":
                 raise click.UsageError("Python init cannot be used with compare")
             selected = (rl_gate if args[0] == "compare" else rl_publication).command(table)

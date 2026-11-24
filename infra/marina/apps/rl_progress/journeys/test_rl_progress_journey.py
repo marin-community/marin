@@ -8,7 +8,7 @@ from finestore.rl.rl_progress import Comparison
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, progress_record
 
 
 def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> None:
@@ -18,6 +18,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "label": "Learning fixture",
         "model": "snowball",
         "evaldash_run_ids": ["first-evaluation", "second-evaluation"],
+        "grader_report": grader_report(),
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?from=1&to=now&var-run=journey%2Frun",
         "evaluations": [
             Comparison(metric=metric, role="slice", run=value, tasks=2, n_run=1, n_control=0).model_dump(mode="json")
@@ -65,6 +66,10 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     )
     dialog.get_by_text("eval_lite_100@25/difficulty/hard/mean: 0.5000", exact=False).scroll_into_view_if_needed()
     journey.shoot("stored-attempt-breakdowns")
+    dialog.get_by_role("link", name="Grader stats").click()
+    expect(journey.page.get_by_role("cell", name="test/source", exact=True).first).to_be_visible()
+    journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{route}", wait_until="domcontentloaded")
+    expect(dialog).to_be_visible()
     journey.page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
     journey.click("Learning fixture")

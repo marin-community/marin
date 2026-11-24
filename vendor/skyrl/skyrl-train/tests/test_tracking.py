@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 import pytest
 import wandb
+from finestore.rl.rl_progress import RunIndexIdentity
+from finestore.rl.run_records import AttemptRecord, write_attempt
 from loguru import logger
 from omegaconf import OmegaConf
 
@@ -64,11 +66,13 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     local_ray, monkeypatch, tmp_path, slow_role, training_fails
 ):
     uploads = {}
+    wandb_arguments = {}
     warnings = []
 
     def init(*, settings, **kwargs):
         role = "primary" if settings.x_primary else "secondary"
-        upload = Upload(settings, duration=120 if role == slow_role else 1)
+        wandb_arguments[role] = kwargs
+        upload = Upload(settings, duration=120 if role == slow_role else 1, id=kwargs["id"])
         uploads[role] = upload
         return upload
 
@@ -76,9 +80,25 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     monkeypatch.setattr(wandb, "init", init)
     sink = logger.add(lambda message: warnings.append(message.record), level="WARNING")
     training_error = RuntimeError("training failed")
+    index = RunIndexIdentity(
+        run_id="mochi-train-medium-user-1234abcd",
+        model="mochi",
+        preset="train-medium",
+        preset_revision="rev",
+        user="user",
+        branch="topic",
+        source_revision="commit",
+        dirty=False,
+    )
+    write_attempt(str(tmp_path), AttemptRecord(run_id="native-run", attempt_id="native-attempt", index=index))
 
     def workload():
-        config = OmegaConf.create({"trainer": {"export_path": str(tmp_path)}})
+        config = OmegaConf.create(
+            {
+                "trainer": {"export_path": str(tmp_path)},
+                "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
+            }
+        )
         with Tracking("project", "experiment", backends=("wandb",), config=config) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:
@@ -98,6 +118,10 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert set(uploads) == {"primary", "secondary"}
     assert uploads["primary"].exit_code == int(training_fails)
     assert uploads["primary"].rows == [{"loss": 0.5, "trainer/global_step": 7}]
+    for arguments in wandb_arguments.values():
+        assert (arguments["project"], arguments["id"]) == ("marin-rl", "native-attempt")
+        assert arguments["name"] == arguments["group"] == "mochi-train-medium-user-1234abcd"
+    assert wandb_arguments["primary"]["tags"] == ["mochi", "train-medium", "rev", "user", "topic"]
     for role, upload in uploads.items():
         assert upload.uploaded == (role != slow_role)
         assert upload.elapsed < 120

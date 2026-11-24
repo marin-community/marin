@@ -725,39 +725,37 @@ class BasePPOExp:
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
         started = time.monotonic()
-        trainer = None
+        with self.get_tracker() as tracker:
+            trainer = None
+            try:
+                trainer = self._setup_trainer(tracker)
+                asyncio.run(trainer.train())
+            finally:
+                # Release GPU actors before a Ray retry can start another attempt.
+                if trainer is not None:
+                    try:
+                        asyncio.run(trainer.shutdown())
+                    except Exception as error:
+                        logger.warning("Error shutting down trainer: {}", error)
+
+        elapsed = time.monotonic() - started - trainer.evaluation_wall_time
+        logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed)
+        runtime = self.cfg.get("runtime") or {}
         try:
-            with self.get_tracker() as tracker:
-                try:
-                    trainer = self._setup_trainer(tracker)
-                    asyncio.run(trainer.train())
-                finally:
-                    # Release GPU actors before a Ray retry can start another attempt.
-                    if trainer is not None:
-                        try:
-                            asyncio.run(trainer.shutdown())
-                        except Exception as e:
-                            logger.warning(f"Error shutting down trainer: {e}")
-        finally:
-            if trainer is not None:
-                elapsed = time.monotonic() - started - trainer.evaluation_wall_time
-                logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed)
-                runtime = self.cfg.get("runtime") or {}
-                try:
-                    write_attempt(
-                        str(self.cfg.trainer.export_path),
-                        AttemptRecord(
-                            run_id=runtime["run_id"],
-                            attempt_id=runtime["attempt_id"],
-                            elapsed_excluding_eval_seconds=elapsed,
-                        ),
-                    )
-                except Exception as error:
-                    logger.warning(
-                        "Could not store trainer completion time for attempt {} ({})",
-                        runtime.get("attempt_id", "unknown"),
-                        type(error).__name__,
-                    )
+            write_attempt(
+                str(self.cfg.trainer.export_path),
+                AttemptRecord(
+                    run_id=runtime["run_id"],
+                    attempt_id=runtime["attempt_id"],
+                    elapsed_excluding_eval_seconds=elapsed,
+                ),
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not store trainer completion time for attempt {} ({})",
+                runtime.get("attempt_id", "unknown"),
+                type(error).__name__,
+            )
 
 
 @ray.remote(num_cpus=1, max_retries=0)
