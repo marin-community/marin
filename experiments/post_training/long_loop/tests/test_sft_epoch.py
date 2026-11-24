@@ -290,6 +290,9 @@ def test_native_hero_restore_starts_the_new_epoch_and_scales_its_lr_tail(epoch_i
         "output_dtype": {"__dtype__": "bfloat16"},
     }
     config = bind_mochi_sft_config(spec, reference, recipe["data"], updates=updates, output="s3://marin-us-east-08a/new")
+    config.trainer.trainer.validate_batch_sizes(32)
+    assert config.trainer.trainer.train_batch_size == 176
+    assert config.trainer.trainer.per_device_parallelism == 6
     assert config.stop_after_steps == config.trainer.trainer.num_train_steps == 40 + target_updates
     assert config.optimizer == replace(previous.optimizer, decay=decay_steps)
     for peak in (previous.optimizer.learning_rate, previous.optimizer.adam_lr):

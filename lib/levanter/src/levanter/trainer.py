@@ -1092,7 +1092,7 @@ class TrainerConfig:
     """
     Allow batch sizes to be non-divisible by the number of devices (or data axis size).
 
-    This is typically used when you want a specific batch size but have a weird number of devices.
+    Validate the padded physical rows while preserving the logical batch schedule and data offsets.
     """
 
     # Config related to duration
@@ -1310,12 +1310,22 @@ class TrainerConfig:
         # Validate mesh early
         _ = self.mesh_axis_specs
 
+        self.validate_batch_sizes(self.data_axis_size)
+
+    def validate_batch_sizes(self, data_axis_size: int) -> None:
+        """Validate batch geometry on a target data mesh without initializing JAX."""
+
+        def physical_batch_size(size: int) -> int:
+            if self.allow_nondivisible_batch_size:
+                return _round_to_nearest_multiple(size, data_axis_size)
+            return size
+
         if self.train_batch_size == -1 and self.per_device_parallelism == -1:
             raise ValueError("either train_batch_size or per_device_parallelism must be specified (not -1)")
 
         if self.per_device_parallelism == -1:
             if isinstance(self.train_batch_size, int):
-                self.per_device_parallelism = self.train_batch_size // self.data_axis_size
+                self.per_device_parallelism = physical_batch_size(self.train_batch_size) // data_axis_size
             else:
                 logger.info(
                     "per_device_parallelism is not set and train_batch_size is not an int. "
@@ -1323,31 +1333,29 @@ class TrainerConfig:
                 )
 
         if self.train_batch_size == -1:
-            self.train_batch_size = self.per_device_parallelism * self.data_axis_size
+            self.train_batch_size = self.per_device_parallelism * data_axis_size
 
         # validate size of per_device_parallelism
         if self.per_device_parallelism != -1:
             if isinstance(self.train_batch_size, Sequence):
                 for phase in self.train_batch_size:
                     assert isinstance(phase, ScheduleStep)
-                    if phase.value % (self.per_device_parallelism * self.data_axis_size) != 0:
+                    if physical_batch_size(phase.value) % (self.per_device_parallelism * data_axis_size) != 0:
                         raise ValueError(
                             f"At step {phase.start}, train_batch_size ({phase.value}) must be divisible by "
                             "per_device_parallelism * data_axis_size "
-                            f"({self.per_device_parallelism}, {self.data_axis_size})"
+                            f"({self.per_device_parallelism}, {data_axis_size})"
                         )
-            elif self.train_batch_size % (self.per_device_parallelism * self.data_axis_size) != 0:
+            elif physical_batch_size(self.train_batch_size) % (self.per_device_parallelism * data_axis_size) != 0:
                 raise ValueError(
                     f"train_batch_size ({self.train_batch_size}) must be divisible by per_device_parallelism *"
-                    f" data_axis_size ({self.per_device_parallelism}, {self.data_axis_size})"
+                    f" data_axis_size ({self.per_device_parallelism}, {data_axis_size})"
                 )
 
         if self.per_device_eval_parallelism == -1:
             if self.per_device_parallelism == -1:
                 tbs = max(distinct_values(self.train_batch_size))
-                self.per_device_eval_parallelism = (
-                    _round_to_nearest_multiple(tbs, self.data_axis_size) // self.data_axis_size
-                )
+                self.per_device_eval_parallelism = _round_to_nearest_multiple(tbs, data_axis_size) // data_axis_size
             else:
                 self.per_device_eval_parallelism = self.per_device_parallelism
 

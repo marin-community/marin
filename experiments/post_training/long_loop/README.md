@@ -110,7 +110,8 @@ CPU coordinator's PRODUCTION priority.
 
 The preflight requires the hash-pinned seal, publisher, current native capacity
 receipt and completed regional initializer-copy inventory. It reads metadata,
-not weight payloads, on the operator host:
+not weight payloads, on the operator host. It also applies the runtime batch
+validator to the target's 32-wide data mesh before GPU admission:
 
 ```bash
 uv run python -m experiments.post_training.long_loop.round_runner \

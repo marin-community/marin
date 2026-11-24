@@ -7,7 +7,7 @@ import copy
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -216,13 +216,14 @@ def bind_mochi_sft_config(
     )
     raw["eval"]["eval_batch_size"] = controls.microbatch_size
     config = draccus.decode(GrugRunConfig, raw)
-    validated_batch_axis_size(
+    batch_axes = validated_batch_axis_size(
         device_count=config.resources.chip_count(),
         dp_racks=grug["replica_axis_size"],
         batch_size=controls.microbatch_size,
         context_axis_size=grug["context_axis_size"],
         expert_axis_size=grug["expert_axis_size"],
     )
+    replace(config.trainer.trainer).validate_batch_sizes(batch_axes)
     if config.model != draccus.decode(type(config.model), baseline["model"]):
         raise ValueError("Mochi SFT changed the hero architecture")
     expected_optimizer = {

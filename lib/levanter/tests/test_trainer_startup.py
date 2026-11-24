@@ -9,6 +9,7 @@ import pytest
 
 import levanter.tracker.tracker_fns as tracker_fns
 from levanter.distributed import DistributedConfig
+from levanter.testing.devices import use_cpu_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.hardware_topology import nvidia_topology_matrix_summary, tpu_topology_shape
@@ -91,3 +92,39 @@ mlx5_0  SYS     PIX     SYS     SYS      X
         "gpu_gpu_link_counts": {"NV18": 1, "SYS": 2},
         "gpu_nic_link_counts": {"PIX": 2, "PXB": 1, "SYS": 3},
     }
+
+
+@pytest.mark.multidevice
+def test_padded_batch_initialization_preserves_logical_schedule(tmp_path, monkeypatch):
+    # Reproduce the 176-row Mochi startup on its actual 32-wide data axis, without GPUs.
+    with use_cpu_devices(32):
+        monkeypatch.setattr(tracker_fns, "_global_tracker", None)
+        config = TrainerConfig(
+            id="padded-batch-startup",
+            log_dir=tmp_path,
+            train_batch_size=176,
+            allow_nondivisible_batch_size=True,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            require_accelerator=False,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+        )
+        try:
+            config.initialize()
+            assert config.microbatch_size == 192
+            assert config.batch_axis_at_step(393491).size == 176
+            assert config.batch_schedule.global_data_offset_by_step(2) == 352
+            tracker_fns.current_tracker().finish()
+        finally:
+            monkeypatch.setattr(tracker_fns, "_global_tracker", None)
+
+
+def test_unpadded_batch_validation_rejects_the_mochi_nondivisible_batch():
+    config = TrainerConfig(train_batch_size=176)
+    with pytest.raises(ValueError, match="must be divisible"):
+        config.validate_batch_sizes(32)
+
+
+def test_padded_batch_still_requires_whole_microbatches():
+    config = TrainerConfig(train_batch_size=176, per_device_parallelism=5, allow_nondivisible_batch_size=True)
+    with pytest.raises(ValueError, match="must be divisible"):
+        config.validate_batch_sizes(32)
