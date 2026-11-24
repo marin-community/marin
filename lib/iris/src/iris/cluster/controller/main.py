@@ -313,26 +313,23 @@ def run_controller_serve(
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        # Write a final checkpoint then exit. Do NOT call controller.stop()
-        # here — its shutdown path runs autoscaler.shutdown() which terminates
-        # every worker VM in the cluster. On a controller restart, workers must
+        # Do NOT call controller.stop() here: it closes the backend, which
+        # terminates every worker VM. On a controller restart, workers must
         # survive; the new controller picks them up from the checkpoint. Even on
         # a full cluster teardown, `iris cluster stop` handles VM cleanup via
         # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
         logger.info("Shutdown signal received")
-        controller.begin_shutdown()
-        if not config.dry_run:
-            try:
-                path, result = controller.begin_checkpoint()
-                logger.info(
-                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                    path,
-                    result.job_count,
-                    result.task_count,
-                    result.worker_count,
-                )
-            except Exception:
-                logger.exception("Final checkpoint on shutdown failed")
+        try:
+            path, result = controller.stop_for_restart()
+            logger.info(
+                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Final checkpoint on shutdown failed")
         logger.info("Controller exiting")
         stop_event.set()
 

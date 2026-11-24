@@ -877,34 +877,71 @@ class Controller:
         )
 
     def stop(self) -> None:
-        """Stop all background components gracefully. Idempotent.
+        """Stop all background components and release the cluster's capacity. Idempotent.
 
         Shutdown ordering:
-        1. Reject new control-plane requests.
-        2. Unregister atexit hook so it doesn't fire against a closed DB.
-        3. Stop the control loop so no new work is triggered.
-        4. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        5. Stop remaining threads (server) and executors.
+        1. Reject new control-plane requests and unregister the atexit checkpoint.
+        2. Stop the control, prune and checkpoint loops so no new work is triggered.
+        3. Stop remaining threads (server) and executors.
+        4. Close the backend; an autoscaling backend terminates its VMs.
+        5. Close the log stack and the DB.
+
+        Use ``stop_for_restart()`` when workers must survive.
         """
         if self._stopped:
             return
+        self._stop_loops(join_timeout=Duration.from_seconds(5.0))
+        self._stop_services()
+        # close() releases backend-owned provider clients and capacity mechanisms.
+        if self._backend is not None:
+            self._backend.close()
+        self._close_stores()
+
+    def stop_for_restart(self) -> tuple[str, CheckpointResult]:
+        """Stop the controller so a successor can resume from a final checkpoint.
+
+        Rejects new requests, then waits for the control, prune and periodic
+        checkpoint loops to finish their current iteration, so nothing changes
+        the database or the cluster after the final checkpoint begins. Then
+        writes that checkpoint and stops the remaining threads so the process
+        can exit. Unlike ``stop()``, it does not close the backend: closing an
+        autoscaling backend terminates every worker VM, and workers must
+        survive a controller restart.
+
+        The loop joins have no timeout. A tick or upload that never returns
+        holds the process until the supervisor kills it, which is safer than
+        checkpointing under a live loop.
+
+        Returns:
+            The checkpoint directory and its row counts.
+        """
+        if self._stopped:
+            raise RuntimeError("Controller has already stopped")
+        self._stop_loops(join_timeout=None)
+        try:
+            return self.begin_checkpoint()
+        finally:
+            self._stop_services()
+            self._close_stores()
+
+    def _stop_loops(self, join_timeout: Duration | None) -> None:
+        """Reject requests and stop the loops that change the DB or the cluster."""
         self.begin_shutdown()
         self._stopped = True
-        # Unregister atexit hook before closing DB connections.
+        # The atexit checkpoint must not fire against a closed DB, nor publish
+        # a checkpoint newer than a restart's final one.
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
             self._atexit_registered = False
+        loops = [t for t in (self._control_thread, self._prune_thread, self._checkpoint_thread) if t is not None]
+        for thread in loops:
+            thread.stop()
         self._tick_wake.set()
-        join_timeout = Duration.from_seconds(5.0)
-        if self._control_thread:
-            self._control_thread.stop()
-            self._control_thread.join(timeout=join_timeout)
-        if self._prune_thread:
-            self._prune_thread.stop()
-            self._prune_thread.join(timeout=join_timeout)
-        if self._checkpoint_thread:
-            self._checkpoint_thread.stop()
-            self._checkpoint_thread.join(timeout=join_timeout)
+        for thread in loops:
+            thread.join(timeout=join_timeout)
+
+    def _stop_services(self) -> None:
+        """Stop the server, federation, native proxy and the remaining managed threads."""
         if self._task_state_collector is not None:
             self._task_state_collector.close()
         self._federation.stop()
@@ -915,10 +952,8 @@ class Controller:
         if self._native_proxy is not None:
             self._native_proxy.stop()
         self._threads.stop()
-        # close() releases backend-owned provider clients and capacity mechanisms.
-        if self._backend is not None:
-            self._backend.close()
 
+    def _close_stores(self) -> None:
         # Remove log handler before closing log resources to avoid errors
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
