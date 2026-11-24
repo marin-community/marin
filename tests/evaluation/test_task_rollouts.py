@@ -26,6 +26,7 @@ from marin.rollouts.evaluation import (
     EvaluationRunConfig,
     ModelIdentity,
     episode_turn,
+    grading_limits,
     run_evaluation,
     run_identity,
 )
@@ -77,6 +78,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    Source,
     TaskSpec,
     TextMessage,
 )
@@ -616,6 +618,7 @@ def convert_judged_row(row, _context):
         label_scan="whole",
         label_case="upper",
         completion_policy=JudgeCompletionPolicy.CONTENT,
+        transport_budget=row.data.get("judge_budget", 180.0),
     )
     task = answer_task(row, prompt=row.data["prompt"], spec=judge, evidence=row.data)
     if row.data.get("scripted"):
@@ -802,6 +805,15 @@ async def test_driver_unmapped_judge_model_is_rejected_before_generation(
         )
     assert any("no recorded immutable revision" in str(error) for error in failure.value.exceptions)
     assert model_requests == judge_requests == []
+
+
+@pytest.mark.parametrize("judge_budget,deadlines", [(1200.0, (1230.0, 2430.0)), (180.0, (600.0, 1800.0))])
+def test_grading_deadline_covers_the_judge_budget(run_config, judge_budget, deadlines):
+    source = Source(dataset="fixture", revision="a" * 40, row="rows.jsonl:0", importer_revision="1")
+    task = convert_judged_row(RawRow("judged", source, {"prompt": "p", "judge_budget": judge_budget}), None)
+    limits = run_config.limits.model_copy(update={"verifier_timeout": 600, "attempt_timeout": 1800})
+    extended = grading_limits(limits, task)
+    assert (extended.verifier_timeout, extended.attempt_timeout) == deadlines
 
 
 @dataclass
