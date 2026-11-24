@@ -6,6 +6,7 @@ import json
 
 import httpx
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.glm_synthesis_serving import prove_replicas
 
@@ -70,3 +71,14 @@ def test_sustained_load_stops_after_engine_error(monkeypatch):
     )
     assert len(outcomes) == 1
     assert outcomes[0].state is prove_replicas.RequestState.STREAM_ERROR
+
+
+def test_published_manifest_keeps_credentials_in_references_and_exposes_capacity(tmp_path):
+    (tmp_path / "credentials").mkdir()
+    target = prove_replicas.Target("/serve/fixture", "http://fixture/v1", "fixture-endpoint-token", 12345)
+    prove_replicas.publish_manifest(StoragePath(str(tmp_path)), [target], concurrency_per_replica=24)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest == [{"base_url": "http://fixture/v1", "api_key_ref": str(tmp_path / "credentials/fixture.jwt")}]
+    assert (tmp_path / "credentials/fixture.jwt").read_text() == "fixture-endpoint-token"
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["healthy_entry_count"] * status["per_engine_concurrency"] == status["total_concurrency"] == 24

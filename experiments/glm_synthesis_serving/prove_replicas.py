@@ -272,13 +272,28 @@ def write_text(path: StoragePath, content: str) -> None:
         stream.write(content)
 
 
-def publish_manifest(output: StoragePath, targets: list[Target]) -> None:
+def publish_manifest(output: StoragePath, targets: list[Target], concurrency_per_replica: int) -> None:
     manifest = []
     for target in targets:
         credential = output / "credentials" / (target.endpoint.rsplit("/", 1)[-1] + ".jwt")
         write_text(credential, target.token)
         manifest.append({"base_url": target.base_url, "api_key_ref": str(credential)})
     write_text(output / "credential-expiry.json", json.dumps({target.endpoint: target.expires_at for target in targets}))
+    write_text(
+        output / "status.json",
+        json.dumps(
+            {
+                "model": pool.SERVED_MODEL_NAME,
+                "cluster": pool.CLUSTER,
+                "healthy_entry_count": len(targets),
+                "per_engine_concurrency": concurrency_per_replica,
+                "total_concurrency": len(targets) * concurrency_per_replica,
+                "validated_at": int(time.time()),
+                "proof_ref": str(output / "proof.json"),
+                "sustained_ref": str(output / "sustained.json"),
+            }
+        ),
+    )
     write_text(output / "manifest.json", json.dumps(manifest))
 
 
@@ -312,7 +327,7 @@ def main() -> None:
     load = write_report(output / "sustained.json", outcomes, time.monotonic() - started, len(targets))
     if load.failures:
         raise RuntimeError("Sustained real-request load failed; consumer manifest was not published")
-    publish_manifest(output, targets)
+    publish_manifest(output, targets, args.concurrency)
 
 
 if __name__ == "__main__":
