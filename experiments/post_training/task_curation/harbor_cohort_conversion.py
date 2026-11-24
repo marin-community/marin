@@ -67,6 +67,7 @@ from taskcompendium.models import (
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
+    MissingArtifactPolicy,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
@@ -185,23 +186,31 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
     """Copy Harbor's reward artifacts and read them with the same precedence.
 
     The argv guards the artifact's arrival: a grading machine without the
-    copied reward file fails loudly instead of scoring anything. The test
-    script's own exit code is copied beside the reward for diagnostics, exactly
-    as Harbor records it in the control detail.
+    copied reward file fails loudly instead of scoring anything. The reward
+    artifacts themselves copy with the skip-if-missing policy — the fallback
+    path's reward.json and reward.txt are alternatives (the harness writes one
+    of them), and a crashed harness leaves the guard to fail the grading. The
+    test script's own exit code is copied beside the reward for diagnostics,
+    exactly as Harbor records it in the control detail.
     """
-    exit_artifact = (VerifierArtifact(source=HARBOR_TEST_EXIT, target=COPIED_TEST_EXIT, kind=ArtifactKind.FILE),)
+    skipped = MissingArtifactPolicy.SKIP
+    exit_artifact = (
+        VerifierArtifact(source=HARBOR_TEST_EXIT, target=COPIED_TEST_EXIT, kind=ArtifactKind.FILE, missing=skipped),
+    )
     if has_verifier_config:
         artifacts = (
-            VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE),
-            VerifierArtifact(source=HARBOR_VERDICT, target=COPIED_VERDICT, kind=ArtifactKind.FILE),
+            VerifierArtifact(
+                source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE, missing=skipped
+            ),
+            VerifierArtifact(source=HARBOR_VERDICT, target=COPIED_VERDICT, kind=ArtifactKind.FILE, missing=skipped),
             *exit_artifact,
         )
         reward = FileReward(files=(RewardFile(path=COPIED_VERDICT, format=RewardFileFormat.VERDICT_JSON),))
         return artifacts, reward, VerifierCommand(argv=("test", "-f", COPIED_VERDICT), cwd="/")
     artifacts = (
-        VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE),
-        VerifierArtifact(source=HARBOR_REWARD_JSON, target=COPIED_REWARD_JSON, kind=ArtifactKind.FILE),
-        VerifierArtifact(source=HARBOR_REWARD_TEXT, target=COPIED_REWARD_TEXT, kind=ArtifactKind.FILE),
+        VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE, missing=skipped),
+        VerifierArtifact(source=HARBOR_REWARD_JSON, target=COPIED_REWARD_JSON, kind=ArtifactKind.FILE, missing=skipped),
+        VerifierArtifact(source=HARBOR_REWARD_TEXT, target=COPIED_REWARD_TEXT, kind=ArtifactKind.FILE, missing=skipped),
         *exit_artifact,
     )
     reward = FileReward(
