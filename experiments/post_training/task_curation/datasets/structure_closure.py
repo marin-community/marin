@@ -16,6 +16,8 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
+SOURCE_ID = "SnowballV01:structure-closure"
+VALIDATION_SOURCE_ID = f"{SOURCE_ID}/validation"
 
 RUBRIC = """
 These tasks complete an unfinished assistant message. Present its text as an assistant prefill and
@@ -44,7 +46,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="SnowballV01:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
+                id=VALIDATION_SOURCE_ID if intended_use == IntendedUse.EVAL else SOURCE_ID,
                 title=f"Snowball v0.1 structural closure · {split}",
                 origin="SnowballV01",
                 family="structural",

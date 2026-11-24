@@ -30,6 +30,7 @@ from evalrecords.records import (
     read_record,
     record_path,
 )
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, write_attempt
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
@@ -53,6 +54,8 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import StatusFile
 from marin.inference.config import (
     EffectiveServing,
@@ -67,6 +70,7 @@ from marin.inference.iris import (
     RemoteInferenceStartupError,
 )
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
+from marin.rl.skyrl import SkyRLPolicyModel, SkyRLRun
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
@@ -90,6 +94,7 @@ from experiments.evaluation.pipeline import (
     EvalStepConfig,
     run_eval_pipeline_step,
 )
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 # Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
 # model in these tests, so an assertion on them can only be satisfied by the preflight result.
@@ -875,7 +880,7 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     ("version", "retry_limit", "reuse_completed"),
-    [("test", 1, True), ("dev", 1, False), ("test", 2, False)],
+    [("2026.07.24", 1, True), ("dev", 1, False), ("2026.07.24", 2, False)],
 )
 def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, version, retry_limit, reuse_completed):
     completed: list[str] = []
@@ -911,16 +916,59 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
     monkeypatch.setattr("experiments.evaluation.pipeline.launch_group", launch)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
-    config = EvalStepConfig(
-        model=models()["qwen3-8b"],
-        evals=resolve_evaluations("smoke"),
-        limit=1,
-        max_concurrent=1,
-        artifact_path=str(tmp_path / "pipeline"),
+    policy_root = tmp_path / "trained"
+    policy_root.mkdir()
+    result = SkyRLRun(
+        path=str(policy_root),
+        hf_model_uri=str(policy_root / "hf"),
+        global_step=0,
+        tokenizer_uri="fixture/tokenizer",
+        tokenizer_revision=None,
+        checkpoint_root=str(policy_root / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(policy_root / "terminal.json"),
+        iris_job_id="/fixture/policy",
+        run_id="native-policy",
+        attempt_id="trained-attempt",
+    )
+    artifact = ArtifactRecord(result_type=result_type_name(SkyRLRun), result=result.result_payload())
+    (policy_root / RECORD_FILENAME).write_text(artifact.model_dump_json())
+    index = RunIndexIdentity(
+        run_id="logical-policy",
+        model="snowball",
+        preset="train-long",
+        preset_revision="2026.07.24",
+        user="tester",
+        branch="fixture",
+        source_revision="fixture",
+        dirty=False,
+    )
+    if reuse_completed:
+        write_attempt(
+            str(policy_root / "exports"),
+            AttemptRecord(run_id="native-policy", attempt_id="trained-attempt", index=index),
+        )
+    serving = replace(
+        models()["qwen3-8b"], location="", revision=None, identity=None, tokenizer=None, tokenizer_revision=None
+    )
+    source = ArtifactStep.adopt("fixture/policy", "2026.07.24", str(policy_root), kind=SkyRLRun)
+    step = evaluate_model(
+        SkyRLPolicyModel(source),
+        serving,
+        resolve_evaluations("smoke"),
+        version=version,
         accelerator=None,
         submission_cluster="marin",
         federated_cluster=None,
-        version=version,
+    )
+    config = replace(
+        step.build_config(
+            StepContext.for_run(
+                str(tmp_path / "pipeline"), str(tmp_path), deps=step.deps, runtime_args=step.runtime_args
+            )
+        ),
+        limit=1,
+        max_concurrent=1,
     )
 
     with pytest.raises(RuntimeError, match="1 step"):
@@ -930,6 +978,13 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
     assert len(completed) == (1 if reuse_completed else 2)
     assert (attempts[0] == attempts[1]) == reuse_completed
     assert len(result.run_ids) == 2
+    for run_id in result.run_ids:
+        saved = read_record(record_path(result.records_prefix, run_id))
+        assert saved.rl_attempt.model_dump() == {
+            "run_id": "logical-policy" if reuse_completed else "native-policy",
+            "attempt_id": "trained-attempt",
+            "step": 0,
+        }
 
 
 def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

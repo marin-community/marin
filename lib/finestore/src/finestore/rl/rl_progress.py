@@ -5,9 +5,17 @@
 
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
+
+SHARED_TASKS_INVARIANT = "shared_tasks"
+SHARED_TASK_FRACTION_INVARIANT = "shared_task_fraction"
+EVALUATION_PROTOCOL_DIFFERS = "evaluation protocol differs"
+GROUP_COMPARISON_INVARIANTS = frozenset({SHARED_TASKS_INVARIANT, SHARED_TASK_FRACTION_INVARIANT})
+
+GRADER_REPORTS_DIR = "grader_reports"
+GRADER_REPORT_FILENAME = "grader_report.json"
 
 
 class Verdict(StrEnum):
@@ -82,21 +90,82 @@ class GateResult(BaseModel):
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
+    control_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class GradingLatency(TypedDict):
+    count: Count
+    mean: FiniteFloat | None
+    p95: FiniteFloat | None
+    max: FiniteFloat | None
+
+
+class SuccessSummary(TypedDict):
+    attempted: Count
+    verified: Count
+    passed: Count
+    verification_coverage: FiniteFloat
+    success_rate: FiniteFloat | None
+
+
+class SubsetSummary(SuccessSummary):
+    subset_id: str
+    data_sources: list[str]
+    verification_statuses: dict[str, Count]
+    grading_failures: dict[str, Count]
+    rollout_failures: dict[str, Count]
+    grading_latency_seconds: GradingLatency
+
+
+class TaskSummary(SuccessSummary):
+    task_id: str
+    subset_ids: list[str]
+
+
+class GraderReport(BaseModel):
+    """Stored training and evaluation counts by subset and task."""
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+    training: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+    evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+
+
+class ControlReplicate(BaseModel, frozen=True):
+    commit: Identity
+    revision: Identity
+    replicate: Count
 
 
 class AttemptSummary(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, extra="ignore")
+    format_version: Literal[1] = 1
     run_id: Identity
+    native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
+    preset_revision: Identity | None = None
+    base_preset_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control: ControlReplicate | None = None
+    control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    user: Identity | None = None
+    branch: str | None = None
+    dirty: bool | None = None
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    cluster: Identity | None = None
     issue: StrictInt | None = None
     evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None
     evaluations: list[Comparison] = Field(default_factory=list)
+    grader_report: GraderReport | None = None
     engine: dict[str, Any] | None = None
     gate_result: GateResult | None = None
     gate: str | None = None
@@ -105,13 +174,14 @@ class AttemptSummary(BaseModel):
     started_at: str | None
     completed_at: str | None
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
+    elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
     timing_scope: Identity
-    status: Literal["succeeded", "failed"]
+    status: Literal["running", "succeeded", "failed"]
     optimizer_steps: Count | None
     planned_updates: Count | None = None
     measured_updates: list[Count] | None = None
     source_revision: Identity
-    data_identity: Identity
+    data_identity: Identity | None
     initializer_identity: Identity
     artifact_uri: str | None
     evidence: list[str]
@@ -136,7 +206,13 @@ class AttemptSummary(BaseModel):
                 dict.fromkeys(
                     [
                         *self.failed_facts,
-                        *(fact.name for fact in gate.invariants if not fact.holds and fact.replicate == replicate),
+                        *(
+                            fact.name
+                            for fact in gate.invariants
+                            if not fact.holds
+                            and fact.replicate == replicate
+                            and fact.name.rpartition("/")[2] not in GROUP_COMPARISON_INVARIANTS
+                        ),
                     ]
                 )
             )

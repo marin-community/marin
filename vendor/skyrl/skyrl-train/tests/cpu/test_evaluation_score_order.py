@@ -120,6 +120,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         ("named", "named", "declared-source", "general", "algebra", "hard"),
     ]
     assert all(item.data_source != "declared-source" for item in identities)
+    assert all(item.subset_id == "declared-source" for item in identities)
     assert all(item.evaluation_identity.strata.agentic for item in identities)
     assert all(item.evaluation_identity.task_digest == digest for item in identities)
     assert OmegaConf.to_container(config, resolve=True) == original_config

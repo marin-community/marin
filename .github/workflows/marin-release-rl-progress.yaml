@@ -1,6 +1,10 @@
 name: "Marin - Release RL Progress"
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/marina/apps/rl_progress/**"
   workflow_dispatch:
     inputs:
       dry_run:

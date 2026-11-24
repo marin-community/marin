@@ -1,5 +1,9 @@
+import { showProgress } from './progress.js';
+
 const $ = (id) => document.getElementById(id);
 let runs = [];
+let comparisonContract = {};
+const EVALDASH_URL = 'https://marina.oa.dev/evaldash/runs';
 const selectedAttempts = new Map();
 
 function element(tag, text, attrs = {}) {
@@ -13,7 +17,7 @@ const grafanaLink = (run) => run.grafana_url && /^https:\/\/grafana\.oa\.dev\//.
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
 const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
-const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
+const invariant = (row) => `${comparisonContract.group_invariants?.includes(row.name.split('/').at(-1)) ? 'Group' : `r${row.replicate}`} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 function groupedRuns(records = runs) {
@@ -31,8 +35,13 @@ function visibleRuns(groups) {
 function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  const attempts = groupedRuns().get(params.get('run')) ?? [];
-  return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
+  const runId = params.get('run');
+  if (!runId) return null;
+  const attempts = groupedRuns().get(runId) ?? [];
+  const aliases = runs.filter((run) => run.native_run_id === runId);
+  const attemptId = params.get('attempt');
+  if (attemptId != null) return [...attempts, ...aliases].find((run) => run.attempt_id === attemptId) ?? null;
+  return attempts[0] ?? aliases.sort((a, b) => attemptTime(b) - attemptTime(a))[0] ?? null;
 }
 
 function addField(list, title, value) {
@@ -49,18 +58,26 @@ function showDetails(run) {
   if (grafana) links.append(grafana);
   if (typeof run.issue === 'number') links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
   for (const id of run.evaldash_run_ids ?? []) {
-    links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
+    links.append(element('a', `EvalDash ${id} ↗`, { href: `${EVALDASH_URL}/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
+  const evaluations = new URLSearchParams({ rl_run: run.run_id, rl_attempt: run.attempt_id, view: 'runs' });
+  if (run.native_run_id && run.native_run_id !== run.run_id) evaluations.set('rl_native_run', run.native_run_id);
+  links.append(element('a', 'All EvalDash evaluations of this attempt', { href: `${EVALDASH_URL}?${evaluations}` }));
+  if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Issue', run.issue],
+    ['Model', run.model], ['Preset', run.preset], ['Preset revision', run.preset_revision],
+    ['Base version', run.base_preset_revision], ['Evaluation set', run.evaluation_data_identity],
+    ['User', run.user], ['Branch', run.branch], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
+    ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
+    ['Elapsed excluding evaluation', run.elapsed_excluding_eval_seconds == null ? null : `${number(run.elapsed_excluding_eval_seconds, 1)} seconds`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Artifact location', run.artifact_uri],
@@ -96,6 +113,17 @@ function render() {
   const model = $('model-filter').value;
   const matching = model ? runs.filter((run) => run.model === model) : runs;
   const groups = groupedRuns(matching), selected = visibleRuns(groups);
+  const preset = $('progress-preset'), previous = preset.value;
+  const choices = new Map(matching.filter((run) => run.model && run.series && run.evaluations?.length)
+    .map((run) => [JSON.stringify([run.model, run.series]), `${run.model} · ${run.series}`]));
+  preset.replaceChildren(...[...choices].sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([value, label]) => element('option', label, { value })));
+  if (choices.has(previous)) preset.value = previous;
+  $('progress-panel').hidden = !choices.size;
+  const history = matching.filter((run) => JSON.stringify([run.model, run.series]) === preset.value);
+  const reference = history.find((run) => run.control_preset && run.control_preset !== run.series);
+  const controls = reference ? matching.filter((run) => run.model === reference.model && run.series === reference.control_preset) : [];
+  showProgress($('progress-charts'), history, controls, route, comparisonContract);
   $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
@@ -114,6 +142,7 @@ function render() {
     const objectives = element('td'), constraints = element('td'), verdict = element('td');
     if (report) {
       for (const row of report.comparisons) {
+        if (row.role === 'slice') continue;
         const cell = row.role === 'objective' ? objectives : constraints;
         cell.append(element('p', comparison(row), { class: row.passes === false ? 'warning' : '' }));
       }
@@ -126,7 +155,9 @@ function render() {
       constraints.textContent = '—';
       verdict.textContent = '—';
     }
-    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict);
+    const evalCount = (run.evaldash_run_ids ?? []).length;
+    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict,
+      element('td', evalCount ? String(evalCount) : '—'));
     return tr;
   }));
 }
@@ -135,7 +166,7 @@ async function refresh() {
   try {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
-    const data = await response.json(); runs = data.runs;
+    const data = await response.json(); runs = data.runs; comparisonContract = data.comparison_contract ?? {};
     const filter = $('model-filter'), previous = filter.value;
     const models = [...new Set(runs.map((run) => run.model).filter(Boolean))].sort();
     filter.replaceChildren(element('option', 'All models', { value: '' }), ...models.map((model) => element('option', model, { value: model })));
@@ -148,6 +179,7 @@ async function refresh() {
 }
 $('refresh').onclick = refresh;
 $('model-filter').onchange = render;
+$('progress-preset').onchange = render;
 function closeDetails() {
   if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
   $('run-detail').close();

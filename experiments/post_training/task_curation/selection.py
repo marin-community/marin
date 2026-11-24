@@ -335,7 +335,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
 def validation_family(task: TaskSpec) -> str:
     if task.source.dataset == STRUCTURE_CLOSURE_DATASET:
         return STRUCTURAL_FAMILY
-    return HELDOUT_FAMILIES[_grader_contract(task)["dataset"]]
+    dataset = _grader_contract(task)["dataset"]
+    if dataset not in HELDOUT_FAMILIES:
+        raise ValueError(f"Held-out task {task.id} has an unknown grader dataset: {dataset}")
+    return HELDOUT_FAMILIES[dataset]
 
 
 def _stratified_sample(
@@ -518,12 +521,16 @@ def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) ->
     _check_release_admission(source, released, attempts)
 
 
-def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+def _heldout_catalog_ids() -> dict[str, str]:
     from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
         BLENDS,
     )
 
-    components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
+    return {dataset: BLENDS[HELDOUT_BLEND][dataset].id for dataset in HELDOUT_FAMILIES}
+
+
+def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+    components = {source_id: dataset for dataset, source_id in _heldout_catalog_ids().items()}
     environments = {}
     for source in sources:
         if source.source_id not in components:
@@ -558,14 +565,25 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
 
 
 def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator[dict[str, Any]]:
+    from experiments.post_training.task_curation.datasets.structure_closure import (  # noqa: PLC0415 - curation-only dependency
+        VALIDATION_SOURCE_ID,
+    )
+
+    catalog_ids = _heldout_catalog_ids()
     for task in tasks:
         family = validation_family(task)
+        structural = family == STRUCTURAL_FAMILY
+        contract = {} if structural else _grader_contract(task)
         row = _selection_row(
             task,
-            TaskStrata(family=family, aai_category=AAII_CATEGORIES[family], source=task.source.dataset),
+            TaskStrata(
+                family=family,
+                aai_category=AAII_CATEGORIES[family],
+                source=VALIDATION_SOURCE_ID if structural else catalog_ids[contract["dataset"]],
+            ),
             state=MembershipState.ACTIVE if task.id in active else MembershipState.CANDIDATE,
         )
-        upstream = None if family == STRUCTURAL_FAMILY else _grader_contract(task).get("pass_rate")
+        upstream = contract.get("pass_rate")
         yield row.model_copy(update={"measured_difficulty": 1 - upstream if upstream is not None else None}).model_dump(
             mode="json"
         )
@@ -663,7 +681,7 @@ def write_training(
                     **TaskStrata(
                         family=family,
                         aai_category=AAII_CATEGORIES.get(family, "untagged"),
-                        source=task.source.dataset,
+                        source=row.source_id,
                         difficulty="unrated" if row.source_id in releases else "untagged",
                         agentic="agentic" in task.tags,
                     ).model_dump(),
@@ -963,9 +981,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
     for task, part in selection.tasks:
         row = _selection_row(
             task,
-            TaskStrata(
-                family=part.family, aai_category=part.aaii_category, source=task.source.dataset, topic=part.topic
-            ),
+            TaskStrata(family=part.family, aai_category=part.aaii_category, source=part.source_id, topic=part.topic),
             state=MembershipState.CANDIDATE,
         ).model_copy(update={"license": part.license})
         if task.id in rows:

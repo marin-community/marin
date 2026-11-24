@@ -13,7 +13,12 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import ComparisonRole
+from finestore.rl.rl_progress import (
+    EVALUATION_PROTOCOL_DIFFERS,
+    SHARED_TASK_FRACTION_INVARIANT,
+    SHARED_TASKS_INVARIANT,
+    ComparisonRole,
+)
 from finestore.rl.run_records import (
     read_attempt,
     read_evaluations,
@@ -933,8 +938,8 @@ def test_control_link_scores_shared_evaluation(
     [link] = run(gate.control_link_step(preset, fresh, previous, table=table))
     report = link.model_dump(mode="json")
     facts = {fact["name"]: fact for fact in report["invariants"]}
-    assert facts["eval_lite/shared_tasks"]["value"] == shared
-    assert facts["eval_lite/shared_task_fraction"]["value"] == shared / count
+    assert facts[f"eval_lite/{SHARED_TASKS_INVARIANT}"]["value"] == shared
+    assert facts[f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"]["value"] == shared / count
     if reason is not None:
         assert report["verdict"] == "invalid" and reason in report["reason"], report
         return
@@ -967,7 +972,7 @@ def test_control_link_scores_shared_evaluation(
             tuple(map(str, baseline_roots)),
             str(tmp_path / "incompatible-link"),
         )
-        assert incompatible.verdict == "invalid" and incompatible.reason == "evaluation protocol differs"
+        assert incompatible.verdict == "invalid" and incompatible.reason == EVALUATION_PROTOCOL_DIFFERS
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]
         assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)

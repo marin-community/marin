@@ -108,6 +108,7 @@ from cloud.iris.ray_storage import (
     validate_ray_spill_dir,
 )
 from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
+from finestore.rl.run_records import read_attempt
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -1811,7 +1812,6 @@ class DriverOutputActivity:
 
     last_progress_at: float = field(default_factory=time.monotonic)
     condition: threading.Condition = field(default_factory=threading.Condition)
-
     def record(self, line: bytes) -> None:
         if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
             return
@@ -2328,7 +2328,17 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
+    run_id = args.run_id
+    try:
+        attempt = read_attempt(str(launch_config.artifacts.export_root), str(launch_config.run.attempt_id))
+        if attempt is not None:
+            run_id = attempt.index_run_id
+    except Exception as error:
+        _log(
+            f"[telemetry] index unavailable for attempt {launch_config.run.attempt_id} "
+            f"({type(error).__name__}); using native run ID"
+        )
+    export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
     ensure_fr_dump_dir()

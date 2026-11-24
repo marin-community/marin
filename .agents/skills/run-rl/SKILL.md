@@ -43,8 +43,9 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    Replace `--plan` with `--run` to submit and add `--wait` for the final report.
    Use a background process and record its process and job IDs so a yielded tool call
    does not cause a second submission.
-   Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
-   the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
+   Record the finishing status's `rl_progress_url` with its result. The launcher publishes the
+   running and terminal attempt with the caller's Marina login. Follow the recipe's
+   [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
    for retries and pinned controls.
    Use `--marina-url ORIGIN` when publication targets a local Marina stack.
    Repeat the original `--run --wait` invocation with the same source and inputs to resume
@@ -62,11 +63,13 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 
 ## Record the experiment
 
-Open an issue through `file-issue` before the first run only with the experimenter's explicit approval.
+Open an issue through `file-issue` after the plan and control-pin check pass and the experimenter
+approves the issue text.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
 state the expected result and the measure that would confirm it. Put the relevant PR or source in
 **Links**. For an existing issue, pass its number with `--issue`. Use the same issue for later
-presets that measure the same change.
+presets that measure the same change. Use `publish --preset PRESET --run-output PATH --attempt ID --issue NUMBER`
+to associate a stored attempt with its issue.
 
 ## Inspect saved answers
 
@@ -86,11 +89,11 @@ Confirm the native receipt records success and the Iris job finished before repo
 For a linked issue, post one comment per result after the person's posting approval. Use these fields
 in order:
 
-- **Preset** — name, version, source and changed inputs.
+- **Result** — verdict or status, key metrics, guards and report path.
+- **Preset** — name, revision, source and changed inputs.
 - **Run / attempt** — IDs, Iris and Grafana links.
 - **W&B** — exact run link.
 - **Marina** — attempt link.
-- **Verdict and key metrics** — verdict, objectives, guards and report path.
 - **Cost** — elapsed time and measured GPU-hours, or label the estimate.
 
 ## Never

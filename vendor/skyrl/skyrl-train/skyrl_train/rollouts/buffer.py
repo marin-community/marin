@@ -14,7 +14,8 @@ import collections
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import repeat
 from typing import Protocol
 
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
@@ -25,6 +26,7 @@ from skyrl_train.group_admission import (
     GroupAdmissionStalledError,
     TrainingGroupInvariantError,
 )
+from skyrl_train.grader_reporting import GraderStats, GraderSummary
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -205,9 +207,11 @@ class RowFacts:
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
             loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
-            shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
-            if batch.get("reward_shaping_components") is not None
-            else None,
+            shaping_components=(
+                tuple(dict(values) for values in batch["reward_shaping_components"])
+                if batch.get("reward_shaping_components") is not None
+                else None
+            ),
             shaping_response_tokens=tuple(int(np.count_nonzero(mask)) for mask in masks),
             loop_incidence=tuple(bool(spans) for spans in batch.get("reward_shaping_loop_spans") or [[]] * count),
             reasoning_span_violations=tuple(batch.get("reasoning_span_violations") or [0] * count),
@@ -223,23 +227,27 @@ class RowFacts:
             passes=tuple(get_trajectory_passes(batch)),
             rollout_passes=tuple(rollout_successes(batch["rewards"], results)),
             scalar_values=tuple(None if isinstance(reward, list) else float(reward) for reward in batch["rewards"]),
-            verifier_present=tuple(result is not None for result in results)
-            if results is not None
-            else (False,) * count,
-            verifier_task_pass=tuple(
-                None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
-                for result in results
-            )
-            if results is not None
-            else (None,) * count,
+            verifier_present=(
+                tuple(result is not None for result in results) if results is not None else (False,) * count
+            ),
+            verifier_task_pass=(
+                tuple(
+                    None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
+                    for result in results
+                )
+                if results is not None
+                else (None,) * count
+            ),
             graded=tuple(index in graded for index in range(count)),
             verifier_scores=tuple(scores) if scores is not None else None,
-            verifier_agents=tuple(
-                agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
-                for result in results
-            )
-            if results is not None
-            else None,
+            verifier_agents=(
+                tuple(
+                    agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
+                    for result in results
+                )
+                if results is not None
+                else None
+            ),
             data_sources=tuple(batch["data_sources"]) if batch.get("data_sources") is not None else None,
             env_metrics=tuple(batch["env_metrics"]) if "env_metrics" in batch else None,
             env_classes=tuple(batch["env_classes"]) if "env_classes" in batch else None,
@@ -261,6 +269,7 @@ class RolloutVerdict:
     rewards: GroupRewards | None
     work: GeneratedWork
     row_facts: RowFacts | None = None
+    grader_stats: GraderStats | None = None
 
     @property
     def trainable(self) -> bool:
@@ -273,6 +282,7 @@ class RolloutContentPolicy:
 
     admission: GroupAdmissionPolicy
     selection: GroupSelectionPolicy
+    report_graders: bool = False
 
     def verdict(self, group: RolloutGroup) -> RolloutVerdict:
         """Judge one group, raising when it violates the run's structural contract."""
@@ -283,10 +293,15 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        grader_stats = None
+        if self.report_graders:
+            metadata = group.prompt["input"].metadata
+            grader_stats = GraderStats()
+            grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
         facts = RowFacts.from_batch(batch)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, grader_stats)
 
 
 class RolloutWriter(Protocol):
@@ -556,6 +571,7 @@ class RolloutBuffer:
         self._batch_taken = False
         self._retries: list[dict] = []
         self._generated: list[tuple[int, GeneratedWork]] = []
+        self._grader_stats = GraderStats()
         self._dispositions: list[GroupDisposition] = []
         self._stats: collections.defaultdict[int, _SelectionStats] = collections.defaultdict(_SelectionStats)
         self._changed = asyncio.Condition()
@@ -601,6 +617,9 @@ class RolloutBuffer:
                 raise ValueError("Committed prompt family does not match its rollout lease")
             del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
+            if verdict.grader_stats is not None:
+                self._grader_stats.merge(verdict.grader_stats)
+                verdict = replace(verdict, grader_stats=None)
             self._ready.append(
                 ReadyRollout(
                     lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
@@ -716,6 +735,10 @@ class RolloutBuffer:
             self._unreported, self._retries, self._generated, self._dispositions = [], [], [], []
             self._changed.notify_all()
             return admission
+
+    def grader_summary(self) -> GraderSummary:
+        """Report all completed groups, including groups rejected for training."""
+        return self._grader_stats.summary()
 
     def snapshot(self) -> BufferSnapshot:
         """Copy committed groups not yet in a taken batch, and prompts awaiting regeneration."""

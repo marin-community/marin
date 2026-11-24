@@ -5,7 +5,7 @@
 
 import re
 from typing import Any, cast
-from urllib.parse import quote, unquote_plus
+from urllib.parse import quote, unquote_plus, urlencode
 
 import pytest
 from marina.journeys import Journey
@@ -29,6 +29,19 @@ def test_the_run_log_lists_launches_and_one_run_opens(journey: Journey) -> None:
     expect(journey.page.get_by_text("Grade", exact=True)).to_be_visible()
     journey.sees("Metrics").shoot("run-detail")
     assert journey.page.url == journey.url(f"/runs/{newest}")
+
+    params = urlencode({"rl_run": "logical-fixture", "rl_native_run": "native/fixture", "rl_attempt": "wanted"})
+    matched = cast(list[dict[str, Any]], journey.api(f"{API}/runs?{params}"))
+    assert {row["rl_run_id"] for row in matched} == {"logical-fixture", "native/fixture"}
+    assert len(matched) == 2 and all(row["rl_attempt_id"] == "wanted" and row["rl_step"] == 0 for row in matched)
+    [group] = cast(list[dict[str, Any]], journey.api(f"{API}/groups?{params}"))
+    assert {item["run_id"] for item in group["evals"]} == {row["run_id"] for row in matched}
+    journey.visit(f"/runs?view=runs&{params}")
+    expect(journey.page.get_by_role("link", name="detail →")).to_have_count(2)
+    journey.visit("/runs/snowball-2026.07.20-mmlu")
+    link = journey.page.get_by_role("link", name="RL attempt wanted")
+    expect(link).to_have_attribute("href", re.compile(r"/#run=native%2Ffixture&attempt=wanted$"))
+    expect(journey.page.get_by_text("checkpoint step 0", exact=False)).to_be_visible()
 
 
 def test_the_shell_bar_carries_the_app_and_its_own_navigation(journey: Journey) -> None:

@@ -68,6 +68,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         "val_data": [],
         "checkpoint_root": "/launch/checkpoints",
         "export_root": "/launch/exports",
+        "grader_report_dir": "/launch/exports/grader_reports/attempt-1",
         "resume_checkpoint_count": 4,
         "seed": 41,
         "trajectory_root": "/launch/trajectories",

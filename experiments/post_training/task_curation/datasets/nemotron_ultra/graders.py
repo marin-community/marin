@@ -30,6 +30,7 @@ from taskcompendium.convert.nemotron_ultra import (
     PLACEHOLDER_FIELD,
     BlendRequest,
     agent_request,
+    blend_component,
     blend_request,
     blend_task,
     text_request,
@@ -818,6 +819,7 @@ def _agent_task(
         answer_format=FinalAction() if action else PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
+        labels={"subset_id": blend_component(request.contract)},
     )
     return NormalizedTask(task, (*changes, *request.changes))
 

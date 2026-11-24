@@ -1,6 +1,7 @@
 """Behavior tests for runtime source selection inside an Iris GPU task."""
 
 import contextlib
+import json
 import os
 import signal
 import sys

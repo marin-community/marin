@@ -18,8 +18,8 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
-from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.rl_progress import Comparison, ComparisonRole, ControlReplicate, Invariant
+from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
 from finestore.rl.strata import TaskStrata
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
@@ -51,6 +51,55 @@ def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
         return recorded_launch(attempt)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
+
+
+class NativeWindow(NamedTuple):
+    seconds: float
+    gpus: int
+
+
+def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWindow | None:
+    result = attempt.native.result
+    if result.started_at is None or result.finished_at is None:
+        return None
+    seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
+    if seconds < 0:
+        raise ValueError("Native completion precedes its recorded start")
+    return NativeWindow(seconds, launch.num_nodes * launch.gpus_per_node)
+
+
+def native_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Multiply the stored native job window by its GPU allocation."""
+    window = _native_window(attempt, launch)
+    return window.seconds * window.gpus / 3600 if window is not None and window.seconds > 0 else None
+
+
+def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | None:
+    """Read the native windows and allocations for a complete checkpoint lineage."""
+    if not history or history[-1].record.resumed_step not in (None, 0):
+        return None
+    windows = []
+    for entry in history:
+        record = entry.record
+        if record.config is None:
+            return None
+        try:
+            launch = read_recorded_launch(record)
+        except InvalidComparison:
+            return None
+        window = _native_window(record, launch)
+        if window is None:
+            return None
+        windows.append(window)
+    return windows
+
+
+def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Sum native allocations over the complete recorded checkpoint lineage."""
+    if not attempt.native.result.state.is_terminal:
+        return None
+    windows = lineage_windows(attempt_lineage(launch.export_root, attempt.attempt_id))
+    return sum(window.seconds * window.gpus for window in windows) / 3600 if windows else None
 
 
 def _selected_evaluation_record(
@@ -197,6 +246,7 @@ class RunOptions(BaseModel, frozen=True):
 
 class RunInputs(BaseModel, frozen=True):
     preset_name: str
+    control: ControlReplicate | None = None
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: presets.StoredInitializer | None = None
@@ -314,18 +364,17 @@ def _grader_errors(
 def _session_invariants(
     name: str,
     table: pa.Table,
-    evaluation: presets.Evaluation,
-    preset: presets.Preset,
-    expected: int,
-    samples: int,
     task_ids: Sequence[str],
+    answers_per_task: int,
+    required_coverage: bool,
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["task_id"] for row in rows)
-    holds = len(rows) == expected and set(counts.values()) == {samples} and set(counts) == set(task_ids)
+    expected = len(task_ids) * answers_per_task
+    holds = len(rows) == expected and set(counts.values()) == {answers_per_task} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/answers_complete", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if _checks_task_coverage(preset, evaluation):
-        coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // samples)
+    if required_coverage:
+        coverage = len({row["task_id"] for row in rows if row["scored"]}) / len(task_ids) if task_ids else 0.0
         result.append(
             Invariant(
                 name=f"{name}/task_coverage",
@@ -434,11 +483,7 @@ def evaluation_status(
         return EvaluationStatus()
     try:
         effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
-        try:
-            inputs = read_run_inputs(path)
-        except FileNotFoundError:
-            inputs = None
-        data = read_measurements(path, effective, inputs, attempt=attempt)
+        data = read_measurements(path, effective, attempt=attempt)
         return EvaluationStatus(
             evaluations=data.evaluations,
             evaluation_invariants=tuple(
@@ -464,11 +509,9 @@ def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[st
 def read_measurements(
     path: str,
     preset: presets.Preset,
-    inputs: RunInputs | None = None,
     *,
     attempt: AttemptRecord | None = None,
 ) -> RunMeasurements:
-    inputs = inputs or RunInputs(preset_name=preset.name)
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
@@ -491,9 +534,6 @@ def read_measurements(
         protocols = {evaluation.name: evaluation_protocol(launch, evaluation.name) for evaluation in preset.evaluations}
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
-    default, selection = recipe.task_selections(
-        preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
-    )
     task_set = held_out_identity(preset, launch)
     scores, initial_scores = [ANSWER_SCHEMA.empty_table()], []
     held_out_answers = {}
@@ -501,18 +541,10 @@ def read_measurements(
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
-        quality = evaluation.held_out and _checks_task_coverage(preset, evaluation)
+        required_coverage = _checks_task_coverage(preset, evaluation)
         task_specs = recorded_tasks[evaluation.name]
-        samples = evaluation.answers
-        if evaluation.held_out:
-            samples = protocols[evaluation.name]["n_samples_per_prompt"]
-            expected = len(task_specs) * samples
-        else:
-            expected = recipe.evaluation_answer_count(
-                evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
-            )
-        if samples < 1 or expected < samples:
-            raise InvalidComparison(f"recorded evaluation task set is empty for {evaluation.name}")
+        task_ids = tuple(task_id for task_id, _ in task_specs)
+        recorded_answers = protocols[evaluation.name]["n_samples_per_prompt"]
         all_scores = read_answers(evaluation, path, launch=launch, attempt=terminal)
         if evaluation.held_out:
             all_scores = _bind_task_digests(all_scores, task_specs)
@@ -555,18 +587,8 @@ def read_measurements(
                         tasks=len({row["task_id"] for row in slices[key]}) if key in slices else None,
                     )
                 )
-            invariants.extend(
-                _session_invariants(
-                    session_name,
-                    session,
-                    evaluation,
-                    preset,
-                    expected,
-                    samples,
-                    tuple(task_id for task_id, _ in task_specs),
-                )
-            )
-            if quality:
+            invariants.extend(_session_invariants(session_name, session, task_ids, recorded_answers, required_coverage))
+            if evaluation.held_out and required_coverage:
                 invariants.append(
                     _grader_errors(
                         [metrics.get(metric_step, {})],
@@ -590,11 +612,6 @@ def read_measurements(
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     values, slices = _evaluation_values(pa.concat_tables(scores), pa.concat_tables([scores[0], *initial_scores]))
     result = terminal.native.result
-    gpu_hours = None
-    if result.started_at and result.finished_at:
-        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
-        if seconds > 0:
-            gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     return RunMeasurements(
         config=terminal.native.config,
         recorded=launch,
@@ -614,7 +631,7 @@ def read_measurements(
         },
         held_out_answers=held_out_answers,
         started_at=result.started_at,
-        gpu_hours=gpu_hours,
+        gpu_hours=native_gpu_hours(terminal, launch),
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,
     )

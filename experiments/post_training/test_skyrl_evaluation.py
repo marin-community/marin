@@ -131,7 +131,7 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
         if tokenizer_revision is not None:
             assert config["tokenizer_revision"] == tokenizer_revision
         if source_kind == "rl":
-            assert record_json["rl_attempt"] == ids
+            assert record_json["rl_attempt"] == {**ids, "step": 100}
         else:
             assert "rl_attempt" not in record_json
 

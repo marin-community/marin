@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
 import json
+import re
 import runpy
 import shutil
 import subprocess
@@ -17,7 +18,14 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
-from finestore.rl.run_records import AttemptRecord, read_attempt, read_evaluations, write_attempt
+from finestore.rl.run_records import (
+    AttemptRecord,
+    LaunchResult,
+    RunIndexIdentity,
+    read_attempt,
+    read_evaluations,
+    write_attempt,
+)
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -25,6 +33,7 @@ from iris.resources.state import JobState
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
 from marin.rl import skyrl as skyrl_api
+from marin.rl.cli import RUN_INDEX_ENV
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
@@ -54,7 +63,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json, selection_summary
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
@@ -87,7 +96,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     initializer = f"{name}@{version}"
     write_published_artifact(tmp_path, name, version, Artifact, source=str(tmp_path / name / version))
     for preset in table.presets:
-        arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
+        arguments = ["--preset", preset.name, "--version", preset.revision]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
         if preset.name == "eval-short":
@@ -98,8 +107,12 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
             capture.setattr(gate, "compose_configs", collect_plan)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
+        status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+        if preset.gated:
+            pin = table.control_pins[preset.control_preset]
+            assert status["control_pin"]["commit"] == pin.commit
+            assert status["control_pin"]["revision"] == pin.revision
         if preset.name == "eval-short":
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
         elif preset.name in ("speed-short", "data-short"):
@@ -110,16 +123,20 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     gate.compose_configs(launch_paths, validate_driver=True)
 
 
-def test_plan_rejects_gated_preset_without_control_pin(selection):
-    table = snowball_model.SNOWBALL
-    preset = next(preset for preset in table.presets if preset.gated)
-    arguments = ["--preset", preset.name, "--version", preset.revision]
-    if preset.tasks_input == "required":
-        arguments += ["--tasks", SELECTION_IDENTITY]
-    unpinned = replace(table, control_pins={})
-    result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
-    assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
-    assert "--control --replicates" in result.output
+@pytest.mark.parametrize(("mode", "exit_code"), [("--plan", 0), ("--run", 4)])
+def test_missing_control_pin(selection, mode, exit_code):
+    table = replace(snowball_model.SNOWBALL, control_pins={})
+    preset = table.by_name["learning-medium"]
+    args = ["--preset", preset.name, "--version", preset.revision, mode]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    if mode == "--plan":
+        status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+        assert len(status["runs"]) == 1
+        assert status["control_pin_error"].startswith(f"no control pin for {preset.name}")
+    else:
+        assert f"no control pin for {preset.name}" in result.output
+        assert "--control --replicates" in result.output
 
 
 @pytest.mark.parametrize(
@@ -754,6 +771,24 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     assert name(learning, "trainer.policy.optimizer_config.lr=2e-6") == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002"
     )
+    index_sources = []
+    table = snowball_model.SNOWBALL
+    paths = (
+        repeated.runs[0],
+        repeated.runs[1],
+        run(learning, "trainer.policy.optimizer_config.lr=2e-6"),
+    )
+    for index, step in enumerate(paths):
+        source = tmp_path / f"index-{index}.yaml"
+        prefix = recipe.artifact_prefix(learning.recipe.layout.cluster)
+        source.write_text(materialized_config(step, prefix).launch_config_yaml)
+        index_sources.append(str(source))
+    provenance = replace(Provenance.capture(), branch=None)
+    first_id, repeated_id, changed_id = (
+        snowball.run_index_identity(config, learning, table, provenance, user="test-user").run_id
+        for config in gate.compose_configs(index_sources)
+    )
+    assert first_id == repeated_id and first_id != changed_id
     controls(recorded_runs, "learning-medium")
     first = snowball.build_experiment(learning, requirements=("eval_lite/mean>=0",), table=snowball_model.SNOWBALL)
     second = snowball.build_experiment(learning, requirements=("eval_lite/mean>=0.1",), table=snowball_model.SNOWBALL)
@@ -924,7 +959,7 @@ def test_submission_exit_codes_and_publication_retries(
             line.split("run: ", 1)[1].strip() for line in output.splitlines() if "run: https://grafana.oa.dev/" in line
         ]
         query = next(parse_qs(urlparse(url).query) for url in urls if parse_qs(urlparse(url).query)["to"] == ["now"])
-        assert query["var-run"] == [built.runs[0].name + "-" + preset.revision]
+        assert re.fullmatch(f"snowball-{preset.name}-[^/]+-[0-9a-f]{{8}}", query["var-run"][0])
         assert query["var-cluster"] == [preset.recipe.layout.cluster]
         assert query["var-training_type"] == ["sync" if preset_name == "data-short" else "async"]
         assert int(query["from"][0]) > 0
@@ -946,7 +981,7 @@ def test_submission_exit_codes_and_publication_retries(
             write_receipt(source, receipt)
             write_attempt(
                 str(source / "exports"),
-                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=74),
+                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=73),
             )
             copy_evaluations(source, "native-0", "native-retry")
             for row in metrics.values():
@@ -969,7 +1004,7 @@ def test_submission_exit_codes_and_publication_retries(
         return SimpleNamespace(state=JobState.FAILED if case in {"native-failed"} else JobState.SUCCEEDED)
 
     client, job = fake_iris(monkeypatch, "dashboard-coordinator")
-    client.job.return_value.wait.side_effect = finish
+    client.job.return_value.state_only.side_effect = lambda: finish().state
     if case in {"malformed-control", "stale-control", "candidate-compose"}:
         client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     published = []
@@ -1046,7 +1081,10 @@ def test_submission_exit_codes_and_publication_retries(
         return
     snapshot = printed_status(result.stdout)
     if case == "data-short":
-        assert "publication" not in snapshot and published == []
+        assert snapshot["publication"]["unserved_records"] == [], snapshot["publication"]
+        assert len(published) == 1 and published[0]["status"] == "succeeded"
+        assert published[0]["optimizer_steps"] == 0 and published[0]["data_identity"] is None
+        assert published[0]["evaluation_data_identity"]
         return
     paths = [[f"{training.name}-{preset.revision}", f"native-{index}"] for index, training in enumerate(built.runs)]
     if unavailable["value"]:
@@ -1057,13 +1095,9 @@ def test_submission_exit_codes_and_publication_retries(
             "retry": "Repeat the original command with --wait.",
         }
     if case == "mixed-native-failed":
-        assert [row["attempt_id"] for row in published] == ["native-0"]
-        assert snapshot["publication"] == {
-            "served_records": paths[:1],
-            "unserved_records": paths[1:],
-            "errors": ["Gate report missing for this attempt; repeat the original command with --wait"],
-            "retry": "Repeat the original command with --wait.",
-        }
+        assert [row["attempt_id"] for row in published] == ["native-0", "native-1"]
+        assert snapshot["publication"]["unserved_records"] == []
+        assert published[1]["failed_facts"] == ["required_gate_report"]
     if case == "mixed-native-failed":
         assert published[0]["status"] == "failed" and published[0]["gate_result"] is None
     if expected == 0 and (not unavailable["value"]):
@@ -1073,7 +1107,12 @@ def test_submission_exit_codes_and_publication_retries(
         return
     unavailable["value"] = False
     phase["retry"] = True
-    arguments[arguments.index("--issue") + 1] = "74"
+    issue_offset = arguments.index("--issue")
+    if case == "partial-retry":
+        arguments[issue_offset + 1] = "74"
+        refused = CliRunner().invoke(snowball.command(snowball_model.SNOWBALL, argv=tuple(arguments)), arguments)
+        assert refused.exit_code == 4 and "conflicting lineage issues" in refused.output
+    del arguments[issue_offset : issue_offset + 2]
     previously_published = len(published)
     repeated = CliRunner().invoke(
         snowball.command(
@@ -1088,14 +1127,212 @@ def test_submission_exit_codes_and_publication_retries(
     recovered = printed_status(repeated.stdout)
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
     assert {row["attempt_id"]: row["issue"] for row in recovered["runs"]} == (
-        {"native-retry": 74, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
+        {"native-retry": 73, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
     )
     if case == "mixed-native-failed":
         retry = next(row for row in published[previously_published:] if row["attempt_id"] == "native-retry")
-        assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and (retry["issue"] == 74)
+        assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and retry["issue"] == 73
     else:
         cached = next(row for row in published[previously_published:] if row["attempt_id"] == "native-0")
         assert cached["issue"] == 73
+
+
+@pytest.mark.parametrize(
+    "model,outcome,pr_number",
+    [
+        ("snowball", "succeeded", 124),
+        ("snowball", "native-failure", 124),
+        ("snowball", "interrupted", None),
+        ("mochi", "succeeded", 124),
+    ],
+)
+def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
+    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number
+):
+    early_failure = outcome != "succeeded"
+    if model == "mochi":
+        table = MOCHI
+        preset = table.by_name["train-medium"]
+        binding = recipe.selection_artifact(preset.tasks)
+        path = Path(binding.path()) / "summary.json"
+        if not path.is_file():
+            _json(path, selection_summary(100))
+        monkeypatch.setattr(snowball, "check_cache", lambda path: True)
+    else:
+        table = snowball_model.SNOWBALL
+        preset = replace(
+            table.by_name["train-long"].with_updates(2),
+            checkpoints="none",
+            export="none",
+            checkpoint_every=None,
+            evaluations=(),
+        )
+        table = preset_table(preset)
+    historical_revision = preset.revision
+    if model == "snowball":
+        preset = replace(preset, revision="2026.01.02")
+        table = preset_table(preset)
+    git_output = snowball.git_output
+    source_ref = git_output(["rev-parse", "HEAD"], cwd=recipe.REPO_ROOT)
+    archive_tree = git_output(["rev-parse", "HEAD^{tree}"], cwd=recipe.REPO_ROOT)
+    monkeypatch.setattr(
+        Provenance, "capture", lambda *a, **kw: Provenance("tree-one", source_ref, False, "branch", "test")
+    )
+
+    def base_ref(args, cwd, **kwargs):
+        if args[0] == "merge-base":
+            assert args == ["merge-base", source_ref, "origin/main"]
+            if outcome == "interrupted":
+                raise RuntimeError("main merge base unavailable")
+            return archive_tree
+        return git_output(args, cwd, **kwargs)
+
+    monkeypatch.setattr(snowball, "git_output", base_ref)
+    built = snowball.build_experiment(preset, table=table)
+    source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old", table=table)
+    receipt = json.loads((source / "terminal.json").read_text())
+    launch = receipt["config"]
+    if early_failure:
+        (source / "terminal.json").unlink()
+        (source / "resolved-launch.yaml").unlink()
+    client, job = fake_iris(monkeypatch, "index-coordinator")
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
+    publications = []
+    unavailable = outcome == "interrupted"
+
+    def publish(record):
+        nonlocal unavailable
+        if record.attempt_id == "native-indexed" and record.status == "failed" and unavailable:
+            unavailable = False
+            raise RuntimeError("Marina unavailable during the terminal write")
+        publications.append(record)
+
+    fake_publication(monkeypatch, publish, "https://progress.test")
+    followers = []
+
+    def run_local(argv, **kwargs):
+        if argv[0] == "gh":
+            if pr_number is None:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, str(pr_number))
+        if argv[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(argv, int(model == "snowball"))
+        if argv[:2] == ["git", "archive"]:
+            assert model == "snowball" and argv[2] == archive_tree
+        return subprocess.run(argv, **kwargs)
+
+    monkeypatch.setattr(
+        snowball,
+        "subprocess",
+        SimpleNamespace(
+            run=run_local,
+            SubprocessError=subprocess.SubprocessError,
+            DEVNULL=subprocess.DEVNULL,
+            STDOUT=subprocess.STDOUT,
+            Popen=lambda argv, **kwargs: followers.append(argv[3:]),
+        ),
+    )
+
+    def native_prepared(**kwargs):
+        run_id = launch["run"]["id"]
+        index = RunIndexIdentity.model_validate(json.loads(kwargs["environment"].env_vars[RUN_INDEX_ENV])[run_id])
+        launch["run"].update(attempt_id="native-indexed", coordinator_iris_job_id=str(job))
+        other_config = {
+            **launch,
+            "run": {**launch["run"], "attempt_id": "other-coordinator", "coordinator_iris_job_id": "/test-user/other"},
+        }
+        export_root = launch["artifacts"]["export_root"]
+        write_attempt(
+            export_root,
+            AttemptRecord(run_id=run_id, attempt_id="other-coordinator", config=other_config, index=index),
+        )
+        write_attempt(
+            export_root,
+            AttemptRecord(
+                run_id=run_id,
+                attempt_id="native-indexed",
+                config=launch,
+                index=index,
+                metrics_started_at=None if early_failure else receipt["result"]["started_at"],
+                elapsed_excluding_eval_seconds=None if early_failure else 123.0,
+                result=(
+                    LaunchResult(state="failed", iris_job_id="/test-user/unschedulable")
+                    if outcome == "native-failure"
+                    else None
+                ),
+            ),
+        )
+        return SimpleNamespace(job_id=job)
+
+    def state():
+        nonlocal running_observed
+        if early_failure:
+            return JobState.FAILED
+        if not running_observed:
+            running_observed = True
+            return JobState.RUNNING
+        write_receipt(source, receipt)
+        metrics = read_skyrl_metrics(str(source), attempt_id="native-old")
+        for row in metrics.values():
+            row["attempt_id"] = "native-indexed"
+        append_metrics(source, metrics)
+        return JobState.SUCCEEDED
+
+    running_observed = False
+    client.submit.side_effect = native_prepared
+    client.job.return_value.state_only.side_effect = state
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
+    result = CliRunner().invoke(
+        snowball.command(table, argv=tuple(arguments), entry_module=f"experiments.post_training.{model}_rl"), arguments
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    grafana_link = next(
+        line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
+    )
+    [follower] = followers
+    saved_attempt = ["--preset", preset.name, "--run-output", str(source), "--attempt", "native-indexed"]
+    if outcome == "interrupted":
+        still_prepared = CliRunner().invoke(snowball.rl_publication.command(table), [*saved_attempt, "--issue", "73"])
+        assert still_prepared.exit_code == 1 and "requires a terminal native attempt" in still_prepared.output
+        assert read_attempt(str(source / "exports"), "native-indexed").issue is None
+
+    @click.command()
+    def follow():
+        raise click.exceptions.Exit(snowball.main(table, argv=follower))
+
+    result = CliRunner().invoke(follow)
+    assert result.exit_code == int(early_failure), (result.output, result.exception)
+    if outcome == "interrupted":
+        assert "Marina unavailable during the terminal write" in result.output
+        interrupted = read_attempt(str(source / "exports"), "native-indexed")
+        assert interrupted.result is None and interrupted.interruption == "coordinator_terminated"
+        replayed = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
+        assert replayed.exit_code == 0, (replayed.output, replayed.exception)
+        assert publications[-1].failed_facts == ["coordinator_interrupted"]
+    running = [row for row in publications if row.status == "running"]
+    assert [row.attempt_id for row in running] == ([] if outcome == "native-failure" else ["native-indexed"])
+    terminal = next(row for row in publications if row.attempt_id == "native-indexed" and row.status != "running")
+    assert terminal.status == ("failed" if early_failure else "succeeded")
+    assert terminal.pr_number == pr_number
+    assert all(row.run_id == terminal.run_id and row.pr_number == pr_number for row in running)
+    assert parse_qs(urlsplit(grafana_link).query)["var-run"] == [terminal.run_id]
+    assert re.fullmatch(rf"{model}-{preset.name}-[^/]+-[0-9a-f]{{8}}", terminal.run_id)
+    assert terminal.source_revision == f"base={source_ref} tree=tree-one"
+    expected_base = None if outcome == "interrupted" else historical_revision
+    assert terminal.base_preset_revision == expected_base
+    assert all(row.base_preset_revision == expected_base for row in running)
+    if expected_base is None:
+        assert "The base preset version is unavailable from the branch's main merge base." in terminal.evidence
+    if not early_failure:
+        assert parse_qs(urlsplit(terminal.grafana_url).query)["var-job"] == [receipt["result"]["iris_job_id"]]
+    assert terminal.gate_result is None
+    assert terminal.elapsed_excluding_eval_seconds == (None if early_failure else 123.0)
+    assert terminal.artifact_uri == str(source)
+    if outcome == "native-failure":
+        result = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert publications[-1].status == "failed"
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
@@ -1178,8 +1415,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         preset,
         checkpoints="best",
         export="best",
+        checkpoint_every=2,
+        evaluations=(replace(preset.evaluations[0], every=2),),
         recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")),
     )
+    monkeypatch.setattr(snowball, "_branch_pr_number", lambda provenance: None)
     table = preset_table(preset)
     initializer = ArtifactHfModel(
         ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=Artifact),
@@ -1193,12 +1433,17 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
     built = snowball.build_experiment(
-        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
-    _json(source / "exports/best_checkpoint.json", {"step": 10})
+    _json(source / "exports/best_checkpoint.json", {"step": 2})
+    earlier = read_attempt(str(source / "exports"), "recorded-attempt")
+    assert earlier is not None
+    linked = earlier.model_copy(update={"issue": 73})
+    write_attempt(str(source / "exports"), linked)
     staged = source.with_name("before-native-execution")
     source.rename(staged)
+    write_attempt(str(source / "exports"), AttemptRecord(run_id=linked.run_id, attempt_id="earlier", issue=73))
     native_calls = []
 
     def native(command, *, env_vars=None):
@@ -1216,7 +1461,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "3TB",
             "tests/python-tokenizer",
         )
-        assert read_attempt(inspection["export"], inspection["attempt"]) is None
+        prepared = read_attempt(inspection["export"], inspection["attempt"])
+        assert prepared is not None and prepared.index is not None
+        assert prepared.index.model == table.model and prepared.index.preset == preset.name
+        assert prepared.issue is None
+        assert snowball.rl_publication.lineage_issue(inspection["export"]) == 73
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
@@ -1232,7 +1481,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         response = stored["result"]
         response["model"] = dict(
             policy_export_uri=str(source / "policy"),
-            global_step=12,
+            global_step=3,
             tokenizer_uri="tests/python-tokenizer",
             tokenizer_revision="python-tokenizer-revision",
             checkpoint_root=str(source / "checkpoints"),
@@ -1256,7 +1505,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "--max-concurrent",
         "3",
         "--set",
-        "trainer.max_steps=12",
+        "trainer.max_steps=3",
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
     mode, coordinator_module = "valid", "first_model_entry"
@@ -1286,9 +1535,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         return SimpleNamespace(job_id=job)
 
     client.submit.side_effect = submit
-    client.job.return_value.wait.side_effect = lambda *args, **kwargs: SimpleNamespace(
-        state=JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
-    )
+    client.job.return_value.state_only.side_effect = lambda: (JobState.SUCCEEDED if mode == "valid" else JobState.FAILED)
 
     policy_uri = "s3://marin-test/models/python-policy"
     policy_path = tmp_path / "python-policy"
@@ -1342,10 +1589,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
         # recorded fixtures and inspect the native launch in this test.
+        config = earlier.native.config
         with monkeypatch.context() as preflight:
-            preflight.setattr(
-                gate, "compose_configs", lambda paths, **_: [{"runtime": {"training_type": "async"}} for _ in paths]
-            )
+            preflight.setattr(gate, "compose_configs", lambda paths, **_: [config for _ in paths])
             return CliRunner().invoke(command, args)
 
     for override in (None, "second_model_entry"):
@@ -1355,11 +1601,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             module(override)
         result = invoke_with_preflight_stub(entry)
         assert result.exit_code == 0, (result.output, result.exception)
-        assert "best_checkpoint_step: 10" in result.output and f"{preset.evaluations[0].name}@12/scored" in result.output
+        assert "best_checkpoint_step: 2" in result.output and f"{preset.evaluations[0].name}@3/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
-    assert published[-1].optimizer_steps == published[-1].planned_updates == 12
-    assert (published[-1].model, published[-1].issue) == ("snowball", None)
+    assert published[-1].optimizer_steps == published[-1].planned_updates == 3
+    assert (published[-1].model, published[-1].issue) == ("snowball", 73)
 
     for mode in (
         "initializer-mismatch",
@@ -1403,7 +1649,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 }
             )
             for row in evaluations
-            if row.step != 10
+            if row.step != 2
         ],
     )
     (source / "exports/best_checkpoint.json").unlink()
@@ -1411,7 +1657,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["model"] = None
     step = built.runs[0]
     write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
-    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=12"]
+    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=3"]
     result = invoke_with_preflight_stub(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
@@ -1420,7 +1666,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     [status] = printed_status(result.stdout)["runs"]
     assert status["best_checkpoint_step"] == "none eligible"
     facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
     mode, coordinator_module = "valid", "first_model_entry"
@@ -1433,7 +1679,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
     live = snowball.build_experiment(
-        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     assert live.runs[0].name != built.runs[0].name
     with monkeypatch.context() as live_record:
@@ -1447,7 +1693,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     facts = {
         fact["name"]: fact for row in printed_status(result.stdout)["runs"] for fact in row["evaluation_invariants"]
     }
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
 
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")

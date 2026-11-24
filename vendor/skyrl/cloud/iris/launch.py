@@ -296,8 +296,6 @@ def execute_launch(
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
-        _prepare_model_caches(config)
-        OmegaConf.save(config, resolved_file.name, resolve=False)
         record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
         if record is None or record.config is None:
             write_attempt(
@@ -308,6 +306,8 @@ def execute_launch(
                     config=OmegaConf.to_container(config, resolve=True),
                 ),
             )
+        _prepare_model_caches(config)
+        OmegaConf.save(config, resolved_file.name, resolve=False)
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:

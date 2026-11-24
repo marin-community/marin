@@ -14,10 +14,13 @@ from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec
 from skyrl_gym.rollout_specs import is_shell_harness
+from skyrl_gym.verification import VerificationResult
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.dataset.tasks import SourceTaskDataset
+from skyrl_train.dataset.tasks import SourceTaskDataset, TaskDataset, write_tasks
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
-from skyrl_train.task_inputs import task_messages
+from skyrl_train.grader_reporting import GraderStats, write_grader_report
+from skyrl_train.task_inputs import TaskInput, task_messages
+from skyrl_train.trajectory_runners.types import TrajectoryBatch
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
     GraderMachine,
@@ -46,17 +49,20 @@ class LocalAdmissionFactory:
         raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
-def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list:
-    path = tmp_path / "tasks.parquet"
-    pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
-    tokenizer = PreTrainedTokenizerFast(
+def _tokenizer() -> PreTrainedTokenizerFast:
+    return PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
         unk_token="[UNK]",
         chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
     )
+
+
+def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list[TaskInput]:
+    path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
     configs["task_spec"].update(task_spec_overrides)
-    dataset = SourceTaskDataset([str(path)], tokenizer, 128, num_workers=1, environment_configs=configs)
+    dataset = SourceTaskDataset([str(path)], _tokenizer(), 128, num_workers=1, environment_configs=configs)
     return [row["input"].spec for row in dataset.collate_fn(list(dataset))]
 
 
@@ -81,9 +87,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
     simulated = text_task("simulated-task", source="mixed").model_copy(
         update={"environment_requirements": SHELL_ENVIRONMENT}
     )
-    linux = text_task("linux-task", source="mixed").model_copy(
-        update={"environment_requirements": NATIVE_ENVIRONMENT}
-    )
+    linux = text_task("linux-task", source="mixed").model_copy(update={"environment_requirements": NATIVE_ENVIRONMENT})
     reply = text_task("reply-task", source="mixed")
     shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
     loaded = _load(
@@ -117,16 +121,43 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
     assert is_shell_harness(loaded[1].harness)
     assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
 
+    packed = []
+    for name in ("one", "two"):
+        task = loaded[0].task.model_copy(
+            update={
+                "id": name,
+                "source": (
+                    loaded[0].task.source.model_copy(
+                        update={
+                            "dataset": f"tasktrove://pack%2Fdataset/shared%2Fsource/category/{name}",
+                        }
+                    )
+                ),
+            }
+        )
+        packed.append(loaded[0].model_copy(update={"task": task}))
+    path = tmp_path / "packed-rollouts.parquet"
+    write_tasks(path, iter(packed))
+    dataset = TaskDataset([str(path)], _tokenizer(), 128, num_workers=1)
+    metadata = [row["input"].metadata for row in dataset.collate_fn(list(dataset))]
+    stats = GraderStats()
+    stats.add(TrajectoryBatch(rewards=[1.0, 1.0], verification_results=[VerificationResult.verified(1.0)] * 2), metadata)
+    write_grader_report(str(tmp_path), "0", {"evaluation": stats.summary()["subsets"]})
+    [subset] = json.loads((tmp_path / "grader_report.json").read_text())["evaluation"]["0"]
+    assert (subset["subset_id"], subset["attempted"]) == ("pack/dataset/shared/source", 2)
+
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
     image = text_task("image-task").model_copy(
         update={
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                placement=GraderMachine(environment=EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS,
-                    docker_image="fixture@sha256:" + "0" * 64,
-                )),
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        docker_image="fixture@sha256:" + "0" * 64,
+                    )
+                ),
             )
         }
     )
@@ -137,10 +168,12 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
             "grader": ScriptGrader(
                 argv=("python", "/tests/grade.py"),
-                placement=GraderMachine(environment=EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS,
-                    packages_lock="s3://fixture/grader.lock",
-                )),
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        packages_lock="s3://fixture/grader.lock",
+                    )
+                ),
             ),
         }
     )

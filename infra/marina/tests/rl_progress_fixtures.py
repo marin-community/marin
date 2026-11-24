@@ -27,20 +27,27 @@ def rl_progress_client(tmp_path, monkeypatch):
         ensure_applet_provisioning(store.engine)
         store.migrate()
         source = Path(__file__).parents[1] / "apps/rl_progress"
-        store.publish(read_applet_package(package_applet(source)), "test", UUID(APPLET_ID))
+        package = read_applet_package(package_applet(source))
+        release = store.publish(package, "test", UUID(APPLET_ID))
         client = TestClient(
             create_app(MarinaConfig(data_root=str(tmp_path), iap_audience=None, database=database)),
             client=("127.0.0.1", 40000),
         )
 
         def request(origin, method, path, *, json_body=None, **kwargs):
+            if method == "GET" and path == "/evaldash/api/runs":
+                return []
             response = client.request(method, path, json=json_body)
             response.raise_for_status()
             return response.json()
 
+        def publish_release():
+            nonlocal release
+            release = store.publish(package, "test", UUID(APPLET_ID), base_version=release.version)
+
         monkeypatch.setattr("marina.client.marina_request", request)
         try:
-            yield client, request
+            yield client, request, publish_release
         finally:
             client.close()
             store.engine.dispose()
@@ -80,3 +87,28 @@ def progress_record() -> dict:
     }
 
     return AttemptSummary.model_validate_json(json.dumps(record), strict=True).model_dump(mode="json")
+
+
+def grader_report() -> dict:
+    return {
+        "training": {},
+        "training_tasks": {},
+        "evaluation": {
+            "eval_lite/0": [
+                {
+                    "subset_id": "test/source",
+                    "data_sources": ["test/source"],
+                    "attempted": 2,
+                    "verified": 2,
+                    "passed": 1,
+                    "verification_coverage": 1.0,
+                    "success_rate": 0.5,
+                    "verification_statuses": {"verified": 2},
+                    "grading_failures": {},
+                    "rollout_failures": {},
+                    "grading_latency_seconds": {"count": 2, "mean": 2.0, "p95": 2.0, "max": 2.0},
+                }
+            ]
+        },
+        "evaluation_tasks": {},
+    }

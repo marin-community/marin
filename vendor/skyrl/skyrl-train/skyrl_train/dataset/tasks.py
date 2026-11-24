@@ -8,6 +8,7 @@ from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -47,10 +48,25 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
+def _source_stratum(dataset: str, labels: Mapping[str, str]) -> str:
+    if dataset.startswith("tasktrove://"):
+        uri = urlsplit(dataset)
+        source = uri.path.lstrip("/").partition("/")[0]
+        if uri.netloc and source:
+            return f"{unquote(uri.netloc)}/{unquote(source)}"
+    return labels.get("subset_id") or dataset
+
+
 def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
     digest = canonical_sha256(task)
     if selection is None:
-        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+        return TaskEvaluationIdentity(
+            task_digest=digest,
+            strata=TaskStrata(
+                source=_source_stratum(task["source"]["dataset"], task.get("labels", {})),
+                agentic="agentic" in task.get("tags", ()),
+            ),
+        )
     identity = selection.identity(task["id"])
     if identity.task_digest != digest:
         raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
@@ -59,7 +75,8 @@ def task_evaluation_identity(task: dict, selection: SelectionManifest | None) ->
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
     return dataset.add_column(
-        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+        TASK_EVALUATION_IDENTITY,
+        [identity.model_dump_json() if identity is not None else None for identity in identities],
     )
 
 
@@ -109,6 +126,13 @@ class TaskDataset(PromptDataset):
                 if ultra is not None and "blend" in ultra and "agent" in ultra
                 else ()
             )
+            stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
+            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
+            subset = (
+                identity.strata.source
+                if identity is not None
+                else _source_stratum(lowered.task.source.dataset, lowered.task.labels)
+            )
             inputs.append(
                 {
                     "uid": uid,
@@ -120,11 +144,9 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
-                            evaluation_identity=(
-                                TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
-                                if extras.get(TASK_EVALUATION_IDENTITY) is not None
-                                else None
-                            ),
+                            task_id=lowered.task.id,
+                            subset_id=subset,
+                            evaluation_identity=identity,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
@@ -199,9 +221,7 @@ def source_row_task(
         source_session["max_turns"] = int(row_turn_limit)
     session = {**source_session, **config.pop("session", {}), "task_session": session_name}
     requirements = (
-        EnvironmentRequirements()
-        if machine is None
-        else EnvironmentRequirements.model_validate(machine["requirements"])
+        EnvironmentRequirements() if machine is None else EnvironmentRequirements.model_validate(machine["requirements"])
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
     task = source_task(prompt, row, config, source, environment=requirements)

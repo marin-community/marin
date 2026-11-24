@@ -203,7 +203,6 @@ _TRAIN_LONG = Preset(
     tasks_input="optional",
     accepts_settings=True,
     accepts_init=True,
-    publishes=False,
     control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
