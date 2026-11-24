@@ -413,7 +413,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
-        assert read_stored_skyrl_attempts(str(sources[index]))[1][f"native-{index}"].issue == 73 + index
+        assert publication.lineage_issue(str(sources[index] / "exports")) == 73 + index
         assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
@@ -439,7 +439,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
     )
     assert conflict.exit_code == 1 and "conflicting lineage issues" in conflict.output
-    assert read_stored_skyrl_attempts(str(sources[0]))[1]["native-0"].issue == 73
+    assert publication.lineage_issue(str(sources[0] / "exports")) == 73
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)

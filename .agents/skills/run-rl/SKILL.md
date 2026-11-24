@@ -28,7 +28,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    and train-long need no pin. Print the plan:
 
    ```bash
-   uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan --check-pin
+   uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan
    ```
 
    Check inputs, allocation, guards, budget estimate and output paths.
@@ -68,7 +68,7 @@ approves the issue text.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
 state the expected result and the measure that would confirm it. Put the relevant PR or source in
 **Links**. For an existing issue, pass its number with `--issue`. Use the same issue for later
-presets that measure the same change. Use `publish --run-output PATH --attempt ID --issue NUMBER`
+presets that measure the same change. Use `publish --preset PRESET --run-output PATH --attempt ID --issue NUMBER`
 to associate a stored attempt with its issue.
 
 ## Inspect saved answers

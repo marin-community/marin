@@ -18,8 +18,14 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
-from finestore.rl.rl_progress import RunIndexIdentity
-from finestore.rl.run_records import AttemptRecord, LaunchResult, read_attempt, read_evaluations, write_attempt
+from finestore.rl.run_records import (
+    AttemptRecord,
+    LaunchResult,
+    RunIndexIdentity,
+    read_attempt,
+    read_evaluations,
+    write_attempt,
+)
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -57,7 +63,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json, selection_summary
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
 
@@ -1069,7 +1075,7 @@ def test_submission_exit_codes_and_publication_retries(
     if case == "data-short":
         assert snapshot["publication"]["unserved_records"] == [], snapshot["publication"]
         assert len(published) == 1 and published[0]["status"] == "succeeded"
-        assert published[0]["optimizer_steps"] == 0 and published[0]["data_identity"]
+        assert published[0]["optimizer_steps"] == 0 and published[0]["data_identity"] is None
         return
     paths = [[f"{training.name}-{preset.revision}", f"native-{index}"] for index, training in enumerate(built.runs)]
     if unavailable["value"]:
@@ -1122,16 +1128,39 @@ def test_submission_exit_codes_and_publication_retries(
         assert cached["issue"] == 73
 
 
-@pytest.mark.parametrize("outcome", ["succeeded", "native-failure", "interrupted"])
+@pytest.mark.parametrize(
+    "model,outcome,pr_number",
+    [
+        ("snowball", "succeeded", 124),
+        ("snowball", "native-failure", 124),
+        ("snowball", "interrupted", None),
+        ("mochi", "succeeded", 124),
+    ],
+)
 def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
-    preset_table, recorded_runs, monkeypatch, outcome
+    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number
 ):
     early_failure = outcome != "succeeded"
-    table = snowball_model.SNOWBALL
-    preset = replace(table.by_name["train-long"].with_updates(2), checkpoint_every=None, evaluations=())
-    table = preset_table(preset)
+    if model == "mochi":
+        table = MOCHI
+        preset = table.by_name["train-medium"]
+        binding = recipe.selection_artifact(preset.tasks)
+        path = Path(binding.path()) / "summary.json"
+        if not path.is_file():
+            _json(path, selection_summary(100))
+        monkeypatch.setattr(snowball, "check_cache", lambda path: True)
+    else:
+        table = snowball_model.SNOWBALL
+        preset = replace(
+            table.by_name["train-long"].with_updates(2),
+            checkpoints="none",
+            export="none",
+            checkpoint_every=None,
+            evaluations=(),
+        )
+        table = preset_table(preset)
     built = snowball.build_experiment(preset, table=table)
-    source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old")
+    source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old", table=table)
     receipt = json.loads((source / "terminal.json").read_text())
     launch = receipt["config"]
     if early_failure:
@@ -1152,11 +1181,19 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 
     fake_publication(monkeypatch, publish, "https://progress.test")
     followers = []
+
+    def run_local(argv, **kwargs):
+        if argv[0] == "gh":
+            if pr_number is None:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, str(pr_number))
+        return subprocess.run(argv, **kwargs)
+
     monkeypatch.setattr(
         snowball,
         "subprocess",
         SimpleNamespace(
-            run=subprocess.run,
+            run=run_local,
             SubprocessError=subprocess.SubprocessError,
             DEVNULL=subprocess.DEVNULL,
             STDOUT=subprocess.STDOUT,
@@ -1238,12 +1275,17 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         replayed = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
         assert replayed.exit_code == 0, (replayed.output, replayed.exception)
         assert publications[-1].failed_facts == ["coordinator_interrupted"]
-    assert [row.attempt_id for row in publications if row.status == "running"] == ["native-indexed"]
-    running, terminal = [row for row in publications if row.attempt_id == "native-indexed"]
-    assert running.status == "running" and terminal.status == ("failed" if early_failure else "succeeded")
-    assert running.run_id == terminal.run_id
+    running = [row for row in publications if row.status == "running"]
+    assert [row.attempt_id for row in running] == ([] if outcome == "native-failure" else ["native-indexed"])
+    terminal = publications[-1]
+    assert terminal.status == ("failed" if early_failure else "succeeded")
+    assert terminal.pr_number == pr_number
+    assert all(row.run_id == terminal.run_id and row.pr_number == pr_number for row in running)
     assert parse_qs(urlsplit(grafana_link).query)["var-run"] == [terminal.run_id]
-    assert re.fullmatch(r"snowball-train-long-[^/]+-[0-9a-f]{8}", terminal.run_id)
+    assert re.fullmatch(rf"{model}-{preset.name}-[^/]+-[0-9a-f]{{8}}", terminal.run_id)
+    assert terminal.source_revision == "base=commit-one tree=tree-one"
+    if not early_failure:
+        assert parse_qs(urlsplit(terminal.grafana_url).query)["var-job"] == [receipt["result"]["iris_job_id"]]
     assert terminal.gate_result is None
     assert terminal.elapsed_excluding_eval_seconds == (None if early_failure else 123.0)
     assert terminal.artifact_uri == str(source)
@@ -1251,6 +1293,16 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         result = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
         assert result.exit_code == 0, (result.output, result.exception)
         assert publications[-1].status == "failed"
+
+
+def test_plan_reports_missing_control_pin(selection):
+    table = replace(snowball_model.SNOWBALL, control_pins={})
+    args = ["--preset", "learning-medium", "--version", "dev", "--plan"]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    assert result.exit_code == 0, (result.output, result.exception)
+    snapshot = printed_status(result.stdout)
+    assert snapshot["runs"]
+    assert "no control pin for learning-medium" in snapshot["control_pin_error"]
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
@@ -1382,7 +1434,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         prepared = read_attempt(inspection["export"], inspection["attempt"])
         assert prepared is not None and prepared.index is not None
         assert prepared.index.model == table.model and prepared.index.preset == preset.name
-        assert prepared.issue == 73
+        assert prepared.issue is None
+        assert snowball.rl_publication.lineage_issue(inspection["export"]) == 73
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())

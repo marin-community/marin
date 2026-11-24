@@ -26,8 +26,8 @@ from typing import Protocol
 
 import click
 import yaml
-from finestore.rl.rl_progress import RunIndexIdentity, Verdict
-from finestore.rl.run_records import AttemptRecord, write_attempt
+from finestore.rl.rl_progress import Verdict
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, write_attempt
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
@@ -74,6 +74,7 @@ from experiments.post_training.rl_command import (
 )
 from experiments.post_training.rl_measurements import (
     RUN_INPUTS_FILENAME,
+    InvalidComparison,
     RunInputs,
     RunOptions,
     evaluation_status,
@@ -84,7 +85,7 @@ from experiments.post_training.rl_measurements import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
-_PUBLICATION_POLL_SECONDS = 10
+_PUBLICATION_POLL_SECONDS = 60
 _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 logger = logging.getLogger(__name__)
@@ -136,13 +137,13 @@ def _run_rl(
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
-        issue = rl_publication.reserve_issue(config.output.export_root, issue)
+        rl_publication.reserve_issue(config.output.export_root, issue)
+    if index is not None:
         write_attempt(
             config.output.export_root,
             AttemptRecord(
                 run_id=config.run_id,
                 attempt_id=config.attempt_id,
-                issue=issue,
                 index=index,
             ),
         )
@@ -215,6 +216,7 @@ def build_experiment(
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
     validate_plan: bool = False,
+    plan_only: bool = False,
     provenance: Provenance | None = None,
 ) -> RLExperiment:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
@@ -309,7 +311,7 @@ def build_experiment(
             inputs=inputs,
             table=table,
         )
-        if preset.gated and not control
+        if preset.gated and not control and (not plan_only or preset.control_preset in table.control_pins)
         else None
     )
     if validate_plan:
@@ -431,7 +433,7 @@ def _status(
                     "disk": execution.disk,
                 },
                 "output": path,
-                "issue": receipt.issue if receipt is not None else issue,
+                "issue": rl_publication.lineage_issue(launch.export_root, issue) if launch is not None else issue,
                 "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
@@ -523,6 +525,7 @@ def run_index_identity(
         user=user,
         branch=provenance.branch,
         source_revision=provenance.base_commit or "Unknown",
+        tree_hash=provenance.tree_hash,
         dirty=provenance.dirty,
         pr_number=_branch_pr_number(provenance),
     )
@@ -584,15 +587,22 @@ def _watch_publication(
                     f"Timed out waiting for {watch.job}. Repeat the original command with --wait."
                 )
             time.sleep(_PUBLICATION_POLL_SECONDS)
-    gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
-    publication = rl_publication.publish_runs(
-        watch.outputs,
-        preset,
-        table=table,
-        gate_path=gate_path,
-        service_url=watch.service_url,
-        failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
-    )
+    try:
+        gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
+        publication = rl_publication.publish_runs(
+            watch.outputs,
+            preset,
+            table=table,
+            gate_path=gate_path,
+            service_url=watch.service_url,
+            failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
+        )
+    except Exception as error:
+        publication = rl_publication.PublicationOutcome(
+            unserved_records=list(watch.outputs),
+            errors=[str(error)],
+            retry="Repeat the original command with --wait.",
+        )
     return state, publication
 
 
@@ -625,7 +635,12 @@ def _wait_for_run(
         else None
     )
     run = _from_handles(handles)
-    run = replace(run, gate=rl_gate.completed_gate(run.gate))
+    try:
+        run = replace(run, gate=rl_gate.completed_gate(run.gate))
+    except Exception:
+        if not publication.errors:
+            raise
+        run = replace(run, gate=None)
     snapshot = _status(
         run,
         preset,
@@ -762,7 +777,6 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
-    @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
     @click.option(
         "--checkpoints", type=click.Choice(("none", "latest", "best")), help="Select native checkpoint retention."
     )
@@ -857,7 +871,6 @@ def command(
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
-        check_pin: bool,
         checkpoints: presets.CheckpointPolicy | None,
         checkpoint_every: int | None,
         export: presets.CheckpointPolicy | None,
@@ -936,23 +949,26 @@ def command(
             requirements=requirements,
             issue=issue,
             validate_plan=from_launcher,
+            plan_only=not do_run,
             provenance=provenance,
         )
         assert run.inputs is not None
-        if from_launcher and (do_run or check_pin):
-            validated = rl_gate.validate_candidate(
-                preset,
-                run.inputs,
-                control=control,
-                table=table,
-            )
-            if do_run:
-                if issue is not None:
-                    _validate_launch_issue(run, preset, issue)
-                context.meta["rl_training_type"] = validated["runtime"]["training_type"]
-                context.meta["rl_index"] = run_index_identity(
-                    validated, preset, table, provenance, user=username_segment()
-                )
+        pin_error = None
+        if from_launcher and (do_run or plan):
+            try:
+                validated = rl_gate.validate_candidate(preset, run.inputs, table=table, control=control)
+            except InvalidComparison as error:
+                if do_run:
+                    raise
+                pin_error = str(error)
+            else:
+                if do_run:
+                    if issue is not None:
+                        _validate_launch_issue(run, preset, issue)
+                    context.meta["rl_training_type"] = validated["runtime"]["training_type"]
+                    context.meta["rl_index"] = run_index_identity(
+                        validated, preset, table, provenance, user=username_segment()
+                    )
         model = preset.model
         if (
             table.needs_completed_default_export
@@ -969,12 +985,18 @@ def command(
             )
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         if preset.gated and not control:
-            pin = rl_gate.control_pin(preset, table=table, check_revision=False)
-            snapshot["control_pin"] = {
-                "commit": pin.commit,
-                "revision": pin.revision,
-                "current": pin.revision == table.by_name[pin.preset].revision,
-            }
+            try:
+                pin = rl_gate.control_pin(preset, table=table, check_revision=False)
+            except InvalidComparison as error:
+                pin_error = pin_error or str(error)
+            else:
+                snapshot["control_pin"] = {
+                    "commit": pin.commit,
+                    "revision": pin.revision,
+                    "current": pin_error is None and pin.revision == table.by_name[pin.preset].revision,
+                }
+            if pin_error is not None:
+                snapshot["control_pin_error"] = pin_error
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])

@@ -188,9 +188,7 @@ def create_ray_wrapped_inference_engines_from_config(
         ).values()
     )
     requested_logprobs = [
-        value + 1
-        for value in requested_logprobs
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        value + 1 for value in requested_logprobs if isinstance(value, int) and not isinstance(value, bool) and value > 0
     ]
     # Chat capture requests K+1 candidates so the sampled token cannot displace
     # a token from the natural top K. Reserve the actual request width in vLLM.
@@ -393,9 +391,9 @@ class BasePPOExp:
             )
         prompts_dataset = self.task_dataset(self.cfg.data.train_data)
         # make sure the dataset is large enough to train on
-        assert len(prompts_dataset) >= self.cfg.trainer.train_batch_size, (
-            f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
-        )
+        assert (
+            len(prompts_dataset) >= self.cfg.trainer.train_batch_size
+        ), f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
         return prompts_dataset
 
     def task_dataset(self, data_files):
@@ -725,43 +723,38 @@ class BasePPOExp:
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
         started = time.monotonic()
-        with self.get_tracker() as tracker:
-            trainer = None
-            try:
-                trainer = self._setup_trainer(tracker)
-                asyncio.run(trainer.train())
-            finally:
-                # Release GPU actors before a Ray retry can start another attempt.
-                if trainer is not None:
-                    try:
-                        asyncio.run(trainer.shutdown())
-                    except Exception as error:
-                        logger.warning("Error shutting down trainer: {}", error)
-
-        elapsed = time.monotonic() - started - trainer.evaluation_wall_time
-        logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed)
-        runtime = self.cfg.get("runtime") or {}
+        trainer = None
         try:
-            write_attempt(
-                str(self.cfg.trainer.export_path),
-                AttemptRecord(
-                    run_id=runtime["run_id"],
-                    attempt_id=runtime["attempt_id"],
-                    elapsed_excluding_eval_seconds=elapsed,
-                ),
-            )
-        except Exception as error:
-            logger.warning(
-                "Could not store trainer completion time for attempt {} ({})",
-                runtime.get("attempt_id", "unknown"),
-                type(error).__name__,
-            )
-
-        elapsed = time.monotonic() - started
-        logger.info(
-            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
-            elapsed - trainer.evaluation_wall_time,
-        )
+            with self.get_tracker() as tracker:
+                try:
+                    trainer = self._setup_trainer(tracker)
+                    asyncio.run(trainer.train())
+                finally:
+                    if trainer is not None:
+                        try:
+                            asyncio.run(trainer.shutdown())
+                        except Exception as error:
+                            logger.warning("Error shutting down trainer: {}", error)
+        finally:
+            if trainer is not None:
+                elapsed = time.monotonic() - started - trainer.evaluation_wall_time
+                logger.info("Trainer time excluding evaluation: {:.3f} seconds", elapsed)
+                runtime = self.cfg.get("runtime") or {}
+                try:
+                    write_attempt(
+                        str(self.cfg.trainer.export_path),
+                        AttemptRecord(
+                            run_id=runtime["run_id"],
+                            attempt_id=runtime["attempt_id"],
+                            elapsed_excluding_eval_seconds=elapsed,
+                        ),
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Could not store trainer time for attempt {} ({})",
+                        runtime.get("attempt_id", "unknown"),
+                        type(error).__name__,
+                    )
 
 
 @ray.remote(num_cpus=1, max_retries=0)

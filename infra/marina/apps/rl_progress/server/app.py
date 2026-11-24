@@ -80,7 +80,7 @@ def create_api(services):
     def publish(record: dict[str, Any]) -> dict:
         try:
             encoded = json.dumps(record, allow_nan=False)
-            summary = AttemptSummary.model_validate_json(encoded, strict=True)
+            summary = AttemptSummary.model_validate_json(encoded, extra="forbid")
         except ValidationError as error:
             raise HTTPException(
                 422, detail=error.errors(include_input=False, include_context=False, include_url=False)

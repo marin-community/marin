@@ -44,7 +44,6 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, Version
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url
@@ -52,6 +51,7 @@ from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     evaluation_status,
+    lineage_windows,
     read_run_inputs,
     training_invariants,
 )
@@ -69,14 +69,11 @@ def publish_result(summary: AttemptSummary, service_url: str | None = None) -> s
     service_url = service_url or client.DEFAULT_MARINA_URL
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     origin = client.applet_origin(service_url, details["authenticated_url"])
-    served = AttemptSummary.model_validate_json(
-        json.dumps(
-            client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json")),
-            allow_nan=False,
-        ),
-        strict=True,
-    )
-    if (served.run_id, served.attempt_id) != (summary.run_id, summary.attempt_id):
+    served = client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json"))
+    if not isinstance(served, dict) or (served.get("run_id"), served.get("attempt_id")) != (
+        summary.run_id,
+        summary.attempt_id,
+    ):
         raise RuntimeError(f"Published attempt {summary.run_id}/{summary.attempt_id} has a different returned identity")
     return details["authenticated_url"] + "#" + urlencode({"run": summary.run_id, "attempt": summary.attempt_id})
 
@@ -140,28 +137,16 @@ def _terminal_measurements(
     )
     if isinstance(preset.recipe.layout.workload, presets.Generation) and optimizer_steps is not None:
         optimizer_steps = 0
-    windows = [
-        (
-            (entry.record.native.result.started_at, entry.record.native.result.finished_at)
-            if entry.record.config is not None
-            else (None, None)
-        )
-        for entry in history
-    ]
-    elapsed = None
-    if complete_history and all(start is not None and finish is not None for start, finish in windows):
-        durations = [recipe.utc_millis(finish) - recipe.utc_millis(start) for start, finish in windows]
-        if any(value < 0 for value in durations):
-            raise ValueError("Native completion precedes its recorded start")
-        elapsed = sum(durations) / 1000
-    else:
+    windows = lineage_windows(history)
+    elapsed = sum(window.seconds for window in windows) if windows is not None else None
+    if windows is None:
         evidence.append(
             "Checkpoint lineage timing is unknown: a shared attempt record or native time window is missing."
         )
     trainer_durations = [entry.record.elapsed_excluding_eval_seconds for entry in history]
     elapsed_excluding_eval = (
         float(sum(duration for duration in trainer_durations if duration is not None))
-        if complete_history and all(duration is not None for duration in trainer_durations)
+        if windows is not None and all(duration is not None for duration in trainer_durations)
         else None
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
@@ -203,7 +188,6 @@ def build_record(
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     evaldash_run_ids: tuple[str, ...] | None = None,
-    running: bool = False,
     gate_failure: bool = False,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
@@ -223,10 +207,8 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    terminal = result.state.is_terminal and not running
-    interrupted = attempt.interruption is not None and not terminal and not running
-    if not (terminal or running or interrupted):
-        raise ValueError("A progress record requires a terminal native attempt")
+    terminal = result.state.is_terminal
+    interrupted = attempt.interruption is not None and not terminal
     measured = (
         _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
     )
@@ -244,14 +226,13 @@ def build_record(
         label=run_label(inputs),
         series=preset.name,
         model=index.model if index is not None else launch.model_name,
-        preset=preset.name,
         preset_revision=index.preset_revision if index is not None else None,
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else None,
         dirty=index.dirty if index is not None else None,
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
-        issue=attempt.issue,
+        issue=lineage_issue(launch.export_root),
         run_date=started or tracking.get("started_at") or (index.submitted_at if index is not None else None),
         started_at=started,
         completed_at=finished if terminal else None,
@@ -262,13 +243,11 @@ def build_record(
         grafana_url=attempt_grafana_url(attempt, launch),
         timing_scope="checkpoint_lineage_native_jobs",
         source_revision=(
-            index.source_revision
+            f"base={index.source_revision} tree={index.tree_hash or 'Unknown'}"
             if index is not None
             else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        data_identity=(
-            "; ".join(source.identity for source in launch.train_data or launch.validation_data) or "Unknown"
-        ),
+        data_identity="; ".join(source.identity for source in launch.train_data) or None,
         initializer_identity=launch.model_identity,
         artifact_uri=run_output,
         evidence=evidence,
@@ -291,9 +270,11 @@ class IssueConflict(ValueError):
 
 
 def _check_issue(export_root: str, requested: int | None, reservation: VersionedBytes | None) -> int | None:
-    issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
-    if reservation is not None:
-        issues.add(int(reservation.data))
+    issues = (
+        {int(reservation.data)}
+        if reservation is not None
+        else {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
+    )
     if requested is not None:
         issues.add(requested)
     if len(issues) > 1:
@@ -301,7 +282,7 @@ def _check_issue(export_root: str, requested: int | None, reservation: Versioned
     return next(iter(issues), None)
 
 
-def lineage_issue(export_root: str, requested: int | None) -> int | None:
+def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
     """Read the run's issue and verify a proposed value against stored assignments."""
     assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
     return _check_issue(export_root, requested, assignment.read())
@@ -343,9 +324,9 @@ def publish_running(
     try:
         for attempt in _coordinator_attempts(path, coordinator).values():
             key = (attempt.index_run_id, attempt.attempt_id)
-            if key in published:
+            if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
                 continue
-            url = publish_result(build_record(path, preset, table=table, attempt=attempt, running=True), service_url)
+            url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
             published.add(key)
             click.echo(f"RL progress {url}")
     except Exception as error:
@@ -385,13 +366,6 @@ def _read_publication_gate(
     if report is not None and (report.run.replicates != replicates or report.run.attempt_ids != current_attempts):
         raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
     return report
-
-
-def _link_issue(receipt: AttemptRecord, issue: int) -> int | None:
-    export_root = recorded_launch(receipt).export_root
-    assigned = reserve_issue(export_root, issue)
-    write_attempt(export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, issue=assigned))
-    return assigned
 
 
 def publish_runs(
@@ -443,6 +417,8 @@ def publish_runs(
                 continue
             destination = (receipt.index_run_id, selected_id)
             try:
+                if not receipt.native.result.state.is_terminal and receipt.interruption is None:
+                    raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
                     gate_path is not None
@@ -465,7 +441,9 @@ def publish_runs(
                     gate_failure=missing_gate,
                 )
                 if issue is not None:
-                    record = record.model_copy(update={"issue": _link_issue(receipt, issue)})
+                    record = record.model_copy(
+                        update={"issue": reserve_issue(recorded_launch(receipt).export_root, issue)}
+                    )
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:

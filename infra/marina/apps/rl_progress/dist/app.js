@@ -66,7 +66,7 @@ function showDetails(run) {
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
     ['Elapsed excluding evaluation', run.elapsed_excluding_eval_seconds == null ? null : `${number(run.elapsed_excluding_eval_seconds, 1)} seconds`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
-    ['Source', run.source_revision], ['Data', run.data_identity], ['Initializer', run.initializer_identity],
+    ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Artifact location', run.artifact_uri],
     ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];

@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field
 
 GRADER_REPORTS_DIR = "grader_reports"
 GRADER_REPORT_FILENAME = "grader_report.json"
-RL_WANDB_PROJECT = "marin-rl"
 
 
 class Verdict(StrEnum):
@@ -120,45 +119,21 @@ class TaskSummary(SuccessSummary):
 class GraderReport(BaseModel):
     """Stored training and evaluation counts by subset and task."""
 
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, extra="ignore")
     training: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
     training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
     evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
     evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
 
 
-class RunIndexIdentity(BaseModel):
-    """Configuration identity and provenance shared by an attempt's public links."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    run_id: Identity
-    model: Identity
-    preset: Identity
-    preset_revision: Identity
-    user: Identity
-    branch: str | None
-    source_revision: Identity
-    dirty: bool
-    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
-    submitted_at: str | None = None
-
-    @property
-    def wandb_tags(self) -> list[str]:
-        tags = [self.model, self.preset, self.preset_revision, self.user]
-        if self.branch is not None:
-            tags.append(self.branch)
-        return tags
-
-
 class AttemptSummary(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, extra="ignore")
     format_version: Literal[1] = 1
     run_id: Identity
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
-    preset: Identity | None = None
     preset_revision: Identity | None = None
     user: Identity | None = None
     branch: str | None = None
@@ -187,7 +162,7 @@ class AttemptSummary(BaseModel):
     planned_updates: Count | None = None
     measured_updates: list[Count] | None = None
     source_revision: Identity
-    data_identity: Identity
+    data_identity: Identity | None
     initializer_identity: Identity
     artifact_uri: str | None
     evidence: list[str]

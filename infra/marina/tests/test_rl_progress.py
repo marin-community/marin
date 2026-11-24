@@ -92,12 +92,12 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "parameters": {
                 "run_id": legacy["run_id"],
                 "attempt_id": "unknown",
-                "record": json.dumps(legacy | {"issue": "opted_out"}),
+                "record": json.dumps(legacy | {"issue": "opted_out", "future_fact": "stored"}),
             },
         },
     )
     for run_id, invalid in (
-        ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
+        ("test/bad-status", record | {"run_id": "test/bad-status", "attempt_id": "bad", "status": "unknown"}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
         (
@@ -146,18 +146,18 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-first"] == _projection(changed)
     assert rows["native-second"] == _projection(failed)
-    assert rows["unknown"] == _projection(legacy | {"issue": None})
+    assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
-    assert "evaluation: extra_forbidden" in skipped["test/legacy"]
+    assert "status: literal_error" in skipped["test/bad-status"]
     assert set(skipped) == {
         "test/bad-shape",
         "test/bad-result",
         "test/huge-extra",
         "test/huge-gate",
         "test/wrong-sql-key",
-        "test/legacy",
+        "test/bad-status",
     }
 
     for run_id in ("test/bad-result", "test/huge-gate"):

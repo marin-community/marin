@@ -164,7 +164,7 @@ interface. Each preset's steps use its own `revision`.
 - **Plan and status.** The default mode and `--plan` run the SkyRL driver's configuration checks on CPU
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
-  Add `--check-pin` to compare the current defaults with stored control receipts before opening an issue.
+  For gated presets, `--plan` compares the current defaults with stored control receipts before opening an issue.
   A gated candidate's status names the control pin and whether its revision matches the preset.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` to keep
@@ -172,7 +172,7 @@ interface. Each preset's steps use its own `revision`.
   Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
   Open an approved issue after confirming the plan and control pin. Retries of the same native output
-  inherit its recorded issue.
+  inherit the issue stored for that output.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
   The executor reuses successful artifacts. When training resumes, either train-long preset loads its
   latest retained checkpoint and records the new attempt and parent checkpoint.

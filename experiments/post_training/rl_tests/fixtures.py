@@ -441,8 +441,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
     templates = {}
 
-    def composed(preset, inputs):
-        key = (repr(preset), inputs.model_dump_json())
+    def composed(preset, inputs, model):
+        key = (model, repr(preset), inputs.model_dump_json())
         if key not in templates:
             source_prefix = tmp_path / "composed" / str(len(templates))
             spec = recipe.run_spec(
@@ -451,6 +451,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 tasks=recipe.selection_artifact(inputs.tasks) if inputs.tasks else None,
                 init=recipe.model_from_reference(inputs.init) if inputs.init else None,
                 settings=inputs.settings,
+                model_name=model,
             )
             step = recipe.run_step(preset, spec)
             source_root = Path(step.path(str(source_prefix)))
@@ -479,12 +480,14 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         fingerprint="",
         missing_steps=(),
         attempt_id="recorded-attempt",
+        table=None,
     ):
-        preset = snowball_model.SNOWBALL.by_name[preset_name]
+        table = table or snowball_model.SNOWBALL
+        preset = table.by_name[preset_name]
         root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or RunInputs(preset_name=preset.name)
-        source_root, config = composed(preset, inputs)
+        source_root, config = composed(preset, inputs, table.model)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
         run_id = f"{name}-{preset.revision}"
@@ -502,7 +505,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         launch, result = native["config"], native["result"]
         max_steps = launch["skyrl"]["trainer"]["max_steps"]
         generating = isinstance(preset.recipe.layout.workload, presets.Generation)
-        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL) if preset.gated else None
+        pin = gate.control_pin(preset, table=table) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
