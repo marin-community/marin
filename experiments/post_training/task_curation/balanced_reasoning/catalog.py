@@ -88,6 +88,25 @@ def domain_for(source_id: str) -> str:
     return source_id.split(":", 1)[-1].lower() or source_id.lower()
 
 
+TASKS_PARQUET = "tasks.parquet"
+
+
+def resolve_tasks_parquet(filesystem: fsspec.AbstractFileSystem, normalized_path: str) -> str:
+    """The parquet to stream: the census entry names the normalized directory.
+
+    Its task material is ``tasks.parquet`` inside; a census that names the file directly
+    passes through unchanged.
+    """
+    info = filesystem.info(normalized_path)
+    if info.get("type") != "directory":
+        return normalized_path
+    parquet = f"{normalized_path.rstrip('/')}/{TASKS_PARQUET}"
+    inside = filesystem.info(parquet)
+    if inside.get("type") == "directory" or not inside.get("size"):
+        raise ValueError(f"Census directory {normalized_path} carries no {TASKS_PARQUET}")
+    return parquet
+
+
 def read_census_entries(census_root: str = CENSUS_ROOT) -> list[CensusEntry]:
     """Enumerate every census release's per-source normalized material."""
     filesystem = fsspec.filesystem(url_protocol(census_root))
@@ -111,7 +130,7 @@ def read_census_entries(census_root: str = CENSUS_ROOT) -> list[CensusEntry]:
             entry = CensusEntry(
                 source_id=source_id,
                 release=release,
-                normalized_path=normalized,
+                normalized_path=resolve_tasks_parquet(filesystem, normalized),
                 dataset_id=population.get("dataset_id"),
             )
             # Deterministic: the first release (sorted) that covers a source wins, so a
