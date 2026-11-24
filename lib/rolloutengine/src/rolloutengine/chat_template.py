@@ -3,11 +3,12 @@
 
 # ruff: noqa: E501 -- Inference prompt text preserves its original line breaks.
 
-"""Shared Marin chat template for tokenizer export and Datakit rendering.
+"""Marin chat template for tokenizer export, Datakit rendering, and rollout tests.
 
-The template must remain self-contained so Hugging Face and vLLM can load it
-from tokenizer artifacts without importing Marin. Generation blocks identify
-assistant output without changing the rendered text.
+Marin and SkyRL both depend on this package, so they share one copy of the
+template. The template must remain self-contained so Hugging Face and vLLM can
+load it from tokenizer artifacts without importing Marin. Generation blocks
+identify assistant output without changing the rendered text.
 """
 
 MARIN_CHAT_TEMPLATE = """
