@@ -14,6 +14,7 @@ from experiments.post_training.task_curation.balanced_reasoning.bands import (
     budget_for,
 )
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
+    SOLVER_ALL,
     LedgerAttempt,
     TaskDifficulty,
     parse_ledger_row,
@@ -88,6 +89,26 @@ def test_tally_deduplicates_attempts_and_filters_solver() -> None:
     second = tasks[("src", "cd" * 32)]
     assert second.solve_rate == 1.0
     assert second.band is Band.EASY
+
+
+def test_tally_skips_source_level_rows() -> None:
+    """Measurement and cost receipts carry no task identity and never fold into rates."""
+    attempts = [
+        LedgerAttempt("src", None, "large", "cost", None, "r1"),
+        LedgerAttempt("src", "ab" * 32, "hosted", "scored", 1.0, "a1", task_id="t1"),
+    ]
+    tasks = tally_attempts(attempts, solver=SOLVER_ALL)
+    assert set(tasks) == {("src", "ab" * 32)}
+    row = {
+        "source_id": "src",
+        "solver": "large",
+        "outcome": "cost",
+        "attempt_id": "r1",
+        "task_sha256": None,
+        "reward": None,
+    }
+    parsed = parse_ledger_row(row)
+    assert parsed.task_sha256 is None
 
 
 def test_style_battery_rejects_loops_and_rechecks() -> None:

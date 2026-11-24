@@ -45,10 +45,14 @@ def url_parent(url: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class LedgerAttempt:
-    """The fields of one reconciler evidence row the lane consumes."""
+    """The fields of one reconciler evidence row the lane consumes.
+
+    Source-level receipts (measurement and cost rows) carry no task identity; their
+    ``task_sha256`` is ``None`` and the tally never folds them into per-task rates.
+    """
 
     source_id: str
-    task_sha256: str
+    task_sha256: str | None
     solver: str
     outcome: str
     reward: float | None
@@ -75,7 +79,7 @@ class TaskDifficulty:
 
 def parse_ledger_row(row: dict) -> LedgerAttempt:
     """Validate and project one evidence-ledger JSON row."""
-    for field in ("source_id", "task_sha256", "solver", "outcome"):
+    for field in ("source_id", "solver", "outcome"):
         if not isinstance(row.get(field), str) or not row[field]:
             raise ValueError(f"Evidence row is missing a usable {field!r}: {row!r}")
     reward = row.get("reward")
@@ -84,14 +88,20 @@ def parse_ledger_row(row: dict) -> LedgerAttempt:
     attempt_id = row.get("attempt_id")
     if not isinstance(attempt_id, str) or not attempt_id:
         raise ValueError(f"Evidence row is missing a usable 'attempt_id': {row!r}")
+    task_sha256 = row.get("task_sha256")
+    if task_sha256 is not None and not isinstance(task_sha256, str):
+        raise ValueError(f"Evidence row carries a non-string 'task_sha256': {row!r}")
+    task_id = row.get("task_id")
+    if task_id is not None and not isinstance(task_id, str):
+        raise ValueError(f"Evidence row carries a non-string 'task_id': {row!r}")
     return LedgerAttempt(
         source_id=row["source_id"],
-        task_sha256=row["task_sha256"],
+        task_sha256=task_sha256,
         solver=row["solver"],
         outcome=row["outcome"],
         reward=float(reward) if reward is not None else None,
         attempt_id=attempt_id,
-        task_id=row.get("task_id"),
+        task_id=task_id,
         reason=row.get("reason"),
     )
 
@@ -130,7 +140,7 @@ def tally_attempts(
     for attempt in attempts:
         if not pooled and attempt.solver != solver:
             continue
-        if attempt.outcome != SCORED_OUTCOME:
+        if attempt.outcome != SCORED_OUTCOME or attempt.task_sha256 is None:
             continue
         key = (attempt.source_id, attempt.task_sha256)
         by_attempt = scored.setdefault(key, {})
