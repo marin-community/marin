@@ -91,12 +91,13 @@ def domain_for(source_id: str) -> str:
 def read_census_entries(census_root: str = CENSUS_ROOT) -> list[CensusEntry]:
     """Enumerate every census release's per-source normalized material."""
     filesystem = fsspec.filesystem(url_protocol(census_root))
-    entries: dict[tuple[str, str], CensusEntry] = {}
+    entries: dict[str, CensusEntry] = {}
     for release_path in sorted(filesystem.ls(census_root)):
         release = release_path.rstrip("/").rsplit("/", 1)[-1]
         index_path = f"{release_path.rstrip('/')}/censuses.json"
         try:
-            with open_url(index_path, "rt") as source:
+            # ls returns bucket-key paths without the scheme; open on the same filesystem.
+            with filesystem.open(index_path, "rt") as source:
                 document = json.load(source)
         except FileNotFoundError:
             continue
