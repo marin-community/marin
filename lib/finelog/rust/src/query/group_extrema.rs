@@ -6,7 +6,6 @@
 //! segments keep the ordinary DataFusion aggregate, and a final aggregate
 //! merges both inputs exactly.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -16,18 +15,20 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::common::tree_node::Transformed;
+use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::functions_aggregate::expr_fn::max;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     col, Cast, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Operator, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{
@@ -262,16 +263,18 @@ impl ExtensionPlanner for GroupExtremaPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DFResult<Option<Arc<dyn ExecutionPlan>>> {
         let Some(node) = node.as_any().downcast_ref::<GroupExtremaNode>() else {
             return Ok(None);
         };
+        let session_state = crate::query::exact_aggregate::session_state(session)?;
         Ok(Some(Arc::new(AdaptiveGroupExtremaExec::new(
             node.request.clone(),
             node.source.clone(),
             node.fallback.clone(),
-            session_state.clone(),
+            session_state,
         ))))
     }
 }
@@ -338,12 +341,17 @@ impl ExecutionPlan for AdaptiveGroupExtremaExec {
         "AdaptiveGroupExtremaExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    // The fallback is planned at execution time, so this node holds no
+    // physical expressions.
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DFResult<TreeNodeRecursion>,
+    ) -> DFResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

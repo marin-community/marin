@@ -133,10 +133,12 @@ UV_EXTRAS: dict[str, list[str]] = {
 }
 
 PYTHON_VERSION = "3.12"
+# `-n auto` counts physical cores, so it starts 2 workers on a 4-vCPU hosted runner.
+# `logical` starts one per vCPU.
 PYTEST_ARGS: tuple[str, ...] = (
     "--durations=5",
     "-n",
-    "auto",
+    "logical",
     "--dist=worksteal",
     "--tb=short",
 )
@@ -171,7 +173,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
+SHARD_COUNT: dict[str, int] = {"levanter": 5, "marin": 6}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.

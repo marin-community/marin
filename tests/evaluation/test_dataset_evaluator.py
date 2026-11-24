@@ -16,11 +16,22 @@ from evalrecords.records import (
     TaskMachineSettings,
 )
 from marin.evaluation.dataset_evaluator import DatasetEvaluator, runtime_config
+from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, DaytonaConnection, machine_factories
+from marin.evaluation.task_worker import (
+    DAYTONA_API_KEY,
+    DAYTONA_EGRESS,
+    JUDGE_API_KEY,
+    JUDGE_ENDPOINT,
+    DaytonaConnection,
+    machine_factories,
+)
 from marin.inference.types import InferenceBackendState
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
+
+from experiments.evaluation.evals import resolve_evaluations
+from experiments.evaluation.launch import LaunchSpec, prepare_evaluation_batch
 
 SERVED_CONTEXT = 4096
 MODEL = ModelConfig(
@@ -81,13 +92,42 @@ def submitted(monkeypatch) -> dict:
     return request
 
 
+@pytest.mark.parametrize("track", ["frontierscience-olympiad", "frontierscience-research"])
+def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, submitted):
+    spec = LaunchSpec(
+        model=MODEL,
+        evals=resolve_evaluations(track),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=1,
+        records_prefix=str(tmp_path),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=0,
+    )
+    (evaluation,) = prepare_evaluation_batch(spec).evaluations
+    evaluation.executor(
+        SESSION, str(tmp_path), {JUDGE_API_KEY: "fixture-key"}, backend_state=lambda: InferenceBackendState.READY
+    )
+
+    _, (datasets, _, config, _), _ = submitted["entrypoint"].resolve()
+    assert len(datasets) == 1
+    assert evaluation.identity.eval_ref.name == track
+    assert submitted["environment"].secrets[JUDGE_API_KEY] == "fixture-key"
+    assert submitted["environment"].secrets[JUDGE_ENDPOINT] == "https://api.together.xyz/v1"
+    assert config.judge.default_model == "openai/gpt-oss-120b"
+
+
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):
+    model = replace(MODEL, evaluation_request_timeout=21600)
     settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
-    first = runtime_config(MODEL, settings, SESSION)
+    first = runtime_config(model, settings, SESSION)
     assert first.model.context_window == SERVED_CONTEXT
     assert first.max_tokens == SERVED_CONTEXT - 1
+    # Long-context requests must survive both the turn and enclosing attempt deadlines.
+    assert first.limits.attempt_timeout > first.limits.model_turn_timeout >= 21600
     created[0] += 100
-    assert runtime_config(MODEL, settings, SESSION) == first
+    assert runtime_config(model, settings, SESSION) == first
 
 
 @pytest.mark.parametrize(
@@ -132,9 +172,7 @@ def test_daytona_task_machines_get_images_as_the_settings_select(created, image_
     settings = CuratedSettings(task_machine=TaskMachineSettings(image_build=image_build))
 
     config = runtime_config(MODEL, settings, SESSION)
-    factories = machine_factories(
-        config, DaytonaConnection(api_key="eval-org-key", api_url="https://daytona", target="us")
-    )
+    factories = machine_factories(config, DaytonaConnection(api_key="eval-org-key"))
 
     assert factories["daytona"].image_build is daytona_machine.DaytonaImageBuild(image_build.value)
 

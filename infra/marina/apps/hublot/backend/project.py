@@ -1,0 +1,101 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Project Finelog records onto the fields used by Hublot."""
+
+import json
+import math
+import re
+from typing import Any
+
+from .query_contract import (
+    ATTRIBUTE_FIELDS,
+    BODY_FIELDS,
+    CUMULATIVE_NAMES,
+    DRIVER_LINE_PATTERNS,
+    DRIVER_TIMESTAMP,
+    SNAPSHOT_NAMES,
+)
+
+_CONFIG_FIELDS = (
+    "mini_batch_size",
+    "max_staleness_steps",
+    "generation_workers",
+    "policy_nodes",
+    "policy_gpus_per_node",
+    "policy_tp",
+    "policy_pp",
+    "policy_cp",
+    "policy_ep",
+    "strategy",
+)
+_SOURCE_FIELDS = ("cluster", "service", "run_id", "job_id", "execution_uid", "region", "node_name", "process_index")
+_ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
+_LOG_TIME = re.compile(DRIVER_TIMESTAMP)
+_DRIVER_FACT = re.compile("|".join(DRIVER_LINE_PATTERNS))
+
+
+def _object(raw: str | None) -> dict[str, Any] | None:
+    try:
+        value = json.loads(raw) if raw else None
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _scalars(values: dict[str, Any], fields: tuple[str, ...]) -> dict[str, str | int | float | bool]:
+    return {
+        key: value
+        for key in fields
+        if isinstance((value := values.get(key)), (str, int, float))
+        and (not isinstance(value, float) or math.isfinite(value))
+    }
+
+
+def run_configuration(raw: str | None) -> dict[str, str | int | float | bool]:
+    return _scalars(_object(raw) or {}, _CONFIG_FIELDS)
+
+
+def telemetry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Preserve the full source and engine-label distinctions without returning their raw metadata.
+    origins: dict[tuple, int] = {}
+    series_ids: dict[tuple, int] = {}
+    output = []
+    for row in rows:
+        attributes = _object(row["attributes_json"]) or {}
+        resource_text = row["resource_attributes_json"]
+        resource_data = _object(resource_text)
+        # Keep unreadable resource labels distinct so their counters are not merged.
+        resource = json.dumps(resource_data, sort_keys=True) if resource_data is not None else resource_text or "{}"
+        origin = (*(row[key] for key in _SOURCE_FIELDS), resource)
+        source = origins.setdefault(origin, len(origins))
+        name = row["name"]
+        measurement = {
+            "name": name,
+            "source": source,
+            "seq": row["seq"],
+            "timestamp_ms": row["timestamp_ms"],
+            "value": row["value"] if row["value"] is not None and math.isfinite(row["value"]) else None,
+            "attributes_json": _scalars(attributes, ATTRIBUTE_FIELDS),
+            "body_json": _scalars(_object(row["body_json"]) or {}, BODY_FIELDS),
+        }
+        if name in CUMULATIVE_NAMES or name in SNAPSHOT_NAMES:
+            if name in SNAPSHOT_NAMES:
+                attributes.pop("step", None)
+            labels = json.dumps(attributes, sort_keys=True)
+            measurement["engineSeries"] = series_ids.setdefault((source, labels), len(series_ids))
+        output.append(measurement)
+    return output
+
+
+def driver_facts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    facts = []
+    for row in rows:
+        line = _ANSI_COLOR.sub("", row["line"])
+        match = _DRIVER_FACT.search(line)
+        if match is None:
+            continue
+        stamp = _LOG_TIME.search(line)
+        prefix = stamp.group() + " " if stamp else ""
+        facts.append({"key": row["key"], "epoch_ms": row["epoch_ms"], "seq": row["seq"], "line": prefix + match.group()})
+    return facts

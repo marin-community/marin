@@ -305,6 +305,12 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+For a single immutable Parquet task selection, the SkyRL driver caches validated rows and prompt
+lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
+selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
+and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
+A cache miss runs the original selection validation before publishing prepared rows.
+
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
 finishes its own uploads using the same SDK deadline. These waits can take up to
