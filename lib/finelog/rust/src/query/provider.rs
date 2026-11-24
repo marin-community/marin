@@ -38,7 +38,7 @@ use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
@@ -401,19 +401,41 @@ impl NamespaceProvider {
     }
 
     /// A pruning predicate over the segments' integer bounds, or `None` when
-    /// `filters` cannot rule out any segment.
+    /// `filters` cannot rule out any segment. A conjunct that reads any other
+    /// column type never prunes here.
     fn int_bounds_predicate(
         &self,
         state: &dyn Session,
         filters: &[Expr],
     ) -> DFResult<Option<PruningPredicate>> {
-        let Some(filter) = conjunction(filters.iter().cloned()) else {
+        // DataFusion before 55 rewrites a prefix `LIKE` into comparisons of the
+        // column's bounds with `Utf8` literals, which fail to evaluate against
+        // this schema's `Utf8View` columns. Remove this filter once
+        // datafusion >= 55.
+        let reads_only_int64_columns = |conjunct: &&Expr| {
+            conjunct
+                .column_refs()
+                .into_iter()
+                .all(|column| self.is_int64_column(&column.name))
+        };
+        let int_conjuncts = filters
+            .iter()
+            .flat_map(split_conjunction)
+            .filter(reads_only_int64_columns)
+            .cloned();
+        let Some(filter) = conjunction(int_conjuncts) else {
             return Ok(None);
         };
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
         let physical = state.create_physical_expr(filter, &df_schema)?;
         let predicate = PruningPredicate::try_new(physical, Arc::clone(&self.schema))?;
         Ok((!predicate.always_true()).then_some(predicate))
+    }
+
+    fn is_int64_column(&self, name: &str) -> bool {
+        self.schema
+            .field_with_name(name)
+            .is_ok_and(|field| *field.data_type() == DataType::Int64)
     }
 
     /// `path`'s recorded `(min, max)` for the Int64 `column`, if it has one.
@@ -646,8 +668,7 @@ struct SegmentIntStatistics<'a> {
 
 impl SegmentIntStatistics<'_> {
     fn bound(&self, column: &Column, pick: fn((i64, i64)) -> i64) -> Option<ArrayRef> {
-        let field = self.provider.schema.field_with_name(&column.name).ok()?;
-        if *field.data_type() != DataType::Int64 {
+        if !self.provider.is_int64_column(&column.name) {
             return None;
         }
         let values = self.provider.segment_paths.iter().map(|path| {

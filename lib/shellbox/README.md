@@ -36,8 +36,8 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
-Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
-credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
+environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
@@ -267,6 +267,11 @@ Ordinary `Machine.run` behavior is unchanged.
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
+
+Daytona repeats a request that failed in transit: one that lost its connection or got a 502, 503, or 504 status.
+A command whose request failed in transit runs once: the command script claims its private directory before it runs,
+and the exit trap records the exit code that the machine then reads. The machine waits for that exit code until the command's timeout.
+If the command shell was killed before it recorded an exit code, or the failure persists, `Machine.run` raises an infrastructure error.
 
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
 Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.

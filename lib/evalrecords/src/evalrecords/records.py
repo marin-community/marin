@@ -359,6 +359,51 @@ class JudgeIdentity(BaseModel):
     default_model: str | None = None
 
 
+class TaskMachineBackend(StrEnum):
+    """Shellbox backends that evaluation workers construct for agent task machines."""
+
+    DAYTONA = "daytona"
+    DOCKER = "docker"
+    LOCAL = "local"
+
+
+class TaskImageBuild(StrEnum):
+    """How Daytona task machines get their images.
+
+    ``SNAPSHOT`` builds each distinct image once into a named account snapshot, which persists and
+    counts against the account's snapshot quota. ``DECLARATIVE`` builds the image for every machine
+    and creates no snapshot; the account must permit declarative builds.
+    """
+
+    SNAPSHOT = "snapshot"
+    DECLARATIVE = "declarative"
+
+
+class TaskMachineSettings(BaseModel):
+    """Where agent task machines run, and their resources when a task declares none.
+
+    Unset resources take the backend's defaults. ``startup_timeout`` bounds machine creation,
+    including an online image build. ``image_build`` applies to Daytona machines only.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    backend: TaskMachineBackend = TaskMachineBackend.DAYTONA
+    cpus: int | None = Field(default=None, gt=0)
+    memory_mb: int | None = Field(default=None, gt=0)
+    storage_mb: int | None = Field(default=None, gt=0)
+    startup_timeout: float = Field(default=600, gt=0)
+    image_build: TaskImageBuild = Field(
+        default=TaskImageBuild.SNAPSHOT, exclude_if=lambda value: value is TaskImageBuild.SNAPSHOT
+    )
+
+    @model_validator(mode="after")
+    def validate_image_build(self) -> "TaskMachineSettings":
+        if self.image_build is not TaskImageBuild.SNAPSHOT and self.backend is not TaskMachineBackend.DAYTONA:
+            raise ValueError("image_build applies only to Daytona task machines")
+        return self
+
+
 class EvaluationOverrides(BaseModel):
     """Run policy supplied by a suite or campaign."""
 
@@ -366,10 +411,19 @@ class EvaluationOverrides(BaseModel):
 
     limit: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
+    concurrency: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
+    """The most attempts that run at once; a model's ``evaluation_num_concurrent`` also bounds them.
+
+    Agent benchmarks set it because their attempts each hold a task machine and share the agent's
+    wall-clock budget with the model's latency, which grows with load."""
     seed: int | None = None
     judge: JudgeIdentity | None = None
     judge_endpoint: str | None = None
     judge_api_key: tuple[str, ...] = ()
+    task_machine: TaskMachineSettings | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Task machines for agent episodes; agent benchmarks default to :class:`TaskMachineSettings`."""
+    task_secrets: dict[str, tuple[str, ...]] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    """Ordered secret references for each host variable that task machines read through ``${NAME}``."""
 
 
 class PromptFormat(StrEnum):
@@ -439,6 +493,8 @@ class CuratedSettings(BaseModel):
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+    task_machine: TaskMachineSettings | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Required by agent episodes; part of the scoring identity."""
     task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
@@ -451,6 +507,23 @@ def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in settings.items() if key not in NON_SCORING_SETTINGS}
 
 
+class CuratedAgentRef(BaseModel):
+    """The harness that ran a curated agent-episode benchmark and its per-attempt token budgets.
+
+    ``revision`` is the worker's declared revision of that harness's behavior
+    (``marin.evaluation.task_worker.EPISODE_HARNESS_REVISIONS``), so records separate runs whose
+    prompts, parsing or tools differ. ``max_input_tokens`` is the agent's context limit and
+    ``max_output_tokens`` the limit of each model reply.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    harness: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+
+
 class CuratedRef(BaseModel):
     """Pinned corpus selection and typed TaskSpec driver settings."""
 
@@ -459,6 +532,8 @@ class CuratedRef(BaseModel):
     datasets: tuple[str, ...]
     settings: CuratedSettings
     selection: ResolvedEvaluationSelection | None = Field(default=None, exclude_if=lambda value: value is None)
+    agent: CuratedAgentRef | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Present for agent-episode benchmarks; the backend is ``settings.task_machine.backend``."""
 
     @model_validator(mode="before")
     @classmethod
@@ -650,6 +725,15 @@ class RepeatAggregate(BaseModel):
     source_coverage: TaskCoverage | None = None
 
 
+class RLAttemptRef(BaseModel):
+    """The RL attempt that produced the evaluated model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    attempt_id: str
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -679,6 +763,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    rl_attempt: RLAttemptRef | None = Field(default=None, exclude_if=lambda value: value is None)
     judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef

@@ -163,6 +163,8 @@ class EvaluationTaskRow(BaseModel):
     error_type: str | None
     answers: list[EvaluationAnswerRow]
     model: str | None = None
+    model_source_identity: str | None = None
+    starting_checkpoint_identity: str | None = None
 
     @model_validator(mode="before")
     @classmethod

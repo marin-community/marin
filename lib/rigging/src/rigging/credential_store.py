@@ -101,12 +101,3 @@ def save_credentials(record: CredentialRecord) -> Path:
     finally:
         tmp.unlink(missing_ok=True)
     return path
-
-
-def delete_credentials(cluster: str) -> bool:
-    """Drop ``cluster``'s cached credentials. Returns True if a file was removed."""
-    path = credential_path(cluster)
-    if not path.is_file():
-        return False
-    path.unlink()
-    return True

@@ -757,6 +757,12 @@ class BasePPOExp:
                 type(error).__name__,
             )
 
+        elapsed = time.monotonic() - started
+        logger.info(
+            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
+            elapsed - trainer.evaluation_wall_time,
+        )
+
 
 @ray.remote(num_cpus=1, max_retries=0)
 def skyrl_entrypoint(cfg: DictConfig):

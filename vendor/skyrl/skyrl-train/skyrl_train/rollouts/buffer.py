@@ -14,11 +14,10 @@ import collections
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
-from enum import StrEnum
-from itertools import repeat
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -26,7 +25,6 @@ from skyrl_train.group_admission import (
     GroupAdmissionStalledError,
     TrainingGroupInvariantError,
 )
-from skyrl_train.grader_reporting import GraderStats, GraderSummary
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -45,13 +43,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 
-class BatchPolicy(StrEnum):
-    """How committed groups are assigned to training batches; the two coincide at ``max_staleness_steps=0``."""
-
-    FULL_BATCH = "full_batch"
-    ROLLING = "rolling"
-
-
 @dataclass(frozen=True)
 class RolloutBufferConfig:
     """Batch shape, generation concurrency, and selection rules of one training run.
@@ -66,6 +57,7 @@ class RolloutBufferConfig:
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
+    groups_per_family: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
@@ -98,6 +90,7 @@ class RolloutLease:
     lease_id: str
     policy_step: int
     batch_id: int
+    family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -268,7 +261,6 @@ class RolloutVerdict:
     rewards: GroupRewards | None
     work: GeneratedWork
     row_facts: RowFacts | None = None
-    grader_stats: GraderStats | None = None
 
     @property
     def trainable(self) -> bool:
@@ -281,7 +273,6 @@ class RolloutContentPolicy:
 
     admission: GroupAdmissionPolicy
     selection: GroupSelectionPolicy
-    report_graders: bool = False
 
     def verdict(self, group: RolloutGroup) -> RolloutVerdict:
         """Judge one group, raising when it violates the run's structural contract."""
@@ -292,15 +283,10 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
-        grader_stats = None
-        if self.report_graders:
-            metadata = group.prompt["input"].metadata
-            grader_stats = GraderStats()
-            grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
         facts = RowFacts.from_batch(batch)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, grader_stats)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
 
 
 class RolloutWriter(Protocol):
@@ -561,6 +547,7 @@ class RolloutBuffer:
         self.config = config
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
+        self._family_order = collections.deque(config.groups_per_family)
         self._leases: dict[str, RolloutLease] = {}
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
@@ -569,7 +556,6 @@ class RolloutBuffer:
         self._batch_taken = False
         self._retries: list[dict] = []
         self._generated: list[tuple[int, GeneratedWork]] = []
-        self._grader_stats = GraderStats()
         self._dispositions: list[GroupDisposition] = []
         self._stats: collections.defaultdict[int, _SelectionStats] = collections.defaultdict(_SelectionStats)
         self._changed = asyncio.Condition()
@@ -587,19 +573,34 @@ class RolloutBuffer:
     async def acquire_lease(self) -> RolloutLease:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
-            await self._changed.wait_for(lambda: self._lease_batch() is not None)
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, self._lease_batch())
+            while (batch_id := self._lease_batch()) is None:
+                await self._changed.wait()
+            family = self._lease_family(batch_id) if self.config.groups_per_family else None
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, family)
             self._leases[lease.lease_id] = lease
             return lease
+
+    def _lease_family(self, batch_id: int) -> str:
+        occupied = collections.Counter(
+            lease.family for lease in self._leases.values() if lease.batch_id == batch_id and lease.family is not None
+        )
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._ready if group.batch_id == batch_id)
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._admitted[batch_id])
+        for _ in range(len(self._family_order)):
+            family = self._family_order[0]
+            self._family_order.rotate(-1)
+            if occupied[family] < self.config.groups_per_family[family]:
+                return family
+        raise RuntimeError(f"No group slot remains for this family in rollout batch {batch_id}")
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
-            lease = self._leases.pop(lease_id)
+            lease = self._leases[lease_id]
+            if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
+                raise ValueError("Committed prompt family does not match its rollout lease")
+            del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
-            if verdict.grader_stats is not None:
-                self._grader_stats.merge(verdict.grader_stats)
-                verdict = replace(verdict, grader_stats=None)
             self._ready.append(
                 ReadyRollout(
                     lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
@@ -674,7 +675,14 @@ class RolloutBuffer:
                 for rollout in self._admitted[self._policy_step]:
                     self._dispose(rollout, "consumed")
                 stats = self._stats.pop(self._policy_step)
-                selection = BatchSelection(stats.metrics(self.config.dynamic_sampling), stats.judged)
+                metrics = stats.metrics(self.config.dynamic_sampling)
+                if self.config.groups_per_family:
+                    counts = collections.Counter(
+                        group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
+                    )
+                    if counts != self.config.groups_per_family:
+                        raise RuntimeError(f"Rollout batch does not meet {GROUPS_PER_FAMILY_KEY}")
+                selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
                 raise RuntimeError(
@@ -709,10 +717,6 @@ class RolloutBuffer:
             self._changed.notify_all()
             return admission
 
-    def grader_summary(self) -> GraderSummary:
-        """Report all completed groups, including groups rejected for training."""
-        return self._grader_stats.summary()
-
     def snapshot(self) -> BufferSnapshot:
         """Copy committed groups not yet in a taken batch, and prompts awaiting regeneration."""
         admitted = [
@@ -730,6 +734,13 @@ class RolloutBuffer:
         async with self._changed:
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
+            if self.config.groups_per_family:
+                occupied = collections.Counter((row.batch_id, row.prompt.get(FAMILY_COLUMN)) for row in snapshot.ready)
+                if any(
+                    family is None or count > self.config.groups_per_family.get(family, 0)
+                    for (_, family), count in occupied.items()
+                ):
+                    raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
 

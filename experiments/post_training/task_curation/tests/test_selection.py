@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -15,9 +16,11 @@ from click.testing import CliRunner
 from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_manifest
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
@@ -26,12 +29,15 @@ from taskcompendium.models import (
     ConversationInput,
     DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
+    NoGrader,
     PlainText,
     ResourceGroups,
     ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    grader_environment,
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.models import IntendedUse
@@ -44,6 +50,7 @@ from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sou
 from experiments.post_training.rl_compose import sampled_tasks_step
 from experiments.post_training.rl_scoring import EvalLiteVersionScore, score_eval_lite_version
 from experiments.post_training.rl_tests.fixtures import answer, evaluation_task_rows
+from experiments.post_training.task_curation import selection as selection_module
 from experiments.post_training.task_curation.campaign import error_chain
 from experiments.post_training.task_curation.datasets.nemo_tool_calls import sources as tool_call_sources
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
@@ -55,19 +62,24 @@ from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     HELDOUT_BLEND,
     HELDOUT_FAMILIES,
+    LOCAL_GRADERS,
     PASS_RATE_ATTEMPTS,
     STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     EvalLiteRecipe,
+    GraderKind,
     HeldoutSource,
     PanelFormat,
+    ReleaseAdmission,
+    ReleasedSource,
     SelectionRecipe,
     eval_lite_step,
     task_selection_step,
     validation_task,
 )
+from experiments.post_training.task_curation.swe_verified_release import convert_release
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
@@ -79,10 +91,10 @@ def local_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
 
 
-def source_task(identifier: str, *, image: bool = False) -> TaskSpec:
+def source_task(identifier: str, *, dataset: str = "fixture", image: bool = False) -> TaskSpec:
     return TaskSpec(
         id=identifier,
-        source=Source(dataset="fixture", revision="release", row=identifier, importer_revision="1"),
+        source=Source(dataset=dataset, revision="release", row=identifier, importer_revision="1"),
         context=ConversationInput(events=(TextMessage(role="user", content=f"Solve {identifier}."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
@@ -90,9 +102,11 @@ def source_task(identifier: str, *, image: bool = False) -> TaskSpec:
         grader=ScriptGrader(
             argv=("python", "/tests/grade.py"),
             env={"MODE": "fixture"},
-            environment=EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS,
-                **({"docker_image": "python@sha256:" + "a" * 64} if image else {"packages_lock": "numpy==2.3.5\n"}),
+            placement=GraderMachine(
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS,
+                    **({"docker_image": "python@sha256:" + "a" * 64} if image else {"packages_lock": "numpy==2.3.5\n"}),
+                )
             ),
         ),
         resources=ResourceGroups(verifier=(inline_resource("private.txt", identifier.encode()),)),
@@ -114,6 +128,8 @@ def heldout_rows() -> list[dict]:
                 )
                 task["resources"]["verifier"].append(config.model_dump(mode="json"))
             else:
+                # The pinned heldout specs keep the 0.30 grader shape.
+                del task["grader"]["placement"]
                 task["grader"]["environment"] = {
                     "command_semantics": "linux_process",
                     "packages_lock": "numpy==2.3.5\n",
@@ -252,6 +268,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         "fixture:first": {
             "input": 24,
             "heldout_overlap": 22,
+            "excluded": 0,
             "duplicate": 0,
             "eligible": 2,
             "selected": sum(task.id != "training-c" for task in tasks),
@@ -259,6 +276,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         "fixture:second": {
             "input": 2,
             "heldout_overlap": 0,
+            "excluded": 0,
             "duplicate": 1,
             "eligible": 1,
             "selected": sum(task.id == "training-c" for task in tasks),
@@ -282,21 +300,29 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in HELDOUT_FAMILIES.items()},
-            "family_limits": {family: 1 for family in HELDOUT_FAMILIES.values()},
+            "sources": {
+                **{BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in HELDOUT_FAMILIES.items()},
+                "fixture:image": "agents",
+            },
+            "family_limits": {family: 1 for family in (*HELDOUT_FAMILIES.values(), "agents")},
+            "admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE},
         }
     )
     curated = {}
     for component, family in settings.sources.items():
-        task = source_task(f"training-{family}")
-        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": environments[family]})})
+        task = source_task(f"training-{family}", image=family == "agents")
+        if family != "agents":
+            placement = GraderMachine(environment=environments[family])
+            task = task.model_copy(update={"grader": task.grader.model_copy(update={"placement": placement})})
         curated[component] = admitted_source(tmp_path / family, [task])
     originals = {}
     for row in rows:
         document = json.loads(row["lowered_task_spec"])
         task = document["task"]
         if task["source"]["dataset"] != "structure-closure":
-            task["grader"]["environment"] = source_task("image", image=True).grader.environment.model_dump(mode="json")
+            image_environment = grader_environment(source_task("image", image=True).grader)
+            assert image_environment is not None
+            task["grader"]["environment"] = image_environment.model_dump(mode="json")
             task["grader"]["argv"][0] = "python3"
             task["grader"]["env"] = {"MODE": "historical"}
             task["grader"]["timeout"] = 330
@@ -327,17 +353,300 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         }
         if family == STRUCTURAL_FAMILY:
             continue
-        assert task.grader.environment == environments[family]
+        assert grader_environment(task.grader) == environments[family]
         assert task.resources.model_dump(mode="json") == original["resources"]
-        assert task.grader.model_dump(mode="json", exclude={"environment"}) == {
-            key: value for key, value in original["grader"].items() if key != "environment"
+        assert task.grader.model_dump(mode="json", exclude={"placement"}) == {
+            key: value for key, value in original["grader"].items() if key not in ("environment", "collect", "artifacts")
         }
     summary = json.loads((output / "summary.json").read_text())
     assert summary["grader_kind_counts"] == {
-        "train": {"package": 4, "image": 0, "remote_judge": 0, "in_process": 0},
-        "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20},
-        "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21},
+        "train": {"package": 4, "image": 1, "remote_judge": 0, "in_process": 0, "harness": 0},
+        "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20, "harness": 0},
+        "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21, "harness": 0},
     }
+
+
+def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
+    source = task_file(path, list(tasks))
+    return ReleasedSource(
+        **source.model_dump(),
+        family="agentic",
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        agentic=True,
+        license="Apache-2.0",
+    )
+
+
+def released_probe(root, release, tasks, *, graded, pin=True):
+    name, version = "probe", "2026.11.18.1"
+    selection = root / selection_module.SELECTION_PREFIX / name / version
+    selection.mkdir(parents=True)
+    (selection / "summary.json").write_text(
+        json.dumps({"recipe": {"released": [{"sha256": release.sha256}] if pin else []}})
+    )
+    rows = []
+    for index, task in enumerate(tasks):
+        tags = task.tags if "agentic" in task.tags else (*task.tags, "agentic")
+        task = task.model_copy(update={"tags": tags})
+        rows.append(
+            {
+                "selection": f"{name}@{version}",
+                "task_id": task.id,
+                "task_digest": canonical_sha256(task.model_dump(mode="json")),
+                "outcome": Outcome.GRADED if index < graded else Outcome.INFRA_ERROR,
+            }
+        )
+    attempts = root / "attempts.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), attempts)
+    return ReleaseAdmission(uri=str(attempts), sha256=hashlib.sha256(attempts.read_bytes()).hexdigest())
+
+
+def harness_task(tags=("harbor",)) -> TaskSpec:
+    return source_task("agent-task", dataset="long-loop-smartie-swesmith").model_copy(
+        update={"grader": NoGrader(reason="The harness grades the completed trial"), "tags": tags}
+    )
+
+
+def released_recipe(release: ReleasedSource, **options) -> SelectionRecipe:
+    return SelectionRecipe(
+        name="mixed",
+        version="2026.11.19.1",
+        sources={},
+        family_limits={"agentic": 1},
+        heldout=(),
+        validation_per_family=1,
+        seed=20261023,
+        released=(release,),
+    ).model_copy(update=options)
+
+
+@pytest.mark.parametrize(
+    ("setup_suffix", "existing_commands", "error"),
+    [
+        pytest.param("", (), None, id="published"),
+        pytest.param(None, (), "no declared Harbor bootstrap command", id="missing-bootstrap"),
+        pytest.param("", ("echo configured",), "already declares setup_commands", id="existing-setup"),
+        pytest.param('user="root"\n', (), "unsupported Harbor setup keys: user", id="unknown-key"),
+    ],
+)
+def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, setup_suffix, existing_commands, error):
+    commands = ("python fixture_setup.py", "python other_setup.py")
+    tasks = []
+    for index, command in enumerate(commands):
+        config = '[environment]\ndocker_image="fixture/image:latest"\n'
+        if index == 0 or setup_suffix is not None:
+            config += f'[environment.setup]\ncommand="{command}"\ntimeout_sec=1800\n'
+            if index == 1:
+                config += setup_suffix
+        resources = ResourceGroups(verifier=(inline_resource("task.toml", config.encode()),))
+        requirements = EnvironmentRequirements(setup_commands=existing_commands if index == 1 else ())
+        tasks.append(
+            source_task(f"agent-{index}").model_copy(
+                update={"resources": resources, "environment_requirements": requirements}
+            )
+        )
+    original = tmp_path / "sealed.parquet"
+    serialized = [task.model_dump_json() for task in tasks]
+    table = pa.table({"task_spec": serialized, "family": ["agentic", "agentic"]})
+    pq.write_table(table, original)
+    source_sha = hashlib.sha256(original.read_bytes()).hexdigest()
+    output = tmp_path / "derived"
+
+    def convert():
+        return convert_release(StoragePath(str(original)), source_sha, 2, StoragePath(str(output)), "test-commit")
+
+    if error is not None:
+        with pytest.raises(ValueError, match=f"agent-1 .*{error}"):
+            convert()
+        assert not output.exists()
+        return
+
+    manifest = convert()
+    parquet = output / "agentic-train.parquet"
+    result = pq.read_table(parquet)
+    assert result.schema == table.schema and result["family"] == table["family"]
+    for task, command, before, after, receipt in zip(
+        tasks, commands, serialized, result["task_spec"].to_pylist(), manifest["tasks"], strict=True
+    ):
+        expected = json.loads(before)
+        expected["environment_requirements"]["setup_commands"] = [command]
+        assert json.loads(after) == expected
+        assert receipt == {
+            "task_id": task.id,
+            "input_sha256": hashlib.sha256(before.encode()).hexdigest(),
+            "output_sha256": hashlib.sha256(after.encode()).hexdigest(),
+        }
+    assert manifest["input_uri"] == str(original) and manifest["input_sha256"] == source_sha
+    assert manifest["code_commit"] == "test-commit" and manifest["rows"] == 2
+    assert manifest["output_sha256"] == hashlib.sha256(parquet.read_bytes()).hexdigest()
+    assert json.loads((output / "manifest.json").read_text()) == manifest
+    assert convert() == manifest
+
+
+def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setattr(selection_module, "MIN_PROBED_TASKS", 3)
+    repeated = source_task("evaluation-overlap")
+    one_turn_task = source_task("one-turn")
+    alias = one_turn_task.model_copy(update={"id": "cross-source-alias"})
+    repaired = harness_task()
+    old_task = repaired.model_copy(
+        update={"environment_requirements": EnvironmentRequirements(setup_commands=("false",))}
+    )
+    skipped = source_task("skip-exact-task")
+    tasks = (repaired, repeated, alias, skipped)
+    release = released_training(tmp_path / "release.parquet", *tasks)
+    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=len(tasks))})
+    skip_list = task_file(
+        tmp_path / "skip.parquet", [selection_module.with_agentic_tag(task) for task in (old_task, skipped)]
+    )
+    heldout = source_task("validation", dataset="structure-closure")
+    one_turn = "fixture:first"
+    settings = released_recipe(
+        release,
+        sources={one_turn: "nonagentic"},
+        family_limits={"nonagentic": 1, "agentic": 1},
+        source_limits={one_turn: 1, release.uri: 1},
+        heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
+        exclusions=(
+            task_file(tmp_path / "evallite.parquet", [repeated]),
+            skip_list.model_copy(update={"format": PanelFormat.TASK_DIGEST}),
+        ),
+        admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS},
+    )
+    curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
+    step = task_selection_step(curated, settings)
+    changed = settings.model_copy(update={"released": (release.model_copy(update={"sha256": "0" * 64}),)})
+    assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
+
+    replacement = task_file(tmp_path / "replacement.parquet", [repeated, alias, skipped, source_task("replaced")])
+    open_path = StoragePath.open
+    release_read = False
+
+    def open_release(path, mode="rb", **kwargs):
+        nonlocal release_read
+        if str(path) == release.uri and mode == "rb":
+            if release_read:
+                path = StoragePath(replacement.uri)
+            release_read = True
+        return open_path(path, mode, **kwargs)
+
+    monkeypatch.setattr(StoragePath, "open", open_release)
+    root = Path(run(step)[0].path)
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
+    assert summary["grader_kind_counts"]["train"]["harness"] == 1
+    assert summary["source_counts"][release.uri] == {
+        "input": 4,
+        "selected": 1,
+        "eligible": 1,
+        "heldout_overlap": 0,
+        "excluded": 2,
+        "duplicate": 1,
+    }
+    rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
+    labels = {}
+    for row in rows:
+        task = TaskSpec.model_validate_json(row["task_spec"])
+        labels[task.id] = (row["family"], row["aai_category"], row["agentic"], row["difficulty"], task.tags)
+    assert labels == {
+        "agent-task": ("agentic", "coding", True, "unrated", ("harbor", "agentic")),
+        "one-turn": ("nonagentic", "untagged", False, "untagged", ()),
+    }
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("digest", "SHA-256 mismatch"),
+        ("count", "row count changed"),
+        ("schema", "Unsupported TaskSpec schema"),
+        ("tag", "contradicts the source"),
+        ("harness", "does not admit harness graders"),
+        ("harness-without-tag", "harness grader requires the harbor tag"),
+    ],
+)
+def test_selection_refuses_invalid_released_tasks(tmp_path, monkeypatch, fault, message):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
+    task = source_task("agent-task")
+    if fault == "schema":
+        task = task.model_copy(update={"schema_version": "0.27"})
+    if fault == "tag":
+        task = task.model_copy(update={"tags": ("agentic",)})
+    if fault in ("harness", "harness-without-tag"):
+        task = harness_task(("harbor",) if fault == "harness" else ())
+    release = released_training(tmp_path / "release.parquet", task)
+    update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
+    release = release.model_copy(update=update.get(fault, {}))
+    release = release.model_copy(update={"admission": released_probe(tmp_path, release, (task,), graded=1)})
+    settings = released_recipe(
+        release,
+        admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS} if fault == "harness-without-tag" else LOCAL_GRADERS,
+    )
+    step = task_selection_step({}, settings)
+    with pytest.raises(RuntimeError) as error:
+        run(step)
+    assert message in error_chain(error.value)
+    assert not (Path(step.path()) / TRAIN_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("fault", "error"),
+    [
+        ("missing", "requires admission evidence"),
+        ("hash", "Admission record SHA-256 mismatch"),
+        ("pin", "does not pin released source"),
+        ("size", "Found 49 of 49 graded"),
+        ("coverage", "Found 44 of 50 graded"),
+        ("repeated-task", "Found 1 of 1 graded"),
+        ("different-content", "Found 0 of 0 graded"),
+    ],
+)
+def test_selection_requires_matching_released_task_admission(tmp_path, monkeypatch, fault, error):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
+    tasks = tuple(source_task(f"probed-{index}") for index in range(50))
+    release = released_training(tmp_path / "release.parquet", *tasks)
+    if fault != "missing":
+        admitted = tasks[:49] if fault == "size" else tasks
+        if fault == "repeated-task":
+            admitted = (tasks[0],) * 50
+        if fault == "different-content":
+            admitted = tuple(task.model_copy(update={"tags": ("different",)}) for task in tasks)
+        graded = 44 if fault == "coverage" else len(admitted)
+        probe = released_probe(tmp_path, release, admitted, graded=graded, pin=fault != "pin")
+        if fault == "hash":
+            probe = probe.model_copy(update={"sha256": "0" * 64})
+        release = release.model_copy(update={"admission": probe})
+    step = task_selection_step({}, released_recipe(release))
+    with pytest.raises(RuntimeError) as raised:
+        run(step)
+    assert error in error_chain(raised.value)
+    assert not (Path(step.path()) / TRAIN_FILENAME).exists()
+
+
+def test_grader_admission_preserves_published_selection_fingerprints():
+    recipes = Path(__file__).parents[1] / "recipes"
+    training = SelectionRecipe.model_validate_json((recipes / "snowball-100k.json").read_text())
+    agentic = SelectionRecipe.model_validate_json((recipes / "snowball-100k-agentic.json").read_text())
+    evaluation = EvalLiteRecipe.model_validate_json((recipes / "eval-lite.json").read_text())
+    for recipe in recipes.glob("*.json"):
+        for source in json.loads(recipe.read_text()).get("released", ()):
+            assert ReleasedSource.model_validate(source).admission is not None, recipe.name
+
+    def curated(sources):
+        return {
+            name: ArtifactStep.adopt(f"inputs/source-{index}", "2026.11.19.1", f"/fixtures/corpus/source-{index}")
+            for index, name in enumerate(sorted(set(sources)))
+        }
+
+    training_sources = curated(training.sources)
+    assert "released" not in training.model_dump(mode="json")
+    assert task_selection_step(training_sources, training).fingerprint() == "7fb51836"
+    explicit = training.model_copy(update={"admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE}})
+    assert task_selection_step(training_sources, explicit).fingerprint() != "7fb51836"
+    evaluation_sources = curated(part.source_id for part in evaluation.sources)
+    assert eval_lite_step(evaluation_sources, evaluation).fingerprint() == "4fd3f893"
+    task_selection_step(curated(agentic.sources), agentic)
 
 
 @pytest.mark.parametrize("shared_id", ["shared-unsampled", "shared-alias"])
@@ -384,8 +693,8 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     [
         ("evaluation-source", "not a training population"),
         ("development-image", "Development panel requires local graders"),
-        ("training-image", "Training selection requires local graders"),
-        ("training-judge", "Training selection requires local graders"),
+        ("training-image", "Training selection does not admit image graders"),
+        ("training-judge", "Training selection does not admit remote_judge graders"),
     ],
 )
 def test_selection_does_not_publish_for_invalid_source_or_grader(tmp_path, failure, cause):
@@ -464,7 +773,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     assert len(tasks) == 1
     assert tasks[0].context.events[-1].content == "Two plus three?"
     summary = json.loads((output / "summary.json").read_text())
-    assert summary["source_counts"][source.info.id]["heldout_overlap"] == 1
+    assert summary["source_counts"][source.info.id]["excluded"] == 1
     heldout_ids = {json.loads(row["lowered_task_spec"])["task"]["id"] for row in heldout_rows()}
     assert {task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)} == heldout_ids
     input_file.unlink()
@@ -888,9 +1197,13 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
             "grader": (
                 source_task("docker-build").grader.model_copy(
                     update={
-                        "environment": EnvironmentRequirements(
-                            command_semantics=CommandSemantics.LINUX_PROCESS,
-                            docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM python:3.12"),)),
+                        "placement": GraderMachine(
+                            environment=EnvironmentRequirements(
+                                command_semantics=CommandSemantics.LINUX_PROCESS,
+                                docker_build=DockerBuildContext(
+                                    files=(inline_resource("Dockerfile", b"FROM python:3.12"),)
+                                ),
+                            )
                         )
                     }
                 )

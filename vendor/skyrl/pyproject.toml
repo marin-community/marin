@@ -66,6 +66,7 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "accelerate>=1.14,<2",
+    "harbor",
     "peft>=0.19",
     "tensordict",
     "torch==2.11.0",

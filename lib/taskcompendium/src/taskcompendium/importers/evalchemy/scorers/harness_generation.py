@@ -251,15 +251,10 @@ def grade_harness_generation_candidate(
             if candidate == INVALID_ANSWER:
                 metrics[f"exact_match,{name}"] = 0.0
                 continue
-            candidates = (
-                _gsm8k_equivalence_candidates(candidate, question) if name == "flexible-extract" else [candidate]
-            )
+            # As in the source task, where both filters pass through process_results.
+            candidates = _gsm8k_equivalence_candidates(candidate, question)
             equivalent = any(is_equiv(normalize_final_answer(value), reference) for value in candidates)
-            if (
-                not equivalent
-                and name == "flexible-extract"
-                and ("percent" in question.lower() or "pass rate" in question.lower())
-            ):
+            if not equivalent and ("percent" in question.lower() or "pass rate" in question.lower()):
                 percent_reference = rf"\frac{{{reference}}}{{100}}"
                 equivalent = any(is_equiv(normalize_final_answer(value), percent_reference) for value in candidates)
             metrics[f"exact_match,{name}"] = float(equivalent)

@@ -15,7 +15,7 @@ Read these before reviewing:
 
 - root `AGENTS.md`
 - root `TESTING.md`
-- `docs/dev-guide/writing-style/ai-writing-donts.md`
+- `docs/dev-guide/writing-style/review-prose.md`
 - the nearest module `AGENTS.md` and testing guide for each changed test
 
 Read [references/examples.md](references/examples.md) when the diff changes tests
@@ -74,7 +74,8 @@ Review every added or edited sentence in comments, docstrings, docs, reports,
 commit text, and PR text.
 
 Delete sentences that add no fact, result, decision, constraint, or caveat.
-Apply the full checklist in `ai-writing-donts.md`. Search explicitly for:
+Apply the relevant checks in `review-prose.md` to each kind of prose in the
+diff. Search explicitly for:
 
 - `X, not Y`, `not X, but Y`, `not just X`, `more than X`
 - `rather than` used as rhetorical contrast

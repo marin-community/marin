@@ -33,6 +33,7 @@ from levanter.data.mixture import (
 )
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -52,9 +53,11 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SerializedChatLmDatasetFormat,
     TextLmDatasetFormat,
     TokenSeqDict,
 )
+from levanter.data.text.serialized_chat import mask_serialized_chat
 from levanter.data.text.length_bucket import (
     LengthBucket,
     LengthBucketIndex,
@@ -400,7 +403,7 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
-    if isinstance(fmt, TextLmDatasetFormat):
+    if isinstance(fmt, TextLmDatasetFormat | SerializedChatLmDatasetFormat):
         return False
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
@@ -559,6 +562,26 @@ def dataset_for_component(
             "the lookahead window only applies to packed datasets."
         )
     fmt = component.format
+    if isinstance(fmt, SerializedChatLmDatasetFormat):
+        max_segments, slice_strategy = _resolve_pack_config(pack)
+        dataset = PackedTokenDataset(
+            cache,
+            Pos,
+            max_segments_per_example=max_segments,
+            slice_strategy=slice_strategy,
+            lookahead_window=component.pack_lookahead_window,
+        )
+
+        def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
+            masked = mask_serialized_chat(
+                example, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+            )
+            # Loss masking needs each document's boundary even with cross-document attention.
+            if not block_cross_document_attention:
+                masked = dataclasses.replace(masked, attn_mask=GrugAttentionMask.causal())
+            return masked
+
+        return dataset.map(apply_chat_mask)
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)

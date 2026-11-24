@@ -28,10 +28,6 @@ namespace {
 
 constexpr int kMaxPeers = NUM_MAX_NVL_PEERS;
 constexpr int kCounterTimeoutSeconds = NUM_CPU_TIMEOUT_SECS;
-constexpr int kProbeDispatchTokens = 4096;
-constexpr int kProbeDispatchHidden = 2048;
-constexpr int kProbeDispatchTopK = 2;
-constexpr int kProbeDispatchExperts = 128;
 
 struct DispatchConfig {
   int num_sms;
@@ -1365,123 +1361,6 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
     }
     if (first_error.has_value()) {
       throw std::runtime_error(*first_error);
-    }
-
-    SetLastError("");
-    return 0;
-  } catch (const std::exception& exc) {
-    SetLastError(exc.what());
-    return 1;
-  }
-}
-
-extern "C" int levanter_deepep_probe_dispatch_kernel_attributes() {
-  try {
-    DeviceRuntime& runtime = RuntimeManager::Instance().RuntimeForCurrentDevice();
-    std::vector<void*> allocations;
-    auto allocate_zeroed = [&](size_t num_bytes, const char* context) -> void* {
-      void* ptr = nullptr;
-      ThrowOnCuda(cudaMalloc(&ptr, num_bytes), context);
-      allocations.push_back(ptr);
-      ThrowOnCuda(cudaMemset(ptr, 0, num_bytes), context);
-      return ptr;
-    };
-
-    const int hidden_int4 = kProbeDispatchHidden * static_cast<int>(sizeof(nv_bfloat16)) / sizeof(int4);
-    const int max_recv_tokens = kProbeDispatchTokens * runtime.num_ranks;
-    const size_t x_bytes = static_cast<size_t>(kProbeDispatchTokens) * kProbeDispatchHidden * sizeof(nv_bfloat16);
-    const size_t recv_x_bytes = static_cast<size_t>(max_recv_tokens) * kProbeDispatchHidden * sizeof(nv_bfloat16);
-    const size_t topk_idx_bytes = static_cast<size_t>(kProbeDispatchTokens) * kProbeDispatchTopK * sizeof(int64_t);
-    const size_t recv_topk_idx_bytes = static_cast<size_t>(max_recv_tokens) * kProbeDispatchTopK * sizeof(int64_t);
-    const size_t topk_weights_bytes = static_cast<size_t>(kProbeDispatchTokens) * kProbeDispatchTopK * sizeof(float);
-    const size_t recv_topk_weights_bytes = static_cast<size_t>(max_recv_tokens) * kProbeDispatchTopK * sizeof(float);
-    const size_t recv_src_idx_bytes = static_cast<size_t>(max_recv_tokens) * sizeof(int);
-    const size_t send_head_bytes = static_cast<size_t>(kProbeDispatchTokens) * runtime.num_ranks * sizeof(int);
-    const size_t token_rank_bytes = static_cast<size_t>(kProbeDispatchTokens) * runtime.num_ranks * sizeof(bool);
-    const size_t channel_prefix_bytes =
-        static_cast<size_t>(runtime.num_ranks) * runtime.dispatch_num_channels() * sizeof(int);
-
-    void* recv_x = allocate_zeroed(recv_x_bytes, "cudaMalloc(probe recv_x)");
-    void* recv_src_idx = allocate_zeroed(recv_src_idx_bytes, "cudaMalloc(probe recv_src_idx)");
-    void* recv_topk_idx = allocate_zeroed(recv_topk_idx_bytes, "cudaMalloc(probe recv_topk_idx)");
-    void* recv_topk_weights = allocate_zeroed(recv_topk_weights_bytes, "cudaMalloc(probe recv_topk_weights)");
-    void* send_head = allocate_zeroed(send_head_bytes, "cudaMalloc(probe send_head)");
-    void* x = allocate_zeroed(x_bytes, "cudaMalloc(probe x)");
-    void* topk_idx = allocate_zeroed(topk_idx_bytes, "cudaMalloc(probe topk_idx)");
-    void* topk_weights = allocate_zeroed(topk_weights_bytes, "cudaMalloc(probe topk_weights)");
-    void* is_token_in_rank = allocate_zeroed(token_rank_bytes, "cudaMalloc(probe is_token_in_rank)");
-    void* channel_prefix_matrix = allocate_zeroed(channel_prefix_bytes, "cudaMalloc(probe channel_prefix_matrix)");
-
-#if defined(LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH)
-    deep_ep::intranode::dispatch(
-        recv_x,
-        nullptr,
-        nullptr,
-        reinterpret_cast<int*>(recv_src_idx),
-        reinterpret_cast<int64_t*>(recv_topk_idx),
-        reinterpret_cast<float*>(recv_topk_weights),
-        runtime.recv_channel_offset_scratch,
-        reinterpret_cast<int*>(send_head),
-        x,
-        nullptr,
-        nullptr,
-        reinterpret_cast<const int64_t*>(topk_idx),
-        reinterpret_cast<const float*>(topk_weights),
-        reinterpret_cast<const bool*>(is_token_in_rank),
-        reinterpret_cast<const int*>(channel_prefix_matrix),
-        kProbeDispatchTokens,
-        0,
-        hidden_int4,
-        kProbeDispatchTopK,
-        kProbeDispatchExperts,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        runtime.buffer_ptrs_gpu,
-        runtime.rank,
-        runtime.num_ranks,
-        runtime.aux_stream,
-        runtime.dispatch_config.num_sms,
-        runtime.dispatch_config.num_max_send_tokens,
-        runtime.dispatch_config.num_max_recv_tokens);
-#else
-    deep_ep::intranode::dispatch(
-        recv_x,
-        nullptr,
-        reinterpret_cast<int*>(recv_src_idx),
-        reinterpret_cast<int64_t*>(recv_topk_idx),
-        reinterpret_cast<float*>(recv_topk_weights),
-        runtime.recv_channel_offset_scratch,
-        reinterpret_cast<int*>(send_head),
-        x,
-        nullptr,
-        reinterpret_cast<const int64_t*>(topk_idx),
-        reinterpret_cast<const float*>(topk_weights),
-        reinterpret_cast<const bool*>(is_token_in_rank),
-        reinterpret_cast<const int*>(channel_prefix_matrix),
-        kProbeDispatchTokens,
-        0,
-        hidden_int4,
-        kProbeDispatchTopK,
-        kProbeDispatchExperts,
-        0,
-        0,
-        0,
-        runtime.buffer_ptrs_gpu,
-        runtime.rank,
-        runtime.num_ranks,
-        runtime.aux_stream,
-        runtime.dispatch_config.num_sms,
-        runtime.dispatch_config.num_max_send_tokens,
-        runtime.dispatch_config.num_max_recv_tokens);
-#endif
-    ThrowOnCuda(cudaStreamSynchronize(runtime.aux_stream), "cudaStreamSynchronize(probe dispatch)");
-
-    for (void* ptr : allocations) {
-      cudaFree(ptr);
     }
 
     SetLastError("");
