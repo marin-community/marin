@@ -210,6 +210,20 @@ def test_declarations_step_binds_the_document_consumers_read(tmp_path, monkeypat
     assert receipt.receipt == ArtifactRef(**document_ref)
 
 
+def test_stage_step_fingerprints_cover_the_receipt_contract():
+    """The receipt key is part of the step's output contract and its fingerprint.
+
+    Regression: the declarations spec's receipt key changed what the step binds,
+    but the stored record from an earlier attempt still matched the fingerprint,
+    so consumers kept reading the stale envelope reference.
+    """
+    plan = fixture_plan()
+    built = release_graph(plan)
+    ctx = StepContext.for_fingerprint()
+    config = built.stages["declarations"].build_config(ctx)
+    assert config["receipt_key"] == "declarations"
+
+
 def test_text_scan_regions_read_the_compose_handoff(tmp_path):
     """The scan handoff is the composition handoff document reference.
 

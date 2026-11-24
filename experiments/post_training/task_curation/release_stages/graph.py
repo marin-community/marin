@@ -962,7 +962,9 @@ def _stage_step(
 
     def build_config(ctx: StepContext) -> dict:
         if ctx.is_fingerprint:
-            return {"node": node, "stage": spec.stage, **identity()}
+            # The receipt key is the step's output contract: the sealed reference the
+            # consumers read. A contract change must invalidate the stored record.
+            return {"node": node, "stage": spec.stage, "receipt_key": receipt_key, **identity()}
         return {**build_inputs(ctx), "graph_receipt_root": graph_receipt_root}
 
     def run(config: dict) -> StageReceipt:
