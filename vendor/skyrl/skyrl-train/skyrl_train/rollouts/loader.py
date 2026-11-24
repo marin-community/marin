@@ -185,12 +185,13 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
+    def next_prompt(self, live: Collection[str], family: str | None = None, *, batches_ahead: int = 0) -> dict | None:
         """Offer a non-live prompt in the requested family.
 
-        Prompts awaiting regeneration come first, followed by a pending early quarantine retry. A family lease
-        advances only that family's seeded pass. Without a family lease, two batches' worth of draws precede a
-        scan that can pick a row the order weights at zero.
+        Prompts awaiting regeneration come first. A lease that can fill the current batch can use an early
+        quarantine retry. ``batches_ahead`` is the number of batches a full-batch lease is reserved ahead of the
+        current one. A family lease advances only that family's seeded pass. Without a family lease, two batches'
+        worth of draws precede a scan that can pick a row the order weights at zero.
         """
 
         def eligible(uid: str) -> bool:
@@ -200,12 +201,11 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
-        early_retry = self._next_early_retry(live, family)
-        if early_retry is not None:
+        if batches_ahead == 0 and (early_retry := self._next_early_retry(live, family)) is not None:
             return early_retry
         if family is not None:
             return self._next_family_prompt(live, family)
-        # An early retry can be both live and quarantined.
+        # An early retry can be both live and quarantined. Check the sum before allocating a union.
         if (
             len(live) + len(self._quarantined) >= self._uid_count
             and len(self._quarantined.keys() | live) >= self._uid_count
@@ -226,7 +226,6 @@ class PromptLoader:
     def _next_early_retry(self, live: Collection[str], family: str | None) -> dict | None:
         if family not in self._early_retry_pools:
             return None
-        self._early_retry_pools.remove(family)
         uid = next(
             (
                 uid
@@ -237,6 +236,7 @@ class PromptLoader:
         )
         if uid is None:
             return None
+        self._early_retry_pools.remove(family)
         # Rotate candidates so each quarantined prompt gets a turn.
         self._quarantined[uid] = self._quarantined.pop(uid)
         return self._offer(self._uid_rows[uid])
@@ -287,7 +287,7 @@ class PromptLoader:
         family = self._families.get(uid)
         if family is not None and family in self._family_minimums:
             minimum = self._family_minimums[family]
-            quarantined = sum(self._families.get(uid) == family for uid in self._quarantined)
+            quarantined = sum(self._families.get(candidate) == family for candidate in self._quarantined)
             usable = len(self._family_rows[family]) - quarantined
             scope = f" in family {family!r}"
         else:

@@ -1,11 +1,30 @@
 """Quarantine of prompts whose groups training can never use."""
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
+import ray
 from loguru import logger
 
-from skyrl_train.config.rollout_validation import FAMILY_COLUMN
-from skyrl_train.group_admission import AdmissionRejection
+from skyrl_train.config.rollout_validation import BatchPolicy, FAMILY_COLUMN
+from skyrl_train.dynamic_sampling import GroupSelectionPolicy, GroupSelectionResult
+from skyrl_train.group_admission import AdmissionRejection, GroupAdmissionPolicy, GroupAdvantageInvariant
+from skyrl_train.rollouts.buffer import (
+    GroupRewards,
+    PayloadReference,
+    RolloutBuffer,
+    RolloutBufferConfig,
+    RolloutContentPolicy,
+    RolloutLease,
+    RolloutTask,
+    RolloutVerdict,
+)
+from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
 from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
+from skyrl_train.rollouts.payloads import MemoryPayloads, RolloutWriter
+from skyrl_train.task_inputs import PreferenceInput, TrajectoryMetadata
+from skyrl_train.telemetry import GeneratedWork
 
 UNUSABLE = AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value
 USABLE = "consumed"
@@ -28,7 +47,10 @@ class Prompts:
         return f"task-{index}"
 
     def collate_fn(self, items: list[int]) -> list[dict]:
-        return [{"uid": str(item)} for item in items]
+        return [
+            {"uid": str(item), "input": PreferenceInput([item], {}, TrajectoryMetadata(str(item), "test"))}
+            for item in items
+        ]
 
 
 def loader(num_rows: int, batch_size: int, max_unusable_groups: int = 2) -> PromptLoader:
@@ -96,6 +118,7 @@ def test_recovered_prompt_fills_the_missing_group(family: str | None):
         # A quarantine in another pool precedes the one that can fill this slot.
         for _ in range(max_unusable_groups):
             prompts.record_disposition("3", UNUSABLE)
+        # The batch already has its math group.
         live = {"4"}
 
     for _ in range(max_unusable_groups):
@@ -115,6 +138,98 @@ def test_recovered_prompt_fills_the_missing_group(family: str | None):
     assert recovered.get(FAMILY_COLUMN) == family
     prompts.record_disposition(recovered["uid"], USABLE)
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == (0.0 if family is None else 1.0)
+
+
+@pytest.mark.asyncio
+async def test_recovered_prompt_fills_the_current_full_batch_with_a_future_lease(monkeypatch: pytest.MonkeyPatch):
+    rejection_batches = (2, 1, 2)
+    prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=len(rejection_batches))
+    for _ in rejection_batches:
+        prompts.record_disposition("0", UNUSABLE)
+    config = RolloutBufferConfig(
+        batch_size=2,
+        max_in_flight=4,
+        max_staleness_steps=1,
+        batch_policy=BatchPolicy.FULL_BATCH,
+        dynamic_sampling=None,
+        max_candidate_groups=None,
+    )
+    buffer = RolloutBuffer(config)
+    leases: asyncio.Queue[int] = asyncio.Queue()
+    rejections: asyncio.Queue[None] = asyncio.Queue()
+
+    async def acquire_lease() -> RolloutLease:
+        lease = await buffer.acquire_lease()
+        leases.put_nowait(lease.batch_id)
+        return lease
+
+    async def run_task(task: RolloutTask, _writer: RolloutWriter) -> int:
+        uid = task.prompt["uid"]
+        rejected = uid == "2"
+        if rejected:
+            await rejections.get()
+        verdict = RolloutVerdict(
+            uid,
+            (AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE,) if rejected else (),
+            None if rejected else GroupSelectionResult.KEEP,
+            None if rejected else GroupRewards((0.0,), (0.0,), False),
+            GeneratedWork(1, 1, 1),
+        )
+        await buffer.commit(task.lease.lease_id, task.prompt, verdict, PayloadReference(None if rejected else uid))
+        return verdict.work.generated_token_count
+
+    actor = SimpleNamespace(
+        publish=SimpleNamespace(remote=buffer.publish),
+        acquire_lease=SimpleNamespace(remote=acquire_lease),
+        admit=SimpleNamespace(remote=buffer.admit),
+    )
+    monkeypatch.setattr(ray, "kill", lambda _actor: None)
+    content = RolloutContentPolicy(
+        GroupAdmissionPolicy(
+            GroupAdvantageInvariant.no_group_advantage(physical_group_size=1), rollout_logprobs_required=False
+        ),
+        GroupSelectionPolicy(None),
+    )
+    context = TrainingContext(
+        prompts,
+        config,
+        actor,
+        content,
+        RolloutRequestSpec(samples_per_prompt=1, sampling_params={}),
+        SimpleNamespace(run_task=run_task),
+        MemoryPayloads(),
+        rollout_spans=False,
+    )
+    context.start()
+    try:
+        async with asyncio.timeout(5):
+            await context.publish(1)
+            async with asyncio.TaskGroup() as tasks:
+                batch = tasks.create_task(context.next_batch_metadata(stall_timeout=2))
+                assert [await leases.get(), await leases.get()] == [1, 1]
+                # Release each rejection once dispatch is holding the next lease.
+                for batch_id in rejection_batches:
+                    assert await leases.get() == batch_id
+                    rejections.put_nowait(None)
+            assert {group.uid for group in batch.result().groups} == {"0", "1"}
+    finally:
+        await context.close()
+
+
+def test_early_retry_waits_for_the_quarantined_prompt_to_finish():
+    prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=1)
+    prompts.record_disposition("0", UNUSABLE)
+    prompts.record_disposition("2", UNUSABLE)
+    first = prompts.next_prompt(live={"1"})
+    assert first is not None and first["uid"] == "0"
+
+    # Another rejection reaches the minimum while the first early retry is still generating.
+    prompts.record_disposition("2", UNUSABLE)
+    regular = prompts.next_prompt(live={"0", "1"})
+    assert regular is not None and regular["uid"] == "2"
+    prompts.record_disposition("0", UNUSABLE)
+    retry = prompts.next_prompt(live={"1", "2"})
+    assert retry is not None and retry["uid"] == "0"
 
 
 def test_failed_early_retry_preserves_quarantine_and_rotates_candidates():
@@ -153,6 +268,7 @@ def test_quarantine_keeps_enough_prompts_for_each_open_batch():
     for uid in ("7", "8", "9"):
         prompts.record_disposition(uid, UNUSABLE)
 
+    # Completing a batch clears its unused early retry.
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
     first = prompts.next_prompt(live=(), family="agentic")
     assert first is not None
@@ -205,5 +321,6 @@ def test_quarantine_keeps_one_batch_of_prompts():
         prompts.record_disposition(uid, UNUSABLE)
         prompts.record_disposition(uid, UNUSABLE)
 
+    # Completing a batch clears its unused early retry.
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
     assert sorted(set(offered(prompts, 6))) == ["1", "2", "3"]

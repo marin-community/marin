@@ -410,7 +410,15 @@ class TrainingContext:
                 with self._wait("prompt"):
                     async with self._uids_released:
                         prompt = await self._uids_released.wait_for(
-                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
+                            lambda: self.loader.next_prompt(
+                                self._live_uids,
+                                lease.family,
+                                batches_ahead=(
+                                    lease.batch_id - self._policy_step
+                                    if self.config.batch_policy is BatchPolicy.FULL_BATCH
+                                    else 0
+                                ),
+                            )
                         )
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
