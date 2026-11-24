@@ -271,7 +271,15 @@ def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsy
         json.dumps(
             {
                 "sequence": 1,
-                "wall_time": 45.0,
+                "wall_time": 100.0,
+                "event": {"type": "taskforge.effects.events.InferenceRequest", "payload": {"messages": []}},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "sequence": 2,
+                "wall_time": 600.0,
                 "event": {
                     "type": "taskforge.effects.events.Resolved",
                     "payload": {
@@ -293,7 +301,7 @@ def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsy
     report = json.loads(capsys.readouterr().out)
     band = report["bands"]["easy"]
     assert band["tasks"] == 1 and band["completion_tokens"] == 900
-    assert band["wall_tok_per_s"] == 20.0  # 900 completion tokens over 45s of effect wall time
+    assert band["wall_tok_per_s"] == 1.8  # 900 completion tokens over the task's 500s log span
     assert band["solve_rate"] == 1.0
     assert report["resolutions"] == {"solved_shortest": 1}
     assert report["transport"]["retry_markers"] == {"transport_error": 1}

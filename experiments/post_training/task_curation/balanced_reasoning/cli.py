@@ -271,12 +271,13 @@ def command_report(args: argparse.Namespace) -> int:
             content = sink.read_bytes()
         except FileNotFoundError:
             continue
+        timestamps: list[float] = []
         for line in content.splitlines():
             record = json.loads(line)
+            timestamps.append(float(record.get("wall_time") or 0.0))
             event = record.get("event") or {}
             if not str(event.get("type", "")).endswith("Resolved"):
                 continue
-            stats["wall_seconds"] += float(record.get("wall_time") or 0.0)
             value = (event.get("payload") or {}).get("value")
             if not isinstance(value, dict) or "usage" not in value:
                 continue
@@ -287,6 +288,9 @@ def command_report(args: argparse.Namespace) -> int:
             for marker in retries:
                 outcome = str(marker).split(":", 1)[0]
                 retry_markers[outcome] = retry_markers.get(outcome, 0) + 1
+        if timestamps:
+            # Record wall_time is a write timestamp; the task's span is last minus first.
+            stats["wall_seconds"] += max(timestamps) - min(timestamps)
 
     for name, stats in bands.items():
         tokens = stats["completion_tokens"]
