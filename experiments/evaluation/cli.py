@@ -352,7 +352,7 @@ def launch(
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit evaluations against a shared candidate endpoint for MODEL."""
+    """Submit evaluations against a served or external API candidate."""
     selected_model = resolve_model_config(model, model_config, api_model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     if platform is not None:

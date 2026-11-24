@@ -292,7 +292,7 @@ class ApiModelConfig:
 
     @property
     def resolved_revision(self) -> str:
-        """The provider's model ID; the provider owns which weights it serves."""
+        """The provider-qualified model ID used to distinguish API records."""
         return f"{self.provider}/{self.api_model}"
 
 

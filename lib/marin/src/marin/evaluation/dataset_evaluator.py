@@ -59,7 +59,7 @@ AGENT_EXTRA_BODY = "extra_body"
 
 
 def run_max_tokens(context: int, settings: CuratedSettings, model: EvaluatedModel) -> int:
-    """The run's reply budget under a served context window."""
+    """The run's reply budget under the candidate's context window."""
     return min(settings.max_tokens or context, model.generation.max_gen_toks or context, context - 1)
 
 
@@ -75,7 +75,7 @@ def mini_swe_model_format(model: EvaluatedModel) -> MiniSweModelFormat:
 
 
 def served_context_window(endpoint: OpenAIEndpoint) -> int:
-    """Read a vLLM server's context limit from its ``/models`` listing."""
+    """Return the served model's window, requiring a usable ``max_model_len``."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     with OpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key or "local-endpoint") as client:

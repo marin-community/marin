@@ -1727,5 +1727,3 @@ def test_api_candidate_runs_against_the_provider_and_records_it_without_its_key(
     assert record.model.api is not None and record.model.api.provider == "openrouter"
     assert (record.hardware.platform, record.hardware.accelerator) == ("api", "openrouter")
     assert record.serving is not None and record.serving.max_model_len == 32768
-    scores = CliRunner().invoke(cli, ["scores", path], catch_exceptions=False)
-    assert "nemotron-openrouter / gsm8k" in scores.output

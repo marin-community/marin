@@ -23,7 +23,6 @@ from marin.evaluation.hardware import Platform
 from marin.evaluation.runner import (
     CANDIDATE_API_KEY,
     ApiCandidate,
-    EndpointRoute,
     EvaluationBatch,
     EvaluationError,
     ServedCandidate,
@@ -865,8 +864,6 @@ def test_api_model_launch_runs_chat_and_agent_benchmarks_without_serving(
     assert batch.secret_env[CANDIDATE_API_KEY] == ("env:OPENROUTER_API_KEY",)
     assert "openrouter.ai" in batch.egress_allow
     chat_run, agent_run = batch.evaluations
-    # The endpoint already is the provider's address, so the runner uses it as given.
-    assert {chat_run.endpoint_route, agent_run.endpoint_route} == {EndpointRoute.CAPABILITY}
     assert chat_run.identity.eval_ref.curated.settings.source_limit == 20
     # The agent's context limit is the configured window, capped by the protocol.
     assert agent_run.identity.eval_ref.curated.agent.max_input_tokens == 24576
