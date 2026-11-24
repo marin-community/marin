@@ -459,11 +459,7 @@ def concatenate_trajectory_batches(
             result.get("env_classes"),
             verification_results=result.get("verification_results"),
         )
-        metrics.update(
-            rollout_counter_metrics(
-                [batch.get("rollout_metrics") or {} for batch in trajectory_batches]
-            )
-        )
+        metrics.update(rollout_counter_metrics([batch.get("rollout_metrics") or {} for batch in trajectory_batches]))
         result["rollout_metrics"] = metrics
         refresh_trajectory_reward_shaping_metrics(result)
     else:
@@ -508,9 +504,7 @@ def rollout_counter_metrics(group_metrics: Sequence[dict[str, float]]) -> dict[s
         )
         total_tito_declines = sum(output.get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0) for output in group_metrics)
         rollout_metrics[TIS_TITO_FULL_DECLINE_COUNT_METRIC] = total_tito_declines
-        rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = (
-            1.0 if sum_unaligned > 0 or total_tito_declines > 0 else 0.0
-        )
+        rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = 1.0 if sum_unaligned > 0 or total_tito_declines > 0 else 0.0
         for reason in TitoFullDeclineReason:
             name = f"{TIS_TITO_FULL_DECLINE_METRIC_PREFIX}{reason.value}"
             rollout_metrics[name] = sum(output.get(name, 0.0) for output in group_metrics)

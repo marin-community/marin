@@ -19,6 +19,7 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
+SETUP_COMPLETED_METRIC = "setup_completed"
 TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
 
 LENGTH_STOP_REASON = "length"
@@ -215,7 +216,10 @@ class GradedRollout:
 
     rollout: Rollout
     grade: GradeResult
-    """The verdict of the task's grader on the last conversation that has a model turn. Unavailable if none has."""
+    """The verdict of the task's grader on the last conversation that has a model turn.
+
+    Without one, the grader grades the work on the machine, and a task whose answer is the conversation is unavailable.
+    """
 
 
 class RolloutOperation(StrEnum):

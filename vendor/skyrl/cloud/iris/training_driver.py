@@ -174,18 +174,12 @@ class LocalRLRunner:
             self._write_resolved_config(launch_config)
             return self._run_skyrl(launch_config)
         self._resolve_data_inputs(str(launch_config.inputs.data_kind), launch_config.inputs.get("evaluation_data"))
-        terminal_bench_data = skyrl_config.get("data", {}).get("terminal_bench_data", ())
-        if terminal_bench_data:
-            terminal_bench_data = tuple(
-                resolve_rl_train_data_with_sources(list(terminal_bench_data), kind="tasks").paths
-            )
         self._setup_environment()
         skyrl_config = apply_task_local_values(
             skyrl_config,
             TaskLocalSkyRLValues(
                 train_data=tuple(self.config.train_data),
                 validation_data=tuple(self.config.val_data),
-                terminal_bench_data=terminal_bench_data,
                 evaluation_data=tuple(self._evaluation_data.items()),
             ),
         )

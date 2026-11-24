@@ -4,11 +4,13 @@
 import hashlib
 import json
 import sys
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, TERMINAL_RECEIPT_FILENAME
 from rigging.filesystem.storage_path import StoragePath
@@ -69,6 +71,48 @@ def harbor_task(identifier: str, image: str | None = None, setup: str = SETUP) -
 def selection_digest(task: TaskSpec) -> str:
     """The digest a selection's task manifest records for a training row."""
     return canonical_sha256(task.model_dump(mode="json"))
+
+
+def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path):
+    task = harbor_task("example", SHARED_IMAGE)
+    export = tmp_path / "export"
+    receipts = export / ATTEMPT_RECEIPTS_DIRECTORY
+    receipts.mkdir(parents=True)
+    receipt = AttemptReceipt(
+        attempt_id="trial-1",
+        task_id=task.id,
+        task_digest=selection_digest(task),
+        outcome=Outcome.INFRA_ERROR,
+        grading_failure=None,
+        exception_type="VerifierRuntimeError",
+        error="Task setup command exited 1",
+        phase=Phase.TASK_SETUP,
+        docker_image=SHARED_IMAGE,
+        setup_sha256=hashlib.sha256(SETUP.encode()).hexdigest(),
+        setup_completed=False,
+        setup_stdout=None,
+        setup_stderr=MISSING_MODULE,
+        verifier_stdout=None,
+        verifier_stderr=None,
+    )
+    first = receipts / "first.jsonl"
+    first.write_text(json.dumps(asdict(receipt)) + "\n")
+    second = receipts / "second.jsonl"
+    second.write_text(json.dumps(asdict(replace(receipt, attempt_id="trial-2"))) + "\n")
+    config = {
+        "skyrl": {"trainer": {"export_path": str(export)}},
+        "inputs": {"train_data": [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]},
+    }
+    snapshot = task_health._extract_attempts(config, "fixture@1", StoragePath(str(tmp_path / "snapshot")))
+    rows = pq.read_table(str(snapshot)).to_pylist()
+
+    assert [row["selection"] for row in rows] == ["fixture-pi", "fixture-pi"]
+    assert [row["address"] for row in rows] == [str(first), str(second)]
+    assert {row["task_digest"] for row in rows} == {receipt.task_digest}
+    training = write_tasks(tmp_path / TRAIN_FILENAME, [task])
+    skip = StoragePath(str(tmp_path / "skip"))
+    publish_skip_list(StoragePath(str(training.parent)), [snapshot], skip, "fixture")
+    assert pq.read_table(str(skip / SKIP_FILENAME))["task_id"].to_pylist() == [task.id]
 
 
 def write_tasks(path: Path, tasks: list[TaskSpec]) -> Path:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from rigging.task_errors import RetrySettings
 import pytest
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
@@ -147,7 +148,12 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
     )
     try:
         (result,) = await worker.generate(request)
@@ -174,12 +180,14 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
         (98, "stop", ",2]\n```", 1.0, None),
         (97, "stop", ",2]\n```", 1.0, None),
         (99, "stop", ",2]\n```", 1.0, None),
+        (98, "stop", ",2]\n```", 1.0, False),
+        # A length stop never earns reward, even when its last budgeted token is a turn terminator.
         (98, "length", ",2]\n```<|eot_id|>", 0.0, None),
-        (98, "stop", ",2]\n```<|eot_id|>", 0.0, False),
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, False),
     ],
-    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop", "retain-special-tokens"],
+    ids=["llama-turn-end", "qwen-turn-end", "eos", "retain-special-tokens", "length-stop", "length-stop-retained"],
 )
-async def test_assistant_prefix_worker_applies_configured_stop_token_retention(
+async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_terminator(
     task_inputs, stop_token, stop_reason, content, reward, skip_special_tokens
 ):
     config, request = task_inputs
@@ -216,7 +224,12 @@ async def test_assistant_prefix_worker_applies_configured_stop_token_retention(
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
     )
     try:
         (result,) = await worker.generate(request)
@@ -264,7 +277,14 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
                 REASONING_VIOLATION_TOKENS_KEY: [2],
             }
 
-    worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30)
+    worker = TaskRolloutWorker(
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        Client(),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
+    )
     try:
         (rollout,) = await worker.generate(request)
         batch = await worker.training_batch(request, [rollout])
@@ -408,9 +428,7 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "max_prompt_length": 2,
         }
     )
-    assert [row["prompt_token_ids"] for row in submitted] == (
-        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-    )
+    assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)

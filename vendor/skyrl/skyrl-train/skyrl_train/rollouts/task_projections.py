@@ -248,14 +248,11 @@ class WholeTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         decisions = [
-            _training_decision(rollout, policy, logprobs_required=required)
-            for rollout, policy in zip(rollouts, policies, strict=True)
+            _training_decision(rollout, self.error_handling, logprobs_required=required) for rollout in rollouts
         ]
         classes = [row.metadata.metric_class for row in request.rows]
         metrics = [
@@ -285,24 +282,22 @@ class StepTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         trajectory_ids = request.trajectory_ids
         if trajectory_ids is None:
             raise ValueError("Per-turn training samples require trajectory_ids")
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         samples = []
         decisions = []
         projected_ids = []
         final_steps = []
         classes = []
-        for rollout, policy, trajectory_id, row in zip(rollouts, policies, trajectory_ids, request.rows, strict=True):
+        for rollout, trajectory_id, row in zip(rollouts, trajectory_ids, request.rows, strict=True):
             turns = _step_rollouts(rollout)
             for index, sample in enumerate(turns):
                 last = index == len(turns) - 1
-                decision = _training_decision(sample, policy, logprobs_required=required)
+                decision = _training_decision(sample, self.error_handling, logprobs_required=required)
                 if (
                     not last
                     and not sample.steps[0].transition.done
@@ -550,14 +545,6 @@ def _attach_reasoning_violations(
         _reasoning_violation_count(row, last) for row, last in zip(rows, ends_attempt, strict=True)
     ]
     batch["reasoning_span_violation_tokens"] = [_violation_tokens(row) for row in rows]
-
-
-def _task_error_policies(
-    request: TaskRequestBatch, default: ErrorHandlingConfig, harbor: ErrorHandlingConfig | None
-) -> list[ErrorHandlingConfig]:
-    if harbor is None:
-        return [default] * len(request.rows)
-    return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
 
 
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:

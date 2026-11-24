@@ -1,9 +1,0 @@
-# @package _global_
-terminal_bench_config:
-  harbor: {}
-
-environment:
-  task_sessions:
-    retry:
-      max_retries: 2
-      wait_multiplier: 2.0

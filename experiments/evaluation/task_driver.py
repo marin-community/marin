@@ -10,26 +10,32 @@ from pathlib import Path
 
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, Job
-from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.task_worker import (
+    DAYTONA_API_KEY,
+    DAYTONA_API_URL,
+    DAYTONA_TARGET,
     DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
-    WORKER_PYTHON,
     WORKER_TIMEOUT,
+    daytona_connection,
     execute_with_retries,
     execution_config,
+    machine_backends,
     run_worker,
+    worker_egress,
+    worker_setup_script,
 )
 from marin.rollouts.evaluation import EvaluationRunConfig
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import Duration
+from shellbox.machine import Backend
 from verifyit.modes.grade_judge import JudgeConnection
 
 DEFAULT_CLUSTER = "cw-us-east-02a"
@@ -45,6 +51,7 @@ def submit_evaluation(
     resources: ResourceSpec,
     timeout: int,
     secrets: dict[str, str],
+    env_vars: dict[str, str] | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
@@ -52,14 +59,13 @@ def submit_evaluation(
         raise ValueError(
             "Iris evaluation requires shared object-storage corpus and output roots; use --local for local files"
         )
+    config = execution_config(config)
     return client.submit(
-        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, execution_config(config), max_attempts),
+        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts),
         name=name,
         resources=resources,
-        environment=EnvironmentSpec(
-            setup_scripts=(default_setup_script(packages=("marin-core",), python_version=WORKER_PYTHON),),
-            secrets=secrets,
-        ),
+        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets, env_vars=env_vars),
+        egress_allow=worker_egress(config),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         timeout=Duration.from_seconds(timeout),
         max_retries_failure=0,
@@ -83,6 +89,11 @@ def main() -> None:
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--judge-endpoint", help="Explicit judge endpoint, when the selected tasks use a judge.")
     parser.add_argument("--judge-api-key-env", default="VERIFYIT_JUDGE_API_KEY")
+    parser.add_argument(
+        "--daytona-api-key-env",
+        default="DAYTONA_EVAL_API_KEY",
+        help="Daytona eval-org key, read when the run config selects Daytona machines.",
+    )
     execution = parser.add_mutually_exclusive_group()
     execution.add_argument("--cluster", default=DEFAULT_CLUSTER, help="Iris cluster for the CPU evaluation worker.")
     execution.add_argument(
@@ -107,6 +118,11 @@ def main() -> None:
     base_url = arguments.endpoint_file.read_text().strip() if arguments.endpoint_file else arguments.endpoint
     datasets = tuple(arguments.dataset)
     api_key = require_secret(arguments.api_key_env)
+    daytona = None
+    if Backend.DAYTONA in machine_backends(execution_config(config)):
+        daytona = daytona_connection(require_secret(arguments.daytona_api_key_env))
+        # Reject an incomplete account before any worker starts.
+        daytona.client_factory()
     if arguments.local:
         judge = (
             JudgeConnection(arguments.judge_endpoint, require_secret(arguments.judge_api_key_env))
@@ -117,10 +133,23 @@ def main() -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         execute_with_retries(
-            datasets, arguments.output, config, base_url, api_key, judge, max_attempts=arguments.max_attempts
+            datasets,
+            arguments.output,
+            config,
+            base_url,
+            api_key,
+            judge,
+            daytona=daytona,
+            max_attempts=arguments.max_attempts,
         )
         return
     secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
+    secrets.update({name: require_secret(name) for name in config.task_secrets})
+    env_vars = {}
+    if daytona is not None:
+        assert daytona.api_key is not None and daytona.api_url is not None and daytona.target is not None
+        secrets[DAYTONA_API_KEY] = daytona.api_key
+        env_vars = {DAYTONA_API_URL: daytona.api_url, DAYTONA_TARGET: daytona.target}
     if arguments.judge_endpoint:
         secrets[JUDGE_ENDPOINT] = arguments.judge_endpoint
         secrets[JUDGE_API_KEY] = require_secret(arguments.judge_api_key_env)
@@ -134,6 +163,7 @@ def main() -> None:
             resources=ResourceSpec(cpu=arguments.cpu, memory=arguments.memory, disk=arguments.disk),
             timeout=arguments.timeout,
             secrets=secrets,
+            env_vars=env_vars,
             max_attempts=arguments.max_attempts,
         )
         print(job.job_id)

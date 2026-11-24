@@ -31,7 +31,14 @@ from shellbox.machine import (
     MachineSpec,
 )
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
+from taskcompendium.models import (
+    ConversationTrace,
+    EnvironmentRequirements,
+    GradingAttempt,
+    TaskResource,
+    TaskSpec,
+    grader_environment,
+)
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
 from taskcompendium.pipeline.models import Reply, WorkspaceFiles
 from taskcompendium.runtime.task_grading import sandbox_grade
@@ -96,7 +103,7 @@ def grade(
     else:
         trace = ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE))
         attempt = GradingAttempt(trace, dict(submission.files))
-    environment = task.grader.environment
+    environment = grader_environment(task.grader)
     assert environment is not None
     return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment, memory_mb)))
 

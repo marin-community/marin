@@ -105,7 +105,7 @@ class NemotronTaskSession:
         self.grading = GradingMode(self.config.get("grading", GradingMode.VERIFY))
         ultra = parameters.extras["extra_info"]["nemotron_ultra"]
         if ultra["route"] != "task_session":
-            raise ValueError("Terminal source rows require a portable Harbor task")
+            raise ValueError("Terminal source rows require a prepared TaskSpec with a task machine")
         self.agent = ultra["agent"]
         if self.agent not in NEMOTRON_ULTRA_MOPD_AGENTS:
             raise ValueError(f"Unsupported Nemotron source agent: {self.agent!r}")

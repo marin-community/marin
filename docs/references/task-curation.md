@@ -496,8 +496,10 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 `HarborHubSource(name, revision, read)` acquires a complete release pinned by
 `sha256:...`. It caches the original task archives as
-`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
-vendored Harbor runtime, and records the task references in `release.json`.
+`tasks/<task-reference-hash>.tar.gz` and records task references in `release.json`.
+New downloads hash every regular archive member and compare the digest with the
+public Hub record. Cached archives are reused without rehashing. Archives with
+files outside Harbor's hashed task paths fail the check.
 The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
 using the same custom-reader interface as HF sources. Acquisition does not
 convert task files or impose a package size cutoff. Dataset-level scoring files
@@ -505,13 +507,11 @@ are not supported.
 
 The existing download cache, sampling, and local-input overrides apply. Retries
 reuse completed archives; use a fresh override directory for a different release
-or task selection. The cache identity includes the release, acquisition code, and
-vendored runtime's source and lock digests. To acquire selected tasks locally,
-inspect the CLI in its isolated environment:
+or task selection. The cache identity includes the release digest. To acquire
+selected tasks locally, inspect the CLI:
 
 ```bash
-uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen \
-  python -m experiments.post_training.task_curation.harbor_hub --help
+uv run python -m experiments.post_training.task_curation.harbor_hub --help
 ```
 
 ## Environments
@@ -570,11 +570,14 @@ identity; lock-backed worker environments retain their existing identities.
 
 A task's grader is one of three kinds:
 
-- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment. A `judge` grades on the host,
-  through its judge service, also when it declares an environment.
-- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+- `VerifyitGrader` names a stock verifyit mode. Without a placement it grades
+  in process; with
+  `placement=GraderMachine(environment=required_grader_environment(context))` it
+  grades in a fresh machine of the grader's environment. A `judge` grades on the
+  host, through its judge service, also when it declares a placement.
+- `ScriptGrader` runs a command in the machine its placement selects: a fresh
+  machine of the grader's environment (`GraderMachine`), or the agent's machine
+  after the agent finishes (`AgentMachine`). Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `NoGrader` records a source evaluator this repository cannot run, with the

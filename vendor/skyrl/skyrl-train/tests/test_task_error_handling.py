@@ -13,54 +13,19 @@ from skyrl_train.task_errors import ERROR_CATEGORIES
 @pytest.mark.parametrize(
     "name, expected",
     [
-        ("ContextManagementInfrastructureError", ErrorTreatment.MASK),
-        ("ArtifactUploadTimeoutError", ErrorTreatment.MASK),
-        ("ArtifactWriterBacklogError", ErrorTreatment.MASK),
         ("EnvironmentStartTimeoutError", ErrorTreatment.MASK),
         ("TrialTimeoutError", ErrorTreatment.MASK),
-        ("SandboxBuildFailedError", ErrorTreatment.MASK),
         ("SnapshotQuotaExceeded", ErrorTreatment.MASK),
-        ("HealthcheckError", ErrorTreatment.MASK),
         ("DaytonaSandboxStopError", ErrorTreatment.MASK),
-        ("BridgeOutageError", ErrorTreatment.MASK),
-        ("EnrootMemoryLimitExceededError", ErrorTreatment.MASK),
-        ("MissingExtraError", ErrorTreatment.MASK),
-        ("AgentKilledBySignalError", ErrorTreatment.MASK),
         ("AgentSetupTimeoutError", ErrorTreatment.MASK),
-        ("ModelAuthenticationError", ErrorTreatment.MASK),
-        ("ContextBudgetExceededError", ErrorTreatment.MASK),
-        ("LLMRequestTimeoutError", ErrorTreatment.MASK),
-        ("OpenAITransportConnectTimeoutError", ErrorTreatment.MASK),
-        ("TmuxBatchProtocolError", ErrorTreatment.MASK),
-        ("TmuxCommandError", ErrorTreatment.MASK),
-        ("TmuxSessionEndedError", ErrorTreatment.MASK),
-        ("DownloadVerifierDirError", ErrorTreatment.MASK),
         ("RewardFileNotFoundError", ErrorTreatment.MASK),
         ("RewardFileEmptyError", ErrorTreatment.MASK),
         ("VerifierRuntimeError", ErrorTreatment.MASK),
         ("VerifierOutputParseError", ErrorTreatment.MASK),
-        ("AddTestsDirError", ErrorTreatment.MASK),
-        ("ArtifactPersistenceError", ErrorTreatment.MASK),
-        ("ArtifactWriteTimeoutError", ErrorTreatment.MASK),
-        ("ContainerRegistryThrottledError", ErrorTreatment.MASK),
         ("DaytonaProcessError", ErrorTreatment.MASK),
-        ("PhaseCancellationError", ErrorTreatment.MASK),
-        ("SandboxDiskFullError", ErrorTreatment.MASK),
-        ("Tau3RuntimeInfrastructureError", ErrorTreatment.MASK),
         ("AgentTimeoutError", ErrorTreatment.ZERO),
-        ("ModelInitiatedTmuxFailure", ErrorTreatment.ZERO),
-        ("AgentDiskFullError", ErrorTreatment.ZERO),
         ("ContextLengthExceededError", ErrorTreatment.ZERO),
-        ("NonZeroAgentExitCodeError", ErrorTreatment.ZERO),
-        ("OutputLengthExceededError", ErrorTreatment.PASSTHROUGH),
-        ("TurnCapExhaustedError", ErrorTreatment.PASSTHROUGH),
-        ("MalformedModelResponseError", ErrorTreatment.PASSTHROUGH),
-        ("TrialNotScoredError", ErrorTreatment.ZERO),
-        ("VerificationNotCompletedError", ErrorTreatment.ZERO),
         ("VerifierTimeoutError", ErrorTreatment.ZERO),
-        ("RuntimeServiceError", ErrorTreatment.MASK),
-        ("RuntimeLogCollectionError", ErrorTreatment.MASK),
-        ("EnvironmentStopError", ErrorTreatment.MASK),
         ("DaytonaError", ErrorTreatment.MASK),
         ("DaytonaDockerSetupError", ErrorTreatment.MASK),
         ("InternalServerError", ErrorTreatment.MASK),
@@ -68,12 +33,12 @@ from skyrl_train.task_errors import ERROR_CATEGORIES
         ("APITimeoutError", ErrorTreatment.MASK),
         ("TaskMachineError", ErrorTreatment.MASK),
         ("TemplateError", ErrorTreatment.MASK),
+        ("PromptTokenizationError", ErrorTreatment.MASK),
+        ("ModelServerError", ErrorTreatment.MASK),
         ("DaytonaConnectionError", ErrorTreatment.MASK),
         ("DaytonaConflictError", ErrorTreatment.MASK),
         ("MachineTerminated", ErrorTreatment.MASK),
-        ("AgentCommandOutputLostError", ErrorTreatment.ZERO),
         ("DaytonaOutputUnavailable", ErrorTreatment.MASK),
-        ("TmuxExecTimeoutError", ErrorTreatment.MASK),
     ],
 )
 def test_terminal_error_treatment_contract(name, expected):
@@ -113,7 +78,7 @@ failure = ErrorIdentity.model_validate_json(
     '{"exception_type":"RuntimeServiceError","category":"infrastructure","retry_disposition":"transient"}'
 )
 assert classify_failure(failure, ErrorHandlingConfig()) is ErrorTreatment.MASK
-assert retry_delay(failure, RetrySettings(max_retries=1), 0) == 1
+assert retry_delay(failure, RetrySettings(jitter=0, max_retries=1), 0) == 1
 """
     result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

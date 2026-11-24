@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from daytona import DaytonaConnectionError
-from omegaconf import OmegaConf
 from rolloutengine.test_support import shell_call
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -16,17 +15,19 @@ from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT
 from hydra import compose, initialize_config_dir
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineSpec, Result
-from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.task_worker import TaskRolloutWorker
-from rigging.task_errors import RetrySettings
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker, TaskRolloutWorkerSpec
+from skyrl_train.rollouts.workers import WorkerShard
+from skyrl_train.rollouts.machines import OwnedMachineFactory
+from rigging.task_errors import RetrySettings, RetryDisposition
+from skyrl_train.trajectory_runners.model_clients import ModelServerError
 from daytona import DaytonaError
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
 from cloud.iris.tests.task_worker_fixtures import ScriptedClient, WorkerTokenizer, sampled_reply
 
-RETRY_SETTINGS = RetrySettings(max_retries=2, min_wait_sec=1, wait_multiplier=2)
+RETRY_SETTINGS = RetrySettings(jitter=0, max_retries=2, min_wait_sec=1, wait_multiplier=2)
 
 SETUP_ENVIRONMENT = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": ("true",)})
 
@@ -85,7 +86,6 @@ async def rollout_evidence(
     factory,
     *,
     environment=SHELL_ENVIRONMENT,
-    harbor=None,
     replies=None,
     retry=RETRY_SETTINGS,
     resources=None,
@@ -97,9 +97,7 @@ async def rollout_evidence(
     async def wait(delay):
         waits.append(delay)
 
-    task = text_task().model_copy(
-        update={"environment_requirements": environment, "tags": () if harbor is None else ("harbor",)}
-    )
+    task = text_task().model_copy(update={"environment_requirements": environment})
     if resources is not None:
         task = task.model_copy(update={"resources": resources})
     if grader is not None:
@@ -112,14 +110,11 @@ async def rollout_evidence(
         WholeTaskProjection(worker_config, WorkerTokenizer()),
         ScriptedClient(replies or [sampled_reply("Done")]),
         factories,
-        harbor=harbor,
         retry_wait=wait,
         retry=retry,
         shutdown_timeout=5,
     )
-    lowered = lowered_task(
-        task, max_turns=2, backend="shellsim", verifier_backend="verifier" if grader else None
-    )
+    lowered = lowered_task(task, max_turns=2, backend="shellsim", verifier_backend="verifier" if grader else None)
     request = TaskRequestBatch(rows=(task_input(lowered),))
     try:
         (result,) = await worker.generate(request)
@@ -154,7 +149,9 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_conf
     ],
     ids=["setup-command", "resource-upload"],
 )
-async def test_connection_loss_before_first_model_turn_restarts_machine(worker_config, operation, environment, resources):
+async def test_connection_loss_before_first_model_turn_restarts_machine(
+    worker_config, operation, environment, resources
+):
     factory = ResettingFactory(failures=1, reset=operation)
     result, waits, _ = await rollout_evidence(worker_config, factory, environment=environment, resources=resources)
     assert factory.creations == 2
@@ -176,14 +173,18 @@ async def test_lost_connection_in_a_model_command_keeps_the_failure(worker_confi
 
 
 @pytest.mark.asyncio
-async def test_harbor_task_obeys_the_same_zero_retry_budget(worker_config):
+async def test_task_obeys_zero_retry_budget(worker_config):
     factory = ResettingFactory(failures=1)
-    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {}}))
-    result, waits, _ = await rollout_evidence(worker_config, factory, harbor=harbor, retry=RetrySettings())
+    result, waits, _ = await rollout_evidence(
+        worker_config,
+        factory,
+        retry=RetrySettings(
+            jitter=0,
+        ),
+    )
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
-
 
 
 @pytest.mark.asyncio
@@ -208,12 +209,15 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
             raise DaytonaConnectionError("Connection reset during grading")
 
     factory = ResettingFactory(failures=0)
-    grader = ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT)
-    result, waits, batch = await rollout_evidence(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
+    grader = ScriptGrader(argv=("true",), placement={"kind": "grader_machine", "environment": NATIVE_ENVIRONMENT})
+    result, waits, batch = await rollout_evidence(
+        worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier()
+    )
     assert factory.creations == 1
     assert waits == []
     assert result.failure.exception_type == "TaskMachineError"
     assert result.failure.operation == "grade"
+    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT
     assert result.steps
     assert batch["error_treatments"] == ["mask"]
     assert batch["exclude_from_baseline"] == [True]
@@ -221,13 +225,47 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
 
 
 @pytest.mark.asyncio
-async def test_harbor_preset_applies_two_retries_to_other_task_kinds(worker_config):
+async def test_yaml_spec_worker_retries_machine_start():
     directory = Path(__file__).resolve().parents[3] / "skyrl-train/skyrl_train/config"
     with initialize_config_dir(config_dir=str(directory), version_base=None):
-        config = compose(config_name="ppo_base_config", overrides=["+terminal_bench_config=terminal_bench"])
-    settings = RetrySettings.model_validate(OmegaConf.to_container(config.environment.task_sessions.retry, resolve=True))
+        config = compose(
+            config_name="ppo_base_config",
+            overrides=[
+                "+environment.task_sessions.retry.max_retries=2",
+                "+environment.task_sessions.retry.wait_multiplier=2",
+                "+environment.task_sessions.retry.jitter=0",
+            ],
+        )
+    worker = TaskRolloutWorkerSpec.from_config(config, []).build(WorkerTokenizer(), WorkerShard(0, 1))
     factory = ResettingFactory(failures=2)
-    result, waits, _ = await rollout_evidence(worker_config, factory, retry=settings)
+    worker.factories["shellsim"] = OwnedMachineFactory(factory, "shellsim")
+    worker.model_client = ScriptedClient([sampled_reply("Done")])
+    waits = []
+
+    async def wait(delay):
+        waits.append(delay)
+
+    worker.retry_wait = wait
+    task = text_task().model_copy(update={"environment_requirements": SHELL_ENVIRONMENT})
+    request = TaskRequestBatch(rows=(task_input(lowered_task(task, max_turns=2, backend="shellsim")),))
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
     assert result.failure is None
     assert factory.creations == 3
     assert waits == [1, 2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [ConnectionError("connection reset"), ModelServerError("server_error", "fixture", 503)]
+)
+async def test_model_failure_after_sampled_work_does_not_restart(worker_config, failure):
+    factory = ResettingFactory(failures=0)
+    replies = [sampled_reply(None, tool_calls=shell_call("true")["tool_calls"]), failure]
+    result, waits, _ = await rollout_evidence(worker_config, factory, replies=replies)
+    assert factory.creations == 1
+    assert waits == []
+    assert result.steps
+    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT

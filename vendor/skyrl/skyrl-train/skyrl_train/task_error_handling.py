@@ -34,9 +34,7 @@ class ErrorHandlingConfig:
             enable_error_classification=bool(
                 config.get("enable_error_classification", defaults.enable_error_classification)
             ),
-            passthrough_exceptions=frozenset(
-                config.get("passthrough_exceptions", defaults.passthrough_exceptions)
-            ),
+            passthrough_exceptions=frozenset(config.get("passthrough_exceptions", defaults.passthrough_exceptions)),
             mask_exceptions=frozenset(config.get("mask_exceptions", defaults.mask_exceptions)),
             zero_exceptions=frozenset(config.get("zero_exceptions", defaults.zero_exceptions)),
             default_error_treatment=ErrorTreatment(
@@ -51,11 +49,13 @@ class ErrorHandlingConfig:
 DEFAULT_ERROR_HANDLING_CONFIG = ErrorHandlingConfig()
 
 
-_CATEGORY_TREATMENTS = MappingProxyType({
-    ErrorCategory.INFRASTRUCTURE: ErrorTreatment.MASK,
-    ErrorCategory.AGENT: ErrorTreatment.ZERO,
-    ErrorCategory.PASSTHROUGH: ErrorTreatment.PASSTHROUGH,
-})
+_CATEGORY_TREATMENTS = MappingProxyType(
+    {
+        ErrorCategory.INFRASTRUCTURE: ErrorTreatment.MASK,
+        ErrorCategory.AGENT: ErrorTreatment.ZERO,
+        ErrorCategory.PASSTHROUGH: ErrorTreatment.PASSTHROUGH,
+    }
+)
 
 
 def classify_failure(failure: ErrorIdentity, config: ErrorHandlingConfig) -> ErrorTreatment:

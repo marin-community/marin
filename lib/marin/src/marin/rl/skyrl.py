@@ -1059,6 +1059,9 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
+    task_env = dict(task_env)
+    if execution.cluster == "cw-us-east-02a":
+        task_env.setdefault("NCCL_IB_HCA", "ibp")
     reject_forced_socket_transport(task_env, num_nodes)
     launch = {
         "schema_version": 1,

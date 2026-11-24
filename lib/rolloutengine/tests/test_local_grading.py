@@ -14,7 +14,14 @@ from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFac
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.evalchemy.code import convert_python
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader, Source
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    GraderMachine,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+)
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
@@ -89,12 +96,12 @@ async def test_rollout_grades_answer_in_lock_environment(
     local_grading_factory, lock_environment, grader_kind, answer, reward
 ):
     if grader_kind == "script":
-        grader = ScriptGrader(environment=lock_environment, argv=("python3", "/tests/grade.py"))
+        grader = ScriptGrader(placement=GraderMachine(environment=lock_environment), argv=("python3", "/tests/grade.py"))
         resources = ResourceGroups(verifier=(inline_resource("grade.py", SCRIPT),))
         task = arithmetic_task(grader=grader, resources=resources)
     elif grader_kind == "verifyit":
         package = verifyit_package(TWELVE)
-        grader = package.grader.model_copy(update={"environment": lock_environment})
+        grader = package.grader.model_copy(update={"placement": GraderMachine(environment=lock_environment)})
         resources = ResourceGroups(verifier=package.resources)
         task = arithmetic_task(grader=grader, resources=resources)
     else:
@@ -124,7 +131,7 @@ async def test_rollout_grades_answer_in_lock_environment(
 
 @pytest.mark.timeout(180)
 async def test_wrapped_local_factory_grades_lock_environment(local_grading_factory, lock_environment):
-    grader = ScriptGrader(environment=lock_environment, argv=("python3", "/tests/grade.py"))
+    grader = ScriptGrader(placement=GraderMachine(environment=lock_environment), argv=("python3", "/tests/grade.py"))
     script = b"import os\nassert os.environ['WRAPPER_MARKER'] == 'wrapped'\n" + SCRIPT
     task = arithmetic_task(grader=grader, resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)))
     model = ReplayModel([{"role": "assistant", "content": "12"}])

@@ -21,22 +21,10 @@ Before launching:
 
 ## Run a benchmark
 
-Choose a model and eval from `experiments/evaluation/models.py` and
-`experiments/evaluation/evals.py`:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --evals tb2-lite --dry-run
-
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --evals tb2-lite
-```
-
-`tb2-lite` runs two Terminal-Bench tasks in Daytona. `--evals agentic` selects the
-standard Harbor suite. `--limit N` caps tasks. Policy trial repetitions still apply.
-`--no-wait` returns after submission.
-
-Use `--harbor-config` for a policy outside the catalog:
+The catalog's agentic keys, such as `tb2`, `swebench`, `gaia`, `bfcl`, `aider`,
+`medagentbench` and `aime-harbor`, run as curated TaskSpec corpora through
+RolloutEngine, not through Harbor; see [evaluation tasks](references/evaluation-tasks.md).
+A Harbor policy runs only through `--harbor-config`:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -45,7 +33,8 @@ uv run python -m experiments.evaluation.cli launch \
   --limit 2 --dry-run
 ```
 
-Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies.
+Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies. `--limit N`
+caps tasks; policy trial repetitions still apply. `--no-wait` returns after submission.
 You can also select catalog entries with `--evals` in the same command.
 
 To serve a judge in the same batch:
@@ -372,7 +361,7 @@ Verifier rewards use `Grading(method="harbor:verifier")`. Samples link trajector
 `trajectory_uri`.
 
 Harbor saves each attempt's result, available trajectory and a record of whether the
-trajectory exists in one transaction. Completion waits for environment cleanup, service
+trajectory exists in one transaction. A completion manifest confirms environment cleanup, service
 shutdown and required artifact writes. Missing required evidence leaves the attempt
 incomplete. At finalization, Harbor selects the final attempt for each trial.
 A finished failed attempt can produce an unscored error row without confirmed

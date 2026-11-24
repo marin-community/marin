@@ -53,15 +53,11 @@ class Sampling(Section):
 
 
 class Data(Section):
-    task_cache_dir: str = field("~/.cache/marinskyrl/tasks")
     train_data: tuple[str, ...] | None = field(["${oc.env:HOME}/data/gsm8k/train.parquet"])
     val_data: tuple[str, ...] | None = field(["${oc.env:HOME}/data/gsm8k/validation.parquet"])
     shuffle: bool = field(True)
     preference_pair_format: Literal["text", "tokenized"] = field("text")
     "text completions or tokenized conversations with assistant masks"
-    terminal_bench_data: tuple[str, ...] = field([])
-    """Optional task-directory sidechannel for mixed Nemotron Ultra RLVR. The parquet dataloader remains
-    authoritative; SWE rows resolve their instance ID against these terminal-bench task roots at rollout time."""
     sampling: Sampling = Field(default_factory=Sampling)
     kind: Literal["tasks", "parquet"] = field("tasks")
 
@@ -93,8 +89,8 @@ class Progress(Section):
 class Placement(Section):
     colocate_all: bool = field(True)
     """TOPOLOGY-SENSITIVE: the launcher uses this to merge or split physical role bundles, while the runtime also
-    uses it to choose placement groups, model residency, weight transfer, and Terminal Bench sync/async execution.
-    A wrapper must treat this as part of the launch topology, not as a trainer-only optimization."""
+    uses it to choose placement groups, model residency, and weight transfer. A wrapper must treat this as part of
+    the launch topology, not as a trainer-only optimization."""
     colocate_policy_ref: bool = field(True)
     """TOPOLOGY-SENSITIVE: when a reference role is active, this decides whether it shares the policy bundle or
     claims a separate physical bundle. Keep the pre-submit role plan and runtime placement in agreement."""
@@ -451,9 +447,8 @@ class RolloutBuffer(Section):
     prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
     prompt still offered."""
     max_in_flight: PositiveInt | None = field(None)
-    """Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up;
-    in a run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
-    n_samples_per_prompt. Elsewhere null bounds generation only by staleness."""
+    """Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up. Elsewhere null
+    bounds generation only by staleness."""
     object_store_root: str | None = field(None)
     """Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then records
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads
@@ -515,8 +510,8 @@ class Trainer(Section):
     HF export"""
     batch_builder: Literal["driver", "worker"] = field("driver")
     "driver, worker"
-    evaluation_runner: Literal["training", "task", "harbor"] = field("training")
-    "task or harbor selects generated validation for offline preference training"
+    evaluation_runner: Literal["training", "task"] = field("training")
+    "task selects generated validation for offline preference training"
     trajectory_selector: TrajectorySelector = Field(default_factory=TrajectorySelector)
     debug_mode: Literal["off", "light", "distributed"] = field("light")
     """light is the shared default: fatal Python stacks, bounded NCCL flight recording, process receipts, and per-
@@ -683,7 +678,7 @@ class Loop(Section):
 
 class Passthrough(Section):
     penalty: int | float = field(0.0)
-    "Subtract from optimization reward when the Harbor taxonomy classifies the terminal exception as PASSTHROUGH."
+    "Subtract from optimization reward for terminal exceptions classified as PASSTHROUGH."
 
 
 class NonTermination(Section):
@@ -813,8 +808,8 @@ class Generator(Section):
     weight_sync_pause_timeout_seconds: int | float = field(30.0)
     "Deadline for every engine to acknowledge a weight-sync pause or resume."
     error_handling: ErrorHandling = Field(default_factory=ErrorHandling)
-    """Shared Harbor/Gym terminal-error taxonomy. Unknown Gym failures retain the previous masking behavior; context
-    overflow and timeouts are agent errors."""
+    """Terminal-error taxonomy. Unknown Gym failures retain the previous masking behavior; context overflow and
+    timeouts are agent errors."""
     chat_template: ChatTemplate | None = Field(default_factory=ChatTemplate)
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})
@@ -856,6 +851,8 @@ class TrajectoryRunner(Section):
     shutdown_timeout: int = field(45)
     max_concurrent_tasks: int = field(1024)
     "Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers."
+    max_concurrent_training_machine_tasks: PositiveInt | None = field(None)
+    "Training machine trajectories across the rollout worker pool, with at least one slot per worker."
     rollout_workers: RolloutWorkers = Field(default_factory=RolloutWorkers)
     "One worker pool executes all task families on the trainer's node."
 
@@ -866,11 +863,9 @@ class RecipeSections(Section):
     generator: Generator = Field(default_factory=Generator)
     environment: Environment = Field(default_factory=Environment)
     trajectory_runner: TrajectoryRunner = Field(default_factory=TrajectoryRunner)
-    terminal_bench: OpenMap | None = unset_field()
     teachers: SectionMap[Teacher] = unset_field()
     teacher_routing: SectionMap[TeacherRouting] = unset_field()
 
 
 class ConfigGroups(Section):
-    terminal_bench_config: Literal["terminal_bench"] = unset_field()
     algorithm_recipe: Literal["cispo", "dapo", "dpo", "dr_grpo", "ftpo", "grpo", "gspo", "mopd", "opd"] = unset_field()

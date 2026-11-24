@@ -567,10 +567,6 @@ def validate_driver_config(
 
     normalize_logging_backends(cfg)
     validate_rollout_launch(cfg, operation)
-    if cfg.get("terminal_bench_config") is not None:
-        from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
-
-        HarborTaskSettings.from_config(cfg.terminal_bench_config)
     validate_cfg(cfg, check_runtime_resources=check_runtime_resources)
     if check_runtime_resources:
         from skyrl_train.utils.progress import configure_progress

@@ -313,9 +313,9 @@ def dump_per_dataset_eval_results(
                     "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
-                    "failure": None if failure is None else failure.model_dump(
-                        mode="json", include=ErrorIdentity.model_fields.keys() - {"diagnostics"}
-                    ),
+                    "failure": None
+                    if failure is None
+                    else failure.model_dump(mode="json", include=ErrorIdentity.model_fields.keys() - {"diagnostics"}),
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
                     "env_class": concat_all_envs[i],
                     "data_source": data_source,

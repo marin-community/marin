@@ -16,6 +16,8 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from rigging.timing import ExponentialBackoff
+
 
 class ErrorCategory(StrEnum):
     """Semantic category for a persisted task exception."""
@@ -114,6 +116,7 @@ class RetrySettings(BaseModel):
     wait_multiplier: float = Field(default=1.0, ge=1, allow_inf_nan=False)
     min_wait_sec: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     max_wait_sec: float = Field(default=60.0, ge=0, allow_inf_nan=False)
+    jitter: float = Field(default=0.1, ge=0, lt=1, allow_inf_nan=False)
 
 
 class RetryDisposition(StrEnum):
@@ -122,7 +125,7 @@ class RetryDisposition(StrEnum):
     UNKNOWN = "unknown"
 
 
-_TRANSIENT_HTTP_STATUS = frozenset({408, 429, 502, 503, 504})
+_TRANSIENT_HTTP_STATUS = frozenset({408, 409, 429, *range(500, 600)})
 _PERMANENT_HTTP_STATUS = frozenset({400, 401, 403, 405, 422})
 
 
@@ -280,4 +283,9 @@ def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries:
     filtered = settings.include_exceptions is not None or settings.include_categories is not None
     if (filtered and not selected) or (disposition is RetryDisposition.UNKNOWN and not selected):
         return None
-    return min(settings.min_wait_sec * settings.wait_multiplier**retries, settings.max_wait_sec)
+    initial = min(settings.min_wait_sec, settings.max_wait_sec)
+    if initial == 0:
+        return 0.0
+    return ExponentialBackoff(
+        initial=initial, maximum=settings.max_wait_sec, factor=settings.wait_multiplier, jitter=settings.jitter
+    ).interval(retries)

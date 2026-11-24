@@ -26,7 +26,10 @@ class ProviderFailure(RuntimeError):
     [
         (503, RetryDisposition.TRANSIENT),
         (HTTPStatus.UNAUTHORIZED, RetryDisposition.PERMANENT),
-        (409, RetryDisposition.UNKNOWN),
+        (404, RetryDisposition.UNKNOWN),
+        (409, RetryDisposition.TRANSIENT),
+        (500, RetryDisposition.TRANSIENT),
+        (599, RetryDisposition.TRANSIENT),
     ],
 )
 def test_wrapped_provider_identity_preserves_retryability_in_json(status, expected):
@@ -73,7 +76,12 @@ def test_transport_identity_distinguishes_connection_and_request_failures(error,
 
 def test_retry_budget_backoff_and_cause_filter_survive_serialization():
     policy = RetrySettings(
-        max_retries=3, min_wait_sec=2, wait_multiplier=2, max_wait_sec=5, include_exceptions={"ConnectionError"}
+        jitter=0,
+        max_retries=3,
+        min_wait_sec=2,
+        wait_multiplier=2,
+        max_wait_sec=5,
+        include_exceptions={"ConnectionError"},
     )
     policy = RetrySettings.model_validate_json(policy.model_dump_json())
     failure = ErrorIdentity(
@@ -91,7 +99,7 @@ def test_retry_budget_backoff_and_cause_filter_survive_serialization():
 
 def test_unknown_failure_requires_explicit_category_or_name_inclusion():
     failure = ErrorIdentity(exception_type="NewVerifierError")
-    policy = RetrySettings(max_retries=1)
+    policy = RetrySettings(jitter=0, max_retries=1)
     assert retry_delay(failure, policy, 0) is None
     selected = policy.model_copy(update={"include_categories": {ErrorCategory.UNKNOWN}})
     assert retry_delay(failure, selected, 0) == 1
@@ -100,5 +108,5 @@ def test_unknown_failure_requires_explicit_category_or_name_inclusion():
 
 
 def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
-    failure = ErrorIdentity(exception_type="DaytonaConnectionError", provider_status_code=409)
-    assert retry_delay(failure, RetrySettings(max_retries=1), 0) is None
+    failure = ErrorIdentity(exception_type="DaytonaConnectionError", provider_status_code=404)
+    assert retry_delay(failure, RetrySettings(jitter=0, max_retries=1), 0) is None

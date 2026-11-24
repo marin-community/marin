@@ -708,7 +708,7 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
     [(True, 3, False), (False, 3, False), (True, 0, False), (True, 3, True)],
     ids=["selected", "excluded", "budget-exhausted", "permanent"],
 )
-async def test_unconfirmed_teardown_obeys_shared_exception_selection(
+async def test_unconfirmed_teardown_retries_outside_include_list(
     tmp_path: Path, monkeypatch, selected, budget, permanent
 ) -> None:
     retried = selected and budget > 0 and not permanent
@@ -738,7 +738,8 @@ async def test_unconfirmed_teardown_obeys_shared_exception_selection(
         n_concurrent=1,
         retry_config=RetrySettings(
             max_retries=budget,
-            include_exceptions={"PhaseCancellationError"} if selected else {"APIConnectionError"},
+            include_exceptions={"APIConnectionError"},
+            include_categories={"infrastructure"} if selected else None,
             min_wait_sec=0,
             max_wait_sec=0,
         ),

@@ -5,13 +5,13 @@
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
@@ -22,18 +22,14 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     PackageSpec,
+    ProcessMachine,
+    ProcessSession,
     Result,
     UnsupportedMachineSpec,
 )
-from taskcompendium.models import (
-    CommandSemantics,
-    EnvironmentRequirements,
-    TaskResource,
-    TaskSpec,
-    require_resolved_environment,
-)
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.environment import prepare_machine_spec
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import resource_bytes, write_build_context
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
 from rolloutengine.models import MachineRuntimeSpec
@@ -47,8 +43,11 @@ class _UserMachine:
     machine: Machine
     user: str
 
-    async def run(self, command: Command):
-        return await self.machine.run(replace(command, user=self.user) if command.user is None else command)
+    def _command(self, command: Command) -> Command:
+        return replace(command, user=self.user) if command.user is None else command
+
+    async def run(self, command: Command) -> Result:
+        return await self.machine.run(self._command(command))
 
     async def upload(self, source: Path, target: str) -> None:
         await self.machine.upload(source, target)
@@ -58,6 +57,19 @@ class _UserMachine:
 
     async def close(self) -> None:
         await self.machine.close()
+
+
+@dataclass(frozen=True)
+class _UserProcessMachine(_UserMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        return await self.machine.open_process(self._command(command))
+
+
+def _verifier_view(machine: Machine) -> Machine:
+    """Remove the agent's user override for the trusted verifier in a shared machine."""
+    return machine.machine if isinstance(machine, _UserMachine) else machine
 
 
 async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...]) -> None:
@@ -71,32 +83,42 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
-    require_resolved_environment(requirements)
-    if requirements.docker_image is not None:
-        source = RegistryImage(requirements.docker_image)
-    elif requirements.packages_lock is not None:
-        source = HostImage()
-    elif requirements.package_spec is not None:
-        source = requirements.package_spec
-    elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-        source = PackageSpec()
-    else:
-        raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
-    return MachineSpec(
-        source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
-        network=runtime.network,
-        memory_mb=runtime.memory_mb,
-        cpus=runtime.cpus,
-        storage_mb=runtime.storage_mb,
-        gpus=runtime.gpus,
-        startup_timeout=runtime.startup_timeout,
-    )
+@contextmanager
+def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> Iterator[MachineSpec]:
+    """The machine spec for ``requirements`` on the selected runtime.
+
+    A Docker build context becomes a ``DockerfileSource`` in a temporary directory that exists until the
+    context exits: the backend checks it there and builds the image when it creates the machine. An
+    image machine, pulled or built, starts in the image's working directory unless the requirements
+    name one.
+    """
+    with ExitStack() as stack:
+        if requirements.docker_image is not None:
+            source = RegistryImage(requirements.docker_image)
+        elif requirements.docker_build is not None:
+            context = Path(stack.enter_context(TemporaryDirectory(prefix="rollout-build-")))
+            source = DockerfileSource(context, write_build_context(requirements.docker_build, context))
+        elif requirements.packages_lock is not None:
+            source = HostImage()
+        elif requirements.package_spec is not None:
+            source = requirements.package_spec
+        elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            source = PackageSpec()
+        else:
+            raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
+        workdir = requirements.working_directory
+        if workdir is None:
+            workdir = "" if isinstance(source, RegistryImage | DockerfileSource) else "/workspace"
+        yield MachineSpec(
+            source=source,
+            workdir=workdir,
+            network=runtime.network,
+            memory_mb=runtime.memory_mb,
+            cpus=runtime.cpus,
+            storage_mb=runtime.storage_mb,
+            gpus=runtime.gpus,
+            startup_timeout=runtime.startup_timeout,
+        )
 
 
 async def _discard_machine(creation: asyncio.Task[Machine], cleanup: _Cleanup) -> None:
@@ -123,15 +145,38 @@ async def _acquire_machine(
         _retain_task(asyncio.create_task(_discard_machine(creation, machine_cleanup)))
         raise
     owned.push_async_callback(machine_cleanup.run, "machine_close", machine.close)
-    return machine if runtime.user is None else _UserMachine(machine, runtime.user)
+    if runtime.user is None:
+        return machine
+    if isinstance(machine, ProcessMachine):
+        return _UserProcessMachine(machine, runtime.user)
+    return _UserMachine(machine, runtime.user)
 
 
 def _output_tail(output: bytes) -> str:
     """The last ``SETUP_OUTPUT_CHARS`` characters of a command's output, for an error message."""
     text = output.decode(errors="replace").strip()
     if len(text) <= SETUP_OUTPUT_CHARS:
-        return repr(text)
-    return repr(f"...{text[-SETUP_OUTPUT_CHARS:]}")
+        return text
+    return f"...{text[-SETUP_OUTPUT_CHARS:]}"
+
+
+class MachineSetupError(RuntimeError):
+    """An authored setup command returned without completing successfully."""
+
+    def __init__(self, command: str, result: Result):
+        self.command = command
+        self.reason = result.reason
+        self.exit_code = result.exit_code
+        self.stdout = _output_tail(result.stdout)
+        self.stderr = _output_tail(result.stderr)
+        super().__init__(
+            f"Environment setup command failed: {self.reason}, exit={self.exit_code}; "
+            f"command: {self.command!r}; stdout: {self.stdout!r}; stderr: {self.stderr!r}"
+        )
+
+
+class MachineSetupTimeout(MachineSetupError, TimeoutError):
+    """An authored setup command reported a timeout."""
 
 
 async def _prepare_machine(
@@ -146,24 +191,19 @@ async def _prepare_machine(
     if runtime is None:
         return None
     async with asyncio.timeout(runtime.startup_timeout):
-        prepared = await asyncio.to_thread(
-            prepare_machine_spec,
-            requirements,
-            factories[runtime.backend],
-            _machine_spec(requirements, runtime),
-            dict(os.environ),
-        )
-        machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
+        # A Docker build context exists only while the machine is created; the built machine no longer reads it.
+        with _machine_spec(requirements, runtime) as spec:
+            prepared = await asyncio.to_thread(
+                prepare_machine_spec, requirements, factories[runtime.backend], spec, dict(os.environ)
+            )
+            machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
             if result.reason == ExitReason.TIMED_OUT:
-                raise TimeoutError("Environment setup command timed out")
+                raise MachineSetupTimeout(command, result)
             if result.exit_code != 0:
-                raise RuntimeError(
-                    f"Environment setup command failed: {result.reason}, exit={result.exit_code}; "
-                    f"command: {command!r}; stdout: {_output_tail(result.stdout)}; stderr: {_output_tail(result.stderr)}"
-                )
+                raise MachineSetupError(command, result)
         if runtime.user is not None:
             result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
             if result.reason == ExitReason.TIMED_OUT:
@@ -200,6 +240,7 @@ class _AttemptMachineFactory:
     factories: Mapping[str, MachineFactory]
     cleanup: _Cleanup
     owned: AsyncExitStack
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
 
     @property
     def backend(self) -> Backend:
@@ -210,6 +251,8 @@ class _AttemptMachineFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
+            if self.verifier is not None:
+                return _OwnedMachine(await self.verifier(spec))
             machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
         return _OwnedMachine(machine)
 

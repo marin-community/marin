@@ -85,8 +85,7 @@ The pinned Ray release has no Intel macOS wheel.
 owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
 Each framework owns its remaining categories: Shellbox owns machine and Daytona
 errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
-SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
-is installed. Composition rejects names assigned by more than one owner.
+SkyRL composes the shared, Shellbox and SkyRL maps. Composition rejects names assigned by more than one owner.
 
 With error classification enabled, `skyrl_train.task_error_handling` maps
 infrastructure failures to masking, agent failures to zero reward, and passthrough
@@ -108,10 +107,8 @@ Named phase timeouts use the producer's timeout policy. Structured provider stat
 and permanent causes take precedence.
 
 Configure task retries at `environment.task_sessions.retry`. The settings apply
-across Harbor and other task kinds. The base budget is zero retries; the
-`terminal_bench` preset explicitly selects two retries with a multiplier of two.
-Mixed-task Snowball and Mochi recipes select one retry with their verifier
-exclusions for every task kind.
+to every task kind. The base budget is zero retries. Mixed-task Snowball and
+Mochi recipes select one retry for every task kind.
 For example:
 
 ```yaml
@@ -122,23 +119,24 @@ environment:
       min_wait_sec: 1
       max_wait_sec: 60
       wait_multiplier: 2
+      jitter: 0.1
       include_categories: [infrastructure]
       exclude_exceptions: [AgentTimeoutError, VerifierTimeoutError]
 ```
 
 `rigging.task_errors.retry_delay` makes the decision for both the task worker
 and native Harbor's trial queue. Filters match the error name, cause name, or
-category; exclusions win. Permanent failures stop even when included. Unknown
-failures need an explicit inclusion. The budget counts retries after the first
-attempt, and backoff is capped at `max_wait_sec`.
+category; exclusions win. Permanent failures stop even when included. Failures
+with an unknown retry disposition need an explicit inclusion. The budget counts retries after the first
+attempt. Backoff grows to `max_wait_sec`, then applies proportional jitter.
 
-Machine startup connection loss can retry with a fresh machine before any model
-turn. A machine failure during a model command or grading is terminal because
-replaying may duplicate work. SkyRL also keeps passthrough results terminal so
-that retries do not discard usable verifier output. Reward and masking treatment
-remain separate from the infrastructure retry classification. Native Harbor may
-retry a passthrough failure when environment teardown is unconfirmed. A selected
-native terminal failure can seal as an unscored archive row;
+The worker retries only attempts with no recorded rollout steps. Failures after
+sampled work retain their original retry disposition but do not restart the task.
+SkyRL also keeps passthrough results terminal so that retries do not discard usable
+verifier output. Native Harbor may
+retry a passthrough failure when environment teardown is unconfirmed. The final failed attempt
+for a native trial can seal as an unscored archive row under the
+[Harbor archive rules](../harbor-integration.md#trial-error-taxonomy);
 its reward and partial trajectory remain raw evidence.
 
 ## Run records

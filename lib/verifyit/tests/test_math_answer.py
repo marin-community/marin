@@ -13,7 +13,7 @@ import math_verify
 import sympy
 from math_verify.errors import TimeoutException
 from verifyit.execution.worker import call_bounded
-from verifyit.grade import InvalidTask, Status, run, write_reward
+from verifyit.grade import GradingInfraError, InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
@@ -227,10 +227,46 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     monkeypatch.setattr(math_verify, operation, expired)
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+    assert result.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE
     write_reward(logs, result)
     assert not (logs / "reward.txt").exists()
     assert not (logs / "reward.json").exists()
     assert json.loads((logs / "verdict.json").read_text())["status"] == Status.INFRA_ERROR
+
+
+def test_math_deadline_verdicts_carry_their_phase(monkeypatch):
+    """Reference-parse deadlines are a task property; candidate-parse and comparison
+    deadlines follow the reply. The verdict tags which step ran out."""
+
+    spec = MathSpec(expected="y=x+1", math_type=MathType.EQUATION)
+    original_parse = math_verify.parse
+
+    def deadline(*args, **kwargs):
+        raise TimeoutException("backend deadline exhausted")
+
+    monkeypatch.setattr(math_verify, "parse", deadline)
+    with pytest.raises(GradingInfraError) as reference:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert reference.value.detail["phase"] == grade_math.MATH_DEADLINE_REFERENCE_PARSE
+
+    def candidate_deadline(text, **kwargs):
+        if "y=x+2" in text:
+            raise TimeoutException("candidate deadline")
+        return original_parse(text, **kwargs)
+
+    monkeypatch.setattr(math_verify, "parse", candidate_deadline)
+    with pytest.raises(GradingInfraError) as candidate:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert candidate.value.detail["phase"] == grade_math.MATH_DEADLINE_CANDIDATE_PARSE
+
+    monkeypatch.setattr(math_verify, "parse", original_parse)
+    monkeypatch.setattr(math_verify, "verify", deadline)
+    with pytest.raises(GradingInfraError) as comparison:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert comparison.value.detail["phase"] == grade_math.MATH_DEADLINE_COMPARISON
+    assert all(
+        error.value.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE for error in (reference, candidate, comparison)
+    )
 
 
 @pytest.mark.parametrize(
