@@ -27,6 +27,9 @@ sft:
   gpu_count: 128
   batch_size: 176
   microbatch_size: 32
+  # 360 x 175.8s leaves 95m12s for startup/overhead after the 50m reserves.
+  # Hero warmup 0/6916; linear tail 692/6916 -> 36/360, min LR ratio stays 0.1.
+  schedule: {updates: 360, warmup_steps: 0, decay_steps: 36}
   stopping: {type: mixture_epochs, count: 1}
   epoch_capacity:
     path: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-preparation/v5-native-capacity-20261123b/capacity.json

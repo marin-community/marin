@@ -37,6 +37,7 @@ from experiments.post_training.long_loop.mochi_sft import (
     MochiSftControls,
     MochiSftInitializer,
     MochiSftRound,
+    MochiSftSchedule,
     bind_mochi_sft_config,
 )
 from experiments.post_training.long_loop.round_runner import RoundSft, load_round
@@ -238,7 +239,8 @@ def test_epoch_completion_accepts_only_coverage_or_certified_time_limit(epoch_in
     assert actual["full_sft_coverage"] == complete
 
 
-def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_inputs):
+@pytest.mark.parametrize("target_updates,decay_steps", [(30, 3), (300, 30)])
+def test_native_hero_restore_starts_the_new_epoch_and_scales_its_lr_tail(epoch_inputs, target_updates, decay_steps):
     recipe, _, pin = epoch_inputs
     recipe["batch_size"] = 176
     recipe["data"]["tokenizer"] = "gpt2"
@@ -256,7 +258,9 @@ def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_in
         pin,
         pin,
         MochiSftInitializer("base", "s3://marin-us-east-08a/base", pin.path, "0" * 64),
-        MochiSftControls(128, 176, 32, MixtureEpochs(), pin, budget, 72000),
+        MochiSftControls(
+            128, 176, 32, MochiSftSchedule(target_updates, 0, decay_steps), MixtureEpochs(), pin, budget, 72000
+        ),
     )
     previous = GrugRunConfig(
         model=GrugModelConfig(vocab_size=64, max_seq_len=16, num_layers=1, num_experts=192),
@@ -265,10 +269,10 @@ def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_in
             components={"old": DatasetComponent(), "val": DatasetComponent(split="validation")},
             train_weights=[(0, {"old": 1.0})],
         ),
-        optimizer=GrugMoeMuonHConfig(),
+        optimizer=GrugMoeMuonHConfig(warmup=0, decay=692, lr_schedule="linear", min_lr_ratio=0.1),
         resources=ResourceConfig(device=GpuConfig("GB200", count=4), replicas=176),
         trainer=GrugTrainerConfig(
-            trainer=TrainerConfig(train_batch_size=176, num_train_steps=140),
+            trainer=TrainerConfig(train_batch_size=176, num_train_steps=6956),
             save_checkpoints=True,
             router_bias_mode=RouterBiasMode.FROZEN,
             expert_axis_size=16,
@@ -277,6 +281,7 @@ def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_in
             special_tokens=SpecialTokenInit((5,), (1,), 40, 2.0),
             expert_placement=ExpertPlacement("base", 16, 12, (tuple(range(192)),), "fixture"),
         ),
+        stop_after_steps=6956,
     )
     reference = {"config": draccus.encode(previous)}
     reference["config"]["trainer"]["trainer"]["mp"] = {
@@ -285,6 +290,15 @@ def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_in
         "output_dtype": {"__dtype__": "bfloat16"},
     }
     config = bind_mochi_sft_config(spec, reference, recipe["data"], updates=updates, output="s3://marin-us-east-08a/new")
+    assert config.stop_after_steps == config.trainer.trainer.num_train_steps == 40 + target_updates
+    assert config.optimizer == replace(previous.optimizer, decay=decay_steps)
+    for peak in (previous.optimizer.learning_rate, previous.optimizer.adam_lr):
+        lr = config.optimizer.lr_scheduler(config.trainer.trainer.num_train_steps, override_lr=peak)
+        decay_start = 40 + target_updates - decay_steps
+        assert float(lr(40)) == pytest.approx(peak)
+        assert float(lr(decay_start)) == pytest.approx(peak)
+        assert float(lr(decay_start + decay_steps / 2)) == pytest.approx(peak * 0.55)
+        assert float(lr(40 + target_updates)) == pytest.approx(peak * 0.1)
     components = {
         name: DirectDatasetComponent(
             datasets={

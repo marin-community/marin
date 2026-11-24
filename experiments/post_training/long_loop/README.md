@@ -97,9 +97,11 @@ with batch 32 to fit the smaller mesh.
 
 The canonical one-SFT-epoch planner binds every included V5 SFT training pack
 once, with its declared replay share and existing validation reservations.
-The LR schedule keeps the hero's zero warmup, linear 692-update tail and 0.1
-minimum ratio, with its endpoint rebound to the new epoch ceiling. The shared
-20-hour clock can end the epoch early. Actual source coverage and the permanent
+The run targets 360 updates within the epoch, with the hero's schedule fractions
+scaled from its 6916 SFT updates: zero warmup and a 36-update linear tail to the
+unchanged 0.1 minimum ratio. At the conservative 175.8-second update estimate,
+this leaves 95 minutes for startup and overhead after the 50-minute reserves.
+The shared 20-hour clock remains a safety cap. Actual source coverage and the permanent
 final checkpoint are recorded separately; an early stop does not claim a full
 epoch. A clock stop skips the forced final evaluation to preserve the checkpoint
 reserve; periodic evaluation stays enabled. Training reads no old hero training

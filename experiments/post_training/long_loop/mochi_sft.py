@@ -30,10 +30,18 @@ from experiments.post_training.long_loop.source_loss import prepared_supervision
 
 
 @dataclass(frozen=True)
+class MochiSftSchedule:
+    updates: int
+    warmup_steps: int
+    decay_steps: int
+
+
+@dataclass(frozen=True)
 class MochiSftControls:
     gpu_count: int
     batch_size: int
     microbatch_size: int
+    schedule: MochiSftSchedule
     stopping: SftStopping
     epoch_capacity: FilePin
     training_budget: TrainingBudgetConfig
@@ -86,7 +94,7 @@ def run_mochi_sft(run: NativeMochiSftRun) -> None:
     completed = json.loads((root / "telemetry/completion.json").read_bytes())
     assert run.config.trainer.special_tokens is not None
     updates = completed["final_step"] - run.config.trainer.special_tokens.start_step
-    if not 0 < updates <= run.receipt["epoch"]["updates"]:
+    if not 0 < updates <= run.receipt["schedule"]["updates"]:
         raise ValueError("Native SFT completion has no valid number of complete updates")
     metadata = StoragePath(prefix_join(completed["checkpoint"], "metadata.json")).read_bytes()
     if json.loads(metadata)["step"] != completed["final_step"] or json.loads(metadata)["is_temporary"]:
@@ -150,6 +158,19 @@ def bind_mochi_sft_config(
         raise ValueError("SFT dispatch timeout differs from its execution budget")
     baseline = reference["config"]
     start = baseline["trainer"]["special_tokens"]["start_step"]
+    hero_updates = baseline["stop_after_steps"] - start
+    schedule = controls.schedule
+    if not 0 < schedule.updates <= updates:
+        raise ValueError("Mochi SFT step target must fit within the planned SFT epoch")
+    hero_optimizer = baseline["optimizer"]
+    expected_warmup = round(hero_optimizer["warmup"] * schedule.updates / hero_updates)
+    expected_decay = round(hero_optimizer["decay"] * schedule.updates / hero_updates)
+    if (schedule.warmup_steps, schedule.decay_steps) != (expected_warmup, expected_decay):
+        raise ValueError("Mochi SFT warmup and decay must scale the hero's SFT-step fractions")
+    if expected_warmup != 0:
+        raise ValueError("The native restored hero schedule requires its zero-warmup reference")
+    updates = schedule.updates
+    raw["optimizer"].update(warmup=schedule.warmup_steps, decay=schedule.decay_steps)
     raw["stop_after_steps"] = start + updates
     raw["resources"]["replicas"] = controls.gpu_count // raw["resources"]["device"]["count"]
     raw["resources"]["target_cluster"] = None  # The canonical coordinator is already on 08a.
@@ -204,8 +225,14 @@ def bind_mochi_sft_config(
     )
     if config.model != draccus.decode(type(config.model), baseline["model"]):
         raise ValueError("Mochi SFT changed the hero architecture")
-    if config.optimizer != draccus.decode(OptimizerConfig, {**baseline["optimizer"], "type": raw["optimizer"]["type"]}):
-        raise ValueError("Mochi SFT changed the hero optimizer or LR schedule")
+    expected_optimizer = {
+        **baseline["optimizer"],
+        "type": raw["optimizer"]["type"],
+        "warmup": schedule.warmup_steps,
+        "decay": schedule.decay_steps,
+    }
+    if config.optimizer != draccus.decode(OptimizerConfig, expected_optimizer):
+        raise ValueError("Mochi SFT changed the hero optimizer beyond its scaled schedule")
     return config
 
 
@@ -271,6 +298,7 @@ def resolve_mochi_sft(spec: MochiSftRound) -> ResolvedMochiSft:
         "status": "native_cpu_preflight_pass",
         "round": draccus.encode(spec),
         "epoch": recipe["sft_exposure"],
+        "schedule": draccus.encode(spec.sft.schedule),
         "initializer_bytes": copied["total_bytes"],
         "initializer_copy_sha256": hashlib.sha256(copy_bytes).hexdigest(),
         "logical_batch": spec.sft.batch_size,
