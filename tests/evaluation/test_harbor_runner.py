@@ -617,8 +617,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
     assert captured["overlay"].archive_dataset == executor.config.record_dataset
     assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
-    assert captured["env"]["DAYTONA_TARGET"] == "test-target"
-    assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
+    # The API URL and target are constants; supplied values for them must not reach the driver.
+    assert "DAYTONA_TARGET" not in captured["env"]
+    assert "DAYTONA_API_URL" not in captured["env"]
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert captured["env"]["OPENAI_API_KEY"] == "policy-judge-private"

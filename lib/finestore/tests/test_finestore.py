@@ -20,7 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
-from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
+from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, read_snapshot
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _compact_shards, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
@@ -52,6 +52,7 @@ from rigging import timing
 from rigging.filesystem import factory
 from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import LAUNCH_PROVENANCE_ENV
 
 
 def _parquet_metadata(path: str) -> pq.FileMetaData:
@@ -1687,3 +1688,39 @@ def test_compaction_prepared_under_an_older_epoch_is_rejected(archive_root):
         )
         assert result.written == 0
         assert ReadView(root).list_shards("samples") == shards_before
+
+
+def test_transaction_author_and_message_are_recorded_only_on_their_commit(archive_root):
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="ana", message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+        first = ReadView(archive_root).commit_info
+        with store.transaction() as transaction:
+            transaction.table("tasks").add({"task_id": "b", "n": 2})
+        second = read_snapshot(FineStoreLayout(archive_root)).manifest
+    assert (first.author, first.message) == ("ana", "fix a")
+    # The next manifest is copied from this one and must not inherit its author.
+    assert second.commit_info is None
+
+
+def test_commit_info_an_older_writer_copies_forward_reads_as_absent(archive_root):
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="ana", message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+    snapshot = read_snapshot(FineStoreLayout(archive_root))
+    # An older writer publishes the next commit with the parent's record unchanged.
+    child = snapshot.manifest.model_copy(update={"sequence": snapshot.manifest.sequence + 1})
+    assert ReadView(archive_root, ArchiveSnapshot(manifest=child, token=snapshot.token)).commit_info is None
+
+
+def test_transaction_author_defaults_to_the_launching_user(archive_root, monkeypatch):
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+    monkeypatch.setenv("LOGNAME", "ana")
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+    info = ReadView(archive_root).commit_info
+    assert (info.author, info.message) == ("ana", "fix a")
