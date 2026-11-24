@@ -202,11 +202,18 @@ def service(
 
 
 def coordinator_resources() -> ResourceConfig:
-    """The coordinator job's CPU placement on the pool cluster (non-preemptible)."""
+    """The coordinator job's CPU placement on the pool cluster (non-preemptible).
+
+    The coordinator is the pool's data path: the controller proxy terminates here and
+    every request streams through this process's dashboard proxy into the broker
+    actor before reaching an engine. Size it for the full fleet's SSE throughput —
+    2 CPUs starved the lease renewals under fleet load (transient "No endpoint")
+    and would cap aggregate throughput.
+    """
     return ResourceConfig.with_cpu(
-        cpu=2.0,
-        ram="8g",
-        disk="20g",
+        cpu=16.0,
+        ram="64g",
+        disk="40g",
         preemptible=False,
         target_cluster=CLUSTER,
     )
