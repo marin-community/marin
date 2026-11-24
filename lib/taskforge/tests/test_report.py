@@ -27,19 +27,21 @@ from taskforge.effects.events import (
     StageCompleted,
 )
 from taskforge.effects.log import EventLog, Opened, Record, Status
+from taskforge.harness.tools.evidence import ReportTool, evidence_tools
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Terminal, Workpiece
+from taskforge.model.workpiece import Submission, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import reason_class, report
 from taskforge.resources.env import CommandResult, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
+from taskforge.stages.solve_review import evidence
 
 
 @pytest.mark.parametrize(
@@ -214,3 +216,37 @@ async def test_a_root_in_another_journal_format_is_named_and_the_report_complete
         f"skipped unsupported_format file://{tmp_path / 'n6' / HEAD} has journal format 3, not {JOURNAL_FORMAT}"
     )
     assert unsupported in lines
+
+
+@pytest.mark.parametrize("review_first", [False, True])
+async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred_it(
+    tmp_path: Path, proposal: TaskProposal, review_first: bool
+) -> None:
+    """Review 2026-11-21: an adversary request resolved while the solve-review's scope was open was counted
+    as solve-review usage; a request's own tools name its role, whatever else is open."""
+    index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
+    tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())
+    review = Resolved(
+        InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11, completion_tokens=3))
+    )
+    adversary = Resolved(
+        InferenceRequest((), (), LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=37, completion_tokens=5))
+    )
+    resolved = (review, adversary) if review_first else (adversary, review)
+    events = (
+        ScopeEntered("workpiece"),
+        ScopeEntered("adversary:a"),
+        ScopeEntered("solve_review"),
+        *resolved,
+        ScopeExited("solve_review", False),
+        ScopeExited("adversary:a", False),
+        StageCompleted(Stage.REVIEW, "", "Accepted", terminal=Terminal.ACCEPTED),
+    )
+    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    await sink.local.write(records)
+    await sink.finish(Status(terminal=Terminal.ACCEPTED), Workpiece("w", proposal, terminal=Terminal.ACCEPTED))
+    lines = await report(str(tmp_path / "root"))
+    assert "tokens role=adversary prompt=37 cached=0 completion=5" in lines
+    assert "tokens role=solve_review prompt=11 cached=0 completion=3" in lines

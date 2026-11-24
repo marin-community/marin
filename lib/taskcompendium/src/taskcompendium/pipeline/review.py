@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from zephyr import counters
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import (
@@ -32,7 +32,7 @@ from taskcompendium.pipeline.review_requests import (
     batch_output,
     typed_batch_records,
 )
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import build_environments, resource_bytes, resource_inventory, resource_signature
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -312,33 +312,18 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     payload = task.model_dump(mode="json")
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
-    resources = [
-        (role, resource)
-        for role, group in (
-            ("all", task.resources.all),
-            ("worker", task.resources.worker),
-            ("oracle", task.resources.oracle),
-            ("verifier", task.resources.verifier),
-        )
-        for resource in group
-    ]
-    environments = [("actor_build", task.environment_requirements, payload["environment_requirements"])]
-    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(("grader_build", task.grader.environment, payload["grader"]["environment"]))
-    for role, environment, projected in environments:
+    resources = resource_inventory(task)
+    for role, environment in build_environments(task):
         if environment.docker_build is not None:
-            resources.extend((role, resource) for resource in environment.docker_build.files)
+            projected = (
+                payload["grader"]["environment"] if role == "grader_build" else payload["environment_requirements"]
+            )
             projected["docker_build"] = {"resource_role": role, "status": "unresolved"}
     manifest = []
     text_previews: list[dict[str, Any]] = []
     for role, resource in resources:
         data = resource_bytes(resource)
-        signature = {
-            "role": role,
-            **resource.model_dump(mode="json", exclude={"source"}),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "byte_count": len(data),
-        }
+        signature = resource_signature(role, resource, data)
         manifest.append(signature)
         if len(previews) == MAX_RESOURCE_PREVIEWS:
             continue

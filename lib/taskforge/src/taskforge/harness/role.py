@@ -14,6 +14,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.effects.context import Context
 from taskforge.effects.log import Opened
+from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.lowering import host_requirements
 from taskforge.model.llm import Message
@@ -127,8 +128,13 @@ async def sitting(
                 await ctx.emit(WriteFiles(files))
             tools = {**role.tools, **visit.tools}
 
+            harness = role.harness
+            if type(harness) is AgenticHarness:  # the stock loop spills only where the visit has a machine; any
+                # injected harness, a subclass included, runs as it was built
+                harness = replace(harness, spill=env is not None)
+
             async def session(opening: Opening) -> Exit:
-                return await role.harness.run(ctx, opened(opening, tools), resources.inference_for(role.name), tools)
+                return await harness.run(ctx, opened(opening, tools), resources.inference_for(role.name), tools)
 
             yield session
     finally:

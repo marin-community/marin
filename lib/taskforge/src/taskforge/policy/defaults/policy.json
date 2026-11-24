@@ -29,6 +29,8 @@
   "solver.model": "glm-5.3",
   "adversary.model": "glm-5.3",
   "adversary.context_tokens": 262144,
+  "solve_review.model": "glm-5.3",
+  "solve_review.context_tokens": 262144,
   "provider.pool": "high",
   "provider.unavailable_wait": 3600.0,
   "provider.backoff_initial": 1.0,

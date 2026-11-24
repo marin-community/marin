@@ -4,23 +4,31 @@
 """The role runner: openings, machine-less sittings and the session it hands its caller."""
 
 import json
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
+from typing import override
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.stage_fakes import Environments
+from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import ScopeEntered
 from taskforge.effects.log import EventLog
-from taskforge.harness.protocol import Stopped
+from taskforge.harness.loop import AgenticHarness
+from taskforge.harness.protocol import Exit, Harness, Stopped, StopReason, Tool, ToolResult
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
+from taskforge.harness.tools.base import ValidatedTool
+from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.workpiece import Conversation
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.env import WriteFile
+from taskforge.resources.inference import InferenceClient
 from taskforge.wiring import build_config
 
 
@@ -62,3 +70,93 @@ async def test_an_answer_replies_to_the_pending_call_in_the_same_conversation() 
     with pytest.raises(ValueError, match="pending tool call"):
         async with sitting(ctx, role, Visit("x", "y", None), bundle) as session:
             await session(Answer(Conversation(saved.messages[:2], ()), "late"))
+
+
+@dataclass(frozen=True, slots=True)
+class NoArgs:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Loud(ValidatedTool[NoArgs]):
+    name = "loud"
+    description = "Reply with far more than a reply may hold."
+    args_type = NoArgs
+
+    @override
+    async def run(self, ctx: Context, args: NoArgs) -> ToolResult:
+        return ToolResult("x" * 50_000)
+
+
+async def test_a_machine_less_session_gets_every_reply_clipped_and_never_a_spill() -> None:
+    """Review 2026-11-21: the loop's own unknown-tool diagnostic spilled a reply to a file a
+    machine-less reviewer could never read. Every reply, tool output and loop diagnostic alike, is clipped instead."""
+    log = EventLog()
+    ctx = Context(log=log)
+    unknown = Completion("", (ToolCall("u", "x" * 50_000, "{}"),), FinishReason.TOOL_CALLS)
+    loud = Completion("", (ToolCall("l", "loud", "{}"),), FinishReason.TOOL_CALLS)
+    client = FakeInference((unknown, loud, finish("f")))
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    role = build_config(load_policy(DEFAULTS_DIR), {}).adversary
+    chars = load_policy(DEFAULTS_DIR).setting("tools.output_chars", int)
+    async with sitting(ctx, role, Visit("review", "unused", None, tools={"loud": Loud()}), bundle) as session:
+        await session(Fresh("system", "user"))
+    replies = [m.content for m in client.requests[-1].conversation if m.role == "tool"]
+    assert len(replies) == 2 and all(len(reply) <= chars for reply in replies)
+    assert all("this session has no machine" in reply for reply in replies)
+    assert not [record for record in log.records if isinstance(record.event, WriteFile)]
+
+
+@dataclass
+class FourArguments(Harness):
+    """An injected harness written against the four-argument protocol: it records each session and finishes."""
+
+    sessions: list[Conversation] = field(default_factory=list)
+
+    @override
+    async def run(
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+    ) -> Exit:
+        self.sessions.append(session)
+        return Stopped(StopReason.FINISHED, session, "done")
+
+
+@pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
+async def test_an_injected_four_argument_harness_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
+    """Review 2026-11-21: the role runner passed ``spill=`` to every harness, so one written
+    against the four-argument protocol raised before it ran, after a machine-backed visit had taken its sandbox. The
+    runner configures only its own harness per visit."""
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), role_inference={"adversary": FakeInference(())})
+    harness = FourArguments()
+    role = replace(build_config(load_policy(DEFAULTS_DIR), {}).adversary, harness=harness)
+    async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
+        outcome = await session(Fresh("system", "user"))
+    assert isinstance(outcome, Stopped) and outcome.detail == "done" and len(harness.sessions) == 1
+
+
+class Constructed(AgenticHarness):
+    """An injected stock-harness subclass with its own constructor, which ``dataclasses.replace`` cannot rebuild."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(262144, LLMPolicy(), "continue", 20000, lambda arguments: arguments)
+        object.__setattr__(self, "detail", detail)
+
+    @override
+    async def run(
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+    ) -> Exit:
+        return Stopped(StopReason.FINISHED, session, self.__dict__["detail"])
+
+
+@pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
+async def test_an_injected_stock_harness_subclass_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
+    """Review 2026-11-21: configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
+    through ``dataclasses.replace``, which called its own constructor with the stock fields and raised. Only the exact
+    stock class is configured."""
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), role_inference={"adversary": FakeInference(())})
+    role = replace(build_config(load_policy(DEFAULTS_DIR), {}).adversary, harness=Constructed("its own"))
+    async with sitting(ctx, role, Visit("review", "visit", machine), bundle) as session:
+        outcome = await session(Fresh("system", "user"))
+    assert isinstance(outcome, Stopped) and outcome.detail == "its own"

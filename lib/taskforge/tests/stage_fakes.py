@@ -8,6 +8,7 @@ from typing import override
 
 from lib.taskforge.tests.resource_doubles import FakeEnv
 from rolloutengine.models import (
+    ConversationRecord,
     GradedRollout,
     Model,
     ModelRequest,
@@ -61,6 +62,12 @@ class RecordingHarness(Harness):
         return self.result
 
 
+def transcript(*replies: str) -> ConversationRecord:
+    """A messages-trace conversation: the task, then each reply as an assistant turn."""
+    turns = tuple({"role": "assistant", "content": reply} for reply in replies)
+    return ConversationRecord(({"role": "user", "content": "Solve the task."}, *turns), (), (), (), None)
+
+
 class SolverEngine(Engine):
     """Release trials only when the entire wave has started; a serial stage deadlocks."""
 
@@ -77,7 +84,7 @@ class SolverEngine(Engine):
             self.ready.set()
         await self.ready.wait()
         trial = int(run_id.split(":")[-2])
-        rollout = Rollout(run_id, (), "stop")
+        rollout = Rollout(run_id, (transcript(f"trial {trial} answers 12"),), "stop")
         if trial == self.restart:
             raise RolloutInterrupted(rollout, RolloutOperation.MODEL)
         return GradedRollout(rollout, GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
@@ -91,7 +98,7 @@ class CandidateEngine(Engine):
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         turn = await model(ModelRequest((), {}))
         return GradedRollout(
-            Rollout(run_id or "grade", (), "stop"),
+            Rollout(run_id or "grade", (transcript(str(turn.message["content"])),), "stop"),
             self.result or GradeResult(Outcome.GRADED, float(turn.message["content"] == "12")),
         )
 

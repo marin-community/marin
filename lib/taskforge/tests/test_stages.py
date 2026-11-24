@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
-from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
 from lib.taskforge.tests.stage_fakes import (
     OVER_CREDITED,
     CandidateEngine,
@@ -213,7 +213,7 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     harness = RecordingHarness(Restart("machine gone"))
     ctx = Context(log=EventLog())
     author_client = FakeInference(())
-    bundle = replace(resources(ctx), role_inference={"author": author_client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "author": author_client})
     with pytest.raises(Restart):
         await author(ctx, workpiece.with_(submission=None), config(harness), bundle)
     await ctx.drain()
@@ -303,7 +303,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     adversary_client = FakeInference(())
-    bundle = replace(resources(ctx), role_inference={"adversary": adversary_client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": adversary_client})
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     finding = evidence.adversary[0].findings[0]
@@ -359,7 +359,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
         )
     )
     ctx = Context(log=EventLog())
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     tools = adversary_tools(
         task_path="/workspace/task.json",
         policy=setup.policy,
@@ -574,7 +574,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
-    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY), evidence=(evidence,))
+    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY, 0), evidence=(evidence,))
     expected = Modify(("Custom reviewer requires another change",))
 
     def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
@@ -710,7 +710,7 @@ def test_hardening_accepts_its_placement_or_restores_the_fallback_after_a_fault(
     original = workpiece.submission
     assert original is not None
     pending = reviewed(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
-    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY)
+    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY, 0)
     first = pending.decisions[-1]
     assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY and first.fallback == original.digest
     assert "Make the task harder" in first.findings[0] and pending.terminal is None
@@ -729,7 +729,7 @@ def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece:
     hard = workpiece.submission
     assert hard is not None
     first = reviewed(workpiece.with_(evidence=(evidence(0),)))
-    assert first.round == 1 and first.fallback == Fallback(hard, BandOutcome.TOO_HARD)
+    assert first.round == 1 and first.fallback == Fallback(hard, BandOutcome.TOO_HARD, 0)
     easier = revised(hard, "easier")
     final = reviewed(first.with_(submission=easier, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
@@ -746,7 +746,7 @@ def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence
     final = reviewed(first.with_(submission=harder, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
     assert final.submission == harder and decision.restore is None and final.accepted_with is BandOutcome.TOO_HARD
-    assert "Clean revision placed on its own evidence" in decision.reasons
+    assert "Clean revision placed too_hard, not too_easy: a placement change is tagged, not reverted" in decision.reasons
 
 
 def test_a_faulted_revision_restores_the_fallback_by_digest_with_its_band(workpiece: Workpiece) -> None:
@@ -766,25 +766,28 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     stored = workpiece.submission
     assert stored is not None
     current = revised(stored, "current")
-    # A stored in-band fallback beats a new too-easy candidate.
+    # Owner's ruling (2026-11-13): a band change is never a regression; a clean too-easy revision of an in-band
+    # fallback is accepted as the revision, tagged, and only a fault restores the fallback (its rounds are spent).
     final = reviewed(
-        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND), evidence=(evidence(3),))
+        workpiece.with_(
+            round=2, submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND, 0), evidence=(evidence(3),)
+        )
     )
     decision = accepted(final)
     assert (decision.band, decision.restore, final.submission, final.accepted_with) == (
-        BandOutcome.IN_BAND,
-        stored.digest,
-        stored,
+        BandOutcome.TOO_EASY,
         None,
+        current,
+        BandOutcome.TOO_EASY,
     )
-    # Equal ranks: the later submission.
+    # Out of band on both sides: the later submission.
     assert fallback_for(
-        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD)),
+        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD, 0), evidence=(evidence(3),)),
         BandOutcome.TOO_EASY,
         build_config(load_policy(DEFAULTS_DIR), {}).band,
-    ) == Fallback(current, BandOutcome.TOO_EASY)
+    ) == Fallback(current, BandOutcome.TOO_EASY, 0)
     # A stored fallback the current policy no longer accepts is not restored.
-    easy = workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY))
+    easy = workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY, 0))
     faulted = reviewed(easy.with_(evidence=(evidence(3, controls_met=False),)), {"band.accept_too_easy": False})
     assert faulted.terminal is not Terminal.ACCEPTED and faulted.submission == current and faulted.fallback is None
 
@@ -798,16 +801,16 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
         apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup.budget, setup.policy)
     with pytest.raises(ValueError, match="Cannot keep"):
         apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup.budget, setup.policy)
-    stored = wp.with_(fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY))
+    stored = wp.with_(fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY, 0))
     assert stored.fallback is not None
     with pytest.raises(ValueError, match="Cannot restore"):  # the right digest, the wrong band
         apply_decision(
             stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup.budget, setup.policy
         )
-    # Two candidates with one digest: the in-band placement is never overwritten with too easy.
-    same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND))
+    # Two candidates with one digest: the current submission at its own placement, as the review rule chose it.
+    same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND, 0))
     kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup.budget, setup.policy)
-    assert kept.fallback == Fallback(submission, BandOutcome.IN_BAND)
+    assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY, len(same.evidence) - 1)
 
 
 # Review 2026-11-21: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.
@@ -994,7 +997,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
         )
     )
     ctx = Context(log=EventLog())
-    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
     result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons

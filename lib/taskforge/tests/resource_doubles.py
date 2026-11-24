@@ -4,6 +4,8 @@
 """Scripted environment, inference and web doubles for the Taskforge tests."""
 
 import errno
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -11,7 +13,7 @@ from typing import override
 
 from taskforge.effects.events import Fingerprint, ReplayPolicy
 from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
-from taskforge.model.llm import Completion
+from taskforge.model.llm import Completion, FinishReason, Role, ToolCall
 from taskforge.resources.env import CommandResult, RecordedEnv
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.web import WebClient, WebFetch, WebSearch
@@ -100,3 +102,25 @@ class FakeWeb(WebClient):
     async def fetch(self, url: str) -> str:
         self.requests.append(WebFetch(url))
         return self.pages[url]
+
+
+class CleanReviewer(InferenceClient):
+    """A solve-reviewer that reports no finding and accounts for every trial its opening lists."""
+
+    def __init__(self) -> None:
+        self.requests: list[InferenceRequest] = []
+
+    @override
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("inference", "clean-reviewer", ReplayPolicy.CACHE)
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        self.requests.append(request)
+        opening = next(message.content for message in request.conversation if message.role == Role.USER)
+        accounts = [
+            {"trial": int(trial), "attribution": "solver", "reason": "its own work"}
+            for trial in re.findall(r"^trial/(\d+):", opening, re.MULTILINE)
+        ]
+        arguments = json.dumps({"findings": [], "accounts": accounts})
+        return Completion("", (ToolCall("review", "report", arguments),), FinishReason.TOOL_CALLS)

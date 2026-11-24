@@ -60,6 +60,9 @@ class AgenticHarness(Harness):
     output_chars: int
     replay_arguments: Callable[[str], str]
     """The model profile's repair of sampled tool-call arguments, applied before they enter the conversation."""
+    spill: bool = True
+    """Whether a reply longer than ``output_chars`` is saved to a workspace file; a visit without a machine has none,
+    and its replies are clipped instead. The role runner sets it per visit."""
 
     def __post_init__(self) -> None:
         if self.output_chars < 1:
@@ -141,7 +144,13 @@ class AgenticHarness(Harness):
                     if isinstance(outcome, FinishRequest):
                         return Stopped(StopReason.FINISHED, session, outcome.reason, turns)
                     content = outcome.content
-                    if len(content) > self.output_chars:
+                    if len(content) > self.output_chars and not self.spill:  # every reply passes here, diagnostics too
+                        cut = (
+                            f"\n[reply cut at {self.output_chars} characters: "
+                            "this session has no machine to hold the rest]"
+                        )
+                        content = content[: max(self.output_chars - len(cut), 0)] + cut[: self.output_chars]
+                    elif len(content) > self.output_chars:
                         path = PurePosixPath(".tool-output") / f"{digest((call.id, content))}.txt"
                         data = content.encode()
                         await ctx.emit(WriteFile(path, data))

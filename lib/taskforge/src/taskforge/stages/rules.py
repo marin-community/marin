@@ -11,6 +11,7 @@ from dataclasses import replace
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.model.review import (
+    Abandon,
     Accept,
     AdversaryFinding,
     AdversaryStatus,
@@ -19,7 +20,9 @@ from taskforge.model.review import (
     Budget,
     Cause,
     Decision,
+    EvidenceKind,
     Incomplete,
+    MissingEvidence,
     Modify,
     Reject,
     RejectKind,
@@ -55,6 +58,31 @@ def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
     )
 
 
+INSTRUCTIONS = {
+    BandOutcome.IN_BAND: "Keep the difficulty.",
+    BandOutcome.TOO_EASY: (
+        "Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
+    ),
+    BandOutcome.TOO_HARD: "Make the task more tractable while preserving its objective, correct controls and grading.",
+}
+"""What each placement asks of the author, as live Forge words it."""
+
+
+def band_line(result: ValidationResult, band: BandRules) -> tuple[BandOutcome, str]:
+    """The placement of ``result``'s scored solver trials, and live Forge's line telling the author what it asks for."""
+    scored = [trial for trial in result.solver if not missing(trial)]
+    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
+    place = band.place(solved / len(scored))
+    return place, f"{solved} of {len(scored)} trials solved: {place}. {INSTRUCTIONS[place]}"
+
+
+def unscored(result: ValidationResult) -> tuple[str, ...]:
+    """How many solver slots of ``result`` had no score, when any did, and how many its placement went over."""
+    scored = sum(not missing(trial) for trial in result.solver)
+    absent = len(result.solver) - scored
+    return (f"{absent} of {len(result.solver)} solver trials have no score; placed over {scored}",) * bool(absent)
+
+
 def missing(trial: TrialResult) -> bool:
     """A solver slot without a score (held, timed out or ungraded): never a failed trial, never a zero."""
     cause = trial.cause or (Cause.NO_GRADE if trial.grade is None else None)
@@ -65,27 +93,59 @@ def tagged(band: BandOutcome) -> tuple[str, ...]:
     return () if band is BandOutcome.IN_BAND else (f"accepted_with: {band}",)
 
 
-def better(candidate: Fallback, stored: Fallback) -> Fallback:
-    """In band beats out of band; between equals, the later submission."""
-    return stored if stored.band is BandOutcome.IN_BAND and candidate.band is not BandOutcome.IN_BAND else candidate
-
-
 def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
-    """The one choice of the submission to fall back to, or accept: the stored fallback while the policy accepts its
-    band, against the current submission at ``placement`` when the policy accepts that. Returning the stored object
-    itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot tell rounds
-    apart."""
-    kept = workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
-    if workpiece.submission is None or placement is None or placement not in band.accepted:
-        return kept
-    current = Fallback(workpiece.submission, placement)
-    return current if kept is None else better(current, kept)
+    """The one choice of the submission to fall back to, or accept: the current submission at ``placement`` when the
+    policy accepts that, else the stored fallback while the policy accepts its band. Owner's ruling (2026-11-13): "A
+    band change is never a regression. Only real faults or an author stopping revert to the fallback." Returning the
+    stored object itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot
+    tell rounds apart."""
+    if workpiece.submission is not None and placement is not None and placement in band.accepted:
+        return Fallback(workpiece.submission, placement, len(workpiece.evidence) - 1)
+    return workpiece.fallback if workpiece.fallback and workpiece.fallback.band in band.accepted else None
+
+
+def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
+    """An acceptance with what the round of its accepted submission went without, and that round's review findings as
+    notes: the stored fallback's round for a restore (a digest cannot tell two rounds apart), else the latest. A
+    restore also carries that round's placement denominator and adversary exhaustion, which its decision did not."""
+    if not isinstance(decision, Accept):
+        return decision
+    shipped = workpiece.fallback.evidence if decision.restore and workpiece.fallback else -1
+    result = workpiece.evidence[shipped] if workpiece.evidence else None
+    review = result.review if result is not None else None
+    if decision.restore and result is not None:
+        decision = replace(decision, reasons=(*decision.reasons, *unscored(result), *exhausted_notes(result)))
+    missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no solve-review ran"),) if review is None else review.missing
+    notes = () if review is None else review.findings
+    why = "of the restored round recorded as notes" if decision.restore else "recorded as notes: no revision round left"
+    why = (f"Solve-review findings {why}",) * bool(notes)
+    return replace(decision, reasons=(*decision.reasons, *why), missing=missing, notes=notes)
+
+
+def author_stopped(workpiece: Workpiece, summary: str) -> Decision:
+    """Owner's ruling (2026-11-13): an author stopping reverts to the stored fallback, or abandons without one."""
+    why = f"author stopped: {summary}"
+    if workpiece.fallback is None:
+        return Abandon((why,))
+    kept = workpiece.fallback
+    restored = f"{why}; restored submission {kept.submission.digest[:12]}"
+    return accepted(Accept(kept.band, (*tagged(kept.band), restored), kept.submission.digest), workpiece)
+
+
+def band_only(decision: Decision) -> bool:
+    """A modification round for difficulty alone: placed, with no review finding to revise (a defect round carries its
+    placement too, and is not one)."""
+    return isinstance(decision, Modify) and decision.placement is not None and not decision.review
 
 
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
-    """Owner's ruling (2026-11-12): placement tags a task and never filters it. An out-of-band task gets one band-only
-    round within the shared budget and is then accepted tagged; a clean revision is placed on its own evidence and a
-    faulted one restores the fallback, named by digest and band."""
+    """Owner's ruling (2026-11-12): placement tags a task and never filters it; live Forge's three decisions, in order.
+
+    A clean revision placed out of its fallback's band is accepted at its own placement, tagged; otherwise an out-of-band
+    task gets one band-only round (``band_only``) within the shared budget and is then accepted tagged. Review findings
+    join a round's modification, or turn its acceptance into one at its placement, while the shared budget has a round
+    left, and are the acceptance's notes after. A faulted revision restores the fallback, named by digest and band.
+    """
     result = workpiece.evidence[-1]
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
@@ -97,22 +157,34 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
+    left, stored, notes = workpiece.round < budget.max_modify_rounds, workpiece.fallback, exhausted_notes(result)
+    review = result.review.findings if result.review is not None else ()
+    placement = decision.placement if isinstance(decision, Modify) and decision.placement in band.accepted else None
+    if isinstance(decision, Modify) and placement is not None:  # a clean round out of band
+        if stored is not None and placement is not stored.band:
+            why = f"Clean revision placed {placement}, not {stored.band}: a placement change is tagged, not reverted"
+        elif any(map(band_only, workpiece.decisions)):
+            why = "The one band-only round is used"
+        elif not left:
+            why = "Shared modification budget exhausted"
+        else:
+            why = ""
+        if why:
+            decision = Accept(placement, (*tagged(placement), why, *decision.findings[1:], *notes))
+    if isinstance(decision, Accept) and review and left:
+        decision = Modify((band_line(result, band)[1],), decision.band)
+        placement = decision.placement
     if not isinstance(decision, Modify):
-        return decision
-    placement = decision.placement if decision.placement in band.accepted else None  # None: a fault or ineligible
-    final = workpiece.fallback is not None or workpiece.round >= budget.max_modify_rounds
+        return accepted(decision, workpiece)
     chosen = fallback_for(workpiece, placement, band)
-    if (placement is not None and not final) or chosen is None:
-        return replace(decision, fallback=None if chosen is None else chosen.submission.digest)
-    notes = exhausted_notes(result)
-    if chosen is not workpiece.fallback:  # the selector's own choice; a digest cannot tell two rounds apart
-        why = (
-            "Clean revision placed on its own evidence" if workpiece.fallback else "Shared modification budget exhausted"
-        )
-        return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings[1:], *notes))
+    if placement is not None or chosen is None:  # a round to revise, or a fault with nothing to restore
+        return replace(decision, fallback=None if chosen is None else chosen.submission.digest, review=review)
     fault = "has a fault" if decision.placement is None else f"placed {decision.placement}"
     why = f"The revision {fault}; restored submission {chosen.submission.digest[:12]}"
-    return Accept(chosen.band, (*tagged(chosen.band), why, *decision.findings, *notes), chosen.submission.digest)
+    label = "Revision fault" if decision.placement is None else "Revision placement"  # a band the policy refuses
+    faults = (f"{label}: {finding}" for finding in decision.findings)
+    restored = Accept(chosen.band, (*tagged(chosen.band), why, *faults), chosen.submission.digest)
+    return accepted(restored, workpiece)
 
 
 def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decision:
@@ -135,7 +207,7 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
-        if CAUSE_DECISIONS[cause] not in (Modify, Reject)
+        if CAUSE_DECISIONS.get(cause) not in (Modify, Reject)
     )
     unavailable += tuple(
         f"{trial.name}: {reason}"
@@ -168,14 +240,8 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
     )
     if findings:
         return Modify(findings)
-    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
-    place = band.place(solved / len(scored))
-    notes = (f"{absent} of {len(result.solver)} solver trials have no score; placed over {len(scored)}",) * bool(absent)
+    place, line = band_line(result, band)
+    notes = unscored(result)
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place, (*notes, *exhausted_notes(result)))
-    finding = f"{solved} of {len(scored)} trials solved: {place}"
-    if place is BandOutcome.TOO_EASY:
-        finding += (
-            ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
-        )
-    return Modify((finding, *notes), placement=place)
+    return Modify((line, *notes), placement=place)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 4; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 7; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,8 +32,12 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 6
-"""Format 5 places a round over its scored solver slots, holds a slot without one, and falls back to an earlier
+JOURNAL_FORMAT = 7
+"""Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
+names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
+Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement
+supersedes, and a `decision_model.read` row, which format-5 readers cannot decode.
+Format 5 places a round over its scored solver slots, holds a slot without one, and falls back to an earlier
 submission named by digest; format 4 hydrated each trial without a detail and restored only a too-easy baseline.
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment

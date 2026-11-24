@@ -15,7 +15,7 @@ import httpx
 import pytest
 from iris.client.client import IrisContext, iris_ctx_scope
 from lib.taskforge.tests.effect_fakes import local_records
-from lib.taskforge.tests.resource_doubles import FakeWeb
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
 from rolloutengine.models import LENGTH_STOP_REASON, GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
@@ -134,7 +134,8 @@ def installed(
     providers = {"author": ScriptedProvider(()), "adversary": ScriptedProvider(()), "solver": solver}
     built = build_resources(policy, providers, {}, FakeWeb({}, {}), decision_model=reader)
     assert built.decision_model is not None
-    built = replace(built, decision_model=replace(built.decision_model, sleep=time.sleep))
+    reviewer = {**built.role_inference, "solve_review": CleanReviewer()}
+    built = replace(built, decision_model=replace(built.decision_model, sleep=time.sleep), role_inference=reviewer)
     install(ctx, built)
     return built
 
