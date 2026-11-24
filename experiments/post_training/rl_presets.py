@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -513,16 +513,29 @@ class Preset:
 
 @dataclass(frozen=True)
 class ControlPin:
+    """Keep every completed, measured run in the cohort and retry only infrastructure failures."""
+
     preset: str
     commit: str
     revision: str
     replicates: int
     retries: tuple[int, ...] = ()
     cluster: str | None = None
+    replicate_indices: tuple[int, ...] = field(default=(), metadata={"fingerprint_omit_value": ()})
 
     def __post_init__(self) -> None:
         if self.retries and (len(self.retries) != self.replicates or any(retry < 0 for retry in self.retries)):
             raise ValueError("control pin retries must give a nonnegative number for each replicate")
+        if self.replicate_indices:
+            if len(self.replicate_indices) != self.replicates or any(index < 0 for index in self.replicate_indices):
+                raise ValueError("control pin must give a nonnegative native index for each replicate")
+            attempts = set(zip(self.replicate_indices, self.retries or (0,) * self.replicates, strict=True))
+            if len(attempts) != self.replicates:
+                raise ValueError("each control pin member must name a distinct run")
+
+    @property
+    def initial_replicates(self) -> int:
+        return max(self.replicate_indices, default=self.replicates - 1) + 1
 
 
 @dataclass(frozen=True)

@@ -73,6 +73,8 @@ presets that measure the same change.
 Read existing answers before launching another run. Controls are named by preset, `commit`
 and revision in `snowball_rl.SNOWBALL.control_pins`; use their configured output paths. Candidate status
 prints its output. Read the configured export root from the native resolved launch to locate answers.
+Keep every completed, measured control run regardless of verdict. Resubmit only after an infrastructure
+failure such as preemption, a node or network error, or a run that ended before any measured update.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries
 its TaskSpec ID, prompt, output, tokens and verification.

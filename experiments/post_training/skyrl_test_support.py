@@ -26,7 +26,14 @@ def with_fixture_control_pins(table: ModelPresets) -> ModelPresets:
     return replace(
         table,
         control_pins={
-            name: replace(pin, revision=table.by_name[name].revision, retries=(), cluster=None)
+            name: replace(
+                pin,
+                revision=table.by_name[name].revision,
+                replicates=pin.initial_replicates,
+                retries=(),
+                cluster=None,
+                replicate_indices=(),
+            )
             for name, pin in table.control_pins.items()
         },
     )

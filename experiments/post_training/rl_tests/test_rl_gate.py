@@ -103,13 +103,20 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypa
             recorded_runs(preset.name, name, speed=100 + index)
         if index < 2:
             recorded_runs(preset.name, name + "-retry1", speed=100 + index, attempt_id=f"replacement-{index}")
-    updated = replace(pin, retries=(1, 1) + (0,) * (pin.replicates - 2))
+        if index == 0:
+            recorded_runs(preset.name, name + "-retry2", speed=100.5, attempt_id="additional-0")
+    updated = replace(
+        pin,
+        replicates=pin.replicates + 2,
+        retries=(1, 1) + (0,) * (pin.replicates - 2) + (0, 2),
+        replicate_indices=(*range(pin.replicates), 0, 0),
+    )
     monkeypatch.setattr(
         snowball_model, "SNOWBALL", replace(table, control_pins={**table.control_pins, pin.preset: updated})
     )
-    report = compare("speed-medium", "--leave-out", "r0")
+    report = compare("speed-medium", "--leave-out", "r5")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
-    assert report["run"]["attempt_ids"] == ["replacement-0"]
+    assert report["run"]["attempt_ids"] == ["additional-0"] and report["control"]["replicates"] == 5
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}

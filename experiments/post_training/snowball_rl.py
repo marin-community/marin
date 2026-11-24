@@ -534,8 +534,23 @@ SNOWBALL = ModelPresets(
             ControlPin("speed-short", "4a4e8f0a81", "2026.11.20.3", 5),
             ControlPin("data-short", "4a4e8f0a81", "2026.11.20.3", 4),
             ControlPin("speed-medium", "4a4e8f0a81", "2026.11.20.3", 4),
-            ControlPin("learning-medium", "e6e6ccd80e", "2026.11.20.4", 4, retries=(2, 0, 0, 0), cluster="cw-rno2a"),
-            ControlPin("speed-long", "98da6db1de", "2026.11.20.3", 4, retries=(0, 0, 0, 1)),
+            ControlPin(
+                "learning-medium",
+                "e6e6ccd80e",
+                "2026.11.20.4",
+                6,
+                retries=(2, 0, 0, 0, 0, 1),
+                cluster="cw-rno2a",
+                replicate_indices=(0, 1, 2, 3, 0, 0),
+            ),
+            ControlPin(
+                "speed-long",
+                "98da6db1de",
+                "2026.11.20.3",
+                5,
+                retries=(0, 0, 0, 1, 0),
+                replicate_indices=(0, 1, 2, 3, 3),
+            ),
         )
     },
 )

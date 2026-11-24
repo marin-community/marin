@@ -871,7 +871,7 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
 
 
 def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidComparison:
-    name, replicas = (pin.preset, pin.replicates) if pin else (preset.control_preset, 4)
+    name, replicas = (pin.preset, pin.initial_replicates) if pin else (preset.control_preset, 4)
     return InvalidComparison(
         f"no control pin for {preset.name} with preset revision {preset.revision}; "
         f"recorded control revision={pin.revision if pin else None}; "
@@ -888,7 +888,8 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
 
 
 def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    name = control_name(pin.preset, pin.commit, index, table=table)
+    native_index = pin.replicate_indices[index] if pin.replicate_indices else index
+    name = control_name(pin.preset, pin.commit, native_index, table=table)
     retry = pin.retries[index] if pin.retries else 0
     return f"{name}-retry{retry}" if retry else name
 
