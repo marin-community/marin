@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <title>Hublot</title>
+  <circle cx="24" cy="24" r="21" fill="#D9AC72" stroke="#F3D2A1" stroke-width="1.5"/>
+  <circle cx="24" cy="24" r="15" fill="#15394F" stroke="#725438" stroke-width="1.5"/>
+  <g fill="#6B4D33">
+    <circle cx="24" cy="6" r="1.35"/>
+    <circle cx="42" cy="24" r="1.35"/>
+    <circle cx="24" cy="42" r="1.35"/>
+    <circle cx="6" cy="24" r="1.35"/>
+  </g>
+  <path d="m13 28 6-6 5 4 10-9" fill="none" stroke="#A2E5E9" stroke-width="2.7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

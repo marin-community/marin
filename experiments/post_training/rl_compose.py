@@ -19,7 +19,6 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -488,6 +487,16 @@ def run_spec(
     """Build the complete default recipe with explicit candidate inputs and settings."""
     model = (resume.model if resume is not None else None) or init or preset.model
     config = _training_config(preset, settings, model)
+    if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
+        workers = config.trajectory_runner.rollout_workers
+        required_cpus = workers.num_workers * workers.cpus_per_worker
+        driver_cpus = preset.recipe.layout.host_cpu
+        if required_cpus > driver_cpus:
+            raise click.BadParameter(
+                f"trajectory_runner.rollout_workers requests {required_cpus} CPUs "
+                f"({workers.num_workers} workers x {workers.cpus_per_worker}); "
+                f"the driver task's Iris CPU request is {driver_cpus}."
+            )
     explicit = override_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
@@ -638,9 +647,7 @@ def run_step(
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
     if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
-    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
-        required_env += (DAYTONA_TARGET_ENV,)
+        required_env += (preset.harbor.daytona_api_key_env,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,

@@ -16,6 +16,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     RewardFile,
@@ -46,7 +47,9 @@ def _task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, .
     )
     grader = ScriptGrader(
         argv=("true",),
-        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image)
+        ),
         reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
     )
     spec = TaskSpec(

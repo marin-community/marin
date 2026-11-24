@@ -4,8 +4,8 @@
 """The IFEval constraint checks, keyed by instruction id such as ``keywords:letter_frequency``.
 
 Each check takes the candidate text and the constraint's params and returns ``(passed, detail)``.
-The detail is a short human-readable string that lands in the reward's ``detail`` field. Checks are
-pure stdlib: this module has to run inside every task image without an extra.
+The detail is a short human-readable string that lands in the reward's ``detail`` field. The harness
+language check uses the optional langdetect package supplied by its grader image; other checks use stdlib.
 
 ``language:response_language`` describes an instruction the model was given rather than a property
 that can be measured exactly, so its check is an approximation, and its docstring says so. The
@@ -35,6 +35,7 @@ from itertools import chain, pairwise
 Check = Callable[[str, dict], tuple[bool, str]]
 
 CONSTRAINTS: dict[str, Check] = {}
+LANGUAGE_DETECTOR_SEED = 0
 
 PARAGRAPH_SEPARATOR = re.compile(r"\n\s*\n+")
 SENTENCE_FINAL = ".!?\u2026"
@@ -960,6 +961,22 @@ def response_language(text: str, params: dict) -> tuple[bool, str]:
     return passed, f"lang={language} non_ascii={non_ascii}"
 
 
+@constraint("harness:response_language")
+def harness_response_language(text: str, params: dict) -> tuple[bool, str]:
+    """Grade harness language instructions with the grader image's seeded detector."""
+    language = params.get("language")
+    if not isinstance(language, str) or not language:
+        return False, "missing language"
+    from langdetect import DetectorFactory, LangDetectException, detect  # noqa: PLC0415
+
+    try:
+        DetectorFactory.seed = LANGUAGE_DETECTOR_SEED
+        detected = detect(text)
+    except LangDetectException:
+        return False, "language detection failed"
+    return detected == language.lower(), f"expected={language.lower()} detected={detected}"
+
+
 # === copy ===================================================================
 
 
@@ -998,3 +1015,99 @@ def two_responses(text: str, params: dict) -> tuple[bool, str]:
     parts = [section.strip() for section in sections if WORD.search(section)]
     passed = len(parts) == 2 and parts[0] != parts[1]
     return passed, f"sections_by_******={len(parts)}"
+
+
+# Open-instruct descriptors with semantics that do not match an IFEval taxonomy check.
+def _open_instruct_relation(actual: int, relation: str, expected: int) -> tuple[bool, str]:
+    if relation == "more than":
+        return actual > expected, f"actual={actual} > {expected}"
+    if relation == "around":
+        tolerance = max(round(expected * 0.1), 1)
+        return abs(actual - expected) <= tolerance, f"actual={actual} around={expected} tolerance={tolerance}"
+    result = compare(actual, relation, expected)
+    return result if result is not None else (False, f"unsupported relation: {relation}")
+
+
+@constraint("open_instruct:keyword_frequency_relation")
+def open_instruct_keyword_frequency_relation(text: str, params: dict) -> tuple[bool, str]:
+    keywords = params.get("keyword_list")
+    expected = params.get("N")
+    relation = params.get("quantifier")
+    if not isinstance(keywords, list) or not keywords or not all(isinstance(word, str) and word for word in keywords):
+        return False, "missing keyword_list"
+    if type(expected) is not int or not isinstance(relation, str):
+        return False, "bad frequency arguments"
+    counts = [count_keyword(text, word) for word in keywords]
+    passed = all(_open_instruct_relation(count, relation, expected)[0] for count in counts)
+    return passed, f"keyword_counts={counts} relation={relation} expected={expected}"
+
+
+@constraint("open_instruct:letter_frequency")
+def open_instruct_letter_frequency(text: str, params: dict) -> tuple[bool, str]:
+    letter = params.get("letter")
+    expected = params.get("N")
+    if not isinstance(letter, str) or len(letter) != 1 or type(expected) is not int:
+        return False, "bad letter frequency arguments"
+    actual = text.count(letter)
+    return actual == expected, f"letter={letter!r} actual={actual} expected={expected}"
+
+
+@constraint("open_instruct:word_constraint")
+def open_instruct_word_constraint(text: str, params: dict) -> tuple[bool, str]:
+    expected = params.get("N")
+    relation = params.get("quantifier")
+    if type(expected) is not int or not isinstance(relation, str):
+        return False, "bad word count arguments"
+    return _open_instruct_relation(len(text.split()), relation, expected)
+
+
+@constraint("open_instruct:sentence_constraint")
+def open_instruct_sentence_constraint(text: str, params: dict) -> tuple[bool, str]:
+    expected = params.get("N")
+    relation = params.get("quantifier")
+    if type(expected) is not int or not isinstance(relation, str):
+        return False, "bad sentence count arguments"
+    actual = len(sentences(text))
+    if relation == "around":
+        return abs(actual - expected) <= 1, f"sentences={actual} around={expected} tolerance=1"
+    return _open_instruct_relation(actual, relation, expected)
+
+
+@constraint("open_instruct:choice")
+def open_instruct_choice(text: str, params: dict) -> tuple[bool, str]:
+    options = params.get("options")
+    if not isinstance(options, list) or not options or not all(isinstance(option, str) and option for option in options):
+        return False, "missing options"
+    passed = any(option in text for option in options)
+    return passed, f"contains_choice={passed}"
+
+
+@constraint("open_instruct:repeat_prompt")
+def open_instruct_repeat_prompt(text: str, params: dict) -> tuple[bool, str]:
+    prompt = params.get("original_prompt")
+    if not isinstance(prompt, str) or not prompt:
+        return False, "missing original_prompt"
+    passed = text.startswith(prompt) and len(text) > len(prompt)
+    return passed, f"repeats_prompt={passed}"
+
+
+@constraint("combination:repeat_prompt")
+def repeat_prompt(text: str, params: dict) -> tuple[bool, str]:
+    """The source request excludes the instruction sentence that precedes it."""
+    prompt = params.get("prompt_to_repeat")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False, "missing prompt_to_repeat"
+    candidate = text.strip().lower()
+    expected = prompt.strip().lower()
+    passed = candidate.startswith(expected) and len(candidate) > len(expected)
+    return passed, f"repeats_prompt={passed}"
+
+
+@constraint("open_instruct:capital_words")
+def open_instruct_capital_words(text: str, params: dict) -> tuple[bool, str]:
+    expected = params.get("N")
+    relation = params.get("quantifier")
+    if type(expected) is not int or not isinstance(relation, str):
+        return False, "bad capital word arguments"
+    actual = len(re.findall(r"\b[A-Z]+\b", text))
+    return _open_instruct_relation(actual, relation, expected)

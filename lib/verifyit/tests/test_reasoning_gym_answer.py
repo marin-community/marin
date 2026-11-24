@@ -58,6 +58,67 @@ def test_wrong_answer_scores_zero(tests_dir, workspace):
     assert (reward.reward, reward.status) == (0.0, Status.SCORED)
 
 
+@pytest.mark.parametrize(
+    ("dataset", "index", "constant_reply"),
+    [
+        ("coin_flip", 0, "0"),
+        ("complex_arithmetic", 0, "NaN"),
+        ("game_of_life_halting", 0, "definitely wrong"),
+        ("game_of_life_halting", 2, "False"),
+        ("propositional_logic", 1, "P \u2228 Q"),
+        ("puzzle24", 0, "1*2*3*4"),
+    ],
+)
+def test_reasoning_gym_constant_reply_scores_zero_and_reference_scores_one(dataset, index, constant_reply):
+    entry = reasoning_gym.create_dataset(dataset, size=3, seed=42)[index]
+    reference = entry["answer"] or entry["metadata"]["example_answer"]
+    assert grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, constant_reply) == 0.0
+    assert grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, reference) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [("1/8192", 1.0), ("0.0001221", 1.0), ("0.00012", 0.0)],
+    ids=["fraction", "four_significant_figures", "two_significant_figures"],
+)
+def test_coin_flip_scores_a_probability_within_a_tenth_of_a_percent(reply, reward):
+    entry = reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0]
+    assert entry["answer"] == "0.0001220703125"
+    assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
+
+
+@pytest.mark.parametrize(("reply", "reward"), [("0.999", 1.0), ("1.001", 0.0)], ids=["below_one", "above_one"])
+def test_coin_flip_scores_no_probability_above_one(reply, reward):
+    entry = reasoning_gym.create_dataset("coin_flip", size=5, seed=42)[4]
+    assert entry["answer"] == "1"
+    assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
+
+
+def test_coin_flip_malformed_reference_is_an_invalid_task():
+    entry = {**reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0], "answer": "not a probability"}
+    with pytest.raises(InvalidTask, match="coin_flip reference probability"):
+        grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, "0")
+
+
+def test_complex_arithmetic_rejects_spaced_nan():
+    entry = reasoning_gym.create_dataset("complex_arithmetic", size=1, seed=42)[0]
+    assert grade_reasoning_gym.score_reasoning_gym_answer("complex_arithmetic", entry, "N a N") == 0.0
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ("4+3+9+8", 1.0),
+        ("4+3+9+8+0", 0.0),
+        ("4*3+9+8", 0.0),
+        ("4+3+9+8.0", 0.0),
+    ],
+)
+def test_puzzle24_requires_exact_entry_numbers_and_exact_value(candidate, expected):
+    entry = reasoning_gym.create_dataset("puzzle24", size=1, seed=42)[0]
+    assert grade_reasoning_gym.score_reasoning_gym_answer("puzzle24", entry, candidate) == expected
+
+
 def test_prose_around_the_answer_is_not_accepted_by_this_dataset(tests_dir, workspace):
     answer(workspace, "The person who savors playing the accordion is Richard.")
     assert grade(tests_dir, workspace).reward == 0.0

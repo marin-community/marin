@@ -172,6 +172,45 @@ def test_launcher_refuses_invalid_driver_settings(
     assert reason in result["reason"]
 
 
+@pytest.mark.parametrize(
+    ("num_workers", "static_preferences", "exit_code"),
+    [(5, False, 4), (4, False, 0), (5, True, 0)],
+    ids=["overbooked", "fits", "static-preferences"],
+)
+def test_plan_checks_pinned_workers_against_driver_cpu_request(
+    selection, preset_table, monkeypatch, num_workers, static_preferences, exit_code
+):
+    client, _ = fake_iris(monkeypatch, "rollout-worker-capacity")
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    settings = (
+        f"trajectory_runner.rollout_workers.num_workers={num_workers}",
+        "trajectory_runner.rollout_workers.cpus_per_worker=8",
+    )
+    if static_preferences:
+        settings += (
+            "environment.env_class=preference_pair",
+            "trainer.evaluation_runner=training",
+            "generator.weight_sync_transport=broadcast",
+            "trainer.rollout_buffer.max_staleness_steps=0",
+        )
+    layout = replace(preset.recipe.layout, host_cpu=32)
+    if static_preferences:
+        layout = replace(
+            layout,
+            workload=replace(
+                layout.workload, plan=replace(layout.workload.plan, colocate_all=True, num_inference_engines=4)
+            ),
+        )
+    config = preset.recipe.config.with_settings(settings)
+    table = preset_table(replace(preset, recipe=replace(preset.recipe, layout=layout, config=config)))
+
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    client.submit.assert_not_called()
+
+
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 

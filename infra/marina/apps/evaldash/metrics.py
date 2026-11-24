@@ -51,7 +51,12 @@ from evalrecords.eval_stats import (
     panel_aggregate,
     select,
 )
-from evalrecords.historical_protocols import comparison_column, compatible_selection, historical_selection
+from evalrecords.historical_protocols import (
+    comparison_column,
+    compatible_selection,
+    harbor_benchmark,
+    historical_selection,
+)
 from evalrecords.metric_selection import PUBLICATION_METRIC_POLICY
 from evalrecords.records import EvalRunRecord, RunStatus
 from rigging.filesystem.step_status import STATUS_SUCCESS
@@ -118,7 +123,7 @@ def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[dict]:
 
 
 def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
-    """Map each eval name to its explicit family or newest Harbor dataset."""
+    """Map each eval name to its explicit family, else the benchmark its newest Harbor dataset ran."""
     explicit: dict[str, tuple[str, str]] = {}
     inferred: dict[str, tuple[str, str]] = {}
     for record in records:
@@ -135,7 +140,7 @@ def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
         if harbor is not None:
             current = inferred.get(record.evaluation.name)
             if current is None or (record.created_at or "") > current[1]:
-                inferred[record.evaluation.name] = (harbor.dataset, record.created_at or "")
+                inferred[record.evaluation.name] = (harbor_benchmark(harbor), record.created_at or "")
     return {
         **{name: family for name, (family, _) in inferred.items()},
         **{name: family for name, (family, _) in explicit.items()},

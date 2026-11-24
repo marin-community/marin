@@ -23,7 +23,13 @@ from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    GraderMachine,
+    NoGrader,
+    ResourceGroups,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -138,7 +144,7 @@ def convert_mixed_graders(row: RawRow, context: ConversionContext) -> TaskSpec |
                 model="fixture-judge",
                 exact_gate=False,
             ),
-            environment=GRADER_ENVIRONMENT,
+            placement=GraderMachine(environment=GRADER_ENVIRONMENT),
         ).grader
     return TaskSpec.model_validate_json(task.model_copy(update={"grader": grader}).model_dump_json())
 

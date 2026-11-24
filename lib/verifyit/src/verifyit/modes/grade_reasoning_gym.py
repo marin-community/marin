@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mode reasoning-gym: score the answer file with the reasoning-gym dataset's own scorer.
+"""Mode reasoning-gym: score with the pinned scorer and targeted repairs.
 
 The task ships the generated entry (its reference answer or null and metadata) as JSON under tests/; the spec
 names the dataset it came from. ``score_answer`` returns a float in [0, 1], which becomes the
@@ -22,6 +22,7 @@ from verifyit.file_ops.read import read_text
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.json_objects import unique_object
 from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.reasoning_gym_scorers import score_reasoning_gym_reply
 from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200
@@ -119,7 +120,7 @@ def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Calla
         except ValueError as error:
             raise InvalidTask("prime_factorization reference answer is malformed") from error
     try:
-        score = score_answer(answer, entry)
+        score = score_reasoning_gym_reply(dataset, answer, entry, score_answer)
     except MALFORMED_REPLY_ERRORS:
         # A broken entry raises the same types and stays an error: the scorer must accept the entry's own
         # answer with a valid reward. An entry without an answer (boxnet, propositional_logic) cannot be
@@ -137,7 +138,7 @@ def _checked_score(dataset: str, score: object) -> float:
 
 
 def score_reasoning_gym_answer(dataset: str, entry: dict, answer: str) -> float:
-    """Score a raw answer, with 0.0 for a reply the dataset's scorer cannot parse."""
+    """Score a raw answer, with 0.0 for a reply the scorer cannot parse."""
     spec = ReasoningGymSpec(dataset=dataset)
     score_answer = _score_answer(dataset, None)
     _validate_entry(spec, entry)

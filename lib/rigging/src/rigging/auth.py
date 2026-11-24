@@ -29,7 +29,6 @@ hook), so the header rides on every RPC shape — unary and streaming alike — 
 both sync and async clients.
 """
 
-import json
 import logging
 import os
 import tempfile
@@ -389,15 +388,6 @@ MARIN_DESKTOP_OAUTH_CLIENT = OAuthClient(
     client_id="748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com",
     client_secret="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",
 )
-
-
-def read_desktop_client(path: str) -> OAuthClient:
-    """Read a Google *desktop* ('installed') OAuth client secret JSON from ``path``."""
-    with open(path) as f:
-        installed = json.load(f).get("installed")
-    if installed is None:
-        raise ValueError(f"{path}: expected a desktop ('installed') OAuth client secret")
-    return OAuthClient(installed["client_id"], installed["client_secret"])
 
 
 def run_iap_desktop_login(
