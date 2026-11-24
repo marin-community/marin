@@ -179,13 +179,14 @@ def test_checkpoint_metadata_restricts_optimizer_classes_to_the_restore_scope(tm
         torch.load(common_file, weights_only=True)
 
     with remote_checkpoint_metadata(str(checkpoint_path), optimizer_classes=(torch.optim.AdamW,)) as read_dir:
+        staged = Path(read_dir) / common_file.name
         if optimizer_class is torch.optim.AdamW:
-            restored = torch.load(Path(read_dir) / "common.pt", weights_only=True)
+            restored = torch.load(staged, weights_only=True)
             assert restored["optimizer"]["defaults"]["cpu_optimizer_cls"] is torch.optim.AdamW
             assert restored["step"] == 22
         else:
             with pytest.raises(pickle.UnpicklingError):
-                torch.load(Path(read_dir) / "common.pt", weights_only=True)
+                torch.load(staged, weights_only=True)
 
     assert common_file.read_bytes() == source_bytes
     with pytest.raises(pickle.UnpicklingError):
