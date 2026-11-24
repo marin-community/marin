@@ -590,17 +590,19 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
+def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path):
     preset = MOCHI.by_name["train-long-3rack"]
     (step,) = snowball.build_experiment(preset, table=MOCHI).runs
     path = tmp_path / "mochi.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
-    producer = mochi_sft_presets["periodic"].model()
-    assert producer.relative_path is not None
-    export = StoragePath(producer.step.path("s3://marin-us-east-02a/marin")) / producer.relative_path
-    assert config["inputs"]["model"]["uri"] == str(export)
+    model = config["inputs"]["model"]
+    assert model["uri"] == (
+        "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1"
+    )
+    assert model["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
+    assert model["tokenizer_revision"] == "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
 
     (source,) = config["inputs"]["validation_data"]
     held_out = recipe.selection_artifact(preset.held_out_tasks)

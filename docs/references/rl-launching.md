@@ -58,8 +58,9 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
   --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
 ```
 
-The Mochi RL presets default to the completed production Mochi SFT export. The export
-supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
+The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
+step-400407 export and the tokenizer pinned by that SFT run. Use `--init NAME@VERSION`
+to start from another published model,
 or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
 `tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
 

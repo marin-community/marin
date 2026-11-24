@@ -526,7 +526,7 @@ class ModelPresets:
     presets: tuple[Preset, ...]
     namespace: str
     control_pins: Mapping[str, ControlPin]
-    needs_completed_default_export: bool = False
+    default_export_marker: str | None = None
 
     def __post_init__(self) -> None:
         names: set[str] = set()

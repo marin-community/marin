@@ -32,7 +32,7 @@ Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
 | Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
 | Snowball `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). | CPU plan only |
 
-Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
+Mochi RL starts from the production SFT step-400407 export and its pinned Hugging Face tokenizer.
 Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
 A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor` evaluates with Harbor cohorts.

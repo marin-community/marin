@@ -8,6 +8,7 @@ from pathlib import Path
 
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
@@ -30,11 +31,13 @@ from experiments.post_training.task_curation.selection import VALIDATION_FILENAM
 
 _MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
-        "grug/hero-sft-fullab-step393k-v2-hf",
-        "2026.11.10",
-        "s3://marin-us-east-02a/marin/grug/hero-sft-fullab-step393k-v2-hf/2026.11.10",
+        "models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407",
+        "2026.11.17",
+        "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
     ),
-    relative_path="hf",
+    tokenizer_uri="marin-community/marin-tokenizer-tools",
+    tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    relative_path="",
 )
 
 _ONE_RACK_PLAN = SkyRLRolePlan(
@@ -247,7 +250,7 @@ MOCHI = ModelPresets(
     ),
     namespace="mochi-rl",
     control_pins={},
-    needs_completed_default_export=True,
+    default_export_marker=COMPLETION_MANIFEST,
 )
 
 
