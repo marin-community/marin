@@ -106,6 +106,7 @@ def run_validation(
     pull_probe=None,
     disk_pool_root: Path | None = None,
     revision_command: tuple[str, ...] = ("git", "rev-parse", "HEAD"),
+    revision: str | None = None,
     feeds: tuple | None = None,
 ) -> dict:
     """Assemble the validation receipt; ``dry_run`` verifies with zero writes.
@@ -114,7 +115,8 @@ def run_validation(
     with the production checkers; ``pull_probe`` defaults to the maintained live
     pull probe per remote backend. Both are injectable so tests pin the contract
     without machines. The releasing checkout must be clean and at the expected
-    revision; ``repo_root`` is the checkout the revision command runs in.
+    revision: ``revision`` states it directly (a materialized job workspace carries
+    no git metadata); otherwise the revision command runs in ``repo_root``.
     """
     alert_feeds = feeds if feeds is not None else (alerts.WATCHDOG_FEED,)
     mode = "dry-run" if dry_run else "write"
@@ -122,7 +124,7 @@ def run_validation(
     try:
         inputs.validate()
         manifest = read_manifest(inputs)
-        revision = subprocess.check_output(revision_command, text=True, cwd=repo_root).strip()
+        revision = revision or subprocess.check_output(revision_command, text=True, cwd=repo_root).strip()
         if revision != inputs.source_revision:
             raise ValueError(f"checkout HEAD {revision} is not the expected release revision {inputs.source_revision}")
         proof: dict = {
@@ -233,16 +235,22 @@ def main() -> None:
         help="Probe ext4 loop/overlay enforcement on this privileged worker; the local checker "
         "records its disk-pool evidence from this pool",
     )
+    parser.add_argument(
+        "--revision",
+        help="The workspace revision, stated directly; a materialized job workspace carries no "
+        "git metadata, so the revision command cannot run there",
+    )
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     document["manifest"] = ArtifactRef(**document["manifest"])
     inputs = ValidationInputs(**document)
-    repo_root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+    repo_root = Path.cwd()
     receipt = run_validation(
         inputs,
         dry_run=args.mode == "dry-run",
         repo_root=repo_root,
         disk_pool_root=args.local_disk_root,
+        revision=args.revision,
     )
     label = "BACKEND-VALIDATION-DRY-RUN" if args.mode == "dry-run" else "BACKEND-VALIDATION-SEALED"
     print(f"{label} {json.dumps(receipt)}", flush=True)
