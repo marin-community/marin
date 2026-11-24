@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.datasets.ifbench import tasks as if
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.datasets.mcp_atlas_easy import tasks as mcp_atlas_easy
 from experiments.post_training.task_curation.datasets.mimo import tasks as mimo
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.openresearcher import recipe as openresearcher
@@ -119,6 +120,7 @@ PENDING_MEASUREMENT_SOURCES = (
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     return [
+        *mcp_atlas_easy.sources(),
         *eval_code.sources(),
         *eval_harness.sources(),
         *eval_instructions.sources(),

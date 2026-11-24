@@ -172,6 +172,7 @@ class SourceOrigin(StrEnum):
     LM_EVAL = "lm-eval"
     MARCUSM117 = "marcusm117"
     MARIN = "Marin"
+    MARIN_COMMUNITY = "marin-community"
     NEMOTRON = "Nemotron"
     OPEN_R1 = "Open-R1"
     OPENAI = "OpenAI"
