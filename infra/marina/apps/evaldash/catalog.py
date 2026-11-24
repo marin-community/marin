@@ -57,6 +57,19 @@ class LaunchRow(TypedDict):
     n_succeeded: int
 
 
+class LaunchMember(TypedDict):
+    run_id: str
+    eval_name: str
+    status: str
+    step_status: str | None
+    created_at: str
+    headline: dict[str, object] | None
+
+
+class LaunchWithMembers(LaunchRow):
+    evals: list[LaunchMember]
+
+
 class ModelCatalogRow(TypedDict):
     model: str
     archived: bool
@@ -120,7 +133,7 @@ class _Run:
         )
 
 
-def _run(record: EvalRunRecord) -> _Run:
+def _indexed_run(record: EvalRunRecord) -> _Run:
     search_text = "\0".join(
         (
             record.run_id,
@@ -225,7 +238,7 @@ class RunCatalog:
 
     def __init__(self, records: list[EvalRunRecord]) -> None:
         self._runs = [
-            _run(record)
+            _indexed_run(record)
             for record in sorted(records, key=lambda record: (record.created_at, record.run_id), reverse=True)
         ]
         by_group: dict[str, list[_Run]] = {}
@@ -237,6 +250,7 @@ class RunCatalog:
         self._launches = sorted(self._by_group.values(), key=_launch_order, reverse=True)
 
     def run_page(self, filters: CatalogFilters, offset: int, limit: int) -> tuple[list[EvalRunRecord], int]:
+        """Return records on the requested page and the total matches before pagination."""
         if filters.group is None:
             candidates = self._runs
         else:

@@ -13,6 +13,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatInterval, formatScore, formatTimestamp, isPercentMetric } from '@/utils/formatting'
+import { lastPageIndex } from '@/utils/pagination'
 import { scoreTint } from '@/utils/score'
 import { UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
@@ -387,8 +388,12 @@ const pageRows = computed(() => rows.value.slice(modelPage.value * MODEL_PAGE_SI
 const pageColumns = computed(() => columns.value.slice(benchmarkPage.value * BENCHMARK_PAGE_SIZE, (benchmarkPage.value + 1) * BENCHMARK_PAGE_SIZE))
 watch([query, sortKey, sortDirection], () => { modelPage.value = 0 })
 watch(selection, () => { benchmarkPage.value = 0 })
-watch(() => rows.value.length, count => { modelPage.value = Math.min(modelPage.value, Math.max(0, Math.ceil(count / MODEL_PAGE_SIZE) - 1)) })
-watch(() => columns.value.length, count => { benchmarkPage.value = Math.min(benchmarkPage.value, Math.max(0, Math.ceil(count / BENCHMARK_PAGE_SIZE) - 1)) })
+watch(() => rows.value.length, (count) => {
+  modelPage.value = Math.min(modelPage.value, lastPageIndex(count, MODEL_PAGE_SIZE))
+})
+watch(() => columns.value.length, (count) => {
+  benchmarkPage.value = Math.min(benchmarkPage.value, lastPageIndex(count, BENCHMARK_PAGE_SIZE))
+})
 function jumpToFamily(family: string) {
   const index = columns.value.findIndex(column => column.family === family)
   if (index >= 0) benchmarkPage.value = Math.floor(index / BENCHMARK_PAGE_SIZE)

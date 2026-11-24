@@ -73,12 +73,22 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import playground_reports, review, samples
-from .catalog import CatalogFilters, CatalogPage, LaunchRow, ModelCatalogRow, RunCatalog, RunRow
+from .catalog import (
+    CatalogFilters,
+    CatalogPage,
+    LaunchMember,
+    LaunchRow,
+    LaunchWithMembers,
+    ModelCatalogRow,
+    RunCatalog,
+    RunRow,
+)
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
     RUN_FACETS,
     ComparisonModels,
+    PanelMetadata,
     ScoredRecords,
     build_comparison,
     build_meta,
@@ -412,17 +422,17 @@ class _RecordSnapshot:
         self.records = records
         self.by_id = {record.run_id: record for record in records}
         self.catalog = RunCatalog(records)
-        self._metadata: dict | None = None
+        self._metadata: PanelMetadata | None = None
         self._metadata_lock = threading.Lock()
         self._scored: ScoredRecords | None = None
         self._scored_lock = threading.Lock()
 
-    def meta(self) -> dict:
+    def meta(self) -> PanelMetadata:
         # Panel metadata scans scores. Build it only for callers of /meta.
         with self._metadata_lock:
             if self._metadata is None:
                 self._metadata = build_meta(self.records)
-            return dict(self._metadata)
+            return self._metadata.copy()
 
     def scored(self) -> ScoredRecords:
         with self._scored_lock:
@@ -496,7 +506,7 @@ class RecordStore:
         rows = [launch.row() for launch in launches[offset : offset + limit]]
         return CatalogPage(rows, len(launches), limit)
 
-    def launches_with_members(self, filters: CatalogFilters, limit: int) -> list[dict]:
+    def launches_with_members(self, filters: CatalogFilters, limit: int) -> list[LaunchWithMembers]:
         """Include eval members and their headline scores for the array-based groups API."""
         launches = self._snapshot().catalog.matching_launches(filters)
         return [
@@ -538,16 +548,16 @@ class RecordStore:
         snapshot = self._snapshot()
         return build_comparison(snapshot.records, request, models, scored=snapshot.scored())
 
-    def meta(self) -> dict:
+    def meta(self) -> PanelMetadata:
         metadata = self._snapshot().meta()
         metadata["archived_models"] = sorted(self.archived_models())
         return metadata
 
     def history(self, model: str, task: str) -> list[dict]:
-        """Every run's headline score for one ``(model, eval)`` over time, oldest first.
+        """Return recorded scores for one model and task, oldest first.
 
-        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
-        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
+        A task can be a scored benchmark setting or a raw evaluation name. A task without a score
+        for this model returns an empty list.
         """
         snapshot = self._snapshot()
         scored = snapshot.scored().history(model, task)
@@ -1061,7 +1071,7 @@ def _run_headline(record: EvalRunRecord) -> dict | None:
     return record_headline(record)
 
 
-def _group_member(record: EvalRunRecord) -> dict:
+def _group_member(record: EvalRunRecord) -> LaunchMember:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
     return {
         "run_id": record.run_id,
@@ -1103,7 +1113,7 @@ def _ingestor_and_loop(
     return local_ingestor, local_ingestor.run_loop
 
 
-def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> APIRouter:
+def _catalog_router(store: RecordStore) -> APIRouter:
     router = APIRouter()
 
     @router.get("/catalog")
@@ -1139,6 +1149,12 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=limit,
         )
         return JSONResponse(asdict(page))
+
+    return router
+
+
+def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> APIRouter:
+    router = APIRouter()
 
     @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:
@@ -1501,6 +1517,7 @@ def build_api(
     """
     ingestor, local_loop = _ingestor_and_loop(store, config)
     api = FastAPI(title="evaldash", docs_url=None, redoc_url=None, openapi_url=None)
+    api.include_router(_catalog_router(store))
     api.include_router(_run_router(store, gateway, config))
     api.include_router(_analysis_router(store))
     api.include_router(_control_router(store, ingestor, trigger_ingest))

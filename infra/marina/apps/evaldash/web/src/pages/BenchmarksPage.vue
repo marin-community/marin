@@ -6,10 +6,11 @@ import CohortNotice from '@/components/shared/CohortNotice.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { isSmokeEval, MAX_COMPARE } from '@/constants'
+import { COMPARISON_MODELS_ENDPOINT, isSmokeEval, MAX_COMPARE } from '@/constants'
 import type { Meta, Panel } from '@/types/api'
 import { formatInterval, formatScore } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, scoredItemsLabel } from '@/utils/panel'
+import { lastPageIndex } from '@/utils/pagination'
 import { compareCells } from '@/utils/ranking'
 
 const route = useRoute()
@@ -41,7 +42,7 @@ function toggleSuite(name: string) {
 const selected = ref<string[]>([])
 const params = computed(() => new URLSearchParams({ benchmarks: benchmark.value, cohort: cohort.value }))
 const { data, error, loading, refresh } = useApi<Panel>(() => 'api/panel?' + params.value)
-const choices = useApi<Pick<Meta, 'models'>>(() => 'api/comparison-models?' + params.value)
+const choices = useApi<Pick<Meta, 'models'>>(() => `${COMPARISON_MODELS_ENDPOINT}?${params.value}`)
 const eligibleModels = computed(() => new Set(choices.data.value?.models ?? []))
 const ready = computed(() => options.value.includes(benchmark.value))
 function loadBenchmark() {
@@ -79,7 +80,7 @@ const matching = computed(() => {
 const visible = computed(() => matching.value.slice(page.value * pageSize, (page.value + 1) * pageSize))
 watch([benchmark, cohort, modelFilter], () => { page.value = 0 })
 watch(() => matching.value.length, (length) => {
-  page.value = Math.min(page.value, Math.max(0, Math.ceil(length / pageSize) - 1))
+  page.value = Math.min(page.value, lastPageIndex(length, pageSize))
 })
 const gaps = computed(() => (data.value?.rows ?? [])
   .flatMap(row => {

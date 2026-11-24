@@ -54,7 +54,7 @@ const dateGroups = computed(() => {
       row,
       description: row.description?.trim() ?? '',
       time: valid ? timeFormat.format(date) : '',
-      membership: runCount(row),
+      membership: runCountLabel(row),
     }
     const items = groups.get(day)
     if (items) items.push(entry)
@@ -66,7 +66,7 @@ const dateGroups = computed(() => {
   })
 })
 
-function runCount(row: LaunchRow) {
+function runCountLabel(row: LaunchRow): string {
   const count = numberFormat.format(row.n_evals)
   if (row.status === MIXED_LAUNCH_STATUS) return `${numberFormat.format(row.n_succeeded)} of ${count} succeeded`
   return `${count} ${row.n_evals === 1 ? 'run' : 'runs'}`

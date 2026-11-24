@@ -8,6 +8,7 @@ import { useApi } from '@/composables/useApi'
 import { useCatalogPage, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { MIXED_LAUNCH_STATUS, type CatalogFacets, type LaunchRow, type RunRow } from '@/types/api'
+import { formatPageRange } from '@/utils/pagination'
 
 const FACETS = [
   { key: 'model', label: 'Model', searchable: true },
@@ -112,22 +113,17 @@ onViewRefresh(() => {
   if (filtersOpen.value && !facetsLoading.value) void refreshFacets()
 })
 
-const total = computed(() => catalog.value?.total ?? 0)
 const launchRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is LaunchRow => !('run_id' in row)),
 )
 const runRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is RunRow => 'run_id' in row),
 )
-const countFormat = new Intl.NumberFormat()
 const resultLabel = computed(() => {
   if (!catalog.value) return error.value ? '' : `Loading ${pluralUnit.value}…`
-  const noun = total.value === 1 ? unit.value : pluralUnit.value
-  const count = countFormat.format(total.value)
-  if (catalog.value.rows.length === 0) return `${count} ${noun}`
-  const start = countFormat.format(offset.value + 1)
-  const end = countFormat.format(offset.value + catalog.value.rows.length)
-  return `${start}–${end} of ${count} ${noun}`
+  const { total, rows } = catalog.value
+  const noun = total === 1 ? unit.value : pluralUnit.value
+  return `${formatPageRange(offset.value, rows.length, total)} ${noun}`
 })
 </script>
 

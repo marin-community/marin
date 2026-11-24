@@ -7,21 +7,28 @@ import { useCatalogPage, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import type { ModelCatalogRow } from '@/types/api'
 import { formatTimestamp } from '@/utils/formatting'
+import { formatPageRange } from '@/utils/pagination'
 import { ALL_COHORTS, UNVERSIONED_COHORT } from '@/utils/panel'
 
+const ARCHIVE_FILTER = { key: 'include_archived', enabled: '1' }
 const numberFormat = new Intl.NumberFormat()
 
 const { queryValue, offset, query, search, submitSearch, pushQuery, changePage } = useCatalogQuery()
 
 const cohort = computed(() => queryValue('cohort'))
 const cohortLabel = computed(() => cohort.value === UNVERSIONED_COHORT ? 'Unversioned' : cohort.value)
-const showArchived = computed(() => queryValue('include_archived') === '1')
+const showArchived = computed({
+  get: () => queryValue(ARCHIVE_FILTER.key) === ARCHIVE_FILTER.enabled,
+  set: (checked: boolean) => {
+    void pushQuery({ [ARCHIVE_FILTER.key]: checked ? ARCHIVE_FILTER.enabled : '', offset: '' })
+  },
+})
 
 const catalogPath = computed(() => {
   const params = new URLSearchParams()
   if (cohort.value) params.set('cohort', cohort.value)
   if (query.value) params.set('q', query.value)
-  if (showArchived.value) params.set('include_archived', '1')
+  if (showArchived.value) params.set(ARCHIVE_FILTER.key, ARCHIVE_FILTER.enabled)
   params.set('offset', String(offset.value))
   return `api/catalog/models?${params}`
 })
@@ -31,9 +38,8 @@ onViewRefresh(refresh)
 const resultLabel = computed(() => {
   if (!data.value) return error.value ? '' : 'Loading models…'
   if (!data.value.rows.length) return 'No models match.'
-  const start = numberFormat.format(offset.value + 1)
-  const end = numberFormat.format(offset.value + data.value.rows.length)
-  return `${start}–${end} of ${numberFormat.format(data.value.total)} ${data.value.total === 1 ? 'model' : 'models'}`
+  const { total, rows } = data.value
+  return `${formatPageRange(offset.value, rows.length, total)} ${total === 1 ? 'model' : 'models'}`
 })
 </script>
 
@@ -54,11 +60,7 @@ const resultLabel = computed(() => {
           />
         </form>
         <label class="archive-toggle">
-          <input
-            :checked="showArchived"
-            type="checkbox"
-            @change="pushQuery({ include_archived: ($event.target as HTMLInputElement).checked ? '1' : '', offset: '' })"
-          />
+          <input v-model="showArchived" type="checkbox" />
           Show archived
         </label>
         <button

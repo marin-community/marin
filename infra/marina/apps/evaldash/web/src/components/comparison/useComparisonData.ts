@@ -1,13 +1,13 @@
 import { computed, watch, type ComputedRef } from 'vue'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { MAX_COMPARE } from '@/constants'
+import { COMPARISON_MODELS_ENDPOINT, MAX_COMPARE } from '@/constants'
 import type { Comparison, Meta } from '@/types/api'
 
 type ComparisonModels = Pick<Meta, 'models' | 'default_cohort' | 'verified_cohorts' | 'versions'>
 
 export function useComparisonData(selection: ComputedRef<string>, requested: ComputedRef<string[]>) {
-  const choices = useApi<ComparisonModels>(() => `api/comparison-models?${selection.value}`)
+  const choices = useApi<ComparisonModels>(() => `${COMPARISON_MODELS_ENDPOINT}?${selection.value}`)
   const available = computed(() => choices.data.value?.models ?? [])
   const eligible = computed(() => new Set(available.value))
   const selected = computed(() => requested.value.filter((model) => eligible.value.has(model)).slice(0, MAX_COMPARE))

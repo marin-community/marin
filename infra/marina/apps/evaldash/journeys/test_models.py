@@ -18,6 +18,14 @@ class ComparisonModelChoices(TypedDict):
     versions: list[str]
 
 
+def _clear_expected_503(journey: Journey, path_prefix: str) -> None:
+    expected = (
+        f"503 {path_prefix}",
+        "console Failed to load resource: the server responded with a status of 503",
+    )
+    journey.refusals[:] = [failure for failure in journey.refusals if not failure.startswith(expected)]
+
+
 def test_compare_picker_keeps_configurations_distinct_and_limits_selection(journey: Journey) -> None:
     path = f"{COMPARE_MODELS_API}?cohort=2026.07.20&benchmarks=gsm8k"
     model_catalog = cast(ComparisonModelChoices, journey.api(path))
@@ -68,12 +76,7 @@ def test_model_index_recovers_from_a_catalog_failure(journey: Journey) -> None:
     page.get_by_role("button", name="Retry", exact=True).click()
     expect(page.get_by_role("link", name="snowball", exact=True)).to_be_visible()
     expect(page.get_by_role("alert")).to_have_count(0)
-
-    expected = (
-        f"503 {MODELS_API}?cohort=2026.07.20",
-        "console Failed to load resource: the server responded with a status of 503",
-    )
-    journey.refusals[:] = [failure for failure in journey.refusals if not failure.startswith(expected)]
+    _clear_expected_503(journey, f"{MODELS_API}?cohort=2026.07.20")
 
 
 def test_compare_retries_model_choices_with_the_editor_closed(journey: Journey) -> None:
@@ -94,9 +97,4 @@ def test_compare_retries_model_choices_with_the_editor_closed(journey: Journey) 
     expect(controls).to_be_hidden()
     editor.click()
     expect(controls.get_by_role("button", name="Remove snowball", exact=True)).to_be_visible()
-
-    expected = (
-        f"503 {COMPARE_MODELS_API}?cohort=2026.07.20",
-        "console Failed to load resource: the server responded with a status of 503",
-    )
-    journey.refusals[:] = [failure for failure in journey.refusals if not failure.startswith(expected)]
+    _clear_expected_503(journey, f"{COMPARE_MODELS_API}?cohort=2026.07.20")

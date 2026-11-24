@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
 from functools import cached_property
 from threading import Lock
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from evalrecords.eval_measurements import (
     MetricRow,
@@ -106,7 +106,12 @@ RUN_FACETS: dict[str, str] = {
 }
 
 
-def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[dict]:
+class EvalSuite(TypedDict):
+    suite: str
+    evals: list[str]
+
+
+def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[EvalSuite]:
     """Group the eval names present into ordered presentation suites for the column tree.
 
     Each suite lists only the evals actually seen; any eval outside :data:`EVAL_SUITES` lands in a
@@ -115,7 +120,7 @@ def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[dict]:
     assigned = set()
     for names in EVAL_SUITES.values():
         assigned.update(name for name in evals if name in names or families.get(name) in names)
-    result = [
+    result: list[EvalSuite] = [
         {"suite": suite, "evals": present}
         for suite, names in EVAL_SUITES.items()
         if (present := sorted(name for name in evals if name in names or families.get(name) in names))
@@ -433,6 +438,26 @@ class ComparisonModels(CohortOptions):
     models: list[str]
 
 
+class BenchmarkFamily(TypedDict):
+    family: str
+    variants: list[str]
+
+
+class PanelMetadata(CohortOptions):
+    models: list[str]
+    run_facets: dict[str, list[str]]
+    metric_policy: str
+    evals: list[str]
+    suites: list[EvalSuite]
+    families: list[BenchmarkFamily]
+    users: list[str]
+    statuses: list[str]
+    facets: dict[str, list[str]]
+    archived_models: list[str]
+    current_user: NotRequired[str | None]
+    store: NotRequired[str]
+
+
 class ScoredRecords:
     """Select benchmark scores and read score history for one record snapshot."""
 
@@ -475,6 +500,11 @@ class ScoredRecords:
             return selected
 
     def history(self, model: str, benchmark: str) -> list[dict] | None:
+        """Return history for a scored column, oldest first.
+
+        Return None if the snapshot has no measurements for the benchmark. An empty list means the
+        benchmark has measurements, but this model has no scores admitted to its history.
+        """
         measurements = [item for item in self._measurements if item.benchmark == benchmark]
         if not measurements:
             return None
@@ -661,7 +691,7 @@ def _cohort_options(eligible: list[EvalRunRecord]) -> CohortOptions:
     return {"default_cohort": ALL_COHORTS, "verified_cohorts": list(POLICIES), "versions": versions}
 
 
-def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
+def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> PanelMetadata:
     """Return panel filter metadata and all known variants for each family."""
     run_facets = build_run_facets(records, (r.status.value for r in records))
     records = _panel_records(records)
