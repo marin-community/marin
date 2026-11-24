@@ -25,7 +25,8 @@ from taskcompendium.models import (
 from taskcompendium.runtime.shell import resolve_shell_tool
 from taskcompendium.submission import require_submission_compatibility
 from verifyit.grade import InvalidTask
-from verifyit.modes.grade_judge import JudgeConnection, validate_judge_spec
+from verifyit.judge_contract import validate_judge_spec
+from verifyit.modes.grade_judge import JudgeConnection
 
 from taskforge.model.controls import Candidate
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
