@@ -307,40 +307,45 @@ class InsufficientOverlap(InvalidComparison):
 
 def _require_shared_overlap(
     name: str, shared: set[str], control_labels: Sequence[Mapping[str, TaskStrata]]
-) -> Invariant:
-    minimum = 1.0
-    failure = None
+) -> tuple[Invariant, ...]:
+    total = max(map(len, control_labels))
+    accepted = len(shared)
+    required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * total))
+    fraction = accepted / total if total else 0.0
+    coverage = (
+        Invariant(
+            name=f"{name}/shared_tasks", value=accepted, limit=required, comparator=">=", holds=accepted >= required
+        ),
+        Invariant(
+            name=f"{name}/shared_task_fraction",
+            value=fraction,
+            limit=MIN_SHARED_TASK_FRACTION,
+            comparator=">=",
+            holds=accepted >= required,
+        ),
+    )
+    refresh = "Request fresh controls with /rl-controls."
+    if accepted < required:
+        raise InsufficientOverlap(
+            f"{name}: {accepted} of {total} control tasks shared; minimum {required}. {refresh}", coverage
+        )
     for labels in control_labels:
         families: dict[str, set[str]] = {}
         for digest, strata in labels.items():
             families.setdefault(strata.family, set()).add(digest)
-        for label, total in [
-            (name, set(labels)),
-            *((f"{name}/{FAMILY_SLICE}/{key}", ids) for key, ids in families.items()),
-        ]:
-            accepted = len(shared & total)
-            required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * len(total)))
-            fraction = accepted / len(total) if total else 0.0
-            if accepted < required and failure is None:
-                failure = (label, accepted, len(total), required, fraction)
-            if label == name:
-                minimum = min(minimum, fraction)
-    overall = Invariant(
-        name=f"{name}/shared_tasks",
-        value=minimum,
-        limit=MIN_SHARED_TASK_FRACTION,
-        comparator=">=",
-        holds=minimum >= MIN_SHARED_TASK_FRACTION,
-    )
-    if failure is not None:
-        label, accepted, total, required, fraction = failure
-        coverage = (overall,)
-        if label != name:
-            coverage += (
-                overall.model_copy(update={"name": f"{label}/shared_tasks", "value": fraction, "holds": False}),
-            )
-        raise InsufficientOverlap(f"{label}: {accepted} of {total} control tasks shared; minimum {required}", coverage)
-    return overall
+        for family, members in families.items():
+            accepted = len(shared & members)
+            required = math.ceil(MIN_SHARED_TASK_FRACTION * len(members))
+            if accepted < required:
+                label = f"{name}/{FAMILY_SLICE}/{family}"
+                fact = Invariant(
+                    name=f"{label}/shared_tasks", value=accepted, limit=required, comparator=">=", holds=False
+                )
+                raise InsufficientOverlap(
+                    f"{label}: {accepted} of {len(members)} control tasks shared; minimum {required}. {refresh}",
+                    (*coverage, fact),
+                )
+    return coverage
 
 
 def _unshared_score(
@@ -387,14 +392,14 @@ def _align_evaluation(
     labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
     sets = [set(tasks) for tasks in labels]
     shared = set.intersection(*sets)
-    coverage = (_require_shared_overlap(name, shared, labels[n_runs:]),)
+    coverage = _require_shared_overlap(name, shared, labels[n_runs:])
     gain = shared.copy()
     if evaluation.at_start:
         for member in cohort:
             gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
         if gain != shared:
             try:
-                coverage += (_require_shared_overlap(name + "/gain", gain, labels[n_runs:]),)
+                coverage += _require_shared_overlap(name + "/gain", gain, labels[n_runs:])
             except InsufficientOverlap as error:
                 raise InsufficientOverlap(str(error), coverage + error.coverage) from error
     baseline = set.union(*sets[n_runs:])

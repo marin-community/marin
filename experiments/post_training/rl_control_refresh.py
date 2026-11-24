@@ -24,6 +24,8 @@ from experiments.post_training.rl_measurements import RunInputs, read_recorded_l
 from experiments.post_training.rl_presets import ControlPin, ModelPresets, Preset
 from experiments.post_training.snowball_rl import SNOWBALL
 
+SNOWBALL_PRESETS_PATH = "experiments/post_training/snowball_rl.py"
+
 
 @dataclass(frozen=True)
 class ControlRefresh:
@@ -145,7 +147,7 @@ def _write_pins(path: Path, table: ModelPresets) -> None:
 
 
 def _ensure_pin_branch(table: ModelPresets, branch: str, title: str, published: str | None) -> None:
-    path = Path("experiments/post_training/snowball_rl.py")
+    path = Path(SNOWBALL_PRESETS_PATH)
     _write_pins(path, table)
     subprocess.run(["uvx", "black@25.9.0", str(path)], check=True)
     if published is None:
@@ -229,11 +231,12 @@ def _remote_pin_head(branch: str) -> str | None:
 def _verify_pin_base(source: str) -> None:
     subprocess.run(["git", "fetch", "--no-tags", "origin", "main"], check=True)
     inputs = (
-        "experiments/post_training/snowball_rl.py",
+        SNOWBALL_PRESETS_PATH,
         "experiments/post_training/rl.py",
         "experiments/post_training/rl_presets.py",
         "experiments/post_training/rl_compose.py",
         "experiments/data.lock",
+        "experiments/post_training/task_curation",
         "lib/marin/src/marin/rl",
         "lib/skyrlrecipe",
         "vendor/skyrl",

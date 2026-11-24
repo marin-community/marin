@@ -588,8 +588,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     [link] = run(gate.control_link_step(fresh_preset, fresh_pin, pin, table=fresh_table))
     saved = gate.read_gate_report(link.path)
     assert saved is not None and saved.verdict == "pass", link.reason
+    assert saved.run.attempt_ids == ("fresh-0", "fresh-1")
     assert saved.control.held_out_tasks == old_binding and saved.run.held_out_tasks == new_binding
     assert "skyrl.trainer.policy.optimizer_config.lr" in saved.run.config_changes
+    assert any(row.metric == "eval_lite/aai_category/format/mean" for row in saved.comparisons)
     attached = publication.publish_runs(
         list(map(str, fresh_roots)), fresh_preset, table=fresh_table, gate_path=link.path, service_url="http://localhost"
     )

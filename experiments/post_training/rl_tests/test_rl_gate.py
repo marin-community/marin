@@ -939,9 +939,14 @@ def test_learning_gate_scores_shared_evaluation(
             receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
     report = compare(preset.name, "--candidate", name)
     facts = {fact["name"]: fact for fact in report["invariants"]}
-    assert facts["eval_lite/shared_tasks"]["value"] == shared / count
+    assert facts["eval_lite/shared_tasks"]["value"] == shared
+    assert facts["eval_lite/shared_task_fraction"]["value"] == shared / count
     if reason is not None:
         assert report["verdict"] == "invalid" and reason in report["reason"], report
+        assert "/rl-controls" in report["reason"]
+        if case == "missing-initial":
+            assert facts["eval_lite/shared_tasks"]["holds"]
+            assert not facts["eval_lite/gain/shared_tasks"]["holds"]
         return
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert report["control"]["held_out_tasks"] == old_binding
@@ -957,6 +962,8 @@ def test_learning_gate_scores_shared_evaluation(
         assert "eval_lite/unshared/mean" not in results
         assert "eval_lite/family/small/mean" not in results
         assert results["eval_lite/family/large/mean"]["tasks"] == 20
+        assert results["eval_lite/family/large/mean/initial"]["control"] == pytest.approx(0.31)
+        assert results["eval_lite/family/large/mean/gain"]["control"] == pytest.approx(0.18525)
     gain = "eval_lite/family_mean/gain_per_gpu_hour"
     if extra:
         assert results[gain]["run"] is results[gain]["control"] is None

@@ -73,11 +73,20 @@ def test_refresh_dry_run_uses_the_requested_merge_and_plans_only_stale_cohorts(
 
 def test_comment_requests_wait_for_main_and_require_the_allowlist(monkeypatch):
     repository = "marin-community/marin"
-    request_comment = {"body": "/rl-controls", "user": {"login": "member"}}
+    request_comment = {
+        "body": "/rl-controls",
+        "user": {"login": "member"},
+        "created_at": "2026-11-24T10:00:00Z",
+        "updated_at": "2026-11-24T10:00:00Z",
+    }
     event = {"issue": {"number": 37, "pull_request": {}}, "comment": request_comment}
     pull = {"number": 37, "base": {"ref": "main", "repo": {"full_name": repository}}, "merged": False}
 
-    comments = [dict(request_comment, body="/rl-controls "), dict(request_comment, user={"login": "stranger"})]
+    comments = [
+        dict(request_comment, body="/rl-controls "),
+        dict(request_comment, user={"login": "stranger"}),
+        dict(request_comment, updated_at="2026-11-24T10:10:00Z"),
+    ]
 
     def github(endpoint, *flags):
         return [comments, authorized_page] if flags else pull
@@ -153,13 +162,13 @@ def test_live_refresh_requires_published_links_and_current_main_before_opening_p
     refresh.main(args)
     assert submissions == [["gh", "pr", "comment"]] and not drafts
 
-    for name, value in (
-        ("RL_CONTROLS_MIN_OVERLAP", str(refresh.rl_gate.MIN_SHARED_TASK_FRACTION)),
-        ("TOGETHER_API_KEY", "fixture"),
-        ("WANDB_API_KEY", "fixture"),
-    ):
-        monkeypatch.setenv(name, value)
     plan.append(item)
+    monkeypatch.setenv("TOGETHER_API_KEY", "fixture")
+    monkeypatch.setenv("WANDB_API_KEY", "fixture")
+    monkeypatch.delenv("RL_CONTROLS_MIN_OVERLAP", raising=False)
+    with pytest.raises(ValueError, match="approval of the current gate overlap threshold"):
+        refresh.main(args)
+    monkeypatch.setenv("RL_CONTROLS_MIN_OVERLAP", str(refresh.rl_gate.MIN_SHARED_TASK_FRACTION))
 
     publication_errors.append("temporary service failure")
     with pytest.raises(RuntimeError, match="temporary service failure"):
