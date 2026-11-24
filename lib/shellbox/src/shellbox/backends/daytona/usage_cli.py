@@ -15,7 +15,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import ACCOUNT_KEY_ENVS, DEFAULT_DAYTONA_API_URL, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
     DEFAULT_SANDBOX_CLASS,
@@ -29,13 +29,6 @@ from shellbox.backends.daytona.usage import (
     region_for_launch,
     region_resource_capacities,
     usage_report,
-)
-
-# The accounts use dedicated keys, not the SDK's ambient DAYTONA_API_KEY.
-ALL_ACCOUNTS: tuple[tuple[str, str], ...] = (
-    ("eval", "DAYTONA_EVAL_API_KEY"),
-    ("rl", "DAYTONA_RL_API_KEY"),
-    ("data", "DAYTONA_DATA_API_KEY"),
 )
 
 
@@ -127,7 +120,7 @@ async def _run(arguments: argparse.Namespace) -> None:
     headroom = DEFAULT_HEADROOM if arguments.headroom is None else arguments.headroom
     if arguments.all:
         reports: dict[str, Any] = {}
-        for account, name in ALL_ACCOUNTS:
+        for account, name in ACCOUNT_KEY_ENVS.items():
             api_key = os.environ.get(name)
             if not api_key:
                 if arguments.json:

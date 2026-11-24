@@ -5,9 +5,27 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 DEFAULT_DAYTONA_API_URL = "https://app.daytona.io/api"
+
+
+class Account(StrEnum):
+    EVAL = "eval"
+    RL = "rl"
+    DATA = "data"
+
+
+# Account selection must not use the SDK's ambient DAYTONA_API_KEY.
+ACCOUNT_KEY_ENVS = MappingProxyType(
+    {
+        Account.EVAL: "DAYTONA_EVAL_API_KEY",
+        Account.RL: "DAYTONA_RL_API_KEY",
+        Account.DATA: "DAYTONA_DATA_API_KEY",
+    }
+)
 
 
 @dataclass(frozen=True)
