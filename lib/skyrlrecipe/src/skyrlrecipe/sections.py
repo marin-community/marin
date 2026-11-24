@@ -587,6 +587,7 @@ class Trainer(Section):
     tracker_commit_each_step: bool = field(True)
     dump_data_batch: bool = field(False)
     dump_eval_results: bool = field(True)
+    dump_grader_report: bool = field(False)
     log_level: str = field("INFO")
     rope_scaling: OpenMap | None = field(None)
     rope_theta: int | float | None = field(None)

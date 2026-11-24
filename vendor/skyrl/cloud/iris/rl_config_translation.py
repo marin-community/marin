@@ -283,6 +283,8 @@ def _skyrl_config_sections(
         trainer["export_path"] = exp_args["export_root"]
     elif not trainer.get("export_path") and experiments_dir and job_name:
         trainer["export_path"] = join_resource_path(experiments_dir, job_name, "exports")
+    if exp_args.get("grader_report_dir"):
+        trainer["grader_report_dir"] = exp_args["grader_report_dir"]
     if exp_args.get("checkpoint_root"):
         trainer["ckpt_path"] = exp_args["checkpoint_root"]
     elif not trainer.get("ckpt_path") and experiments_dir and job_name:

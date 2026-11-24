@@ -579,6 +579,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 raise InvalidComparison(f"native resume binding differs from declared inputs: skyrl.runtime.{field}")
     if not runtime:
         config["skyrl"].pop("runtime", None)
+    # Grader reports are attempt diagnostics, like other launch-output destinations.
+    trainer = config["skyrl"]["trainer"]
+    trainer.pop("grader_report_dir", None)
+    trainer.pop("dump_grader_report", None)
     for section in ("trainer", "checkpoint_export"):
         export = config["skyrl"].get(section, {})
         if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):

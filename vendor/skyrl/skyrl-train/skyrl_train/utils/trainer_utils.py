@@ -18,6 +18,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.trajectory_runners.types import ERROR_IDENTITIES_KEY
 from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
@@ -32,6 +33,8 @@ from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
+        GRADING_DURATION_SECONDS,
+        GRADING_FAILURE,
         TIMED_OUT_DIAGNOSTIC,
         "machine_operation",
         "provider_sdk_call",

@@ -17,6 +17,9 @@ from rigging.task_errors import (
     ErrorIdentity,
 )
 
+GRADING_DURATION_SECONDS = "grading_duration_seconds"
+GRADING_FAILURE = "grading_failure"
+
 
 class Outcome(StrEnum):
     GRADED = "graded"
