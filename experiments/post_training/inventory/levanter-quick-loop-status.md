@@ -5,6 +5,37 @@ November 24, 2026 (UTC).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
+Full run `2026.11.24.5` at `21409c1ef4` completed one finite, changed update
+on all four native learner processes, then failed before checkpoint restore.
+Each process owned eight H100s; a fifth GPU Pod hosted eight vLLM H100s.
+All four processes emitted finite live-state proofs at initialization and after
+the first update. Model, Adam, RNG and step fingerprints changed; schemas and
+layouts were preserved. The fetched 321-byte metadata records step 1, policy
+version 1 and the source URI and identity of the pinned Datakit-SFT initializer;
+checkpoint arrays were not decoded. Actor index 3's native learner acknowledged
+shutdown but exceeded the unchanged five-second natural-exit wait. The native
+shutdown-stack observer was disabled, so no current native C++ stack identifies
+the cause. Four Python finalization traces contain no Python frames. Both Iris jobs failed
+without preemption; all five GPU Pods were verified absent and all four
+coordinator containers are terminal. Full-model restore, update two, updated
+publication and generation, and the matched 25-update comparison remain open.
+[Full run R5](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.5-coordinator-ad7e87d0)
+
+The same source passed one-H100 tiny Snowball qualification in
+`tiny-real-ray-haliax-cleanup-rno-20261124-3`: two finite updates, exact restoration
+of 137 model/Adam/RNG/step arrays, identical frozen-score bytes, and natural
+native-process exits within five seconds. Model averaging was absent; all Pod
+containers exited zero. The full R5 result shows that this tiny pass does not
+qualify full-model shutdown.
+[One-H100 qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-haliax-cleanup-rno-20261124-3)
+
+A later four-device CPU Snowball probe found that Haliax's shape-evaluation cache
+retained the Trainer after cleanup. Registering it with the existing clear API
+releases the Trainer and preserves exact saved-state fingerprints and frozen
+input bytes. All 427 safe Haliax tests passed on eight CPU devices, with 37
+skipped. The previous cleanup already released the CPU client and mesh; this
+change does not establish a repair for the GPU failure.
+
 Full diagnostic `2026.11.24.4` at frozen runtime source `b2aa2d9ab8` failed
 before checkpoint restore. All four native learner ranks completed a finite,
 changed first update, with preserved schemas and layouts. The independently
@@ -34,12 +65,9 @@ using `hax.named_jit` and tiny Snowball initialization showed that the previous
 cleanup retained the mesh and Python JAX client; Haliax cache clearing released
 both. The affected worker suite passed 61 cases, with three skipped and two
 deselected; the ownership regression also passed with four CPU devices. The
-candidate has not run on a GPU.
-A one-H100 run with the observer enabled must pass exact checkpoint restore,
-strict score continuation and a second finite update. Both native processes
-must exit naturally within the existing five-second post-ACK limit before
-another full Snowball attempt. Full-model restore, update two, updated-policy
-publication and generation, and the matched 25-update comparison remain open.
+candidate later passed the one-H100 workload above, then failed the full R5
+shutdown check. Clearing compilation caches remains insufficient evidence of a
+full-model lifecycle repair.
 
 Full diagnostic `2026.11.24.3` at `8f520676ef` failed during checkpoint
 roundtrip validation. The native learner acknowledged shutdown, then exceeded

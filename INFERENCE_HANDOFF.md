@@ -4,15 +4,13 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-Full-model diagnostic `2026.11.24.4` at frozen runtime source `b2aa2d9ab8`
-completed one finite, changed update on all four native learner ranks, then
-failed the unchanged five-second process-exit check before checkpoint restore.
-Complete main-thread stacks identified XLA VMM allocator and PJRT client
-destruction during Python finalization on two ranks. A cleanup candidate now
-clears Haliax's compilation caches before JAX's caches and backend teardown;
-it has CPU regression evidence and remains unqualified on GPUs. Full-model
-restore, update two, updated-policy publication and generation, and the matched
-25-update comparison remain open. The integrated
+Full-model run `2026.11.24.5` at frozen source `21409c1ef4` completed one
+finite, changed update on all four native learner processes, then failed the
+five-second process-exit check before checkpoint restore. The compilation-cache
+cleanup in that source passed a one-H100 tiny Snowball save/resume run but did
+not resolve full-model shutdown. Run `2026.11.24.5` retained no native C++ stack
+identifying the remaining cause. Full-model restore, update two, updated-policy
+publication and generation, and the matched 25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
 
@@ -553,12 +551,36 @@ JAX caches and releasing backend clients. Fresh-process CPU reproductions using
 cleanup retained the mesh and Python JAX client; clearing Haliax's caches
 released both. The affected worker suite passed 61 cases, with three skipped
 and two deselected; the ownership regression also passed with four CPU devices.
-The candidate has not run on a GPU. A one-H100 run with the observer enabled
-must pass exact checkpoint restore, strict score continuation and a second
-finite update. Both native processes
-must exit naturally within the existing five-second post-ACK limit before
-another full Snowball attempt; full-model restore, update two, updated-policy
-publication and generation, and the matched 25-update comparison remain open.
+On one H100, `tiny-real-ray-haliax-cleanup-rno-20261124-3` succeeded with
+real Ray workers, two finite updates, exact restoration of 137 model/Adam/RNG/
+step arrays, identical frozen-score bytes, and natural native-process exits
+within the original five-second limit. All Pod containers exited zero. Model
+averaging was absent. This qualifies the tiny workload only.
+[One-H100 cleanup qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-haliax-cleanup-rno-20261124-3)
+
+Full run `2026.11.24.5` used the same published source `21409c1ef4`, 32 learner
+and eight vLLM H100s at BATCH priority, with the native shutdown-stack observer
+disabled and no retries. Each native learner process owned eight GPUs; a fifth
+GPU Pod hosted vLLM. All four processes emitted finite live-state proofs at
+initialization and after the first update; model, Adam, RNG and step
+fingerprints changed with preserved schemas and layouts. The fetched 321-byte
+checkpoint metadata records step 1, version 1 and the source URI and identity of
+the pinned Datakit-SFT initializer; arrays were not decoded. The trainer
+traceback reports that actor index 3's native learner acknowledged shutdown,
+then exceeded the original five-second exit wait before restore. Four Python
+finalization traces contain no Python frames and do not
+identify a native caller. Both Iris jobs failed without preemption. All five GPU
+Pods were verified absent; the coordinator's task exited 1 and its three helpers
+exited zero. The tiny pass therefore leaves full-model cleanup unqualified.
+[Full run R5](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.5-coordinator-ad7e87d0)
+
+A later CPU probe found that Haliax's separate shape-evaluation cache retained
+the Trainer after cleanup. Registering that cache with the existing clear API
+releases the Trainer. Saved-state fingerprints and frozen input bytes matched
+exactly before and after the change in the four-device Snowball control. The
+eight-CPU Haliax suite passed 427 tests, with 37 skipped. The previous cleanup
+already released the CPU client and mesh, so this result does not identify the
+GPU shutdown cause.
 
 The native server stages and installs weights inside one runtime. The Levanter
 learner bridge accepts a version-bound native route payload per trajectory and

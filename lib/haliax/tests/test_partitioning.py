@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+import weakref
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -11,6 +14,7 @@ from jaxtyping import Array
 
 import haliax as hax
 from haliax import Axis, NamedArray
+from haliax._src.compile_utils import clear_caches
 from haliax.partitioning import (
     ResourceAxis,
     axis_mapping,
@@ -395,3 +399,21 @@ def test_named_jit_no_in_axis_resources():
 
         r = fn(data)
         assert r.array.sharding.device_set == set(jax.devices())
+
+
+def test_clear_caches_releases_named_jit_bound_owner():
+    class Owner:
+        def apply(self, value):
+            return value + 1
+
+    def execute():
+        owner = Owner()
+        named_jit(owner.apply)(jnp.array(1)).block_until_ready()
+        return weakref.ref(owner)
+
+    owner = execute()
+    jax.clear_caches()
+    gc.collect()
+    clear_caches()
+    gc.collect()
+    assert owner() is None

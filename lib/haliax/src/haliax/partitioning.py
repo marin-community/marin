@@ -26,7 +26,7 @@ from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_a
 from jaxtyping import PyTree
 
 import haliax.tree_util as htu
-from haliax._src.compile_utils import compile_cache
+from haliax._src.compile_utils import compile_cache, internal_caches
 
 from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
 from .core import NamedArray
@@ -656,6 +656,7 @@ def _named_pjit_cache(fun_names, **jitkwargs) -> WrappedCallable:
 
 
 _eval_shape_cache = {}
+internal_caches.append(_eval_shape_cache)
 
 
 def _cached_filter_eval_shape(fun, *args, **kwargs):
