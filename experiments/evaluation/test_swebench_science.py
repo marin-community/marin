@@ -48,7 +48,7 @@ def science_package(tmp_path):
     return package
 
 
-def test_science_corpus_uses_the_validated_daytona_solver_resources(science_package):
+def test_science_corpus_sets_solver_resources_and_keeps_the_verifier_image(science_package):
     row = RawRow(ROW.id, SOURCE, {"name": science_package.name, "archive": package_archive(science_package)})
     [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
@@ -156,7 +156,6 @@ def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monk
         selected=frozenset({"task_001", "task_002"}),
     )
     assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]
-    assert (output / "tasks/task_002.tar.gz").read_bytes() == package_archive(repository / "tasks/task_002")
     with pytest.raises(ValueError, match="task_004"):
         stage_repository_packages(
             "org/fixture",

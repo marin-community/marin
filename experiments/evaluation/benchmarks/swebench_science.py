@@ -18,6 +18,7 @@ import tomlkit
 from taskcompendium.evaluation.spec import MiniSweAgent, PiAgent
 from taskcompendium.importers.harbor.config import TASK_CONFIG
 from taskcompendium.importers.harbor.package import (
+    INSTRUCTION,
     REWARD_JSON_PATH,
     HarborTask,
     JobSettings,
@@ -84,7 +85,7 @@ def _harbor_config(directory: Path) -> dict:
             raise ValueError("SWE-bench Science requires offline digest-pinned images")
         # Skopeo's docker transport accepts repository@digest, including registries with ports.
         environment["docker_image"] = re.sub(r":[^/:@]+(?=@)", "", environment["docker_image"])
-    if config["agent"]["network_mode"] != "no-network" or verifier["network_mode"] != "no-network":
+    if any(role["network_mode"] != "no-network" for role in (config["agent"], verifier)):
         raise ValueError("SWE-bench Science requires the native no-network protocol")
     hook = (directory / "pre_artifacts.sh").read_text()
     command = f"cd {shlex.quote(config['environment']['workdir'])} && sh -c {shlex.quote(hook)}"
@@ -102,8 +103,8 @@ def lower_science_package(directory: Path, row: RawRow, job: JobSettings) -> Har
         prepared = Path(temporary) / directory.name
         (prepared / "environment").mkdir(parents=True)
         (prepared / "tests").mkdir()
-        shutil.copyfile(directory / "instruction.md", prepared / "instruction.md")
-        shutil.copyfile(directory / "tests/grader.py", prepared / "tests/grader.py")
+        for path in (INSTRUCTION, "tests/grader.py"):
+            shutil.copyfile(directory / path, prepared / path)
         (prepared / TASK_CONFIG).write_text(tomlkit.dumps(config))
         lowered = lower_package(
             prepared, task_id=row.id, source=row.source, rule=PackageTests(), image_digests={}, job=job
