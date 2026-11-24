@@ -2,25 +2,37 @@
 
 import asyncio
 import json
+import os
 import shutil
+import socket
 from contextlib import asynccontextmanager
 
 import daytona
+import httpx
 import pytest
 from harbor.host_capabilities import HostCapabilities
+from harbor import host_capabilities
 from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.pi import Pi
+from harbor.environments import model_relay
 from harbor.environments.factory import EnvironmentFactory
+from harbor.environments.model_relay import ModelRelay
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from harbor.verifier.verifier import Verifier
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRolloutInterrupted
+from shellbox.http_service import serve_http
 from shellbox.machine import ExitReason, Result
+from shellbox.process_session import SubprocessSession
 from taskcompendium.models import Source
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
@@ -32,6 +44,11 @@ from skyrl_train.rollouts.harbor_trial_session import run_harbor_trial
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from tests.cpu.task_specs import lowered_task
+
+
+GUEST_WORKSPACE = "/workspace"
+HOST_JUDGE_KEY = "host-private-key"
+POLICY_JUDGE_MODEL = "policy-judge"
 
 
 class ProviderUnavailable(RuntimeError):
@@ -67,6 +84,78 @@ class ProcessTransport:
         return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
 
 
+class RelayProcessMachine:
+    def __init__(self, root):
+        self.root = root
+        self.path(GUEST_WORKSPACE).mkdir(parents=True)
+        self.sessions = []
+
+    def path(self, value):
+        return self.root / value.lstrip("/")
+
+    def argument(self, value):
+        for prefix in (GUEST_WORKSPACE, "/tests", "/logs"):
+            value = value.replace(prefix, str(self.path(prefix)))
+        return value
+
+    def process_command(self, command):
+        return (
+            tuple(self.argument(value) for value in command.argv),
+            self.path(command.cwd or GUEST_WORKSPACE),
+            {"PATH": os.environ["PATH"], **command.env},
+        )
+
+    async def open_process(self, command):
+        argv, cwd, env = self.process_command(command)
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def stop():
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+
+        session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+        self.sessions.append(session)
+        return session
+
+    async def run(self, command):
+        argv, cwd, env = self.process_command(command)
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
+
+    async def upload(self, source, target):
+        destination = self.path(target)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(source, destination)
+
+    async def download(self, source, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if self.path(source).is_dir():
+            shutil.copytree(self.path(source), target, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(self.path(source), target)
+
+    async def close(self):
+        await asyncio.gather(*(session.close() for session in self.sessions))
+
+
 @pytest.fixture
 def harbor_package(tmp_path):
     package = tmp_path / "package"
@@ -77,6 +166,102 @@ def harbor_package(tmp_path):
     (package / "instruction.md").write_text("Write an answer.")
     (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
     return package
+
+
+@pytest.mark.asyncio
+async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package, tmp_path, monkeypatch):
+    package = harbor_package
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "https://provider.invalid/v1"\nMODEL_NAME = "fixture-judge"\n'
+    )
+    (package / "tests" / "test.sh").write_text(
+        "#!/bin/sh\n"
+        "python3 - <<'PY'\n"
+        "import json, os, urllib.request\n"
+        "assert os.environ['OPENAI_API_KEY'] == 'EMPTY'\n"
+        f"assert {HOST_JUDGE_KEY!r} not in os.environ.values()\n"
+        "request = urllib.request.Request(\n"
+        "    os.environ['OPENAI_BASE_URL'] + '/chat/completions',\n"
+        "    data=json.dumps({'model': os.environ['MODEL_NAME'], 'messages': [{'role': 'user', 'content': 'Grade'}]}).encode(),\n"
+        "    headers={'Authorization': 'Bearer ' + os.environ['OPENAI_API_KEY'], 'Content-Type': 'application/json'},\n"
+        ")\n"
+        "with urllib.request.urlopen(request) as response:\n"
+        "    assert json.load(response)['choices'][0]['message']['content'] == 'CORRECT'\n"
+        "with open(os.environ['REWARD_PATH'], 'w') as reward:\n"
+        "    reward.write('1')\n"
+        "PY\n"
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    monkeypatch.setattr(host_capabilities, "MODEL_RELAY_PORT", port)
+    machine = RelayProcessMachine(tmp_path / "guest")
+    machine.path("/logs/verifier").mkdir(parents=True)
+    paths = TrialPaths(tmp_path / "trial")
+    paths.mkdir()
+    task_spec = harbor_trial_task(
+        package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    )
+    settings = InstalledAgentSettings(
+        agent=AgentConfig(name="pi"),
+        output_path=str(tmp_path / "attempts"),
+        setup_timeout=5,
+        run_timeout=5,
+        cleanup_timeout=5,
+        service_startup_timeout=5,
+        service_shutdown_timeout=5,
+        judge_model=POLICY_JUDGE_MODEL,
+    )
+    connection = DaytonaConnection(api_key="daytona-secret")
+    runtime = InstalledAgentRuntime(
+        settings,
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=connection,
+        eval_daytona_connection=connection,
+        judge=JudgeConnection("https://provider.invalid/v1", HOST_JUDGE_KEY),
+    )
+    binding = runtime.original_trial_binding(
+        lowered_task(task_spec, "harbor_trial", attempt_timeout=15),
+        HarborTaskSettings.from_config(OmegaConf.create({})),
+        "eval",
+        {"REWARD_PATH": str(machine.path("/logs/verifier/reward.txt"))},
+    )
+    observed = []
+
+    def provider(request):
+        observed.append((request.headers["authorization"], request.url.path, request.read()))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "CORRECT"}}]})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(provider), **kwargs),
+    )
+    relay = ModelRelay.from_endpoint(
+        binding.environment.kwargs["model_endpoint"],
+        binding.environment.kwargs["model_name"],
+        authentication=binding.host_capabilities.model_authentication,
+    )
+    task = Task(package)
+    environment = BorrowedMachineEnvironment(
+        machine, tmp_path / "trial", "bixbench", task.config.environment, host_capabilities=binding.host_capabilities
+    )
+    verifier = Verifier(task=task, trial_paths=paths, environment=environment, override_env=binding.verifier_environment)
+    try:
+        async with asyncio.TaskGroup() as service_tasks:
+            async with serve_http(machine, relay.handle, port=port, task_group=service_tasks):
+                result = await verifier.verify()
+    finally:
+        await machine.close()
+    assert result.rewards == {"reward": 1.0}
+    assert len(observed) == 1
+    assert observed[0][0] == f"Bearer {HOST_JUDGE_KEY}"
+    assert observed[0][1] == "/v1/chat/completions"
+    assert json.loads(observed[0][2])["model"] == POLICY_JUDGE_MODEL
 
 
 @pytest.mark.asyncio
