@@ -6,6 +6,7 @@
 import hashlib
 from pathlib import Path
 
+from verifyit.grade import VERDICT_JSON
 from verifyit.spec import EmptyOutputPolicy, JudgeSpec
 
 from taskcompendium.convert.answers import answer_task, source_evidence
@@ -75,7 +76,7 @@ def convert_research(row: RawRow, context: ConversionContext) -> TaskSpec:
         judge=spec,
         empty_output=EmptyOutputPolicy.GRADE,
         timeout=60 + max(spec.transport_budget, spec.request_timeout),
-        reward=FileReward(files=(RewardFile(path="/app/verdict.json", format=RewardFileFormat.VERDICT_JSON),)),
+        reward=FileReward(files=(RewardFile(path=f"/app/{VERDICT_JSON}", format=RewardFileFormat.VERDICT_JSON),)),
     )
     task = conversation_task(
         row,
