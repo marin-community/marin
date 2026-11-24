@@ -101,10 +101,15 @@ def build_gate_image(pins: list[str]) -> None:
         (Path(directory) / "Dockerfile").write_text(dockerfile)
         (Path(directory) / "requirements.txt").write_text(requirements)
         subprocess.run(
-            ["docker", "build", "--pull", "-t", GATE_IMAGE, directory],
+            ["docker", "build", "--pull", "--network", _docker_network(), "-t", GATE_IMAGE, directory],
             check=True,
             stdout=subprocess.DEVNULL,
         )
+
+
+def _docker_network() -> str:
+    """The build/run network: host networking when the daemon runs inside a pod."""
+    return "host" if os.environ.get("MICRO210_GATE_DOCKER_HOST_NETWORK") == "1" else "default"
 
 
 def extract_row(task_spec_json: str) -> Path:
@@ -140,7 +145,7 @@ def build_wheel_image(packages: list[str]) -> None:
         (Path(directory) / "Dockerfile").write_text(dockerfile)
         (Path(directory) / "requirements.txt").write_text(requirements)
         subprocess.run(
-            ["docker", "build", "--pull", "-t", WHEEL_IMAGE, directory],
+            ["docker", "build", "--pull", "--network", _docker_network(), "-t", WHEEL_IMAGE, directory],
             check=True,
             stdout=subprocess.DEVNULL,
         )
@@ -159,7 +164,17 @@ def wheel_grade_frozen(source_row: dict, answer: str, judge_environment: dict[st
 
 def docker_grade(root: Path, judge_environment: dict[str, str] | None, *, image: str = GATE_IMAGE) -> str:
     """Run the row's own grade.py in the isolated gate image; return stdout."""
-    command = ["docker", "run", "--rm", "-v", f"{root / 'tests'}:/tests:ro", "-v", f"{root / 'app'}:/app:ro"]
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        _docker_network(),
+        "-v",
+        f"{root / 'tests'}:/tests:ro",
+        "-v",
+        f"{root / 'app'}:/app:ro",
+    ]
     for name, value in (judge_environment or {}).items():
         command += ["-e", f"{name}={value}"]
     command += [image, "python3", "/tests/grade.py"]
@@ -301,7 +316,18 @@ def _run_harbor_tests(
         image = f"micro210-harbor-gate:{row['task_id'].replace('/', '-')}"
         # The Harbor base images are x86-64 (the eval runtime hosts are x86-64); pin the
         # platform so arm hosts build the same images under emulation.
-        _docker(["build", "--platform", "linux/amd64", "-t", image, str(task_dir / HARBOR_ENVIRONMENT_DIR)])
+        _docker(
+            [
+                "build",
+                "--platform",
+                "linux/amd64",
+                "--network",
+                _docker_network(),
+                "-t",
+                image,
+                str(task_dir / HARBOR_ENVIRONMENT_DIR),
+            ]
+        )
         workdir = _harbor_workdir(files, image)
         container = f"micro210-harbor-{uuid.uuid4().hex[:12]}"
         try:
