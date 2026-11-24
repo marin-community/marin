@@ -21,7 +21,11 @@ def drop_table(root: str, table: str, *, expected: TableVersion | None = None) -
     """Drop the expected table version while retaining its immutable objects."""
     coordinator = CommitCoordinator(FineStoreLayout(root))
     snapshot = coordinator.snapshot()
-    version = expected if expected is not None else snapshot.manifest.table_version(table)
-    return coordinator.commit(
-        CommitDelta(reset_tables=frozenset({table}), expected_tables={table: version}), base=snapshot
-    )
+    resets = frozenset({table})
+    if expected is None:
+        delta = CommitDelta(
+            reset_tables=resets, expected_contents={table: snapshot.manifest.table_content_version(table)}
+        )
+    else:
+        delta = CommitDelta(reset_tables=resets, expected_tables={table: expected})
+    return coordinator.commit(delta, base=snapshot)

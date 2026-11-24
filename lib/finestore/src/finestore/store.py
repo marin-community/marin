@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Protocol
@@ -32,6 +32,7 @@ from finestore.commit import (
     CommitCoordinator,
     CommitDelta,
     TableAddition,
+    check_preconditions,
     initialize_archive,
     write_schema,
 )
@@ -181,6 +182,12 @@ class PendingRows:
 
     rows: tuple[ArrowRow, ...]
     nbytes: int
+
+
+@dataclass(frozen=True)
+class _TransactionRows:
+    writer: DataTable
+    rows: list[ArrowRow]
 
 
 class FlushScheduler(Protocol):
@@ -373,6 +380,7 @@ class DataStore:
         With a ``message``, the commit this transaction publishes records it as ``commit_info``,
         together with ``author``, the commit's sequence and its publication time. ``author``
         defaults to the launching user (``rigging.provenance.launch_user``).
+        On a non-empty archive, a transaction with only read guards returns its checked commit.
         """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
@@ -421,24 +429,38 @@ class DataStore:
 
     def _commit_transaction(
         self,
-        rows: dict[str, list[ArrowRow]],
+        rows: dict[str, _TransactionRows],
         delta: CommitDelta,
     ) -> CommitToken:
-        with self._commit_lock:
+        with self._commit_lock, ExitStack() as retire:
+            retiring = []
+            if delta.reset_tables:
+                retire.enter_context(self._register_lock)
+                for name in delta.reset_tables:
+                    table = self._tables.get(name)
+                    if table is not None:
+                        retire.enter_context(table._retire_on_commit())
+                        retiring.append(table)
+
             additions = {}
-            for name, pending_rows in rows.items():
-                table = self._tables.get(name)
-                if table is None:
-                    raise KeyError(f"table {name!r} must be registered before the transaction")
+            for name, buffered in rows.items():
+                table = buffered.writer
+                if self._tables.get(name) is not table:
+                    raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
+                pending_rows = buffered.rows
                 shard = table._write_rows(pending_rows, nbytes=sum(row.table.nbytes for row in pending_rows))
                 additions[name] = TableAddition(table.metadata_path, (shard,), table.incarnation)
             if additions:
-                return self._commits.commit(_addition_delta(additions, delta=delta))
-            if delta.reset_tables or delta.expected_contents:
-                return self._commits.commit(delta)
+                delta = _addition_delta(additions, delta=delta)
+            if additions or delta.reset_tables:
+                token = self._commits.commit(delta)
+                for table in retiring:
+                    del self._tables[table.name]
+                return token
             snapshot = self._commits.snapshot()
             if snapshot.token is None:
                 return self._commits.commit(delta)
+            check_preconditions(snapshot.manifest, delta)
             return snapshot.token
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
@@ -586,7 +608,9 @@ class DataStore:
     def _has_level_zero_groups(self) -> bool:
         """Whether some registered table holds at least two level-zero shards, from any writer."""
         view = ReadView(self.root, self._commits.last_snapshot())
-        return any(sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in self._tables)
+        return any(
+            sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in list(self._tables)
+        )
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.
@@ -648,12 +672,12 @@ class DataStore:
 class TransactionTable:
     """One table's rows inside a transaction."""
 
-    def __init__(self, transaction: Transaction, name: str) -> None:
+    def __init__(self, transaction: Transaction, writer: DataTable) -> None:
         self._transaction = transaction
-        self._name = name
+        self._writer = writer
 
     def add(self, row: dict) -> None:
-        self._transaction._add_rows({self._name: [row]})
+        self._transaction._add_rows({self._writer: [row]})
 
     def extend(self, rows: Iterable[dict]) -> None:
         for row in rows:
@@ -707,7 +731,7 @@ class Transaction:
             raise ValueError("transaction base must come from the same archive")
         self._store = store
         self._base = store.read_view() if base is None else base
-        self._rows: dict[str, list[ArrowRow]] = {}
+        self._rows: dict[str, _TransactionRows] = {}
         self._table_changes: dict[str, StagedTable | _PublishedTable | None] = {}
         self._dependencies: set[str] = set()
         self._staging_id: str | None = None
@@ -740,26 +764,28 @@ class Transaction:
         if name in self._table_changes and table is None:
             raise KeyError(f"table {name!r} is absent from the transaction")
         source = table.source if isinstance(table, _PublishedTable) else name
-        if source not in self._store._tables:
+        writer = self._store._tables.get(source)
+        if writer is None:
             raise KeyError(f"table {name!r} must be registered before the transaction")
-        return TransactionTable(self, source)
+        return TransactionTable(self, writer)
 
-    def _add_rows(self, rows: dict[str, list[dict]]) -> None:
+    def _add_rows(self, rows: dict[DataTable, list[dict]]) -> None:
         self._require_open()
         buffered = {}
-        for name, table_rows in rows.items():
+        for table, table_rows in rows.items():
+            name = table.name
             if not self._can_append(name):
                 raise KeyError(f"table {name!r} is absent from the transaction")
-            table = self._store._tables.get(name)
-            if table is None:
-                raise KeyError(f"table {name!r} must be registered before the transaction")
-            buffered[name] = table._arrow_rows(table_rows)
+            existing = self._rows.get(name)
+            if existing is not None and existing.writer is not table:
+                raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
+            buffered[table] = table._arrow_rows(table_rows)
         added_bytes = sum(row.table.nbytes for table_rows in buffered.values() for row in table_rows)
         if self._max_bytes is not None and self._buffer_bytes + added_bytes > self._max_bytes:
             raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
         self._buffer_bytes += added_bytes
-        for name, table_rows in buffered.items():
-            self._rows.setdefault(name, []).extend(table_rows)
+        for table, table_rows in buffered.items():
+            self._rows.setdefault(table.name, _TransactionRows(table, [])).rows.extend(table_rows)
 
     def create_table(
         self,
@@ -820,7 +846,7 @@ class Transaction:
         self._require_open()
         self._dependencies.update(tables)
 
-    def _commit_delta(self, rows: dict[str, list[ArrowRow]]) -> CommitDelta:
+    def _commit_delta(self, rows: dict[str, _TransactionRows]) -> CommitDelta:
         resets = set()
         creations = {}
         moves = {}
@@ -847,10 +873,10 @@ class Transaction:
         self._require_open()
         blob_table = self._store._blob_table()
         descriptor, parts = self._store._blob_rows(name, data, metadata)
-        rows = {blob_table.name: [descriptor]}
+        rows = {blob_table: [descriptor]}
         if parts:
             part_table = self._store._blob_part_table()
-            rows[part_table.name] = parts
+            rows[part_table] = parts
         self._add_rows(rows)
         self._objects[name] = data
         return build_uri(BlobTables.DESCRIPTORS, name)
@@ -921,7 +947,8 @@ class DataTable:
         self._pending: list[ArrowRow] = []
         self._pending_bytes = 0
         self._next_seq = start_seq
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._retired = False
         self._digests: dict[tuple, bytes] | None = {} if on_conflict is OnConflict.ERROR else None
 
     def append(self, row: dict) -> None:
@@ -961,6 +988,8 @@ class DataTable:
     def _stamp_arrow_rows(self, rows: Iterable[ArrowRow]) -> list[ArrowRow]:
         stamped = []
         with self._lock:
+            if self._retired:
+                raise CommitConflict(f"table {self.name!r} was dropped or replaced after the writer registered it")
             for row in rows:
                 self._check_conflict(row)
                 sequence = self._next_seq
@@ -976,13 +1005,23 @@ class DataTable:
 
     def extend(self, rows: Iterable[dict]) -> None:
         self._scheduler.raise_if_failed()
-        buffered = self._stamp_arrow_rows(self._arrow_rows(rows))
+        arrow_rows = self._arrow_rows(rows)
         with self._lock:
+            buffered = self._stamp_arrow_rows(arrow_rows)
             self._pending.extend(buffered)
             self._pending_bytes += sum(row.table.nbytes for row in buffered)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
+
+    @contextmanager
+    def _retire_on_commit(self) -> Iterator[None]:
+        # An append either reaches the pending buffer before publication or sees the retired handle.
+        with self._lock:
+            if self._pending:
+                raise CommitConflict(f"flush buffered appends to table {self.name!r} before changing it")
+            yield
+            self._retired = True
 
     def _claim_pending(self) -> PendingRows | None:
         with self._lock:

@@ -308,6 +308,56 @@ def test_private_table_rename_publishes_all_staged_shards_with_transaction_objec
         assert pinned.read_blob("completion") == b"old"
 
 
+def test_ddl_keeps_buffered_appends_and_retires_the_store_handle_on_success(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        table = store.table("items", primary_key=("id",))
+        table.append({"id": 1})
+        store.flush()
+        stale = store.transaction()
+        stale.table("items").add({"id": 2})
+
+        table.append({"id": 3})
+        with pytest.raises(CommitConflict, match="flush buffered appends"):
+            with store.transaction() as transaction:
+                transaction.drop_table("items")
+        store.flush()
+        assert store.read_view().keys("items") == {(1,), (3,)}
+
+        with store.transaction() as transaction:
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.add({"id": 10})
+            transaction.rename_table("scratch", "items", on_conflict=TableNameConflict.REPLACE)
+
+        with pytest.raises(CommitConflict):
+            table.append({"id": 4})
+        store.table("items", primary_key=("id",)).append({"id": 11})
+        with pytest.raises(CommitConflict):
+            stale.commit()
+        with store.transaction() as transaction:
+            transaction.table("items").add({"id": 12})
+        store.flush()
+        assert store.read_view().keys("items") == {(10,), (11,), (12,)}
+
+
+def test_guard_only_transaction_checks_pinned_base_without_publishing(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        table = store.table("source", primary_key=("id",))
+        table.append({"id": 1})
+        store.flush()
+        before = store.read_view()
+        table.append({"id": 2})
+        current = store.flush()
+
+        with pytest.raises(CommitConflict, match="table 'source' changed"):
+            with store.transaction(base=before) as transaction:
+                transaction.require_unchanged("source")
+
+        with store.transaction(author="schema-admin", message="check source") as transaction:
+            transaction.require_unchanged("source")
+            transaction.drop_table("missing")
+        assert transaction.token == current == store.read_view().token
+
+
 def test_private_table_rename_rebases_over_source_and_target_compaction(archive_root):
     with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("derived", primary_key=("id",)).append({"id": 0})

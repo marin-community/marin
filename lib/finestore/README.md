@@ -37,6 +37,8 @@ commit's sequence and publication time, and `ReadView.commit_info` returns the r
 the pinned commit. `author=` defaults to the user who launched the process, as
 `rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
 submitting user. FineStore stores the author as given and does not verify it.
+On a non-empty archive, a transaction with no writes returns the checked
+commit token without publishing a new commit.
 
 Appends to registered tables and named object writes retain their Arrow buffers
 in memory. Each appended table produces one level-zero Parquet shard. FineStore
@@ -90,8 +92,10 @@ active staging transactions and retained snapshots.
 
 Renaming, dropping, or replacing a previously published table advances its incarnation.
 Append handles registered under an earlier incarnation fail with
-`CommitConflict`. A new store can register a fresh handle. Pinned reads
-retain their earlier view.
+`CommitConflict`. Flush buffered appends before changing a table in the same store.
+After the change, call `store.table(...)` to register a fresh handle. If another
+store changed a registered table, reopen before writing to it. Pinned reads retain
+their earlier view.
 
 The first publication of a table uses the existing manifest format. An
 incarnation change requires the `table-incarnations-v1` manifest feature.

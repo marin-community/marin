@@ -232,7 +232,8 @@ def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo |
     )
 
 
-def _check_preconditions(base: Manifest, delta: CommitDelta) -> None:
+def check_preconditions(base: Manifest, delta: CommitDelta) -> None:
+    """Reject a delta whose guards fail on this manifest."""
     if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
         raise CommitConflict(
             f"maintenance epoch is {base.maintainer_epoch}, commit was prepared under {delta.expected_epoch}"
@@ -297,7 +298,7 @@ def _apply_table_ddl(
 
 
 def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
-    _check_preconditions(base, delta)
+    check_preconditions(base, delta)
     sequence = base.sequence + 1
     tables = _append_tables(base, delta.additions, sequence)
     incarnations = _apply_table_ddl(tables, base, delta, sequence)

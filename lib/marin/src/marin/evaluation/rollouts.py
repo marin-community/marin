@@ -108,6 +108,7 @@ def _source_fingerprints(reader: ReadView) -> dict[str, str]:
             "metadata_path": version.metadata_path,
             "row_commit_upper_bound": version.row_commit_upper_bound,
         }
+        # Omit zero values to preserve fingerprints written before these fields existed.
         if version.incarnation:
             source["incarnation"] = version.incarnation
         if version.history_floor:
