@@ -273,10 +273,10 @@ def command_report(args: argparse.Namespace) -> int:
             continue
         for line in content.splitlines():
             record = json.loads(line)
-            stats["wall_seconds"] += float(record.get("wall_time") or 0.0)
             event = record.get("event") or {}
             if not str(event.get("type", "")).endswith("Resolved"):
                 continue
+            stats["wall_seconds"] += float(record.get("wall_time") or 0.0)
             value = (event.get("payload") or {}).get("value")
             if not isinstance(value, dict) or "usage" not in value:
                 continue
