@@ -1,19 +1,25 @@
 {
-  "marina_url": "https://marina.oa.dev",
-  "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
-  "expires_when": "preview_refresh_strict_audit_passes",
-  "rule": "post-seal-declaration-missing-served-projection",
-  "reason": "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
-  "source_ids": [
-    "FWeindel:validated-tasks/facet_v2",
-    "FWeindel:validated-tasks/facet_v3",
-    "FWeindel:validated-tasks/mimo_v1",
-    "Marin:forge-main-20261117",
-    "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
-    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
-    "OpenAthena:pdbthink-coordinate-tasks",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122",
-    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122",
-    "Lego-X:Terminal-Lego-15k"
-  ]
+ "marina_url": "https://marina.oa.dev",
+ "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
+ "expires_when": "preview_refresh_strict_audit_passes",
+ "rule": "post-seal-declaration-missing-served-projection",
+ "reason": "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
+ "source_ids": [
+  "FWeindel:validated-tasks/facet_v2",
+  "FWeindel:validated-tasks/facet_v3",
+  "FWeindel:validated-tasks/mimo_v1",
+  "Lego-X:Terminal-Lego-15k",
+  "Marin:forge-main-20261117",
+  "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+  "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+  "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+  "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+  "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+  "OpenAthena:pdbthink-coordinate-tasks",
+  "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+  "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+  "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122",
+  "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122",
+  "di-zhang-fdu:aime_1983_2024"
+ ]
 }

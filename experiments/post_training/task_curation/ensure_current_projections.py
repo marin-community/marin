@@ -163,11 +163,18 @@ def apply_projection_waivers(
     if waivers.rule == "post-seal-declaration-missing-served-projection":
         # Ruling 68: a source declared after the sealed refresh. The named-source waiver is
         # independent of declaration drift, so it runs before the selection/drift check.
+        # A stale-pin gap is the same sealed-state class for a re-pinned source: the served
+        # projection still records the prior pin and catches up at the next refresh, which
+        # the same expiry forces.
         blocking, waived, notes = [], [], []
         if not waivers.source_ids:
             raise ValueError("Ruling 68 waiver must name the exact declared source IDs")
         for gap in gaps:
-            if gap.projection == "served-catalog" and gap.state == "missing" and gap.source_id in waivers.source_ids:
+            if (
+                gap.projection == "served-catalog"
+                and gap.state in {"missing", "stale-pin"}
+                and gap.source_id in waivers.source_ids
+            ):
                 record = ProjectionWaiver(
                     source_id=gap.source_id,
                     projection=gap.projection,
