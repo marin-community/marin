@@ -295,8 +295,9 @@ rejected before Pod creation; preferred regions do not restrict placement.
 Task pods receive `IRIS_WORKER_REGION` from the backend's single advertised
 region. This value overrides user and cluster environment values. Backends with
 no region or multiple advertised regions remove supplied values and leave it
-unset because they cannot attest one physical region. Consumers that require worker-region attestation need this
-controller version deployed before their task pods are created.
+unset because they cannot attest one physical region. Consumers that require
+worker-region attestation must dispatch through a controller that maps the
+backend's advertised region into task pods.
 Child jobs inherit the parent's region by default, as worker-backed tasks
 already do. An explicit region or the ANY marker overrides this default.
 

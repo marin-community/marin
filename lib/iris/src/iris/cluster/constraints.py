@@ -90,11 +90,12 @@ def get_device_variant(device: job_pb2.DeviceConfig) -> str | None:
     return None
 
 
-# Kubernetes compares node-affinity values byte-exactly against node labels, and
-# CoreWeave writes NVLink-domain labels uppercase (e.g. ``DH1-136-US-EAST-08A``).
-# Constraint values for these keys ARE label values: the wire carries the
-# supplied spelling (``Constraint.label_value``) while ``values`` stays
-# normalized (lowercase) for Iris-side matching.
+# Kubernetes compares node-affinity values byte-exactly against node labels.
+# Values of these keys are Kubernetes label values (the key names live in the
+# k8s platform layer): the wire carries the supplied spelling
+# (``Constraint.label_value``) while ``values`` stays normalized (lowercase)
+# for Iris-side matching. CoreWeave writes NVLink-domain labels uppercase, so
+# preserving the spelling is what lets an exclusion match the Node label.
 CASE_PRESERVED_LABEL_KEYS = frozenset({COSCHEDULE_NVLINK_DOMAIN})
 
 

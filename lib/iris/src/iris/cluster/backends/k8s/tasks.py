@@ -378,7 +378,8 @@ def _constraints_to_node_placement(
 ) -> tuple[dict[str, str], dict]:
     """Map placement constraints to Kubernetes selectors and required affinity.
 
-    Unknown keys are silently skipped. Known keys require EQ with a value.
+    Unknown keys are silently skipped. Node-selector keys require EQ with a
+    value; NVLink-domain exclusions require a hard NE constraint.
     """
     node_selector: dict[str, str] = {}
     domain_expressions = []
