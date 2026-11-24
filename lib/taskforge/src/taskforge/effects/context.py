@@ -111,11 +111,11 @@ class Context:
         return None if isinstance(value, Missing) else value
 
     def receipt(self, event: Event[object]) -> int | None:
-        """``EventLog.receipt`` under ``event``'s fingerprints."""
+        """Return the physical row of the event's latest resolution, if one exists."""
         return self._log.receipt(event, self._handler(event)[2])
 
     def recorded_at[T](self, receipt: int, event: Event[T]) -> T:
-        """``EventLog.at`` under ``event``'s fingerprints."""
+        """Read a physical resolution at its row under the event's current fingerprints."""
         return cast(T, self._log.at(receipt, event, self._handler(event)[2]))
 
     async def emit[T](self, event: Event[T]) -> T:

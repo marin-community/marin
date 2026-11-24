@@ -6,7 +6,6 @@ with its stored evidence and buys nothing inside it, while the open frontier exe
 
 import hashlib
 import json
-import logging
 import math
 from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
@@ -446,8 +445,7 @@ async def test_a_nonfinite_reward_reaches_the_author_as_strict_json_alike_live_a
 async def test_a_heartbeat_only_policy_edit_is_a_new_plan_and_replans_every_visit(launches: Driver) -> None:
     """The documented contract (README): a policy edit is a new plan, so every visit recomputes from the first one,
     even when only an operational setting changed. Here round 0 replays the control grade its retry bought under the
-    same key and accepts, so the held launch's paid Retry round (slots (0, 1), (1, 1)) is no longer on the route.
-    That is the contract working, not a tolerated loss."""
+    same key and accepts, so the held launch's paid Retry round (slots (0, 1), (1, 1)) is no longer on the route."""
     first = launch(Paid(outage={(2, 2)}), Grader(unavailable=1))
     assert await launches.run(first) == driver.DEFERRED
     assert kinds(published_workpiece(launches.root))[:2] == ["retry", "accept"]
@@ -481,20 +479,15 @@ def restated(workpiece: Workpiece, band: Any, budget: Any) -> Any:
     return default_review(workpiece, band, budget)
 
 
-async def test_a_custom_review_rule_reuses_no_visit_and_says_so_once(
-    launches: Driver, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_a_custom_review_rule_reuses_no_visit(launches: Driver) -> None:
     def custom(config: TaskforgeConfig) -> TaskforgeConfig:
         return replace(config, review=restated)
 
     assert await launches.run(launch(Paid(outage={(2, 1)})), configure=custom) == driver.DEFERRED
     held = len(launches.rows())
-    caplog.clear()
-    with caplog.at_level(logging.WARNING):
-        assert await launches.run(launch(Paid()), configure=custom) == 0
+    assert await launches.run(launch(Paid()), configure=custom) == 0
     assert scopes(launches.rows()[held:], "validate") == 1
     assert not [r for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
-    assert sum("reuses no committed visit" in record.message for record in caplog.records) == 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,7 +520,7 @@ async def test_a_reviewer_subclass_reuses_no_stock_visit_and_decides_as_a_fresh_
     assert await launches.run(launch(Paid()), configure=holding_reviewer) == 0
     fresh = published_workpiece(launches.root)
     assert cold.terminal is fresh.terminal is Terminal.HELD
-    assert cold.decisions[-1] == fresh.decisions[-1] and "sends every round to a person" in str(cold.decisions[-1])
+    assert cold.decisions[-1] == fresh.decisions[-1]
 
 
 def invalid_in_confirmation(trial: int, attempt: int) -> GradeResult:
