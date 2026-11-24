@@ -133,7 +133,18 @@ def difficulty_table_summary(declaration: dict[str, Any], records: Iterable[Diff
 
 def table_difficulty(summary: dict[str, Any]) -> dict[str, Any]:
     """The current solver values and provenance displayed by the table and dialog."""
-    fields = {"solver", "status", "reason", "n", "solved", "solve_rate", "wilson_95", "protocol_id"}
+    fields = {
+        "solver",
+        "status",
+        "reason",
+        "n",
+        "solved",
+        "solve_rate",
+        "wilson_95",
+        "protocol_id",
+        "difficulty",
+        "sealed_snapshot_id",
+    }
     output = []
     for model in summary["models"]:
         row = {key: value for key, value in model.items() if key in fields}
@@ -142,4 +153,8 @@ def table_difficulty(summary: dict[str, Any]) -> dict[str, Any]:
         if model.get("sample") is not None:
             row["sample"] = {"pre_oracle_filter": model["sample"]["pre_oracle_filter"]}
         output.append(row)
-    return {"protocol_id": summary["protocol_id"], "models": output}
+    return {
+        "protocol_id": summary["protocol_id"],
+        "models": output,
+        **({"sealed_snapshot": summary["sealed_snapshot"]} if "sealed_snapshot" in summary else {}),
+    }

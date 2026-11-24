@@ -38,6 +38,7 @@ from taskcompendium.identity import canonical_sha256
 from .content_access import content_is_withheld
 from .difficulty import raw_current_models
 from .restrictions import PRIVATE_TEXT_MARKER
+from .sealed_difficulty import sealed_difficulty_models
 from .source_identity import canonical_source_id
 
 COVERED_STATUSES = ("Available", "Pending")
@@ -126,7 +127,9 @@ def _solver_coverage(model: dict[str, Any], withheld: bool = False) -> SolverCov
     )
 
 
-def source_coverage(declaration: dict[str, Any], records: list[DifficultyObservation]) -> SourceCoverage:
+def source_coverage(
+    declaration: dict[str, Any], records: list[DifficultyObservation], sealed_record: dict | None = None
+) -> SourceCoverage:
     """Classify one source from its current declaration and stored observations.
 
     Classification reads the typed reasons verbatim; a PRIVATE_ALWAYS source's
@@ -134,7 +137,8 @@ def source_coverage(declaration: dict[str, Any], records: list[DifficultyObserva
     can never travel through the coverage document.
     """
     withheld = content_is_withheld(declaration)
-    solvers = tuple(_solver_coverage(model, withheld=withheld) for model in raw_current_models(declaration, records))
+    models = sealed_difficulty_models(declaration, raw_current_models(declaration, records), sealed_record)
+    solvers = tuple(_solver_coverage(model, withheld=withheld) for model in models)
     measured = [model for model in solvers if model.status is MeasurementStatus.MEASURED]
     gaps = tuple(gap for model in solvers for gap in model.gaps)
     evidence = tuple(model.reason for model in solvers if model.reason and model.gaps)
@@ -156,14 +160,20 @@ def source_coverage(declaration: dict[str, Any], records: list[DifficultyObserva
 
 
 def difficulty_coverage(
-    declarations: dict[str, dict[str, Any]], records: dict[str, list[DifficultyObservation]]
+    declarations: dict[str, dict[str, Any]],
+    records: dict[str, list[DifficultyObservation]],
+    sealed_records: dict[str, dict] | None = None,
 ) -> DifficultyCoverage:
     """Classify every Available or Pending source in the catalog being rebuilt."""
     sources: dict[str, SourceCoverage] = {}
     for source_id, declaration in declarations.items():
         if declaration.get("status") not in COVERED_STATUSES:
             continue
-        coverage = source_coverage(declaration, records.get(canonical_source_id(source_id), []))
+        coverage = source_coverage(
+            declaration,
+            records.get(canonical_source_id(source_id), []),
+            (sealed_records or {}).get(canonical_source_id(source_id)),
+        )
         sources[coverage.source_id] = coverage
     counts = {
         "sources": len(sources),

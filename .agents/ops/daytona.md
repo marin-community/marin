@@ -648,3 +648,29 @@ unbound create request still consumes one slot. A replacement producer must
 carry unresolved quarantine records forward and transfer the stopped producer's
 reserve claim without releasing it. Verify the old producer and pod are terminal
 before the handoff; never replay an ownership-ambiguous row as a new trial.
+
+## Sealing a stopped difficulty ledger
+
+Stop the controller before releasing its serving pools. Derive leftover Daytona
+sandbox IDs from the lane's lifecycle logs and reconcile those exact IDs; retain
+unbound create requests as unresolved evidence.
+
+Run the maintained `experiments.post_training.task_curation.difficulty.seal`
+entry point with the ledger, destination, provenance JSON and receipt path. It
+verifies content-addressed partitions, refuses a changing inventory, preserves
+parked repair verifications and REPAIRED rows, and reads every sealed object back.
+Its final sequence is the number of unique ledger rows ordered by UTC record
+time and attempt ID; the content-addressed ledger has no native sequence counter.
+The selected snapshot is recorded in `v1/closed.json`, after which appenders fail
+closed. Start any new campaign in its own explicitly versioned ledger namespace.
+
+Uncovered cells have null difficulty and pass rate. Observed partial rates remain
+separate; repeated scores on one task do not cover another task. Out-of-range
+rewards remain in the raw ledger and make the affected cell unmeasured. Parked
+holds remain effective even when old scores exist.
+
+Register the verified manifest URI and hash for the next cut in
+`release_stages/difficulty_snapshots.json`. The `atlas-release` graph binds that
+receipt into catalog-load identity, verifies it in preflight, and publishes its
+release-bound cells and seal reference. Changed source populations never inherit
+values from the old seal. Do not publish a seal through a per-release script.

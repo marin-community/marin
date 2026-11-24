@@ -34,7 +34,7 @@ from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .derived_contract import contract_projection, contract_records
-from .difficulty import difficulty_records, difficulty_summary, difficulty_table_summary, table_difficulty
+from .difficulty import difficulty_records, difficulty_summary, table_difficulty
 from .difficulty_coverage import difficulty_coverage
 from .duplicate_folding import (
     SourceStanding,
@@ -63,6 +63,7 @@ from .review_content import task_request_evidence
 from .reviews import register_review_routes
 from .rollouts import register_rollout_routes
 from .schema import SCHEMA_SQL
+from .sealed_difficulty import sealed_difficulty_records, sealed_difficulty_summary
 from .source_areas import materialize_source_areas
 from .source_counts import SourceCounts
 from .source_identity import canonical_source_id, original_source_id
@@ -538,6 +539,7 @@ def create_api(services: AppletServices) -> FastAPI:
             if cached is not None and cached.input_key == input_key:
                 return cached.payload
             measurements = difficulty_records(connection)
+            sealed_measurements = sealed_difficulty_records(connection, metadata["load_id"])
             contracts = contract_records(connection)
             full_reviews = full_review_records(connection)
             rows = [
@@ -620,9 +622,19 @@ def create_api(services: AppletServices) -> FastAPI:
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
                         "difficulty": (
-                            difficulty_table_summary(row["declaration"], measurements.get(row["id"], []))
+                            table_difficulty(
+                                sealed_difficulty_summary(
+                                    difficulty_summary(row["declaration"], measurements.get(row["id"], [])),
+                                    row["declaration"],
+                                    sealed_measurements.get(row["id"]),
+                                )
+                            )
                             if projection == SourceProjection.TABLE
-                            else difficulty_summary(row["declaration"], measurements.get(row["id"], []))
+                            else sealed_difficulty_summary(
+                                difficulty_summary(row["declaration"], measurements.get(row["id"], [])),
+                                row["declaration"],
+                                sealed_measurements.get(row["id"]),
+                            )
                         ),
                         "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": (
@@ -1049,8 +1061,13 @@ def create_api(services: AppletServices) -> FastAPI:
             coverage = source_coverage(connection, {canonical_source_id(source_id): source["declaration"]}).get(
                 canonical_source_id(source_id)
             )
-            difficulty = difficulty_summary(
-                source["declaration"], difficulty_records(connection, source_id).get(canonical_source_id(source_id), [])
+            difficulty = sealed_difficulty_summary(
+                difficulty_summary(
+                    source["declaration"],
+                    difficulty_records(connection, source_id).get(canonical_source_id(source_id), []),
+                ),
+                source["declaration"],
+                sealed_difficulty_records(connection, source["load_id"]).get(canonical_source_id(source_id)),
             )
         explanation = quality_explanation(
             source["declaration"],

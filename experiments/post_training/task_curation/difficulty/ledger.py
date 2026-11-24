@@ -74,6 +74,8 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
     """
     if not rows:
         return None
+    if (StoragePath(root) / LEDGER_VERSION / "closed.json").exists():
+        raise ValueError(f"Difficulty ledger is sealed: {root}")
     payload = "".join(
         json.dumps(asdict(row), sort_keys=True) + "\n" for row in sorted(rows, key=lambda row: row.attempt_id)
     )
@@ -93,9 +95,13 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
 @lru_cache(maxsize=LEDGER_PARTITION_CACHE_SIZE)
 def partition_rows(uri: str) -> tuple[LedgerRow, ...]:
     """Decode one immutable content-addressed partition once per controller process."""
-    path = StoragePath(uri)
+    return decode_partition_rows(StoragePath(uri).read_bytes())
+
+
+def decode_partition_rows(payload: bytes) -> tuple[LedgerRow, ...]:
+    """Decode ledger bytes without changing their recorded evidence."""
     decoded = []
-    for line in path.read_text().splitlines():
+    for line in payload.splitlines():
         value = json.loads(line)
         value["solver"] = Solver(value["solver"])
         value["outcome"] = Outcome(value["outcome"])

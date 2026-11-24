@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_snapshot_source,
 )
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.difficulty.seal import verify_snapshot
 from experiments.post_training.task_curation.release_stages.admission_check import review_admissions
 from experiments.post_training.task_curation.release_stages.history_staging import (
     DEFAULT_APPLET_ID,
@@ -52,6 +53,7 @@ from experiments.post_training.task_curation.release_stages.paced_query import R
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
 from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
+from infra.marina.apps.rl_data_catalog.load_difficulty_seal import load_difficulty_seal
 from infra.marina.apps.rl_data_catalog.load_reviews import load_content_reviews
 from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
@@ -88,6 +90,7 @@ class CatalogLoadInputs:
     migrations: tuple[str, ...] = ()
     service_url: str = DEFAULT_SERVICE_URL
     applet_id: str = DEFAULT_APPLET_ID
+    difficulty_snapshot: ArtifactRef | None = None
 
     def validate(self) -> None:
         """Refuse malformed inputs before any query or read runs."""
@@ -147,6 +150,8 @@ def run_dry_run(inputs: CatalogLoadInputs) -> dict:
     fails the dry run — never the cluster job.
     """
     publication = read_ref(inputs.publication)
+    if inputs.difficulty_snapshot is not None:
+        verify_snapshot(inputs.difficulty_snapshot)
     contracts_document = read_ref(inputs.staging["contracts"])
     contract_rows = contracts_document if isinstance(contracts_document, list) else [contracts_document]
     if len(contract_rows) != inputs.expected_contract_count:
@@ -325,8 +330,15 @@ def _run_write(
     )["rows"][0]["n"]
     if selected_panels != inputs.expected_selected_panels:
         raise ValueError(f"{selected_panels} selected review panels, expected {inputs.expected_selected_panels}")
+    sealed_difficulty = None
+    if inputs.difficulty_snapshot is not None:
+        sealed_difficulty = load_difficulty_seal(inputs.difficulty_snapshot, query, inputs.target_load_id)
     coverage_publisher = coverage_publisher if coverage_publisher is not None else publish_coverage
-    coverage_result = coverage_publisher(query, inputs.target_load_id)
+    coverage_result = (
+        coverage_publisher(query, inputs.target_load_id, sealed_snapshot_id=sealed_difficulty["snapshot_id"])
+        if sealed_difficulty is not None
+        else coverage_publisher(query, inputs.target_load_id)
+    )
 
     proof = {
         "kind": "catalog-load",
@@ -340,6 +352,7 @@ def _run_write(
         "fresh_qc_results": qc_results,
         "selected_review_panels": selected_panels,
         "difficulty_coverage": coverage_result,
+        "sealed_difficulty": sealed_difficulty,
         "result": result,
         "measured_dependency": {
             "module": inputs.measured_module,

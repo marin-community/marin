@@ -104,7 +104,7 @@ def difficulty_records_from_query(query: AppletQuery) -> dict[str, list[Difficul
         offset += DIFFICULTY_READ_BATCH
 
 
-def publish_coverage(query: AppletQuery, load_id: str) -> dict[str, Any]:
+def publish_coverage(query: AppletQuery, load_id: str, *, sealed_snapshot_id: str | None = None) -> dict[str, Any]:
     """Compute the Difficulty coverage over the loaded catalog and store it for this load.
 
     The pure classifier runs over the loaded declarations and the stored
@@ -125,7 +125,25 @@ def publish_coverage(query: AppletQuery, load_id: str) -> dict[str, Any]:
             break
         offset += DECLARATION_READ_BATCH
     observations = difficulty_records_from_query(query)
-    document = difficulty_coverage(declarations, observations)
+    sealed = {}
+    if sealed_snapshot_id is not None:
+        offset = 0
+        while True:
+            rows = query(
+                "SELECT c.source_id,c.cell,s.snapshot_id,s.manifest_uri,s.manifest_sha256 "
+                "FROM atlas_difficulty_seal_loads l JOIN atlas_difficulty_seals s USING(snapshot_id) "
+                "JOIN atlas_difficulty_seal_cells c USING(snapshot_id) WHERE l.load_id=:load_id "
+                "ORDER BY c.source_id,c.solver LIMIT :limit OFFSET :offset",
+                {"load_id": load_id, "limit": DIFFICULTY_READ_BATCH, "offset": offset},
+            )["rows"]
+            for row in rows:
+                record = sealed.setdefault(row["source_id"], {"cells": []})
+                record.update(snapshot_id=row["snapshot_id"], uri=row["manifest_uri"], sha256=row["manifest_sha256"])
+                record["cells"].append(row["cell"])
+            if len(rows) < DIFFICULTY_READ_BATCH:
+                break
+            offset += DIFFICULTY_READ_BATCH
+    document = difficulty_coverage(declarations, observations, sealed)
     payload = document.model_dump(mode="json", include={"sources", "counts", "generated_at"})
     payload["load_id"] = load_id
     stored = DifficultyCoverage.model_validate({**payload, "snapshot_id": None, "queue": []})

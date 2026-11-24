@@ -218,3 +218,18 @@ with this README and the entry point alone: `plan` lists the full graph I/O-free
 ones with reasons, `status` reports state, and `run` refuses anything unqualified
 through the guard — all without reading or executing anything outside the
 repository.
+
+## Release-bound difficulty seals
+
+`difficulty_snapshots.json` binds a named future cut to a verified immutable
+Difficulty manifest URI and SHA-256. Loading that cut's plan incorporates the
+binding into `ReleasePlan.difficulty_snapshot` and catalog-load identity; a
+conflicting explicit plan binding fails closed. Other release IDs retain their
+existing inputs.
+
+Catalog-load preflight verifies all sealed bytes. Write mode uses the maintained
+`load_difficulty_seal` loader, reads its records back, and binds the seal to the
+new load without overwriting a prior binding. Atlas source columns and aggregate
+coverage use only cells matching the loaded declaration's population. Partial
+cells keep their attempt counts while difficulty and pass rate remain null.
+The column retains the immutable manifest receipt for inspection.

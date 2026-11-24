@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS atlas_difficulty (
     measurement JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS atlas_difficulty_source ON atlas_difficulty (source_id, protocol_id);
+CREATE TABLE IF NOT EXISTS atlas_difficulty_seals (
+    snapshot_id TEXT PRIMARY KEY, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL,
+    manifest JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS atlas_difficulty_seal_cells (
+    snapshot_id TEXT NOT NULL REFERENCES atlas_difficulty_seals(snapshot_id), source_id TEXT NOT NULL,
+    solver TEXT NOT NULL, registry_revision TEXT NOT NULL, cell JSONB NOT NULL,
+    PRIMARY KEY (snapshot_id,source_id,solver)
+);
+CREATE TABLE IF NOT EXISTS atlas_difficulty_seal_loads (
+    load_id TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL REFERENCES atlas_difficulty_seals(snapshot_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_difficulty_coverage (
     load_id TEXT PRIMARY KEY, coverage JSONB NOT NULL
 );

@@ -207,6 +207,9 @@ class MeasuredDependency(BaseModel):
             raise ValueError("the measured dependency pins (module, revision, sha256, schema_sha256) are required")
 
 
+DIFFICULTY_SNAPSHOTS = Path(__file__).with_name("difficulty_snapshots.json")
+
+
 class ReleasePlan(BaseModel):
     """Typed release configuration resolved once at the CLI boundary.
 
@@ -247,6 +250,7 @@ class ReleasePlan(BaseModel):
     gpu_runtime: str | None = None
     previously_available: tuple[str, ...] = ()
     qc_exclusions: tuple[str, ...] = ()
+    difficulty_snapshot: ArtifactRef | None = None
     migrations: tuple[str, ...] = ()
     rebound_source: str = ""
     rebound_tasks: int = 0
@@ -310,6 +314,13 @@ class ReleasePlan(BaseModel):
 def load_plan(path: Path) -> ReleasePlan:
     """Load and validate the sealed release plan document."""
     plan = ReleasePlan.model_validate_json(path.read_text(encoding="utf-8"))
+    registry = json.loads(DIFFICULTY_SNAPSHOTS.read_text())
+    bound = registry.get(plan.release_id)
+    if bound is not None:
+        reference = ArtifactRef.model_validate(bound)
+        if plan.difficulty_snapshot is not None and plan.difficulty_snapshot != reference:
+            raise ValueError("Release plan differs from its registered difficulty seal")
+        plan = plan.model_copy(update={"difficulty_snapshot": reference})
     plan.validate_shape()
     return plan
 
@@ -1665,6 +1676,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
         "previously_available",
         "migrations",
         "measured",
+        "difficulty_snapshot",
     )
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1694,6 +1706,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
             "migrations": plan.migrations,
             "service_url": plan.service.service_url,
             "applet_id": plan.service.applet_id,
+            "difficulty_snapshot": _ref_dict(plan.difficulty_snapshot),
         }
 
     return _stage_step(

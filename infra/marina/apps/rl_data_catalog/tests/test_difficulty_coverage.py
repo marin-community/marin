@@ -329,6 +329,8 @@ def test_publish_coverage_stores_the_document_for_the_load():
                     for source_id, declaration in sorted(self.declarations.items())
                 ]
                 return {"rows": rows[parameters["offset"] : parameters["offset"] + parameters["limit"]]}
+            if "FROM atlas_difficulty_seal_loads" in sql:
+                return {"rows": []}
             if "FROM atlas_difficulty" in sql:
                 rows = [{"measurement": record.model_dump(mode="json")} for record in self.records]
                 return {"rows": rows[parameters["offset"] : parameters["offset"] + parameters["limit"]]}
@@ -367,6 +369,8 @@ def test_publish_coverage_paginates_bulk_reads_under_the_transport_bound(monkeyp
                     {"id": source_id, "declaration": declaration}
                     for source_id, declaration in sorted(self.declarations.items())
                 ]
+            elif "FROM atlas_difficulty_seal_loads" in sql:
+                rows = []
             elif "FROM atlas_difficulty" in sql:
                 rows = [{"measurement": record.model_dump(mode="json")} for record in self.records]
             elif "INSERT INTO atlas_difficulty_coverage" in sql:
