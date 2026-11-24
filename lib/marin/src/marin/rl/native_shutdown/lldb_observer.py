@@ -14,6 +14,7 @@ from stack_safety import identity  # pyrefly: ignore[missing-import]  # standalo
 LIMIT = 1024 * 1024
 _MAX_FRAMES_PER_THREAD = 8
 _DETACH_RESERVE_SECONDS = 0.2
+_THREAD_JOURNAL_INTERVAL_SECONDS = 0.1
 
 
 def atomic_json(path, value):
@@ -25,6 +26,10 @@ def atomic_json(path, value):
 
 def run(debugger, command, result, internal_dict):
     settings = json.loads(Path(shlex.split(command)[0]).read_text())
+    costs: dict = {
+        name: {"calls": 0, "seconds": 0.0} for name in ("journal_writes", "frame_unwinds", "enrichments", "trace_writes")
+    }
+    costs.update(cache_hits=0, cache_misses=0, inline_bypasses=0, cache_entries=0)
     receipt: dict = {
         "status": "error",
         "native_stack_qualified": False,
@@ -44,13 +49,37 @@ def run(debugger, command, result, internal_dict):
         "late_cleanup_frame": False,
         "libxla_frame_present": False,
         "frame_marker_present": False,
+        "capture_cost": costs,
+        "capture_cost_scope": (
+            "Non-exhaustive capture-phase elapsed times; enrichment includes module-prefix trace writes, "
+            "so timings overlap. Attach/ACK wait and final receipt write are excluded."
+        ),
     }
     process = None
     trace = None
+    last_journal = None
+    # Addresses are stable only for this single stopped-process sample. Inline
+    # frames can share a PC while carrying different call contexts.
+    enrichment_by_pc = {}
+    measuring_capture = False
 
-    def journal(phase, **fields):
-        receipt.update(phase=phase, journal_monotonic=time.monotonic(), **fields)
-        atomic_json(settings["lldb_receipt_path"], receipt)
+    def measured(kind, function, *args):
+        if not measuring_capture:
+            return function(*args)
+        started = time.monotonic()
+        costs[kind]["calls"] += 1
+        try:
+            return function(*args)
+        finally:
+            costs[kind]["seconds"] += time.monotonic() - started
+
+    def journal(phase, *, periodic=False, **fields):
+        nonlocal last_journal
+        now = time.monotonic()
+        receipt.update(phase=phase, journal_monotonic=now, **fields)
+        if not periodic or last_journal is None or now - last_journal >= _THREAD_JOURNAL_INTERVAL_SECONDS:
+            measured("journal_writes", atomic_json, settings["lldb_receipt_path"], receipt)
+            last_journal = now
 
     def execute(text):
         response = lldb.SBCommandReturnObject()
@@ -65,7 +94,7 @@ def run(debugger, command, result, internal_dict):
             receipt["output_truncated"] = True
             raise RuntimeError("OutputLimitExceeded")
         assert trace is not None
-        written = trace.write(data)
+        written = measured("trace_writes", trace.write, data)
         receipt["trace_bytes_written"] += written or 0
         if written != len(data):
             raise OSError("Incomplete native stack write")
@@ -82,12 +111,12 @@ def run(debugger, command, result, internal_dict):
             # The streamed frame prefix retains the per-frame cursor. Avoid
             # thousands of atomic JSON rewrites while the target is stopped.
             receipt.pop("active_frame_index", None)
-            journal("thread_frames", active_thread_id=thread_id)
+            journal("thread_frames", periodic=True, active_thread_id=thread_id)
         for index in range(_MAX_FRAMES_PER_THREAD):
             capture_budget(deadline)
             if main:
                 journal("frame_unwind", active_thread_id=thread_id, active_frame_index=index)
-            frame = thread.GetFrameAtIndex(index)
+            frame = measured("frame_unwinds", thread.GetFrameAtIndex, index)
             capture_budget(deadline)
             if not frame.IsValid():
                 break
@@ -99,16 +128,39 @@ def run(debugger, command, result, internal_dict):
             write_trace(f"frame #{index}: {pc:#x} ")
             if main:
                 journal("frame_symbol", active_thread_id=thread_id, active_frame_index=index)
-            module = frame.GetModule().GetFileSpec().GetFilename() or "<unknown>"
+            inline = frame.IsInlined()
             capture_budget(deadline)
-            write_trace(module + " ")
-            symbol = frame.GetFunctionName()
-            capture_budget(deadline)
-            if not symbol:
-                symbol = frame.GetSymbol().GetName()
-                capture_budget(deadline)
-            symbol = symbol or "<unknown>"
-            symbol = symbol.replace("\n", " ").replace("\r", " ")
+            cached = None if inline else enrichment_by_pc.get(pc)
+            if cached is None:
+                costs["inline_bypasses" if inline else "cache_misses"] += 1
+                enrichment_started = time.monotonic()
+                costs["enrichments"]["calls"] += 1
+                try:
+                    resolved_module = frame.GetModule()
+                    module = resolved_module.GetFileSpec().GetFilename() or "<unknown>"
+                    capture_budget(deadline)
+                    module = module.replace("\n", " ").replace("\r", " ")
+                    write_trace(module + " ")
+                    symbol = frame.GetFunctionName()
+                    capture_budget(deadline)
+                    symbol_valid = bool(symbol and symbol.strip() and symbol != "<unknown>")
+                    if not symbol:
+                        resolved_symbol = frame.GetSymbol()
+                        symbol = resolved_symbol.GetName()
+                        capture_budget(deadline)
+                        symbol_valid = bool(
+                            resolved_symbol.IsValid() and symbol and symbol.strip() and symbol != "<unknown>"
+                        )
+                    symbol = (symbol or "<unknown>").replace("\n", " ").replace("\r", " ")
+                    if not inline and resolved_module.IsValid() and module != "<unknown>" and symbol_valid:
+                        enrichment_by_pc[pc] = (module, symbol)
+                        costs["cache_entries"] = len(enrichment_by_pc)
+                finally:
+                    costs["enrichments"]["seconds"] += time.monotonic() - enrichment_started
+            else:
+                costs["cache_hits"] += 1
+                module, symbol = cached
+                write_trace(module + " ")
             write_trace(symbol + "\n")
             receipt["late_cleanup_frame"] |= "late_cleanup" in symbol
             receipt["libxla_frame_present"] |= any(name in module for name in ("libjax", "libxla", "xla_extension"))
@@ -118,7 +170,7 @@ def run(debugger, command, result, internal_dict):
         if not captured:
             raise RuntimeError("Stopped thread has no readable frames")
         receipt["threads_captured"] += 1
-        journal("thread_complete", active_thread_id=thread_id, completed_thread_frames=captured)
+        journal("thread_complete", periodic=not main, active_thread_id=thread_id, completed_thread_frames=captured)
 
     try:
         descriptor = os.open(settings["trace_path"], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -187,6 +239,7 @@ def run(debugger, command, result, internal_dict):
                 return
             time.sleep(0.005)
         started = time.monotonic()
+        measuring_capture = True
         journal("capture", capture_started_monotonic=started)
         if process.GetState() == lldb.eStateExited:
             receipt.update(status="target_exited_no_sample", phase="done", target_exit_status=process.GetExitStatus())
@@ -214,10 +267,12 @@ def run(debugger, command, result, internal_dict):
         count = process.GetNumThreads()
         capture_budget(deadline)
         receipt["threads_seen"] = count
+        receipt.pop("active_frame_index", None)
+        journal("supplementary_threads", active_thread_id=None, active_thread_index=0)
         seen = set()
         for index in range(count):
             capture_budget(deadline)
-            journal("thread_lookup", active_thread_index=index)
+            journal("thread_lookup", periodic=True, active_thread_index=index)
             thread = process.GetThreadAtIndex(index)
             capture_budget(deadline)
             thread_id = thread.GetThreadID()

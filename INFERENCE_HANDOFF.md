@@ -4,7 +4,7 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-The full-model quick loop at `ab3e704c55` completed one finite update on all
+The latest full-model quick loop at `40723ba125` completed one finite update on all
 four native learner ranks, then failed the unchanged five-second process-exit
 check before checkpoint restore. Updated-policy publication, generation from
 that policy, and the matched 25-update comparison remain open. The integrated
@@ -412,7 +412,7 @@ eight for the existing vLLM group, BATCH priority and zero automatic retries.
 Explicit delivery of the W&B key restored normal logging. The coordinator and
 GPU source bundles matched all 4,640 frozen files. Compared with the original
 `2026.11.23.1` run, all 693 payload leaves matched after applying the 17 reviewed
-changes to attempt paths, diagnostic observation and the execution cap.
+changes to attempt paths, diagnostic observation and the two-hour job execution cap.
 
 The checkpoint writer completed at 05:27 UTC on November 24. The fetched
 321-byte metadata records step 1, policy version 1 and the same Snowball SFT
@@ -433,6 +433,28 @@ two, updated-policy publication and generation, and the matched 25-update
 Megatron-versus-Levanter comparison remain unverified.
 [Corrected observed diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.2-coordinator-8a56842f)
 · [W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/02o09b9k)
+
+The observer at `1524e77170` now streams numeric PCs before symbol lookup,
+keeps partial traces and phase receipts, and observes every opted-in native
+rank. Its zero-GPU Linux control captured the real main-thread `late_cleanup`
+frame, but failed complete coverage: 33,373 bytes, 439 complete frames and 55
+completed thread stacks out of 386 observed threads. Capture stopped near ACK + 2.75 seconds, reserving 0.20 seconds for detach
+before the guardian deadline at ACK + 2.95 seconds. The guardian
+safely retired the debugger, and the strict control verdict remains failed.
+The failed control deliberately held its allocation for output collection.
+The bounded outputs were backed up before cancellation; Iris reports
+`KILLED` and the exact pod was verified absent. This is progress
+in retaining diagnostics, not qualification of capture capacity or learner exit.
+The 439 frames use only 17 distinct PCs. Symbol memoization and fewer
+per-thread journal writes are the next optimization candidates; their costs
+have not been separated. No capture deadline or coverage gate is relaxed.
+[Streamed native capture control](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-streamed-native-c6-20261124-1)
+
+The `python_atexit_begin` marker proves entry into Python's ordinary atexit
+callbacks. It runs before previously registered callbacks, so it does not
+prove that every callback finished. The full-model exit cause still requires
+a discriminating native stack; loaded libraries and an idle attach frame do
+not identify the owner of the wait.
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

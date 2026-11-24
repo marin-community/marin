@@ -4,6 +4,7 @@
 """Portable guardian phase timing using real marker files and readiness pipes."""
 
 import importlib.util
+import itertools
 import json
 import os
 import select
@@ -193,13 +194,18 @@ def lldb_capture(tmp_path, monkeypatch):
     def frame(symbol, pc):
         return SimpleNamespace(
             IsValid=lambda: True,
+            IsInlined=lambda: False,
             GetPC=lambda: pc,
-            GetModule=lambda: SimpleNamespace(GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "libnative.so")),
+            GetModule=lambda: SimpleNamespace(
+                IsValid=lambda: True, GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "libnative.so")
+            ),
             GetFunctionName=lambda: symbol,
         )
 
     def thread(thread_id, symbols):
-        values = [frame(symbol, 0x1000 + 16 * index) for index, symbol in enumerate(symbols)]
+        values = [
+            frame(symbol, 0x1000 + (thread_id - 1212) * 0x100 + 16 * index) for index, symbol in enumerate(symbols)
+        ]
         hook = SimpleNamespace(before_frame=None)
 
         def get_frame(index):
@@ -212,6 +218,7 @@ def lldb_capture(tmp_path, monkeypatch):
             GetThreadID=lambda: thread_id,
             GetFrameAtIndex=get_frame,
             hook=hook,
+            frames=values,
         )
 
     main = thread(1212, ["late_cleanup", "Py_Finalize"])
@@ -307,6 +314,8 @@ def lldb_capture(tmp_path, monkeypatch):
         state=state,
         clock=clock,
         errors=errors,
+        frame=frame,
+        thread=thread,
     )
 
 
@@ -373,8 +382,11 @@ def test_lldb_oversize_symbol_preserves_bounded_nonqualifying_partial_output(lld
     value = lldb_capture
     oversized = SimpleNamespace(
         IsValid=lambda: True,
+        IsInlined=lambda: False,
         GetPC=lambda: 0x1234,
-        GetModule=lambda: SimpleNamespace(GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "native.so")),
+        GetModule=lambda: SimpleNamespace(
+            IsValid=lambda: True, GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "native.so")
+        ),
         GetFunctionName=lambda: "x" * (1024 * 1024 + 1),
     )
     value.main.GetFrameAtIndex = lambda index: oversized
@@ -434,3 +446,216 @@ def test_lldb_blocked_frame_enrichment_keeps_numeric_prefix_nonqualifying(lldb_c
     assert receipt["error_phase"] == "frame_symbol" and receipt["frames_written"] == 0
     assert receipt["status"] == "error" and not receipt["frames_complete"]
     assert not receipt["native_stack_qualified"] and receipt["final_detach_success"]
+
+
+def test_lldb_repeated_noninline_PC_enriches_once_per_stop_but_writes_every_real_frame(lldb_capture):
+    value = lldb_capture
+    calls = {"pc": 0, "module": 0, "symbol": 0}
+
+    def current_frame():
+        frame = value.frame("late_cleanup", 0x1234)
+
+        def pc():
+            calls["pc"] += 1
+            return 0x1234
+
+        def module():
+            calls["module"] += 1
+            assert Path(value.settings["trace_path"]).read_bytes().endswith(b"0x1234 ")
+            # Repeating the external symbol lookup would exceed the real
+            # detach reserve; reusing enrichment must preserve full coverage.
+            value.clock[0] += 0.2
+            return SimpleNamespace(
+                IsValid=lambda: True, GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "native.so")
+            )
+
+        def symbol():
+            calls["symbol"] += 1
+            return "late_cleanup"
+
+        frame.GetPC = pc
+        frame.GetModule = module
+        frame.GetFunctionName = symbol
+        return frame
+
+    value.main.frames[:] = [current_frame() for _ in range(3)]
+    value.other.frames[:] = [current_frame() for _ in range(2)]
+    for stop in range(2):
+        if stop:
+            Path(value.settings["trace_path"]).unlink()
+        value.run()
+        lines = Path(value.settings["trace_path"]).read_text().splitlines()
+        receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+        assert [line for line in lines if line.startswith("thread ")] == [
+            "thread tid=1212 main=true",
+            "thread tid=1213 main=false",
+        ]
+        assert [line for line in lines if line.startswith("frame #")] == [
+            f"frame #{index}: 0x1234 native.so late_cleanup" for index in (0, 1, 2, 0, 1)
+        ]
+        assert calls == {"pc": 5 * (stop + 1), "module": stop + 1, "symbol": stop + 1}
+        assert receipt["status"] == "collected" and receipt["frames_written"] == 5
+        assert receipt["capture_cost"]["cache_hits"] == 4 and receipt["capture_cost"]["cache_misses"] == 1
+        assert receipt["capture_cost"]["cache_entries"] == 1 and receipt["capture_cost"]["enrichments"]["calls"] == 1
+        assert receipt["capture_cost"]["frame_unwinds"]["calls"] == 7  # Five frames and two real invalid probes.
+
+
+def test_lldb_inline_frames_keep_distinct_context_even_when_noninline_PC_is_cached(lldb_capture):
+    value = lldb_capture
+    value.main.frames[:] = [value.frame("noninline", 0x1234)]
+    value.other.frames[:] = [value.frame("inline_A", 0x1234), value.frame("inline_B", 0x1234)]
+    for frame in value.other.frames:
+        frame.IsInlined = lambda: True
+    value.run()
+    data = Path(value.settings["trace_path"]).read_text()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    assert all(name in data for name in ("noninline", "inline_A", "inline_B"))
+    assert receipt["frames_written"] == 3 and receipt["capture_cost"]["enrichments"]["calls"] == 3
+    assert receipt["capture_cost"]["inline_bypasses"] == 2 and receipt["capture_cost"]["cache_hits"] == 0
+    assert receipt["capture_cost"]["cache_entries"] == 1
+
+
+@pytest.mark.parametrize("unknown", ["invalid_module", "unknown_module", "invalid_symbol", "unknown_symbol"])
+def test_lldb_unknown_enrichment_is_not_memoized_and_can_resolve_later(lldb_capture, unknown):
+    value = lldb_capture
+    lookups = []
+    frames = []
+    for index in range(3):
+        frame = value.frame("resolved", 0x1234)
+
+        def module(index=index):
+            lookups.append(index)
+            return SimpleNamespace(
+                IsValid=lambda: not (index == 0 and unknown == "invalid_module"),
+                GetFileSpec=lambda: SimpleNamespace(
+                    GetFilename=lambda: (
+                        None
+                        if index == 0 and unknown == "unknown_module"
+                        else "invalid_module.so" if index == 0 and unknown == "invalid_module" else "native.so"
+                    )
+                ),
+            )
+
+        frame.GetModule = module
+        if index == 0 and unknown == "invalid_symbol":
+            frame.GetFunctionName = lambda: None
+            frame.GetSymbol = lambda: SimpleNamespace(IsValid=lambda: False, GetName=lambda: "invalid_lookup")
+        elif index == 0 and unknown == "unknown_symbol":
+            frame.GetFunctionName = lambda: "<unknown>"
+        frames.append(frame)
+    value.main.frames[:] = frames
+    value.run()
+    data = Path(value.settings["trace_path"]).read_text()
+    assert lookups == [0, 1]  # Only the valid second resolution is reused by frame three.
+    assert "frame #1: 0x1234 native.so resolved" in data and "frame #2: 0x1234 native.so resolved" in data
+    assert json.loads(Path(value.settings["lldb_receipt_path"]).read_text())["status"] == "collected"
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_lldb_supplementary_journals_preserve_complete_or_faulted_real_stream(lldb_capture, monkeypatch, blocked):
+    value = lldb_capture
+    checkpoints = []
+    partial = []
+    original = value.module.os.replace
+
+    def record(source, target):
+        original(source, target)
+        if str(target) == value.settings["lldb_receipt_path"]:
+            checkpoints.append((value.clock[0], json.loads(Path(target).read_text())))
+
+    monkeypatch.setattr(value.module.os, "replace", record)
+    for index in range(100):
+        thread = value.thread(1300 + index, ["real_helper"])
+
+        def advance(frame_index, thread_index=index):
+            value.clock[0] += 0.001
+            if blocked and thread_index == 90 and frame_index == 1:
+                partial.append(
+                    (
+                        Path(value.settings["trace_path"]).read_bytes(),
+                        json.loads(Path(value.settings["lldb_receipt_path"]).read_text()),
+                        value.clock[0],
+                    )
+                )
+                raise TimeoutError("Later supplementary unwind blocked")
+
+        thread.hook.before_frame = advance
+        value.threads.append(thread)
+    value.run()
+    rows = [row for _, row in checkpoints]
+    periodic = [
+        (at, row)
+        for at, row in checkpoints
+        if row["phase"] in {"thread_lookup", "thread_frames", "thread_complete"} and row.get("active_thread_id") != 1212
+    ]
+    assert 1 <= len(periodic) <= 3
+    assert all(b[0] - a[0] >= 0.1 for a, b in itertools.pairwise(periodic))
+    assert all(
+        phase in [row["phase"] for row in rows] for phase in ("main_thread", "thread_inventory", "supplementary_threads")
+    )
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    lines = Path(value.settings["trace_path"]).read_text().splitlines()
+    if blocked:
+        assert sum(line.startswith("thread ") for line in lines) == 93 and receipt["threads_captured"] == 92
+        assert sum(line.startswith("frame #") for line in lines) == receipt["frames_written"] == 95
+        assert Path(value.settings["trace_path"]).read_bytes() == partial[0][0]
+        assert 0 <= partial[0][2] - partial[0][1]["journal_monotonic"] <= 0.101
+        assert partial[0][1]["phase"] in {"thread_lookup", "thread_frames", "thread_complete"}
+        assert receipt["error_phase"] == "thread_frames" and receipt["active_thread_id"] == 1390
+        assert receipt["status"] == "error" and not receipt["frames_complete"] and not receipt["native_stack_qualified"]
+        assert receipt["final_detach_success"]
+    else:
+        assert sum(line.startswith("thread ") for line in lines) == receipt["threads_captured"] == 102
+        assert sum(line.startswith("frame #") for line in lines) == receipt["frames_written"] == 104
+        assert receipt["status"] == "collected" and receipt["frames_complete"]
+    assert receipt["capture_cost"]["frame_unwinds"]["seconds"] > 0
+
+
+def test_lldb_names_cannot_forge_extra_streamed_thread_or_frame_records(lldb_capture):
+    value = lldb_capture
+    frame = value.main.frames[0]
+    frame.GetModule = lambda: SimpleNamespace(
+        IsValid=lambda: True, GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "native\nthread tid=999.so")
+    )
+    frame.GetFunctionName = lambda: "late_cleanup\r\nframe #999: forged"
+    value.run()
+    lines = Path(value.settings["trace_path"]).read_text().splitlines()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    assert sum(line.startswith("thread ") for line in lines) == receipt["threads_captured"] == 2
+    assert sum(line.startswith("frame #") for line in lines) == receipt["frames_written"] == 4
+
+
+def test_lldb_capture_cost_counters_are_bounded_aggregate_completed_operation_times(lldb_capture, monkeypatch):
+    value = lldb_capture
+    original_replace = value.module.os.replace
+    original_fdopen = value.module.os.fdopen
+
+    def replace(source, target):
+        value.clock[0] += 0.001
+        original_replace(source, target)
+
+    def fdopen(*args, **kwargs):
+        stream = original_fdopen(*args, **kwargs)
+
+        def write(data):
+            value.clock[0] += 0.0001
+            return stream.write(data)
+
+        return SimpleNamespace(write=write, close=stream.close)
+
+    monkeypatch.setattr(value.module.os, "replace", replace)
+    monkeypatch.setattr(value.module.os, "fdopen", fdopen)
+    for thread in value.threads:
+        thread.hook.before_frame = lambda index: value.clock.__setitem__(0, value.clock[0] + 0.0002)
+    value.run()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    costs = receipt["capture_cost"]
+    assert receipt["status"] == "collected"
+    assert all(
+        costs[name]["calls"] > 0 and costs[name]["seconds"] > 0
+        for name in ("journal_writes", "frame_unwinds", "enrichments", "trace_writes")
+    )
+    assert costs["frame_unwinds"]["calls"] == 6 and costs["enrichments"]["calls"] == 4
+    assert costs["journal_writes"]["seconds"] == pytest.approx(costs["journal_writes"]["calls"] * 0.001)
+    assert costs["trace_writes"]["seconds"] == pytest.approx(costs["trace_writes"]["calls"] * 0.0001)
+    assert costs["frame_unwinds"]["seconds"] == pytest.approx(0.0012)
