@@ -282,9 +282,12 @@ def measure_token_stats(config: EmbeddingConfig) -> None:
     percentiles_source: list[int] = []
     for shard in shards:
         with pq.ParquetFile(shard) as parquet:
-            for batch in parquet.iter_batches(batch_size=512, columns=["docid", "text"]):
+            for batch in parquet.iter_batches(batch_size=1024, columns=["docid", "text"]):
                 rows = batch.to_pylist()
-                lengths = [len(tokenizer.encode(row["text"], add_special_tokens=False)) for row in rows]
+                # Batch encoding parallelizes inside the fast tokenizer.
+                lengths = [
+                    len(ids) for ids in tokenizer([row["text"] for row in rows], add_special_tokens=False)["input_ids"]
+                ]
                 documents += len(rows)
                 total_tokens += sum(lengths)
                 total_chars += sum(len(row["text"]) for row in rows)
@@ -314,7 +317,7 @@ def measure_token_stats(config: EmbeddingConfig) -> None:
         "token_percentiles": {str(p): percentile(p) for p in (0.5, 0.75, 0.9, 0.95, 0.99)},
         "caps": {str(cap): per_cap[cap] for cap in caps},
     }
-    (work / "token-stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    (StoragePath(config.output_path) / "token-stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     logger.info("Token stats: %s", json.dumps(stats))
 
 
