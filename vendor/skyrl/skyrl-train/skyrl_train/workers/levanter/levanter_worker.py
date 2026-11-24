@@ -18,6 +18,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from marin.rl.levanter_shutdown_observer import ShutdownObserver, observation_completed
+from marin.rl.native_shutdown.artifact_handoff import handoff_artifacts
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.distributed.dispatch import ActorInfo, MeshRank, concatenate_outputs_after_mesh_dispatch
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
@@ -406,15 +407,46 @@ class LevanterHostWorker:
         observer = self._shutdown_observer
         if observer is None:
             return
+        receipt = None
+        retired_safe = False
+        retirement_error = None
         try:
             receipt = observer.retire(cancel=cancel)
+            retired_safe = True
             self._shutdown_observer = None
             if not cancel and not observation_completed(receipt):
                 raise RuntimeError("Native shutdown observation did not complete; diagnostic is nonqualifying")
         except Exception as error:
+            retirement_error = type(error).__name__
             if primary is None:
                 raise
             primary.add_note(f"Shutdown observer failure: {error!r}")
+        finally:
+            if not observer.artifact_handoff_attempted:
+                observer.artifact_handoff_attempted = True
+                try:
+                    handoff = handoff_artifacts(
+                        observer.directory,
+                        observer.config,
+                        self.process_id,
+                        retired_safe=retired_safe,
+                        guardian_receipt=receipt,
+                        observation_completed=receipt is not None and observation_completed(receipt),
+                        cancel=cancel,
+                        retirement_error=retirement_error,
+                        primary_error_type=type(primary).__name__ if primary is not None else None,
+                    )
+                    logger.info("NATIVE_OBSERVER_HANDOFF {}", json.dumps(handoff, sort_keys=True))
+                    if primary is not None and handoff["status"] != "uploaded":
+                        primary.add_note(f"Shutdown observer artifact handoff: {handoff['status']}")
+                except Exception as error:
+                    if primary is not None:
+                        primary.add_note(f"Shutdown observer artifact handoff failed: {type(error).__name__}")
+                    with suppress(Exception):
+                        logger.warning(
+                            "NATIVE_OBSERVER_HANDOFF {}",
+                            json.dumps({"status": "failed", "error_type": type(error).__name__}),
+                        )
 
     def _shutdown_child(self):
         observer = self._shutdown_observer

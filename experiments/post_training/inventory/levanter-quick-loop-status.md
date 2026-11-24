@@ -38,8 +38,8 @@ actual deterministic flags, all seven cleanup phases returning, acknowledgment
 and entry into Python finalization. The deterministic profile did not fix the
 full-model shutdown failure.
 
-All five GPU pods were verified absent. The failed coordinator CPU pod remains
-retained. Root/head attempts advertised empty output archives, while the four
+All five GPU pods were verified absent. The failed coordinator CPU pod was
+retained at that check. Root/head attempts advertised empty output archives, while the four
 coscheduling-failed native hosts advertised none. Bounded durable debug objects
 preserve all four ranks' finite-state proofs and the original exceptions.
 No actual learner C++ shutdown stack was captured; that diagnosis precedes a
@@ -47,7 +47,14 @@ further full-model retry. The experimental rank-zero shutdown observer remains
 optional; its latest CPU trace-cap check did not qualify. The guardian now
 separates startup readiness from ACK waiting and rejects late markers before
 they can reset an expired phase. Sixteen portable regressions and required
-lint/type checks pass; actual Linux/LLDB capture with the repair remains open.
+lint/type checks pass. A Linux Python-finalizer control retained a complete
+226,380-byte trace and passed all nine phase checks, with no qualifying
+C-destructor/XLA frame. A separate C-destructor control captured `late_cleanup`
+under the original timing and cleanup guards; its 34,820-byte trace did not
+exercise expanded capacity. Both strict expanded-retention verdicts remain
+false. The new post-retirement upload preserves selected diagnostic files
+before failure propagation; real Linux supervision and object-store delivery
+with that integration remain unqualified.
 [Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
 · [Strict paired checkpoint run](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
 · [Genuine Ray lifecycle](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-deterministic-20261123-2)

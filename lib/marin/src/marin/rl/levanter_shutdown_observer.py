@@ -114,6 +114,7 @@ class ShutdownObserver:
         config_path = self.directory / "observer-config.json"
         config_path.write_text(json.dumps(self.config) + "\n")
         self.retirement_attempted = False
+        self.artifact_handoff_attempted = False
         self.stderr = (self.directory / "guardian.stderr").open("wb")
         try:
             self.guardian = subprocess.Popen(

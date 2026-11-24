@@ -85,6 +85,17 @@ Artifacts also copy into `IRIS_OUTPUT_DIR/native-compile/` when that directory
 is configured. Failure counters are saved separately, preserving the original
 training exception if diagnostic collection or upload fails. These diagnostics
 preserve the recipe and do not establish successful updates or peak-memory fit.
+`--diagnostic-shutdown-observer` enables an experimental native-rank-zero
+observer during checkpoint restart. After retirement, its parent attempts to
+upload at most eight selected files, within a 2 MiB total bound, before
+propagating the learner failure. The launcher supplies the physical task's
+rendezvous destination; the worker never derives it from a checkpoint path.
+Local `handoff-parent.json` and remote `handoff-commit.json` record delivery
+separately from observation success. The uploader has a separate five-second
+budget plus one second for reaping. This post-retirement budget is separate
+from the native five-second exit requirement. Upload failures preserve the
+original learner exception. The observer remains disabled by default.
+
 Require every learner process to report the pinned model revision and completed
 optimizer steps. Receiver replay receipts must identify the installed version
 and report zero byte mismatches against learner weights. Generation receipts

@@ -278,8 +278,23 @@ The guardian now waits separately for debugger readiness and shutdown
 acknowledgment. A late readiness marker can no longer revive an expired phase.
 The 15-second outer debugger cap, ACK-relative sampling and cleanup deadlines,
 and native five-second exit requirement are unchanged. Sixteen portable tests
-pass, including arrivals and reads crossing a deadline. Actual Linux/LLDB
-capture with this repair remains unqualified.
+pass, including arrivals and reads crossing a deadline. Two Linux controls at
+`114e278e74` exercised the repaired path. The Python-finalizer control retained
+all 226,380 bytes of a stack and module listing, with safe cleanup and all nine
+phase checks passing. It had no qualifying C-destructor/XLA frame. The separate
+C-destructor control captured `late_cleanup` and passed its expected
+five-second timeout/exit-9 checks, but its trace was only 34,820 bytes. Both
+strict expanded-retention verdicts remain false; these complementary results
+do not qualify a real GPU learner shutdown stack.
+[Python-finalizer control](https://iris.oa.dev/#/job/%2Fdlwh%2Fproduction-shutdown-ready-python35-114e278e-20261123-1)
+· [C-destructor control](https://iris.oa.dev/#/job/%2Fdlwh%2Fproduction-shutdown-native-c6-114e278e-20261123-1)
+
+After observer retirement, the worker now attempts a bounded upload of its
+selected diagnostic files before propagating a shutdown failure. The route
+uses the physical task and attempt identity; a commit receipt records uploaded
+file hashes separately from observation success. Upload errors preserve the
+original learner exception. Actual Linux process supervision and successful
+object-store delivery with this integration remain unqualified.
 
 A one-H100 smoke at source `f5e53f48b8` exercised the genuine Ray
 `HostWorker` and public checkpoint roundtrip with the observer disabled. Its
@@ -348,7 +363,7 @@ started. The deterministic profile therefore did
 not fix the full-model shutdown failure.
 
 The job is terminal with one failure and no preemptions. All five GPU pods were
-verified absent; the failed coordinator CPU pod remains retained. Canonical
+verified absent; the failed coordinator CPU pod was retained at that check. Canonical
 output archives were unavailable: root and inference-head attempts advertised
 `EMPTY`, and the four coscheduling-failed native hosts advertised no archive.
 The evidence above comes from bounded, revision-checked durable debug objects
