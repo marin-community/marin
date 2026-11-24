@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-writer environments with replayable command and binary-file effects."""
+"""Single-writer environments with live command and binary-file effects."""
 
 import errno
-import logging
 import os
 import shlex
 import time
@@ -38,9 +37,8 @@ from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
-from taskforge.effects.events import ENVIRONMENT, Event, Failed, Fingerprint, Note, ReplayPolicy, digest, failure
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, Unreproducible, describe_exception
-from taskforge.effects.log import Missing, Outcome
+from taskforge.effects.events import ENVIRONMENT, Event, Fingerprint, ReplayPolicy, digest
+from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
@@ -95,12 +93,8 @@ class EnvFactory(Protocol):
     async def create(self, requirements: EnvironmentRequirements) -> Env: ...
 
 
-def _stable(result: CommandResult) -> tuple[str, ...]:
-    return str(result.exit_code), result.stdout, result.stderr
-
-
 class RecordedEnv(Env):
-    """An environment fingerprinted by its initial sandbox definition, which an attempt's open row records."""
+    """An environment fingerprinted by its initial sandbox definition, which each of its outcome rows records."""
 
     def __init__(self, image: str) -> None:
         self.digest = digest((image,))
@@ -163,7 +157,7 @@ class ShellboxEnv(RecordedEnv):
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error
         except CommandOutcomeUnknown as error:
-            # Retrying in place could run the command twice; a stage replay issues it once on a fresh machine.
+            # Retrying in place could run the command twice; a stage restart issues it once on a fresh machine.
             # That is safe only for roles without network: one that can mutate an external service needs a
             # durable command identity, or a hold on an unknown outcome.
             raise Restart(f"command outcome unknown: {error}") from error
@@ -302,60 +296,25 @@ class ShellboxEnvFactory(EnvFactory):
         return ShellboxEnv(machine, image, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
 
-async def reexecuted[T](
-    event: Event[T], recorded: Outcome[T], operation: Callable[[], Awaitable[T]], notify: Notify
-) -> T:
-    """Apply ``event`` to this machine and return its recorded outcome when it has one.
-
-    A resumed attempt rebuilds its machine by re-executing its owner's history in order. Serving a command's recorded
-    output keeps the model's view, and every later request, equal to the recording when only its text drifts (a PID, a
-    timestamp); that drift, the truncation flag included, is noted at INFO by digest. A handled failure is served again
-    when the guest fails with the same errno; any other change of outcome, exit status or bytes holds.
-    """
+async def live[T](event: Event[T], operation: Callable[[], Awaitable[T]], notify: Notify) -> T:
+    """Apply ``event`` to this machine, on every launch; a transfer archive the backend cannot unpack restarts."""
     try:
-        fresh = await retry_effect(event, operation, notify)
-    except TarError as error:  # The backend failed to unpack its transfer archive.
+        return await retry_effect(event, operation, notify)
+    except TarError as error:
         raise Restart(f"{event.kind} transfer failed: {describe_exception(error)}") from error
-    except OSError as error:
-        if isinstance(recorded, Missing):
-            raise
-        if isinstance(recorded, Failed) and failure(error).category == recorded.category:
-            raise recorded.error() from error
-        was = f"failed with {recorded.category}" if isinstance(recorded, Failed) else "succeeded"
-        raise Unreproducible(f"{event.kind} {was} when recorded but failed here: {describe_exception(error)}") from error
-    if isinstance(recorded, Missing):
-        return fresh
-    if isinstance(recorded, Failed):
-        raise Unreproducible(f"{event.kind} failed with {recorded.category} when recorded but succeeded here")
-    if isinstance(fresh, CommandResult) and isinstance(recorded, CommandResult):
-        if recorded.exit_code != fresh.exit_code:
-            raise Unreproducible(f"{event.kind} exited {recorded.exit_code} when recorded but {fresh.exit_code} here")
-        before, after = digest((_stable(recorded), recorded.truncated)), digest((_stable(fresh), fresh.truncated))
-        if before != after:
-            message = f"Replay of {event.kind} diverged: recorded {before[:12]}, re-executed {after[:12]}"
-            logging.info(message)
-            notify(Note(message))
-    elif fresh != recorded:
-        # File content is the machine's state; a read of the same range that differs means the history did not rebuild.
-        raise Unreproducible(f"{event.kind} read other bytes than were recorded ({digest(fresh)[:12]})")
-    return recorded
 
 
-async def run_command(
-    event: RunCommand, env: Env, *, notify: Notify, recorded: Outcome[CommandResult] = Missing()
-) -> CommandResult:
-    return await reexecuted(event, recorded, lambda: env.run(event.cmd, timeout=event.timeout), notify)
+async def run_command(event: RunCommand, env: Env, *, notify: Notify) -> CommandResult:
+    return await live(event, lambda: env.run(event.cmd, timeout=event.timeout), notify)
 
 
-async def write_file(event: WriteFile, env: Env, *, notify: Notify, recorded: Outcome[None] = Missing()) -> None:
-    await reexecuted(event, recorded, lambda: env.write(event.path, event.data), notify)
+async def write_file(event: WriteFile, env: Env, *, notify: Notify) -> None:
+    await live(event, lambda: env.write(event.path, event.data), notify)
 
 
-async def write_files(event: WriteFiles, env: Env, *, notify: Notify, recorded: Outcome[None] = Missing()) -> None:
-    await reexecuted(event, recorded, lambda: env.write_many(event.files), notify)
+async def write_files(event: WriteFiles, env: Env, *, notify: Notify) -> None:
+    await live(event, lambda: env.write_many(event.files), notify)
 
 
-async def read_file(event: ReadFile, env: Env, *, notify: Notify, recorded: Outcome[bytes] = Missing()) -> bytes:
-    return await reexecuted(
-        event, recorded, lambda: env.read(event.path, offset=event.offset, limit=event.limit), notify
-    )
+async def read_file(event: ReadFile, env: Env, *, notify: Notify) -> bytes:
+    return await live(event, lambda: env.read(event.path, offset=event.offset, limit=event.limit), notify)

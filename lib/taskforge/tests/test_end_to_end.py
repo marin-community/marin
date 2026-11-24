@@ -7,7 +7,6 @@ import errno
 import gzip
 import hashlib
 import json
-import logging
 import os
 import shutil
 import subprocess
@@ -66,7 +65,6 @@ from taskforge.effects.events import (
     Note,
     ReplayPolicy,
     Resolved,
-    ScopeEntered,
     StageCompleted,
     event_digest,
 )
@@ -82,7 +80,7 @@ from taskforge.effects.issues import (
     Transient,
     UnsupportedFormat,
 )
-from taskforge.effects.log import BufferSink, EventLog, Opened, Record, Status, decode, fold
+from taskforge.effects.log import Billing, BufferSink, EventLog, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
 from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
@@ -128,13 +126,12 @@ from taskforge.resources.env import (
     CommandResult,
     EnvFactory,
     ReadFile,
-    RunCommand,
     ShellboxEnv,
     WriteFile,
     WriteFiles,
 )
 from taskforge.resources.grading import GradingResource
-from taskforge.resources.ids import Ids, NewId
+from taskforge.resources.ids import Ids
 from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
@@ -1248,7 +1245,11 @@ def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: Work
         policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         config = build_config(policy, {})
-        yield (config if workspace is None else replace(config, workspace=workspace)), next(remaining)
+        bundle = next(remaining)
+        if workspace is None:
+            yield wiring.CampaignWiring(config, bundle)  # counted stand-ins for a fixed campaign
+        else:
+            yield replace(config, workspace=workspace), bundle
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
 
@@ -1976,71 +1977,39 @@ def tool_output(workpiece: Workpiece, call_id: str) -> str:
     return message.content
 
 
-# Regression: a re-executed command's fresh stdout reached the model, so every later request missed its
-# recording and the resume paid for the model calls again. A flipped truncation flag alone produced no note.
+PID = FakeCommand(CommandResult(0, "pid 11\n", "", 0, False), {STAMP: b"ok"})
+"""The first launch's first machine's ``stamp``, for a later machine that prints exactly what it printed."""
+
+
 @pytest.mark.parametrize(
-    "stamp",
-    [None, FakeCommand(CommandResult(0, "pid 11\n", "", 0, True), {STAMP: b"ok"})],
-    ids=["stdout drifts", "truncation only"],
-)
-async def test_resume_serves_recorded_command_output_and_notes_the_divergence(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stamp: FakeCommand | None
-) -> None:
-    served = await held_after_stamp(monkeypatch, driver_args)
-    resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[3:], served))
-    serve(monkeypatch, resumed)
-    with caplog.at_level(logging.INFO):
-        await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    workpiece = published_workpiece(destination)
-    assert workpiece.terminal is Terminal.ACCEPTED
-    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
-    assert len(resumed.inference.requests) == len(drifting_script()) - 3
-    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
-    assert json.loads(tool_output(workpiece, "stamp"))["truncated"] is False
-    assert tool_output(workpiece, "read") == "ok"
-    assert isinstance(resumed.envs, Envs)
-    fresh = resumed.envs.created[0]
-    assert fresh.executed == ["stamp", "write-draft"] and fresh.files[STAMP] == b"ok"
-    notes = [r.event.msg for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
-    assert len(notes) == 1 and notes[0].startswith("Replay of env.run_command diverged")
-    assert "pid" not in notes[0]  # digests, not content
-    assert any(record.levelno == logging.INFO and record.getMessage() == notes[0] for record in caplog.records)
-
-
-def stamped(code: int, stamp: bytes = b"ok") -> FakeCommand:
-    return FakeCommand(CommandResult(code, "", f"exit {code}\n", 0, False), {STAMP: stamp})
-
-
-# Regression: 2 -> 3 and 2 -> 0 kept serving exit 2, and a read of other binary bytes kept serving the old ones.
-@pytest.mark.parametrize(
-    ("recorded", "stamp"),
+    ("stamp", "stdout", "reused"),
     [
-        (None, FakeCommand(CommandResult(1, "", "disk full\n", 0, False), {})),
-        (None, FakeCommand(CommandResult(0, "pid 21\n", "", 0, False), {})),
-        (stamped(2), stamped(3)),
-        (stamped(2), stamped(0)),
-        (stamped(0, b"\x00\xff"), stamped(0, b"\x00\xfe")),
+        (PID, "pid 11\n", 3),
+        (None, "pid 21\n", 1),
+        (FakeCommand(CommandResult(0, "pid 11\n", "", 0, True), {STAMP: b"ok"}), "pid 11\n", 1),
     ],
-    ids=["0 to 1", "file missing", "2 to 3", "2 to 0", "binary read"],
+    ids=["identical feedback", "stdout drifts", "truncation only"],
 )
-async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_state(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, recorded: FakeCommand | None, stamp: FakeCommand
+async def test_an_interrupted_author_reruns_its_commands_and_buys_turns_from_the_first_changed_one(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand | None, stdout: str, reused: int
 ) -> None:
-    served = await held_after_stamp(monkeypatch, driver_args, recorded)
-    resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[3:], served))
+    """The resumed author opens one fresh machine and runs ``stamp`` there. With the output its first launch saw, all
+    three recorded turns hit the cache; with other output the turn that sees it misses, and every turn after it is
+    bought."""
+    served = await held_after_stamp(monkeypatch, driver_args)
+    resumed = replace(resources(DriftingEnvs(2, stamp), ()), inference=ServedOnce(drifting_script()[reused:], served))
     serve(monkeypatch, resumed)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     workpiece = published_workpiece(destination)
-    assert workpiece.terminal is Terminal.HELD
-    assert "Unreproducible" in str(workpiece.decisions[-1]) and "bug:" not in str(workpiece.decisions[-1])
-    assert isinstance(resumed.inference, ServedOnce)
-    assert not resumed.inference.repeated and not resumed.inference.requests
-    assert isinstance(resumed.envs, Envs) and resumed.envs.created[0].executed == ["stamp"]
-    # Same exit status: the command matched and the read of the file it wrote is what failed to rebuild.
-    same_status = stamp.result.exit_code == (recorded.result.exit_code if recorded else 0)
-    assert ("env.read_file" in str(workpiece.decisions[-1])) == same_status
+    assert workpiece.terminal is Terminal.ACCEPTED
+    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
+    assert len(resumed.inference.requests) == len(drifting_script()) - reused
+    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == stdout
+    assert tool_output(workpiece, "read") == "ok"
+    assert isinstance(resumed.envs, Envs)
+    author = resumed.envs.created[0]
+    assert author.executed == ["stamp", "write-draft"] and author.files[STAMP] == b"ok"
 
 
 # Regression: resuming a partly validated workpiece must keep its finished solver trials.
@@ -2140,7 +2109,7 @@ def rows(records: Sequence[Record]) -> list[Record]:
     return [replace(record, wall_time=0.0) for record in records]
 
 
-FIXTURE_CONFIG_DIGEST = "1797f796269d33067b1b26a1bbf934c262605ebaa992e42691d91cbe014f7384"
+FIXTURE_CONFIG_DIGEST = "6719d6bc52bb8a517e6e07784d5070046b31452217b04aa623e74091c19a7b58"
 """The policy digest the ``N4_JOURNAL`` and ``N4_POLLS`` fixtures recorded. A later policy entry changes only that
 digest in an author-only journal."""
 
@@ -2160,9 +2129,9 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
     """The fixture is the journal this dispatch published for the held first launch of ``held_after_stamp``. It pins
-    the recorded events, owner references and replay keys; it serves the author reference it recorded, so
-    TaskCompendium's wording does not enter it. A deliberate change to the author prompts, tool schemas, event
-    identities or envelopes invalidates it; regenerate it then from that first launch."""
+    the recorded events, the stage boundary, request references and replay keys; it serves the author reference it
+    recorded, so TaskCompendium's wording does not enter it. A deliberate change to the author prompts, tool schemas,
+    event identities or envelopes invalidates it; regenerate it then from that first launch."""
     recorded = decode(gzip.decompress(N4_JOURNAL.read_bytes()))
     bind_reference(monkeypatch, recorded)
     await held_after_stamp(monkeypatch, driver_args)
@@ -2174,7 +2143,7 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
         for record in recorded
         if isinstance(record.event, Resolved) and isinstance(record.event.request, InferenceRequest)
     ]
-    resumed = replace(resources(DriftingEnvs(2), ()), inference=ServedOnce(drifting_script()[3:], served))
+    resumed = replace(resources(DriftingEnvs(2, PID), ()), inference=ServedOnce(drifting_script()[3:], served))
     log = EventLog(replay_from=recorded, replayable=replayable_grade)
     workpiece = await run_workpiece(proposal, config(), resumed, log, install=install)
     assert workpiece.terminal is Terminal.ACCEPTED
@@ -2198,31 +2167,13 @@ def plant(driver_args: Namespace, events: bytes, journal_format: int) -> Path:
     return destination
 
 
-def before_first_environment_outcome(events: bytes) -> bytes:
-    lines = events.splitlines(keepends=True)
-    records = decode(events)
-    cut = next(
-        n for n, r in enumerate(records) if isinstance(r.event, Resolved) and r.event.request.kind.startswith("env.")
-    )
-    return b"".join(lines[:cut])
-
-
 # Regression: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
-@pytest.mark.parametrize(
-    "events",
-    [
-        gzip.decompress(N3_JOURNAL.read_bytes()),
-        gzip.decompress(N4_JOURNAL.read_bytes()),
-        before_first_environment_outcome(gzip.decompress(N4_JOURNAL.read_bytes())),
-    ],
-    ids=["n3 dispatch", "positional rows", "interrupted before its first environment outcome"],
-)
 async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``N3_JOURNAL`` is the journal the format-2 dispatch (e5ec5eba21) published for the held first launch of
-    ``held_after_stamp``; the positional one is ``N4_JOURNAL``, which an earlier revision published as format 2."""
-    destination = plant(driver_args, events, 2)
+    ``held_after_stamp``."""
+    destination = plant(driver_args, gzip.decompress(N3_JOURNAL.read_bytes()), 2)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
@@ -2302,17 +2253,30 @@ FORMAT_14_HELD = Path(__file__).parent / "fixtures" / "format14-judge-grade-held
 draft, then deferred during validation. Format 15 would return an error at that same author grade."""
 
 
+FORMAT_15_HELD = Path(__file__).parent / "fixtures" / "format15-author-held-root.json.gz"
+"""The whole root the format-15 writer (187294b339) published for the held first launch of ``held_after_stamp``.
+Format 16 resumes at stage boundaries and would run that author's commands live instead of rebuilding them."""
+
+
 @pytest.mark.parametrize(
     "fixture,found",
-    [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12), (FORMAT_13_HELD, 13), (FORMAT_14_HELD, 14)],
+    [
+        (FORMAT_10_HELD, 10),
+        (FORMAT_11_HELD, 11),
+        (FORMAT_12_HELD, 12),
+        (FORMAT_13_HELD, 13),
+        (FORMAT_14_HELD, 14),
+        (FORMAT_15_HELD, 15),
+    ],
 )
 async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
     """A format-10 root's author calls embedded a reference this writer does not reproduce, a format-11 root's author
     requests were worded otherwise, a format-12 root committed no reviewed visit, and a format-13 root's trials were
-    recorded under another solver clock. A format-14 author could grade or submit a judge draft this writer refuses.
-    The driver refuses each root untouched and names the ways on."""
+    recorded under another solver clock. A format-14 author could grade or submit a judge draft this writer refuses,
+    and a format-15 root has no stage boundary to resume at. The driver refuses each root untouched and names the ways
+    on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
@@ -2324,6 +2288,19 @@ async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report
     assert tree(destination) == before
     lines = await usage_report(str(destination))
     assert lines[0] == "workpieces=1 since_hours=all" and not [line for line in lines if "skipped" in line]
+
+
+async def test_a_finished_format_15_root_is_skipped_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), FORMAT_15_HELD)
+    head = json.loads((destination / HEAD).read_text())
+    (destination / HEAD).write_text(json.dumps({**head, "status": {**head["status"], "terminal": "accepted"}}))
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    driver_args.resume_held = True
+    assert await driver.one(driver_args) == 0
+    assert tree(destination) == before
 
 
 def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
@@ -2592,42 +2569,39 @@ async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
 MISSING = f"File operation failed: [Errno {errno.ENOENT}] No such file: '{STATUS}'"
 
 
-# Regression: a failed read had no recorded outcome, so a later success on the same path took its place.
+# Regression: a failed read had no recorded outcome, so a later success on the same path took its place. A resume
+# meets what the fresh machine holds: the same failure replays the recorded turns, a present file buys the turns after.
 @pytest.mark.parametrize(
     ("recorded", "resumed", "served"),
     [
         ((None, b"B"), (None, b"B"), [MISSING, "B"]),
-        ((None, b"B"), (b"B", b"B"), None),
+        ((None, b"B"), (b"B", b"B"), ["B", "B"]),
         ((None, b"B", b"C"), (None, b"B", b"C"), [MISSING, "B", "C"]),
     ],
     ids=["missing again", "present where it was missing", "missing, then two contents"],
 )
-async def test_a_handled_read_failure_is_verified_and_served_in_its_place(
+async def test_a_handled_read_failure_is_journalled_and_a_resume_meets_the_live_outcome(
     driver_args: Namespace,
     monkeypatch: pytest.MonkeyPatch,
     recorded: tuple[bytes | None, ...],
     resumed: tuple[bytes | None, ...],
-    served: list[str] | None,
+    served: list[str],
 ) -> None:
     paid = await held_after_polls(monkeypatch, driver_args, recorded)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert sum(isinstance(r.event, Failed) for r in history(destination)) == 1
     envs = ProducerEnvs(STATUS, resumed)
-    resources_ = replace(resources(envs, ()), inference=ServedOnce(polling_script(len(recorded))[len(recorded) :], paid))
+    reused = len(recorded) if resumed == recorded else 1  # a changed first poll misses from the turn that reads it
+    resources_ = replace(resources(envs, ()), inference=ServedOnce(polling_script(len(recorded))[reused:], paid))
     serve(monkeypatch, resources_)
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert isinstance(resources_.inference, ServedOnce) and not resources_.inference.repeated
     polls = [f"poll-{n}" for n in range(1, len(recorded) + 1)]
-    if served is None:
-        assert workpiece.terminal is Terminal.HELD and "Unreproducible" in str(workpiece.decisions[-1])
-        assert "failed with ENOENT when recorded but succeeded here" in str(workpiece.decisions[-1])
-        assert envs.producers[0].physical == [b"B"] and not resources_.inference.requests
-        return
     assert envs.producers[0].physical == list(resumed)
     assert [tool_output(workpiece, poll) for poll in polls] == served
-    assert last_message(resources_.inference.requests[0]) == served[-1]
-    assert len(resources_.inference.requests) == len(script()) - 1
+    assert last_message(resources_.inference.requests[0]) == served[reused - 1]
+    assert len(resources_.inference.requests) == len(polling_script(len(recorded))) - reused
     assert workpiece.terminal is Terminal.ACCEPTED
     assert not [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
 
@@ -2643,12 +2617,12 @@ class LosesWriteDraft(DriftingEnvs):
         return env
 
 
-# Regression: a stage restarted in-process rebuilt from the launch's history only, so a PID drifting earlier in
-# the stage changed the next requests and the two turns completed before the restart were paid for again (7 calls).
+# Regression: a stage restarted in-process rebuilt from the launch's history only, so the two turns completed before
+# the restart were paid for again (7 calls). The restart runs its commands on a fresh machine that prints the same.
 async def test_an_in_process_stage_restart_replays_the_turns_its_first_attempt_completed(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    envs = LosesWriteDraft(1)
+    envs = LosesWriteDraft(1, PID)
     first = resources(envs, drifting_script())
     serve(monkeypatch, first)
     await driver.one(driver_args)
@@ -2657,95 +2631,29 @@ async def test_an_in_process_stage_restart_replays_the_turns_its_first_attempt_c
     assert workpiece.terminal is Terminal.ACCEPTED
     assert executions(first) == (len(drifting_script()), 2)
     assert [env.executed for env in envs.created] == [["stamp", "write-draft"], ["stamp", "write-draft"]]
-    assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"  # the first machine's PID
-    assert tool_output(workpiece, "read") == "ok"
-
-
-class DiesOnFirstStamp(DriftingEnvs):
-    @override
-    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
-        env = await super().create(requirements)
-        if len(self.created) == 1:
-            env.commands = {**env.commands, "stamp": Restart("command outcome unknown: reply lost")}
-        return env
-
-
-# An attempt that dies re-applying a known prefix must not shorten what the next one verifies.
-@pytest.mark.parametrize("stamp", [None, stamped(0, b"other")], ids=["same state", "other state"])
-async def test_a_reconstruction_that_dies_inside_the_known_prefix_leaves_the_rest_to_verify(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand | None
-) -> None:
-    served = await held_after_stamp(monkeypatch, driver_args)
-    envs = DiesOnFirstStamp(2, stamp)
-    resumed = replace(resources(envs, ()), inference=ServedOnce(drifting_script()[3:], served))
-    serve(monkeypatch, resumed)
-    await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    workpiece = published_workpiece(destination)
-    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
-    assert envs.created[0].executed == ["stamp"]
-    if stamp is not None:  # the third attempt still compared the read the first one recorded
-        assert workpiece.terminal is Terminal.HELD and "env.read_file read other bytes" in str(workpiece.decisions[-1])
-        assert envs.created[1].executed == ["stamp"] and executions(resumed) == (0, 0)
-        return
-    assert workpiece.terminal is Terminal.ACCEPTED and executions(resumed) == (2, 2)
-    assert envs.created[1].executed == ["stamp", "write-draft"]
     assert json.loads(tool_output(workpiece, "stamp"))["stdout"] == "pid 11\n"
     assert tool_output(workpiece, "read") == "ok"
-
-
-# A resumed session must reproduce its recorded requests in order and to their end.
-@pytest.mark.parametrize("change", ["hydration", "context window", "sandbox definition"])
-async def test_a_resumed_author_that_leaves_its_recorded_session_holds_without_new_work(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: str
-) -> None:
-    served = await held_after_stamp(monkeypatch, driver_args)
-    envs = DriftingEnvs(2) if change != "sandbox definition" else DriftingEnvs(2, image="upgraded")
-    resumed = replace(resources(envs, ()), inference=ServedOnce(drifting_script()[3:], served))
-    if change == "hydration":  # a caller's rendered workspace that is not deterministic
-        serve(monkeypatch, resumed, workspace=WorkspaceHydration((inline_resource("notes.txt", b"launch 2"),)))
-    else:
-        serve(monkeypatch, resumed)
-    if change == "context window":  # the session now stops after its first command, before its recorded end
-        overlay = json.loads(Path(driver_args.policy).read_text())
-        Path(driver_args.policy).write_text(json.dumps({**overlay, "author.context_tokens": 1}))
-    await driver.one(driver_args)
-    workpiece = published_workpiece(destination := Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
-    reason = str(workpiece.decisions[-1])
-    assert workpiece.terminal is Terminal.HELD and "Unreproducible" in reason and workpiece.submission is None
-    assert executions(resumed) == (0, 0)
-    expected = {
-        "hydration": ("another request at position 0", []),
-        "context window": ("returned before its recorded history ended", ["stamp"]),
-        "sandbox definition": ("another sandbox definition", []),
-    }[change]
-    assert expected[0] in reason and envs.created[0].executed == expected[1]
-    if change != "context window":
-        assert not envs.created[0].files  # held before the hydration write
-    assert sum(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.HELD for r in history(destination))
-    # The divergent request stays unanswered, and the held journal stays claimable for an explicit resume.
-    assert CheckpointSink(str(destination)).claim(published(destination))
 
 
 ROLE = "cat /fixture/role"
 
 
 class RoleEnvs(Envs):
-    """Adversary machine ``k``, created in roster order after the author's, prints ``outputs[k]`` for ``ROLE``.
+    """Adversary machine ``k``, created in roster order after ``before`` others, prints ``outputs[k]`` for ``ROLE``.
 
     Its command waits for the machine before it in ``order`` to finish, or with ``overlap``, for its sibling to start.
     """
 
-    def __init__(self, outputs: Sequence[str], order: Sequence[int], overlap: bool) -> None:
+    def __init__(self, outputs: Sequence[str], order: Sequence[int], overlap: bool, before: int = 1) -> None:
         super().__init__()
-        self.outputs, self.order = outputs, order
+        self.outputs, self.order, self.before = outputs, order, before
         self.finished = [asyncio.Event() for _ in outputs]
         self.barrier = asyncio.Barrier(len(outputs)) if overlap else None
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
         env = await super().create(requirements)
-        if (index := len(self.created) - 2) < 0:
+        if (index := len(self.created) - 1 - self.before) < 0:
             return env  # the author's machine
         result = FakeCommand(CommandResult(0, self.outputs[index], "", 0, False), {})
         env.commands = {**env.commands, ROLE: result}
@@ -2804,6 +2712,7 @@ class Adversaries(InferenceClient):
 
 
 # Regression: siblings whose readiness reversed on resume swapped outputs, and overlapping identical results held.
+# Each resumed search now runs on its own fresh machine and reports on what that machine printed.
 @pytest.mark.parametrize(
     ("roster", "recorded", "fresh", "overlap"),
     [
@@ -2813,7 +2722,7 @@ class Adversaries(InferenceClient):
     ],
     ids=["reversed readiness", "duplicate roster names", "identical results overlapping"],
 )
-async def test_each_adversary_replays_its_own_machine_history_whatever_its_siblings_do(
+async def test_each_adversary_reruns_on_its_own_fresh_machine_whatever_its_siblings_do(
     driver_args: Namespace,
     monkeypatch: pytest.MonkeyPatch,
     roster: tuple[str, str],
@@ -2831,14 +2740,16 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
     serve(monkeypatch, first)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert published_workpiece(destination).terminal is Terminal.HELD  # both searches failed on their report turn
+    held_wp = published_workpiece(destination)  # both searches failed on their report turn, so review held
+    assert held_wp.terminal is Terminal.HELD and isinstance(held_wp.decisions[-1], Incomplete)
+    assert [result.status for result in held_wp.evidence[-1].adversary] == [AdversaryStatus.FAILED] * 2
     # Same-named searches send one identical first turn, which the cache resolves once for both.
     assert len(held.requests) == (3 if roster[0] == roster[1] else 4)
     resolved = [r.event.request for r in history(destination) if isinstance(r.event, Resolved)]
     adversary = Adversaries(
         hold=False, served=[r for r in resolved if isinstance(r, InferenceRequest) and r in held.requests]
     )
-    envs = RoleEnvs(fresh, (1, 0), overlap)
+    envs = RoleEnvs(fresh, (1, 0), overlap, before=0)
     resumed = replace(
         resources(envs, ()),
         inference=ServedOnce((), ()),
@@ -2847,13 +2758,13 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
     serve(monkeypatch, resumed)
     driver_args.resume_held = True
     await driver.one(driver_args)
-    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    wp = published_workpiece(destination)  # the explicit resume reopened validation, not the review that held
+    assert wp.terminal is Terminal.ACCEPTED and not any(isinstance(d, Incomplete) for d in wp.decisions)
     assert executions(resumed) == (0, 0) and len(adversary.requests) == 2  # only the two report turns are new
-    assert [env.executed for env in envs.created[1:]] == [[ROLE], [ROLE]]
+    assert [env.executed for env in envs.created] == [[ROLE], [ROLE]]  # no author machine: its boundary holds
     names = [roster[0], roster[1]]
-    assert adversary.outputs() == sorted(zip(names, recorded, strict=True)) == held.outputs()
-    notes = [r for r in history(destination) if isinstance(r.event, Note) and "diverged" in r.event.msg]
-    assert len(notes) == (0 if recorded == fresh else 2)
+    assert held.outputs() == sorted(zip(names, recorded, strict=True))
+    assert adversary.outputs() == sorted(zip(names, fresh, strict=True))
 
 
 MALFORMED = b'{"malformed"'
@@ -2881,15 +2792,11 @@ async def test_a_resumed_submit_never_accepts_bytes_the_sandbox_does_not_hold(
     assert workpiece.terminal is Terminal.HELD and workpiece.submission is None
     assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
     assert executions(resumed)[1] == 0
-    if rebuilt == "replaced after the grade":
-        # The grade's read matched its recording; submit, beyond the recording, read the machine.
-        assert envs.producers[0].physical == [valid, MALFORMED]
-        assert len(resumed.inference.requests) == 2
-        assert last_message(resumed.inference.requests[1]).startswith("Invalid draft")
-    else:
-        assert envs.producers[0].physical == [MALFORMED]
-        assert not resumed.inference.requests
-        assert "Unreproducible" in str(workpiece.decisions[-1]) and "env.read_file" in str(workpiece.decisions[-1])
+    # Grade and submit each read the fresh machine; submit refuses what it read and the model hears why.
+    graded = valid if rebuilt == "replaced after the grade" else MALFORMED
+    assert envs.producers[0].physical == [graded, MALFORMED]
+    assert len(resumed.inference.requests) == 2
+    assert last_message(resumed.inference.requests[1]).startswith("Invalid draft")
 
 
 class ExhaustedRole(Envs):
@@ -2916,11 +2823,12 @@ class ExhaustedRole(Envs):
         return env
 
 
-# Regression: a resumed adversary whose recorded command exhausted the output budget consumed its position
-# unverified, so the search counted as EXHAUSTED evidence and the workpiece was accepted with no new model call.
-@pytest.mark.parametrize("exhausted", [1, STAGE_REPLAY_ATTEMPTS], ids=["once", "every stage replay"])
-async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_weaker_evidence(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhausted: int
+@pytest.mark.parametrize(
+    ("exhaustions", "status", "reports"),
+    [(1, AdversaryStatus.REPORTED, 1), (2, AdversaryStatus.EXHAUSTED, 0)],
+)
+async def test_a_resumed_adversary_records_what_its_two_fresh_machines_observed(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhaustions: int, status: AdversaryStatus, reports: int
 ) -> None:
     overlay = json.loads(Path(driver_args.policy).read_text())
     Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["false_accept"]}))
@@ -2935,7 +2843,7 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.HELD and len(held.requests) == 2
     adversary = Adversaries(hold=False, served=held.requests[:1])
-    envs = ExhaustedRole(exhausted)
+    envs = ExhaustedRole(exhaustions)
     resumed = replace(
         resources(envs, ()),
         inference=ServedOnce((), ()),
@@ -2946,14 +2854,17 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert executions(resumed) == (0, 0) and envs.exhausted == 0
-    statuses = [result.status for evidence in workpiece.evidence for result in evidence.adversary]
-    if exhausted == STAGE_REPLAY_ATTEMPTS:
-        assert workpiece.terminal is Terminal.HELD and not isinstance(workpiece.decisions[-1], Accept)
-        assert "unverified" in str(workpiece.decisions[-1]) and not adversary.requests
-        assert AdversaryStatus.EXHAUSTED not in statuses
-        return
-    assert workpiece.terminal is Terminal.ACCEPTED and statuses[-1] is AdversaryStatus.REPORTED
-    assert len(adversary.requests) == 1  # only the report turn is new
+    assert [env.executed for env in envs.created] == [[ROLE], [ROLE]]
+    [search] = workpiece.evidence[-1].adversary
+    assert workpiece.terminal is Terminal.ACCEPTED and search.status is status
+    assert len(adversary.requests) == reports
+    if status is AdversaryStatus.EXHAUSTED:
+        decision = workpiece.decisions[-1]
+        assert isinstance(decision, Accept)
+        assert any(
+            "its output budget ran out before it reported" in reason and "this is not a validation of the task" in reason
+            for reason in decision.reasons
+        )
 
 
 class CorruptArchiveOnce(DriftingEnvs):
@@ -2979,7 +2890,7 @@ class CorruptArchiveOnce(DriftingEnvs):
 async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming_feedback(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, held: bool
 ) -> None:
-    envs = CorruptArchiveOnce(1)
+    envs = CorruptArchiveOnce(1, PID)
     inference = FakeInference((*drifting_script()[:3], Hold("relay unavailable")) if held else drifting_script())
     first = replace(resources(envs, ()), inference=inference)
     serve(monkeypatch, first)
@@ -2990,7 +2901,7 @@ async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming
     assert len(inference.requests) == (4 if held else len(drifting_script()))  # no turn was paid for twice
     if held:
         served = ServedOnce(drifting_script()[3:], inference.requests[:-1])
-        resumed = replace(resources(DriftingEnvs(2), ()), inference=served)
+        resumed = replace(resources(DriftingEnvs(2, PID), ()), inference=served)
         serve(monkeypatch, resumed)
         driver_args.resume_held = True
         await driver.one(driver_args)
@@ -3003,14 +2914,7 @@ async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming
 
 
 SANDBOX = (Fingerprint("env", "definition", ReplayPolicy.REEXECUTE),)
-OPENED = Record(1, 0.0, ScopeEntered("author"), opened=Opened("author/0", "definition"))
 READ_STATUS = ReadFile(STATUS)
-ANSWERED = (
-    OPENED,
-    Record(2, 0.0, READ_STATUS, attempt=1),
-    Record(3, 0.0, Resolved(READ_STATUS, SANDBOX, b"A"), answers=2),
-)
-REOPENED = (*ANSWERED, replace(OPENED, sequence=4))
 
 
 def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes:
@@ -3023,90 +2927,20 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
 
 
-def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE."""
-    rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
-    (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
-    assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
-    fingerprint["replay"] = ReplayPolicy.REEXECUTE
-    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
-
-
-# Regression: the real claim swapped the head for each of these journals, and a list-valued owner escaped as an
-# untyped TypeError. The paid id result reached both the content cache and the owner's history.
 @pytest.mark.parametrize(
     "events",
     [
-        lines((replace(OPENED, event=Note("entered")),)),
-        lines((OPENED, Record(2, 0.0, READ_STATUS, attempt=1, answers=1))),
-        lines(ANSWERED, (1, "sequence", True)),
-        lines((OPENED, Record(2, 0.0, Failed("ENOENT", "missing")))),
-        lines((OPENED, Record(2, 0.0, READ_STATUS))),
+        lines((Record(1, 0.0, READ_STATUS),), (1, "sequence", True)),
         lines(
             (
-                OPENED,
-                Record(2, 0.0, NewId("author/0/id"), attempt=1),
-                Record(3, 0.0, Resolved(NewId("author/0/id"), (Ids(lambda: "").fingerprint(),), "paid"), answers=2),
-            )
-        ),
-        lines(
-            (
-                *ANSWERED[:2],
-                replace(ANSWERED[2], event=Resolved(READ_STATUS, (replace(SANDBOX[0], digest="other"),), b"A")),
-            )
-        ),
-        lines(
-            (
-                *REOPENED,
-                Record(5, 0.0, RunCommand("ls", 5), attempt=4),
-                Record(6, 0.0, Resolved(RunCommand("ls", 5), SANDBOX, CommandResult(0, "", "", 0, False)), answers=5),
-            )
-        ),
-        lines(
-            (
-                *REOPENED,
-                Record(5, 0.0, READ_STATUS, attempt=4),
-                Record(6, 0.0, Resolved(READ_STATUS, SANDBOX, b"B"), answers=5),
-            )
-        ),
-        lines((OPENED, Record(2, 0.0, READ_STATUS, attempt=1), Record(3, 0.0, Failed("ENOTANERRNO", "x"), answers=2))),
-        lines((OPENED,), (1, "opened", {"owner": ["author/0"], "definition": "definition"})),
-        relabelled_inference(),
-        lines((OPENED, Record(2, 0.0, Resolved(READ_STATUS, (replace(SANDBOX[0], replay=ReplayPolicy.CACHE),), b"A")))),
-        lines((OPENED, Record(2, 0.0, Resolved(READ_STATUS, (), b"A")))),
-        lines(
-            (
-                OPENED,
-                Record(2, 0.0, Resolved(READ_STATUS, (*SANDBOX, replace(SANDBOX[0], replay=ReplayPolicy.CACHE)), b"A")),
-            )
-        ),
-        lines(
-            (
-                *ANSWERED[:2],
-                replace(ANSWERED[2], event=Resolved(READ_STATUS, (replace(SANDBOX[0], resource="ids"),), b"A")),
+                Record(1, 0.0, READ_STATUS),
+                Record(2, 0.0, Resolved(READ_STATUS, SANDBOX, b"A"), answers=1, billed=Billing.AUTHOR),
             )
         ),
     ],
-    ids=[
-        "note as open row",
-        "attempt and answers",
-        "true as row 1",
-        "unattached failure",
-        "unowned sandbox request",
-        "paid request in an attempt",
-        "another sandbox definition",
-        "contradictory answered request",
-        "contradictory answered result",
-        "unsupported failure category",
-        "list-valued owner",
-        "inference resolution relabelled reexecute",
-        "plain sandbox resolution under cache",
-        "plain sandbox resolution without fingerprints",
-        "plain sandbox resolution under mixed policies",
-        "sandbox answer under a non-environment resource",
-    ],
+    ids=["true as row 1", "billed sandbox outcome"],
 )
-async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_the_head(
+async def test_claim_refuses_a_malformed_row_and_leaves_the_head(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, events: bytes
 ) -> None:
     destination = plant(driver_args, events, checkpoint.JOURNAL_FORMAT)
@@ -3117,30 +2951,6 @@ async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_t
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.CORRUPT
     assert tree(destination) == before
-
-
-# Regression: the driver claimed this journal, repeated the first completed author request and accepted.
-async def test_a_resolution_relabelled_reexecute_is_refused_before_any_model_call(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = plant(driver_args, relabelled_inference(), checkpoint.JOURNAL_FORMAT)
-    before = tree(destination)
-    resumed = replace(resources(DriftingEnvs(2), ()), inference=FakeInference(drifting_script()))
-    serve(monkeypatch, resumed)
-    driver_args.resume_held = True
-    with pytest.raises(CorruptJournal) as raised:
-        await driver.one(driver_args)
-    assert driver.exit_code(raised.value) == driver.CORRUPT
-    assert tree(destination) == before and executions(resumed) == (0, 0)
-
-
-async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(driver_args: Namespace) -> None:
-    """A resumed attempt that issued another request than was recorded leaves it unanswered and holds; it stays valid."""
-    held = (*REOPENED, Record(5, 0.0, RunCommand("ls", 5), attempt=4))
-    destination = plant(driver_args, lines(held), checkpoint.JOURNAL_FORMAT)
-    sink = CheckpointSink(str(destination))
-    assert rows(sink.claim(published(destination))) == rows(held)
-    assert published(destination).head.writer == sink.writer
 
 
 class HelperlessMachine(Machine):
@@ -3333,7 +3143,6 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     records = history(destination)
     writes = [r for r in records if isinstance(r.event, WriteFile) and r.event.path.name == "proof.txt"]
     assert [[type(r.event) for r in records if r.answers == write.sequence] for write in writes] == [[], [Resolved]]
-    assert len({write.attempt for write in writes}) == 2  # the replacement is on the fresh sandbox's opening
 
 
 class ScratchController(SandboxController):

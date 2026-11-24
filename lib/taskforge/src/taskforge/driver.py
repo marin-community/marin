@@ -41,6 +41,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
 
+from taskforge import wiring
 from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
@@ -57,6 +58,7 @@ from taskforge.effects.issues import (
 )
 from taskforge.effects.log import EventLog, Status, fold
 from taskforge.llm.glm_provider import API_ROOT, EndpointSource
+from taskforge.model.content_hash import digest
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -180,10 +182,22 @@ async def one(args: argparse.Namespace, controller_url: str | None = None) -> in
     try:
         async with checkpoints.running():
             gateway, key = glm_source(policy, args), get_secret("PARALLEL_API_KEY") or ""
-            async with runtime(policy, gateway, key, controller_url=controller_url) as (config, resources):
+            async with runtime(policy, gateway, key, controller_url=controller_url) as bindings:
+                config, resources = bindings
+                plan = (
+                    digest((proposal, policy))
+                    if isinstance(bindings, wiring.CampaignWiring) and install is wiring.install
+                    else None
+                )
                 readers[0] = resources.decision_model
                 wp[0] = await run_workpiece(
-                    proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
+                    proposal,
+                    config,
+                    resources,
+                    log,
+                    install=install,
+                    stage_plan=plan,
+                    reached=partial(wp.__setitem__, 0),
                 )
     except* (Superseded, CorruptJournal, PublicationFailed):
         raise  # The writer stopped; it publishes neither a hold nor a final head.

@@ -12,7 +12,7 @@ from rolloutengine.models import MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import NoGrader, TaskSpec
 
-from taskforge.effects.events import Committed, Resolved, StageCompleted
+from taskforge.effects.events import Resolved, StageBoundary
 from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import Record, physical
 from taskforge.model.review import FAULTS, Cause, Incomplete, Modify, Reject, Retry
@@ -102,18 +102,18 @@ def replaced_refusals(previous: Sequence[Record], resume: bool) -> Callable[[Res
     return lambda event: id(event) in stale and refused(event.value)
 
 
-def commitments(records: Sequence[Record]) -> dict[str, Committed]:
-    """The journal's committed visits by identity, after a best-effort check for accidental corruption: each committed
-    trial's receipt names an earlier physical solver resolution of that trial's slot. A deliberately rewritten journal is
-    out of scope; reading a transcript at its receipt checks the full request again, and a mismatch there holds."""
-    found: dict[str, Committed] = {}
+def boundary(records: Sequence[Record]) -> StageBoundary | None:
+    """The journal's latest stage boundary, after a best-effort check for accidental corruption: each trial receipt in a
+    boundary names an earlier physical solver resolution of that trial's slot. A deliberately rewritten journal is out
+    of scope; reading a transcript at its receipt checks the full request again, and a mismatch there holds."""
+    found = None
     for record in records:
-        if not isinstance(marker := record.event, StageCompleted) or (commit := marker.committed) is None:
+        if not isinstance(event := record.event, StageBoundary):
             continue
-        for trial in commit.result.solver:
+        for trial in (trial for result in event.workpiece.evidence for trial in result.solver):
             row = None if trial.receipt is None else physical(records, trial.receipt, record.sequence)
             request = None if row is None else row.request
             if trial.receipt is not None and not (isinstance(request, SolverRollout) and request.trial == trial.trial):
                 raise LogFailure(f"Row {record.sequence}: trial {trial.trial}'s receipt names no resolution of its slot")
-        found[commit.visit] = commit
+        found = event
     return found

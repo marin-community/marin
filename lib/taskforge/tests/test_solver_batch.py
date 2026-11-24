@@ -30,7 +30,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Invalidated, Note, Resolved, event_digest
-from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Unreproducible
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.model.review import Cause, TrialResult
@@ -205,8 +205,8 @@ async def test_a_long_slot_heartbeats_at_the_policy_cadence_without_touching_its
         for n, record in enumerate(beats, 1)
         if isinstance(record.event, Note)
     )
-    # A heartbeat is a plain diagnostic row: no request, outcome or sandbox attempt reads it.
-    assert all((record.opened, record.attempt, record.answers) == (None, None, None) for record in beats)
+    # A heartbeat is a plain diagnostic row: no outcome answers it.
+    assert all(record.answers is None for record in beats)
     replayed = Slots(failures={0: AssertionError("a heartbeat made the slot execute again")})
     resumed, _ = context(replayed, log.records)
     again = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 1, concurrency=4, heartbeat=1.0)
@@ -384,10 +384,8 @@ async def test_holds_beyond_the_missing_allowance_hold_the_batch_before_a_siblin
     assert sorted(engine.executed) == ["arithmetic:0:0", "arithmetic:1:0", "arithmetic:2:0"]
 
 
-# Regression: an injected Unreproducible became one missing slot and the workpiece published ACCEPTED.
-@pytest.mark.parametrize(
-    "hold", [Unreproducible("history mismatch"), Hold("environment terminated")], ids=["unreproducible", "other"]
-)
+# Regression: an injected hold became one missing slot and the workpiece published ACCEPTED.
+@pytest.mark.parametrize("hold", [Hold("environment terminated")], ids=["other"])
 async def test_only_a_slot_local_refusal_is_missing_evidence_and_every_other_hold_holds_the_workpiece(
     hold: Hold,
 ) -> None:

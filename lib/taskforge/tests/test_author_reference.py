@@ -11,7 +11,7 @@ from lib.taskforge.tests.test_end_to_end import Envs, config, resources, script
 from taskcompendium.models import TaskSpec
 
 from taskforge.coordinator import run_workpiece
-from taskforge.effects.events import Resolved
+from taskforge.effects.events import Resolved, StageBoundary
 from taskforge.effects.log import EventLog, Record
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.workpiece import Terminal
@@ -66,8 +66,10 @@ async def test_a_resumed_root_replays_its_recorded_reference_after_the_wording_c
     await run_workpiece(proposal, config(), resources(Envs(), script()), recorded, install=install)
     reword(monkeypatch, "Later wording.")
     resumed = resources(Envs(), ())  # an author call bought again exhausts this empty script
-    log = EventLog(replay_from=recorded.records, replayable=replayable_grade)
+    # Cut before the author's boundary, so the resumed launch opens the author session again.
+    cut = next(r.sequence for r in recorded.records if isinstance(r.event, StageBoundary) and r.event.workpiece.session)
+    log = EventLog(replay_from=recorded.records[: cut - 1], replayable=replayable_grade)
     assert (await run_workpiece(proposal, config(), resumed, log, install=install)).terminal is Terminal.ACCEPTED
     assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
-    ((reference, replayed),) = references(log.records[len(recorded.records) :])
+    ((reference, replayed),) = references(log.records[cut - 1 :])
     assert described(reference) == "Recorded wording." and replayed

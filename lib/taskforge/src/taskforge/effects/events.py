@@ -31,15 +31,16 @@ from taskforge.model.content_hash import (
 )
 from taskforge.model.review import ValidationResult
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Terminal
+from taskforge.model.workpiece import ENTRY, Terminal, Workpiece
 
 ENVIRONMENT = "env"
-"""The sandbox area: the kind prefix of every re-executed sandbox request and the resource that fingerprints it."""
+"""The sandbox area: the kind prefix of every live sandbox request and the resource that fingerprints it."""
 
 
 class ReplayPolicy(StrEnum):
     CACHE = "cache"
     REEXECUTE = "reexecute"
+    """Run against the current machine on every launch; never served from the log."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,26 +141,20 @@ class Invalidated(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class Failed(Event[None]):
-    """A re-executed request's handled failure: the ``OSError`` its caller saw, by errno name and text."""
+    """A sandbox request's handled failure: the ``OSError`` its caller saw, by errno name and text."""
 
     kind = "effect.failed"
     category: str
     message: str
 
-    def error(self) -> OSError:
-        error = OSError(self.message)
-        error.errno = getattr(errno, self.category, None)
-        return error
-
 
 HANDLED_FAILURE = OSError
-"""The one caller-visible, recoverable failure of a re-executed request: recorded as ``Failed`` and handed to the
+"""The one caller-visible, recoverable failure of a sandbox request: recorded as ``Failed`` and handed to the
 model as tool feedback. Argument and JSON validation errors are no effects; transfer and machine failures are issues."""
 
 
 UNNUMBERED = "OSError"
-FAILURE_CATEGORIES = frozenset({*errno.errorcode.values(), UNNUMBERED})
-"""Every category ``failure`` records: an errno name, or ``UNNUMBERED`` for an error without a known errno."""
+"""The category ``failure`` records for an error without a known errno; any other is an errno name."""
 
 
 def failure(error: OSError) -> Failed:
@@ -181,8 +176,7 @@ class ScopeExited(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class Committed:
-    """The visit (``digest((stage, entry workpiece, compatibility))``) a continuing review decided on and its evidence;
-    a later launch entering it returns that evidence."""
+    """A visit a format-13 to format-15 review committed, and its evidence; read for reports only."""
 
     visit: str
     result: ValidationResult
@@ -197,3 +191,18 @@ class StageCompleted(Event[None]):
     round: int = 0
     terminal: Terminal | None = None
     committed: Committed | None = field(default=None, metadata={"absent_when_none": True})
+
+
+@dataclass(frozen=True, slots=True)
+class StageBoundary(Event[None]):
+    """The workpiece stage ``following`` starts from under ``plan``, as ``ENTRY`` encodes it; a
+    later launch of the same plan resumes there."""
+
+    kind = "stage.boundary"
+    plan: str | None
+    following: Stage
+    entry: str
+
+    @property
+    def workpiece(self) -> Workpiece:
+        return ENTRY.validate_json(self.entry)[0]

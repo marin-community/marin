@@ -81,7 +81,7 @@ LIMIT_STOP_REASONS = frozenset({LENGTH_STOP_REASON, TIME_LIMIT_STOP_REASON, "con
 
 SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)
 """The holds that mean only "this slot produced no evidence": the batch records them as the slot's result. Every
-other hold (``Unreproducible``, host refusals, anything unknown) holds the workpiece. ``DecisionModelUnavailable`` is
+other hold (host refusals, anything unknown) holds the workpiece. ``DecisionModelUnavailable`` is
 deliberately absent: a recorded result would be missing evidence, while an outage defers the slot unrecorded."""
 
 

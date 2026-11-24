@@ -126,7 +126,7 @@ async def solver_batch(
     while a retry or replay of one unresolved slot keeps its own.
 
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
-    enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
+    enters a replay key. A slot that restarts raises once every sibling has settled, so restarting the stage
     re-executes only it; more than ``max_missing`` held slots hold the batch instead. A decision-model outage defers
     the batch the same way, and any other hold a slot raises holds it, each once every admitted sibling has settled.
     Once a slot waits for the decision model or holds, or ``stopped()`` says a validation sibling holds, no further
@@ -228,7 +228,7 @@ async def adversary_result(
     name: str,
     occurrence: int,
 ) -> AdversaryResult:
-    """One roster entry, ``occurrence`` among entries with its name; each search is its own environment owner."""
+    """One roster entry, ``occurrence`` among entries with its name; each search runs on its own machine."""
     visit = f"validate/{workpiece.round}/{len(workpiece.evidence)}"
     owner = ""
     for retry in range(2):
@@ -379,7 +379,7 @@ async def run_adversary(
                 graded[digest(event.request.candidate)] = shown
 
     tools = {"report": ReportTool(spec.task, graded)}
-    visit = Visit(f"adversary:{name}", owner, machine, files, tools, bills=Billing.ADVERSARY)
+    visit = Visit(f"adversary:{name}", machine, files, tools, bills=Billing.ADVERSARY)
     async with sitting(ctx, config.adversary, visit, resources) as session:
         ctx.observe(Resolved, remember)
         brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts

@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from taskforge.effects.events import HANDLED_FAILURE, Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
-from taskforge.effects.issues import Restart, Unreproducible
-from taskforge.effects.log import Attempt, Billing, EventLog, Missing, Opened, Record, cached
+from taskforge.effects.log import Billing, EventLog, Missing, Record, cached
 
 type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
@@ -34,7 +33,6 @@ class _Scope:
         self.observers: tuple[tuple[type[Event[object]], Observer[Event[object]]], ...] = ()
         self.observed: list[asyncio.Future[None]] = []
         """Observer runs this scope's events started; their failures are the scope's issues."""
-        self.attempt: Attempt | None = None
         self.bills = bills
 
     def take(self) -> list[asyncio.Future[None]]:
@@ -67,9 +65,8 @@ class Context:
     def handle(self, etype: type[Event[object]], fn: Executor, resource: Resource | None = None) -> None:
         """Execute ``etype`` here as ``fn(event, resource)``, replayed under the resource's fingerprint.
 
-        An inner scope's handler wins. A re-executed resource's executor also receives ``recorded=``, the outcome at
-        this request's position in the innermost opened scope's history (a result, ``Failed`` or ``Missing``), and
-        returns what the caller sees; a ``HANDLED_FAILURE`` it raises is recorded as ``Failed``.
+        An inner scope's handler wins. A resource that is not cached (a sandbox) runs on every launch, and a
+        ``HANDLED_FAILURE`` its executor raises is recorded as ``Failed``.
         """
         self._chain.get()[-1].handlers += (_Handler(etype, fn, resource),)
 
@@ -122,12 +119,11 @@ class Context:
         chain = self._chain.get()
         handler, uses, fingerprints = self._handler(event)
         if handler is not None and not cached(fingerprints):
-            attempt = next((scope.attempt for scope in reversed(chain) if scope.attempt is not None), None)
-            if attempt is None:
-                raise RuntimeError(f"{type(event).__qualname__} is re-executed outside an opened environment scope")
-            request = self._publish(self._log.append(event, attempt=attempt.sequence), chain).sequence
+            # TODO: To resume inside a session, cache sandbox outcomes by logical sandbox and operation position,
+            # then decide whether reconstructing the machine must verify each recorded outcome.
+            request = self._publish(self._log.append(event), chain).sequence
             try:
-                value = await handler.fn(event, *uses, recorded=self._log.recorded(request))
+                value = await handler.fn(event, *uses)
             except HANDLED_FAILURE as error:
                 self._publish(self._log.append(failure(error), answers=request), chain)
                 raise
@@ -154,29 +150,18 @@ class Context:
         await _join(self._chain.get()[-1].take)
 
     @asynccontextmanager
-    async def scope(
-        self, name: str, opens: Opened | None = None, *, bills: Billing | None = None
-    ) -> AsyncIterator[None]:
-        """A task-local scope; with ``opens``, one physical attempt at that environment owner, whose clean exit before
-        the owner's recorded history ends is ``Unreproducible``, and with a recorded outcome still unverified a
-        ``Restart``. With ``bills``, a physical cached resolution inside it, unless an inner scope bills another
-        role, records that role as its payer."""
+    async def scope(self, name: str, *, bills: Billing | None = None) -> AsyncIterator[None]:
+        """A task-local scope. With ``bills``, a physical cached resolution inside it, unless an inner scope bills
+        another role, records that role as its payer."""
         owner = _Scope(bills)
         chain = (*self._chain.get(), owner)
-        entered = self._log.append(ScopeEntered(name), opened=opens)
-        owner.attempt = None if opens is None else self._log.attempt(entered.sequence)
+        entered = self._log.append(ScopeEntered(name))
         token = self._chain.set(chain)
         failed = True
         try:
             self._publish(entered, chain)  # its observers start in this scope's context
             yield
             await _join(owner.take)
-            if (attempt := owner.attempt) is not None:
-                # A recorded outcome left unverified is no frontier: reconstruct the owner again on a fresh machine.
-                if attempt.unanswered is not None and not isinstance(self._log.recorded(attempt.unanswered), Missing):
-                    raise Restart(f"{attempt.owner} left its recorded request {attempt.unanswered} unverified")
-                if attempt.position < len(attempt.history):
-                    raise Unreproducible(f"{attempt.owner} returned before its recorded history ended")
             failed = False
         finally:
             try:

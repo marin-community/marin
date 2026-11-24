@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import PurePosixPath
 from string import Formatter
 from types import MappingProxyType
-from typing import override
+from typing import NamedTuple, override
 
 import httpx
 from connectrpc.errors import ConnectError
@@ -408,6 +408,13 @@ def provider_policy(policy: Policy) -> Policy:
     return policy
 
 
+class CampaignWiring(NamedTuple):
+    """The stock campaign the driver can resume under its proposal, policy and journal format."""
+
+    config: TaskforgeConfig
+    resources: Resources
+
+
 @asynccontextmanager
 async def runtime(
     policy: Policy,
@@ -426,6 +433,7 @@ async def runtime(
     ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. Iris sandboxes reach
     ``controller_url``, by default the controller of the Iris job this process runs in. The caller owns what it passes.
     """
+    stock = not providers and not profiles and decision_model is None
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
     logging.info("\n".join(resolution_lines(declared, policy)))
@@ -467,4 +475,5 @@ async def runtime(
         if decision_model is None and decision_model_policy(policy) is not None:
             decision_model = clef(policy, source, await owned.enter_async_context(httpx.AsyncClient()))
         resources = build_resources(policy, resolved, factories, web, profiles, decision_model)
-        yield build_config(policy, factories, profiles), resources
+        config = build_config(policy, factories, profiles)
+        yield CampaignWiring(config, resources) if stock else (config, resources)
