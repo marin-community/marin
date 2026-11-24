@@ -188,7 +188,7 @@ evaluations:
     benchmark: swebench-science
     protocol: pi-xhigh
     run:
-      concurrency: 16
+      concurrency: 32
       task_machine:
         image_build: declarative
   gaia:
