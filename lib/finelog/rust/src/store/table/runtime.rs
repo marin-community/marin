@@ -910,7 +910,7 @@ mod tests {
             .expect("policy update blocked behind eviction")
             .unwrap();
 
-        assert_eq!(table.stats().segment_count, 0);
+        assert_eq!(table.stats().unwrap().segment_count, 0);
         assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
