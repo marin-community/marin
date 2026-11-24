@@ -1,10 +1,12 @@
 {
-  "marina_url": "https://marina.oa.dev",
   "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
   "expires_when": "preview_refresh_strict_audit_passes",
-  "rule": "post-seal-declaration-missing-served-projection",
+  "marina_url": "https://marina.oa.dev",
   "reason": "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
+  "rule": "post-seal-declaration-missing-served-projection",
   "source_ids": [
+    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
+    "FWeindel:validated-tasks/endless",
     "FWeindel:validated-tasks/facet_v2",
     "FWeindel:validated-tasks/facet_v3",
     "FWeindel:validated-tasks/mimo_v1",
