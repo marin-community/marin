@@ -6,11 +6,13 @@ from http import HTTPStatus
 import httpx
 import pytest
 from rigging.task_errors import (
+    DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES,
     ErrorCategory,
     ErrorIdentity,
     RetryDisposition,
     RetrySettings,
     exception_identity,
+    record_retry_disposition,
     retry_delay,
 )
 
@@ -110,3 +112,24 @@ def test_unknown_failure_requires_explicit_category_or_name_inclusion():
 def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
     failure = ErrorIdentity(exception_type="DaytonaConnectionError", provider_status_code=404)
     assert retry_delay(failure, RetrySettings(jitter=0, max_retries=1), 0) is None
+
+
+def test_deterministic_infrastructure_names_are_permanent_regardless_of_cause():
+    for name in sorted(DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES):
+        assert record_retry_disposition(name, None, None) is RetryDisposition.PERMANENT
+        assert record_retry_disposition(name, "ConnectionError", None) is RetryDisposition.PERMANENT
+
+
+def test_infrastructure_selection_cannot_retry_a_deterministic_setup_failure():
+    failure = ErrorIdentity(exception_type="EnvironmentSetupError", category=ErrorCategory.INFRASTRUCTURE)
+    assert failure.retry_disposition is RetryDisposition.PERMANENT
+    policy = RetrySettings(jitter=0, max_retries=3, include_categories={ErrorCategory.INFRASTRUCTURE})
+    assert retry_delay(failure, policy, 0) is None
+
+
+def test_framework_transient_names_keep_their_disposition_beside_deterministic_names():
+    teardown = "PhaseCancellationError"
+    assert record_retry_disposition(teardown, None, None, retryable_error_types=frozenset({teardown})) is (
+        RetryDisposition.TRANSIENT
+    )
+    assert record_retry_disposition("EnvironmentSetupError", None, None) is RetryDisposition.PERMANENT

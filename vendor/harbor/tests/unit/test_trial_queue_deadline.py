@@ -28,6 +28,7 @@ from harbor.trial.errors import (
     AgentCommandOutputLostError,
     AgentDiskFullError,
     AgentTimeoutError,
+    EnvironmentSetupError,
     PhaseCancellationError,
 )
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
@@ -38,7 +39,7 @@ from harbor.utils.artifact_writer import (
     ArtifactUploadTimeoutError,
     ArtifactWriter,
 )
-from rigging.task_errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, RetryDisposition, error_category
 from harbor_config.errors import is_resume_retryable
 from harbor_config.models.job.config import ArchiveConfig
 from shellbox.backends.daytona.machine import DaytonaOutputUnavailable
@@ -772,6 +773,35 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
     assert sample.correct is (False if retried else None)
     native = reader.read_blob(f"sources/harbor/lost/attempts/{persisted.id}/result.json")
     assert TrialResult.model_validate_json(native) == persisted
+
+
+@pytest.mark.unit
+async def test_environment_setup_error_does_not_retry_inside_the_infrastructure_category(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def fail_setup(trial: FakeTrial) -> None:
+        raise EnvironmentSetupError("Public fixture initialization exited 1")
+
+    config = _config(tmp_path, "setup-failed", attempt_timeout=None)
+    _install_factory(monkeypatch, {("setup-failed", 0): FakeTrial(config, 0, fail_setup)})
+    queue = TrialQueue(
+        n_concurrent=1,
+        retry_config=RetrySettings(
+            max_retries=3,
+            include_categories={"infrastructure"},
+            min_wait_sec=0,
+            max_wait_sec=0,
+        ),
+    )
+
+    result = await queue.submit(config)
+    assert result.exception_info is not None
+    assert result.exception_info.exception_type == "EnvironmentSetupError"
+    assert result.exception_info.category is ErrorCategory.INFRASTRUCTURE
+    assert result.exception_info.retry_disposition is RetryDisposition.PERMANENT
+    assert result.finished_at is not None
+    assert result.trial_relpath == "setup-failed/attempts/000"
+    assert not (config.trials_dir / config.trial_name / "attempts" / "001").exists()
 
 
 @pytest.mark.unit

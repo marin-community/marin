@@ -150,16 +150,49 @@ SHARED_RETRYABLE_ERROR_TYPES = frozenset(
 )
 
 
+# Deterministic infrastructure failures repeat identically on every attempt: a
+# fixed setup command, path, credential, quota, or resource limit decides the
+# outcome, so spending the retry budget cannot change it. Frameworks keep owning
+# these names in their category maps; this set only pins the retry disposition.
+DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES = frozenset(
+    {
+        "AddTestsDirError",
+        "AgentKilledBySignalError",
+        "ContextBudgetExceededError",
+        "DownloadVerifierDirError",
+        "EnrootMemoryLimitExceededError",
+        "EnvironmentSetupError",
+        "EnvironmentStopError",
+        "HealthcheckError",
+        "MissingExtraError",
+        "ModelAuthenticationError",
+        REWARD_FILE_EMPTY_ERROR,
+        REWARD_FILE_NOT_FOUND_ERROR,
+        "SandboxDiskFullError",
+        "SnapshotQuotaExceeded",
+        VERIFIER_OUTPUT_PARSE_ERROR,
+        VERIFIER_RUNTIME_ERROR,
+    }
+)
+
+
 def record_retry_disposition(
     exception_type: str,
     cause_type: str | None,
     provider_status_code: int | None,
     *,
     retryable_error_types: frozenset[str] = SHARED_RETRYABLE_ERROR_TYPES,
+    deterministic_error_types: frozenset[str] = DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES,
 ) -> RetryDisposition:
-    """Classify records without a disposition, honoring provider status and cause boundaries."""
+    """Classify records without a disposition, honoring provider status and cause boundaries.
+
+    Deterministic names are permanent regardless of their cause: retrying the
+    identical setup cannot produce a different outcome.
+    """
     if provider_status_code is not None:
         return http_retry_disposition(provider_status_code)
+    if exception_type in deterministic_error_types:
+        return RetryDisposition.PERMANENT
     if cause_type is None and exception_type in retryable_error_types:
         return RetryDisposition.TRANSIENT
     return RetryDisposition.UNKNOWN
