@@ -127,4 +127,6 @@ def _check_nonfinite_context_rank(rank, rendezvous, nonfinite_source):
 
 @pytest.mark.parametrize("nonfinite_source", ["input", "upstream"])
 def test_shortconv_context_padding_does_not_propagate_nonfinite_values(tmp_path, nonfinite_source):
-    mp.spawn(_check_nonfinite_context_rank, args=(f"file://{tmp_path}/rendezvous", nonfinite_source), nprocs=2, join=True)
+    mp.spawn(
+        _check_nonfinite_context_rank, args=(f"file://{tmp_path}/rendezvous", nonfinite_source), nprocs=2, join=True
+    )

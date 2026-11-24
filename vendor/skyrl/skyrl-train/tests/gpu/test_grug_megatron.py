@@ -112,7 +112,6 @@ def test_packed_rope_matches_megatron(cp_size, dtype, rotary_interleaved, freque
         torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
 
 
-
 def _spot_check_name(suffix: str) -> str:
     """First broad-coverage parameter name with the given suffix."""
     return next(name for name in PARAMETER_NAMES if name.endswith(suffix))

@@ -21,7 +21,7 @@ def causal_short_conv(
             starting at zero and covering ``x.shape[0] * cp_size`` positions. Document lengths are
             unchecked: each must be positive and divisible by twice the CP size (by one without CP).
             None means one global document per batch column, partitioned across CP ranks.
-        cp_group: Context group. Each document uses the two-chunk zigzag layout.
+        cp_group: Context group. With multiple ranks, each document uses the two-chunk zigzag layout.
 
     Each chunk uses the preceding ``tap - 1`` tokens in its document, with zeros before the
     document's start. CP ranks exchange halos once per call when the kernel has multiple taps.

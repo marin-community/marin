@@ -66,7 +66,7 @@ from skyrl_train.models.grug_moe import (
 
 
 def packed_rotary_pos_emb(t, freqs, *, config, cu_seqlens, cp_group):
-    """Apply RoPE to ``[tokens, heads, dim]`` packed documents by indexing frequencies per token.
+    """Apply RoPE to ``[tokens, heads, dim]`` packed documents.
 
     Matches Megatron 0.18.0's unfused packed RoPE.
     """
