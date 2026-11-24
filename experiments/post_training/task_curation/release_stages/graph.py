@@ -392,6 +392,8 @@ def _coerce_ref(value: Any, hint: Any) -> Any:
         return {key: ArtifactRef(**item) for key, item in value.items()}
     if origin is not None:
         args = [arg for arg in get_args(hint) if arg is not type(None)]
+        if origin is tuple:
+            return tuple(value)
         if len(args) == 1:
             return _coerce_ref(value, args[0])
         raise ValueError(f"unsupported typed-input hint {hint!r}")
