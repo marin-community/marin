@@ -174,23 +174,25 @@ def row_contract(
 ) -> Contract | ImportRejection:
     """The frozen contract of one row, or why the row is left out; ``listed`` names the Prime Intellect list
     that holds a uuid, if any. ``require_passing_proof`` is off only while ``PROOFS_FILE`` is written."""
-    proof = data.get("formal_ground_truth")
-    if not isinstance(proof, str) or not proof.strip():
+    uuid, problem, statement, proof = (
+        data.get(key) for key in ("uuid", "problem", "formal_statement", "formal_ground_truth")
+    )
+    if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement, proof)):
         return source_defect("missing_input", "uuid, problem, formal_statement and formal_ground_truth are required")
-    contract = statement_row_contract(data, listed)
-    if isinstance(contract, ImportRejection):
-        return contract
-    if OLD_BIG_OPERATOR.search(without_comments(proof)):
-        return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
-    if UNUSABLE_PROOF.search(without_comments(proof)):
-        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
-    if require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+    contract = statement_row_contract(data, listed, proof=proof)
+    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
         return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
     return contract
 
 
-def statement_row_contract(data: Mapping[str, Any], listed: Callable[[str], str | None]) -> Contract | ImportRejection:
-    """Freeze one human statement after applying shared toolchain and contamination filters."""
+def statement_row_contract(
+    data: Mapping[str, Any], listed: Callable[[str], str | None], *, proof: str | None = None
+) -> Contract | ImportRejection:
+    """Freeze one human statement after the shared toolchain and contamination filters.
+
+    A given ``proof`` is checked at the same points as the statement, so proof tasks report the same rejection
+    reasons as before auto-informalization shared these filters.
+    """
     uuid, problem, statement = (data.get(key) for key in ("uuid", "problem", "formal_statement"))
     if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement)):
         return source_defect("missing_input", "uuid, problem and formal_statement are required")
@@ -202,8 +204,10 @@ def statement_row_contract(data: Mapping[str, Any], listed: Callable[[str], str 
         return source_defect("does_not_compile", "The statement does not compile with the grader's toolchain")
     if uuid in EVAL_OVERLAP:
         return unsupported("eval_overlap", "The row states a problem of the frozen Lean eval set")
-    if OLD_BIG_OPERATOR.search(without_comments(statement)):
+    if any(OLD_BIG_OPERATOR.search(without_comments(text)) for text in (statement, proof) if text is not None):
         return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
+    if proof is not None and UNUSABLE_PROOF.search(without_comments(proof)):
+        return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
     if UNUSABLE_STATEMENT.search(without_comments(statement)):
         return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
     return numina_contract(statement)
