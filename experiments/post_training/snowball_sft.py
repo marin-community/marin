@@ -13,9 +13,9 @@ from fray.types import ResourceConfig
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import OUT, apply
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedData, SFTPreset, SFTSpec, main
 

@@ -1,0 +1,67 @@
+name: "Marin - Protected shared graders"
+
+on:
+  pull_request:
+    paths:
+      - "lib/taskcompendium/**"
+      - "lib/verifyit/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/shared-grader-unit.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "lib/taskcompendium/**"
+      - "lib/verifyit/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/shared-grader-unit.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-grader-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image_boundary:
+    name: shared-grader-image-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Test image confidentiality when initialization is skipped
+        run: >-
+          uv run --frozen --package marin-taskcompendium --group test
+          pytest lib/taskcompendium/tests/test_shared_reference.py
+          -o addopts=--import-mode=importlib -m docker -q --tb=short
+
+  shared_grader:
+    name: shared-grader-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: ghcr.io/astral-sh/uv:python3.12-bookworm
+    env:
+      UV_PROJECT_ENVIRONMENT: /opt/shared-grader-env
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native smoke toolchain
+        run: apt-get update -qq && apt-get install -y -qq cmake
+      - name: Install locked grading dependencies and test tools
+        run: |
+          uv sync --frozen --package marin-taskcompendium --group test --python /usr/local/bin/python
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" pytest-json-report==1.5.0 pip setuptools wheel
+      - name: Test protected grading with real Linux identities
+        run: >-
+          uv run --no-sync --frozen --package marin-taskcompendium --group test
+          pytest lib/taskcompendium/tests/test_shared_pytest.py
+          lib/taskcompendium/tests/test_shared_source.py
+          lib/taskcompendium/tests/test_shared_native.py
+          -o addopts=--import-mode=importlib -m docker
+          -k 'not test_native or cpp' -q --tb=short
