@@ -25,8 +25,8 @@
   "package_output_root": "/Users/benfeuer/Documents/experiments/active/atlas-release-pipeline/m3-dryrun/package",
   "pins": {
     "backend_survey": {
-      "sha256": "d41ba3caf0a2148c1601f00fb8e6e1e434259a58013e39b0b04f462bf44f0f47",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v19/backend-validation/backend-survey.json"
+      "sha256": "ec126b66ca9cf4a86d348ddb64f7a8ab20edcfd3ebe252b2f74e8859b4adb906",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v21/backend-validation/backend-survey.json"
     },
     "backend_validation_receipt": {
       "sha256": "40109fc9970a14aa512f22b78cf6d572954fbf0278d8e191dcad44bf9c69e95e",
@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v20",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v21",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
