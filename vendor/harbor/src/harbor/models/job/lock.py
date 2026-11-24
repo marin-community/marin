@@ -14,7 +14,8 @@ from urllib.request import url2pathname
 
 from pydantic import BaseModel, Field, field_validator
 
-from harbor.models.job.config import JobConfig, RetryConfig
+from harbor.models.job.config import JobConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 from harbor.models.trial.config import (
     AgentConfig,
@@ -197,7 +198,7 @@ class JobLock(BaseModel):
     harbor: HarborLockInfo = Field(default_factory=HarborLockInfo)
     invocation: list[str] | None = None
     n_concurrent_trials: int
-    retry: RetryConfig
+    retry: RetrySettings
     trials: list[TrialLock] = Field(default_factory=list)
 
     def __eq__(self, other):

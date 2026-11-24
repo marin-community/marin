@@ -44,7 +44,6 @@ _COMBINE_TARGET = "levanter_deepep_combine_intranode"
 _INIT_SYMBOL = "levanter_deepep_init_intranode_runtime"
 _SHUTDOWN_SYMBOL = "levanter_deepep_shutdown_intranode_runtime"
 _LAST_ERROR_SYMBOL = "levanter_deepep_last_error"
-_PROBE_DISPATCH_SYMBOL = "levanter_deepep_probe_dispatch_kernel_attributes"
 _RUN_HOST_DISPATCH_SYMBOL = "levanter_deepep_run_host_dispatch_round"
 _EXTENDED_INTRNODE_DISPATCH_MACRO = "LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH"
 _PYEXT_MODULE_NAME_MACRO = "LEVANTER_DEEPEP_PYEXT_MODULE_NAME"
@@ -771,21 +770,6 @@ def ensure_intranode_runtime(
         text = _read_last_error("unknown error")
         raise RuntimeError(f"Failed to initialize DeepEP intranode JAX runtime: {text}")
     ensure_intranode_runtime._signature = signature
-
-
-def probe_dispatch_kernel_attributes() -> dict[str, int | str]:
-    """Call the DeepEP dispatch host wrapper outside XLA execution."""
-    probe = _library_function(_PROBE_DISPATCH_SYMBOL)
-    probe.argtypes = []
-    probe.restype = ctypes.c_int
-
-    status = probe()
-    result: dict[str, int | str] = {"probe_status_code": int(status)}
-    text = _read_last_error()
-    result["last_error"] = text
-    if status != 0:
-        raise RuntimeError(f"Failed to probe DeepEP dispatch kernel attributes: {text}")
-    return result
 
 
 def run_host_dispatch_round(

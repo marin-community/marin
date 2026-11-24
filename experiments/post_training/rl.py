@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -23,11 +24,12 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
+from typing import Protocol
 
 import click
 import yaml
-from finestore.rl.rl_progress import RunIndexIdentity, Verdict
-from finestore.rl.run_records import AttemptRecord, write_attempt
+from finestore.rl.rl_progress import ControlReplicate, Verdict
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, write_attempt
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
@@ -36,12 +38,14 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
+from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import BASE_PRESET_REVISION_ENV, RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
+from marin.rl.cli import RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
+    ArtifactHfModel,
     SkyRLModelSource,
     SkyRLReceiptLookupError,
     SkyRLRun,
@@ -72,7 +76,9 @@ from experiments.post_training.rl_command import (
 )
 from experiments.post_training.rl_measurements import (
     RUN_INPUTS_FILENAME,
+    InvalidComparison,
     RunInputs,
+    RunOptions,
     evaluation_status,
     lineage_gpu_hours,
     read_recorded_launch,
@@ -81,11 +87,25 @@ from experiments.post_training.rl_measurements import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
-_PUBLICATION_POLL_SECONDS = 10
+_PUBLICATION_POLL_SECONDS = 60
 _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 logger = logging.getLogger(__name__)
 _SUBMITTED_INDEX = TypeAdapter(dict[str, RunIndexIdentity])
+
+
+class SFTModelPreset(Protocol):
+    """The recipe and exported model exposed by an SFT preset."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def recipe(self) -> object: ...
+
+    def model(
+        self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
@@ -119,16 +139,14 @@ def _run_rl(
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
-        issue = rl_publication.reserve_issue(config.output.export_root, issue)
-        base_revision = os.environ.get(BASE_PRESET_REVISION_ENV) if index is not None else None
+        rl_publication.reserve_issue(config.output.export_root, issue)
+    if index is not None:
         write_attempt(
             config.output.export_root,
             AttemptRecord(
                 run_id=config.run_id,
                 attempt_id=config.attempt_id,
-                issue=issue,
                 index=index,
-                base_preset_revision=base_revision or None,
             ),
         )
     return run_skyrl(config, forward_env=forward_env)
@@ -142,11 +160,47 @@ def _run_name(
     *,
     table: presets.ModelPresets,
     control: bool,
+    resume_step: int | None,
 ) -> str:
     if control:
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
+    if resume_step is not None:
+        name += f"-resume-step-{resume_step}"
     return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
+
+
+def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
+    if has_init:
+        raise click.BadParameter("--resume cannot be combined with --init")
+    if preset.checkpoints == "none":
+        raise click.BadParameter("--resume requires checkpointing")
+
+
+def _with_run_options(
+    preset: presets.Preset,
+    *,
+    checkpoints: presets.CheckpointPolicy | None,
+    checkpoint_every: int | None,
+    export: presets.CheckpointPolicy | None,
+    priority: str | None,
+) -> presets.Preset:
+    if preset.gated and any(value is not None for value in (checkpoints, checkpoint_every, export)):
+        raise click.BadParameter("gated presets do not accept --checkpoints, --checkpoint-every, or --export")
+    retention = checkpoints if checkpoints is not None else preset.checkpoints
+    export_policy = export if export is not None else preset.export
+    cadence = preset.checkpoint_every if checkpoint_every is None else checkpoint_every or None
+    layout = preset.recipe.layout
+    try:
+        return replace(
+            preset,
+            checkpoints=retention,
+            checkpoint_every=cadence,
+            export=export_policy,
+            recipe=replace(preset.recipe, layout=replace(layout, priority=priority or layout.priority)),
+        )
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
 
 
 def build_experiment(
@@ -155,6 +209,8 @@ def build_experiment(
     table: presets.ModelPresets,
     tasks: ArtifactStep | None = None,
     init: SkyRLModelSource | None = None,
+    sft_preset: str | None = None,
+    resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
@@ -162,6 +218,7 @@ def build_experiment(
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
     validate_plan: bool = False,
+    plan_only: bool = False,
     provenance: Provenance | None = None,
 ) -> RLExperiment:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
@@ -172,14 +229,14 @@ def build_experiment(
         raise click.BadParameter("this preset accepts no --set")
     if preset.tasks_input == "required":
         if tasks is None and not control:
-            raise click.BadParameter("data presets require --tasks and accept no --set")
+            raise click.BadParameter(f"{preset.name} requires --tasks")
     elif preset.tasks_input == "forbidden" and tasks is not None:
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
         raise click.BadParameter("this preset does not accept --init")
     if (not preset.gated and replicates != 1) or (control and preset.control_preset != preset.name):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
-    if control and (settings or tasks is not None or init is not None):
+    if control and (settings or tasks is not None or init is not None or resume is not None):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
     default, selection = recipe.task_selections(preset, tasks)
     if is_mutable_version(selection.version):
@@ -201,7 +258,9 @@ def build_experiment(
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
             raise click.BadParameter("candidate tasks must record the full held-out selection in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
-    spec = recipe.run_spec(preset, name="rl-config", tasks=tasks, init=init, settings=settings, model_name=table.model)
+    spec = recipe.run_spec(
+        preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
+    )
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
@@ -214,6 +273,13 @@ def build_experiment(
         "settings": sorted(recipe.override_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
+    if resume is not None:
+        changes["resume"] = resume.model_dump(mode="json", exclude_none=True)
+    if sft_preset is not None:
+        changes["sft_preset"] = sft_preset
+    options = RunOptions.from_preset(preset)
+    if options != RunOptions.from_preset(table.by_name[preset.name]):
+        changes["run_options"] = options.model_dump(mode="json")
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = provenance or _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
@@ -223,12 +289,28 @@ def build_experiment(
         f"{tasks.name}@{tasks.version}" if tasks is not None else None,
         initializer,
         requirements,
+        resume=resume,
+        options=options,
+        sft_preset=sft_preset,
     )
     runs = []
     for replicate in range(replicates):
-        name = _run_name(preset, provenance, inputs_hash, replicate, table=table, control=control)
+        name = _run_name(
+            preset,
+            provenance,
+            inputs_hash,
+            replicate,
+            table=table,
+            control=control,
+            resume_step=resume.step if resume is not None else None,
+        )
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
-        runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
+        recorded_inputs = inputs
+        if control:
+            assert provenance.base_commit is not None
+            member = ControlReplicate(commit=provenance.base_commit, revision=preset.revision, replicate=replicate)
+            recorded_inputs = inputs.model_copy(update={"control": member})
+        runs.append(replace(run, run=partial(_run_rl, inputs=recorded_inputs, issue=issue, forward_env=forward_env)))
     gate = (
         rl_gate.gate_step(
             preset,
@@ -236,7 +318,7 @@ def build_experiment(
             inputs=inputs,
             table=table,
         )
-        if preset.gated and not control
+        if preset.gated and not control and (not plan_only or preset.control_preset in table.control_pins)
         else None
     )
     if validate_plan:
@@ -245,7 +327,7 @@ def build_experiment(
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
-    return bool(preset.checkpoint_every) and any(
+    return isinstance(preset.recipe.layout.workload, presets.Training) and any(
         not fact["holds"] for row in snapshot["runs"] for fact in row.get("evaluation_invariants", ())
     )
 
@@ -270,12 +352,29 @@ def _status(
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
 ) -> dict:
+    prefix = recipe.run_prefix(preset)
+    ttl = preset.output_ttl_days
+    source = "cluster default"
+    if ttl is not None:
+        if os.environ.get("MARIN_PREFIX"):
+            source = "MARIN_PREFIX"
+        elif os.environ.get("MARIN_TEMP_PREFIX"):
+            source = "MARIN_TEMP_PREFIX"
+        else:
+            source = f"preset's {ttl}-day storage"
+    output = {"root": prefix, "source": source}
+    if (
+        ttl
+        and (source != "MARIN_PREFIX" or f"/tmp/ttl={ttl}d" in prefix)
+        and preset.recipe.layout.coordinator_timeout_hours > 24 * ttl
+    ):
+        output["warning"] = "The coordinator time limit exceeds storage lifetime. Set MARIN_PREFIX to a durable root."
     rows = []
     planned = []
     for step in run.runs:
         execution = skyrl_execution(step)
         assert execution is not None
-        path = step.path(recipe.artifact_prefix(execution.cluster))
+        path = step.path(prefix)
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
@@ -295,14 +394,15 @@ def _status(
         )
         best = {}
         if receipt is not None and launch is not None:
-            best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
             native = receipt.native.config
-            if best_path.exists():
-                best["best_checkpoint_step"] = json.loads(best_path.read_text())["step"]
-            elif preset.checkpoint_every or (
+            exports_best = (
                 native["run"].get("export_hf") and native["skyrl"]["trainer"].get("hf_export_checkpoint") == "best"
-            ):
-                best["best_checkpoint_step"] = "none eligible"
+            )
+            if preset.checkpoints == "best" or exports_best:
+                best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
+                best["best_checkpoint_step"] = (
+                    json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"
+                )
         rows.append(
             {
                 "name": step.name,
@@ -340,14 +440,14 @@ def _status(
                     "disk": execution.disk,
                 },
                 "output": path,
-                "issue": receipt.issue if receipt is not None else issue,
+                "issue": rl_publication.lineage_issue(launch.export_root, issue) if launch is not None else issue,
                 "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
     verdict = {}
     report = None
     if run.gate is not None:
-        path = run.gate.path(prefix=recipe.artifact_prefix(preset.recipe.layout.cluster))
+        path = run.gate.path(prefix=recipe.run_prefix(preset))
         report = rl_gate.read_gate_report(path)
         if report is not None:
             verdict = {
@@ -363,16 +463,18 @@ def _status(
                 "iris_job_id": crashed["iris_job_id"],
             }
     preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
+    launch_inputs = planned[0]["inputs"]
+    inputs = {"model": launch_inputs["model"]["identity"]}
+    for name in ("train_data", "validation_data"):
+        inputs[name] = [source["identity"] for source in launch_inputs[name]]
+    if "starting_checkpoint" in launch_inputs:
+        inputs["starting_checkpoint"] = launch_inputs["starting_checkpoint"]["identity"]
     return {
         "preset": preset.name,
+        "output": output,
+        "run_options": RunOptions.from_preset(preset).model_dump(mode="json"),
         "code": asdict(Provenance.capture(recipe.REPO_ROOT)),
-        "inputs": {
-            "model": planned[0]["inputs"]["model"]["identity"],
-            **{
-                name: [source["identity"] for source in planned[0]["inputs"][name]]
-                for name in ("train_data", "validation_data")
-            },
-        },
+        "inputs": inputs,
         "context_budget": planned[0]["skyrl"]["context_budget"],
         "updates": preset.recipe.layout.workload.update_count(preset.updates),
         "measured_updates": list(preset.measured),
@@ -430,13 +532,15 @@ def run_index_identity(
         user=user,
         branch=provenance.branch,
         source_revision=provenance.base_commit or "Unknown",
+        tree_hash=provenance.tree_hash,
         dirty=provenance.dirty,
         pr_number=_branch_pr_number(provenance),
     )
 
 
-def _base_preset_revision(module: str, model: str, preset: str, source_revision: str) -> str | None:
+def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
     root = recipe.REPO_ROOT
+    preset = index.preset
     program = """
 import sys
 from importlib import import_module
@@ -453,11 +557,21 @@ if len(revisions) == 1:
     print(revisions.pop())
 """
     try:
-        base = git_output(["merge-base", source_revision, "origin/main"], cwd=root, timeout=4)
+        base = git_output(["merge-base", index.source_revision, "origin/main"], cwd=root, timeout=4)
     except (OSError, RuntimeError):
         logger.debug("Git could not resolve the main merge base for preset %s", preset)
         return None
     try:
+        comparison = subprocess.run(
+            ["git", "diff", "--quiet", base, "--", "experiments/post_training", "lib"],
+            cwd=root,
+            timeout=4,
+        )
+        if comparison.returncode == 0:
+            return index.preset_revision
+        if comparison.returncode != 1:
+            logger.debug("Could not compare preset sources at main commit %s", base)
+            return None
         snapshot = subprocess.run(
             [
                 "git",
@@ -480,7 +594,7 @@ if len(revisions) == 1:
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
             result = subprocess.run(
-                [sys.executable, "-c", program, module, model, preset],
+                [sys.executable, "-c", program, module, index.model, preset],
                 text=True,
                 capture_output=True,
                 check=True,
@@ -511,7 +625,7 @@ def _publication_watch(
     job: JobName, handles: list[ArtifactStep], preset: presets.Preset, service_url: str | None
 ) -> _PublicationWatch:
     run = _from_handles(handles)
-    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    prefix = recipe.run_prefix(preset)
     return _PublicationWatch(
         job=str(job),
         preset=preset.name,
@@ -554,15 +668,22 @@ def _watch_publication(
                     f"Timed out waiting for {watch.job}. Repeat the original command with --wait."
                 )
             time.sleep(_PUBLICATION_POLL_SECONDS)
-    gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
-    publication = rl_publication.publish_runs(
-        watch.outputs,
-        preset,
-        table=table,
-        gate_path=gate_path,
-        service_url=watch.service_url,
-        failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
-    )
+    try:
+        gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
+        publication = rl_publication.publish_runs(
+            watch.outputs,
+            preset,
+            table=table,
+            gate_path=gate_path,
+            service_url=watch.service_url,
+            failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
+        )
+    except Exception as error:
+        publication = rl_publication.PublicationOutcome(
+            unserved_records=list(watch.outputs),
+            errors=[str(error)],
+            retry="Repeat the original command with --wait.",
+        )
     return state, publication
 
 
@@ -585,6 +706,7 @@ def _wait_for_run(
     *,
     table: presets.ModelPresets,
     service_url: str | None,
+    has_following: bool,
 ) -> None:
     watch = _publication_watch(job, handles, preset, service_url)
     parent_state, publication = _watch_publication(watch, table)
@@ -594,7 +716,12 @@ def _wait_for_run(
         else None
     )
     run = _from_handles(handles)
-    run = replace(run, gate=rl_gate.completed_gate(run.gate))
+    try:
+        run = replace(run, gate=rl_gate.completed_gate(run.gate))
+    except Exception:
+        if not publication.errors:
+            raise
+        run = replace(run, gate=None)
     snapshot = _status(
         run,
         preset,
@@ -602,7 +729,15 @@ def _wait_for_run(
         publication_urls=publication.urls,
     )
     snapshot["publication"] = publication.to_dict()
-    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+    rows = snapshot.get("runs", ())
+    if (
+        has_following
+        and coordinator_error is not None
+        and rows
+        and all(row["state"] == JobState.SUCCEEDED for row in rows)
+    ):
+        snapshot["post_run_error"] = f"Coordinator {job} ended in state {parent_state}. RL has a committed result."
+    elif "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
     if _evaluation_failed(snapshot, preset):
@@ -617,6 +752,7 @@ def _submit_from_launcher(
     module: str | None,
     argv: tuple[str, ...],
     handles: list[ArtifactStep],
+    rl_handles: list[ArtifactStep],
     max_concurrent: int,
     context: click.Context,
     preset: presets.Preset,
@@ -627,15 +763,17 @@ def _submit_from_launcher(
     if not module:
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
-    index: RunIndexIdentity = context.meta["rl_index"]
-    base_preset_revision = _base_preset_revision(module, index.model, index.preset, index.source_revision)
-    index = index.model_copy(update={"submitted_at": submitted_at})
-    runs = _from_handles(handles).runs
+    index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+    runs = _from_handles(rl_handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
     }
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
-    environment = {**os.environ, RUN_INDEX_ENV: metadata, BASE_PRESET_REVISION_ENV: base_preset_revision or ""}
+    environment = {**os.environ, RUN_INDEX_ENV: metadata}
+    if revision := context.meta.get("sft_source_revision"):
+        environment["GIT_COMMIT"] = revision
+    if preset.output_ttl_days is not None:
+        environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {
@@ -651,13 +789,13 @@ def _submit_from_launcher(
         "coordinator_job_id": str(job),
         "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
         "submitted_at": submitted_at,
-        "base_preset_revision": base_preset_revision,
+        "base_preset_revision": index.base_preset_revision,
         "runs": submitted,
     }
     _print_status(result)
     if not context.params["wait"]:
         try:
-            watch = _publication_watch(job, handles, preset, context.params["url"])
+            watch = _publication_watch(job, rl_handles, preset, context.params["url"])
             _print_status({"publication_log": _follow_detached(module, watch)})
         except OSError as error:
             logger.warning("Iris accepted %s. The publication watcher could not start (%s)", job, type(error).__name__)
@@ -677,16 +815,22 @@ def _run_command(
         return function(*args, **kwargs)
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-        if get_job_info() is not None:
-            validate_coordinator_graph(handles)
-            _run_graph(handles, max_concurrent)
-            return
         context = click.get_current_context()
         options = context.params
-        preset = table.by_name[options["preset_name"]]
-        job = _submit_from_launcher(entry_module, argv, handles, max_concurrent, context, preset)
+        preset = context.meta["rl_preset"]
+        count = context.meta["rl_handle_count"]
+        rl_handles = handles[:count]
+        if get_job_info() is not None:
+            validate_coordinator_graph(handles)
+            _run_graph(rl_handles, max_concurrent)
+            if following := handles[count:]:
+                build_artifacts(*following, max_concurrent=max_concurrent)
+            return
+        job = _submit_from_launcher(entry_module, argv, handles, rl_handles, max_concurrent, context, preset)
         if options["wait"]:
-            _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
+            _wait_for_run(
+                job, rl_handles, preset, table=table, service_url=options["url"], has_following=len(handles) > count
+            )
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -694,7 +838,7 @@ def _run_command(
 
 
 def _validate_launch_issue(run: RLExperiment, preset: presets.Preset, issue: int) -> None:
-    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    prefix = recipe.run_prefix(preset)
     for step in run.runs:
         export = str(StoragePath(step.path(prefix)) / EXPORTS_SUBDIRECTORY)
         try:
@@ -708,13 +852,23 @@ def command(
     *,
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
+    sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
-    @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
+    @click.option(
+        "--checkpoints", type=click.Choice(("none", "latest", "best")), help="Select native checkpoint retention."
+    )
+    @click.option(
+        "--checkpoint-every", type=click.IntRange(min=0), help="Save every N updates. Use 0 for no periodic saves."
+    )
+    @click.option("--export", type=click.Choice(("none", "latest", "best")), help="Select the model export at the end.")
+    @click.option(
+        "--priority", type=click.Choice(("batch", "interactive", "production")), help="Request an Iris priority band."
+    )
     @click.option("--marina-url", "url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
         "--wait",
@@ -775,6 +929,13 @@ def command(
         "mean with the controls; more copies narrow the tolerance. Only gated presets.",
     )
     @click.option(
+        "--resume",
+        "resume_name",
+        metavar="NAME@VERSION",
+        help="Continue from a stopped run's native checkpoint and its starting model. "
+        "A running source may prune the checkpoint before the coordinator starts it.",
+    )
+    @click.option(
         "--control",
         is_flag=True,
         help="Run the preset's control replicates from a clean checkout with only its pinned default "
@@ -786,20 +947,71 @@ def command(
         settings: tuple[str, ...],
         tasks_name: str | None,
         init_name: str | None,
+        resume_name: str | None,
         replicates: int,
         control: bool,
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
-        check_pin: bool,
+        checkpoints: presets.CheckpointPolicy | None,
+        checkpoint_every: int | None,
+        export: presets.CheckpointPolicy | None,
+        priority: str | None,
+        sft_name: str | None = None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
-        preset = table.by_name[preset_name]
+        if control and any(value is not None for value in (checkpoints, checkpoint_every, export, priority)):
+            raise click.BadParameter("controls use only the preset's pinned run options")
+        preset = _with_run_options(
+            table.by_name[preset_name],
+            checkpoints=checkpoints,
+            checkpoint_every=checkpoint_every,
+            export=export,
+            priority=priority,
+        )
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
+        initializer = init
+        if sft_name is not None:
+            if init is not None or init_name is not None or resume_name is not None or control:
+                raise click.UsageError("--sft requires a fresh candidate without --init or --resume")
+            if not preset.accepts_init:
+                raise click.BadParameter(f"{preset.name} does not accept --sft")
+            if preset.gated:
+                raise click.BadParameter(f"{preset.name} uses default-model controls and does not accept --sft")
+            assert sft_presets is not None
+            by_name = {source.name: source for source in sft_presets()}
+            if sft_name not in by_name:
+                raise click.BadParameter(
+                    f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
+                )
+            from experiments.sft.launcher import HFModel, SFTSpec  # noqa: PLC0415 - load only for --sft
+
+            sft = by_name[sft_name]
+            try:
+                initializer = sft.model(
+                    coordinator_cluster=preset.recipe.layout.cluster,
+                    coordinator_prefix=recipe.run_prefix(preset) if preset.temporary_output else None,
+                )
+            except ValueError as error:
+                raise click.BadParameter(str(error), param_hint="--sft") from error
+            export = initializer.step
+            export_config = export.build_config(StepContext.for_fingerprint(export.runtime_args, export.deps))
+            if isinstance(export_config, dict) and (revision := export_config.get("source_revision")):
+                click.get_current_context().meta["sft_source_revision"] = revision
+            sft_recipe = sft.recipe
+            sft_model = sft_recipe.model if isinstance(sft_recipe, SFTSpec) else None
+            if isinstance(sft_model, HFModel) and sft_model.task_timeout_seconds is not None:
+                layout = preset.recipe.layout
+                hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
+                layout = replace(layout, coordinator_timeout_hours=hours)
+                preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
+        click.get_current_context().meta["rl_preset"] = preset
+        if resume_name is not None:
+            _check_resume(preset, has_init=init is not None or init_name is not None)
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
@@ -811,45 +1023,79 @@ def command(
             forward_env=forward_env,
             settings=settings,
             tasks=recipe.selection_artifact(tasks_name) if tasks_name else None,
-            init=init if init is not None else recipe.published_model(init_name, preset=preset) if init_name else None,
+            init=recipe.published_model(init_name, preset=preset) if init_name else initializer,
+            sft_preset=sft_name,
+            resume=recipe.recovery_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
             replicates=replicates,
             control=control,
             requirements=requirements,
             issue=issue,
             validate_plan=from_launcher,
+            plan_only=not do_run,
             provenance=provenance,
         )
-        handles = (*run.runs, *((run.gate,) if run.gate else ()))
-        if from_launcher and (do_run or check_pin):
-            assert run.inputs is not None
-            validated = rl_gate.validate_candidate(
-                preset,
-                run.inputs,
-                control=control,
-                table=table,
+        assert run.inputs is not None
+        pin_error = None
+        if from_launcher and (do_run or plan):
+            try:
+                validated = rl_gate.validate_candidate(preset, run.inputs, table=table, control=control)
+            except InvalidComparison as error:
+                if do_run:
+                    raise
+                pin_error = str(error)
+            else:
+                if do_run:
+                    if issue is not None:
+                        _validate_launch_issue(run, preset, issue)
+                    context.meta["rl_training_type"] = validated["runtime"]["training_type"]
+                    context.meta["rl_index"] = run_index_identity(
+                        validated, preset, table, provenance, user=username_segment()
+                    )
+        model = preset.model
+        if (
+            table.needs_completed_default_export
+            and run.inputs.init is None
+            and (run.inputs.resume is None or run.inputs.resume.model is None)
+            and isinstance(model, ArtifactHfModel)
+            and model.step.adopt_source is not None
+            and not check_cache(model.step.path())
+        ):
+            sft_hint = "Build it with --sft PRESET or use" if sft_presets is not None else "Use"
+            raise click.BadParameter(
+                f"default model {model.step.name}@{model.step.version} has no completed HF export. "
+                f"{sft_hint} --init NAME@VERSION."
             )
-            if do_run:
-                if issue is not None:
-                    _validate_launch_issue(run, preset, issue)
-                context.meta["rl_training_type"] = validated["runtime"]["training_type"]
-                context.meta["rl_index"] = run_index_identity(
-                    validated, preset, table, provenance, user=username_segment()
-                )
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         if preset.gated and not control:
-            pin = rl_gate.control_pin(preset, table=table, check_revision=False)
-            snapshot["control_pin"] = {
-                "commit": pin.commit,
-                "revision": pin.revision,
-                "current": pin.revision == table.by_name[pin.preset].revision,
-            }
+            try:
+                pin = rl_gate.control_pin(preset, table=table, check_revision=False)
+            except InvalidComparison as error:
+                pin_error = pin_error or str(error)
+            else:
+                snapshot["control_pin"] = {
+                    "commit": pin.commit,
+                    "revision": pin.revision,
+                    "current": pin_error is None and pin.revision == table.by_name[pin.preset].revision,
+                }
+            if pin_error is not None:
+                snapshot["control_pin_error"] = pin_error
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        return handles
+        after_run = preset.then
+        following = tuple(after_run(step) for step in run.runs) if after_run is not None else ()
+        rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
+        click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
+        return (*rl_handles, *following)
 
+    if sft_presets is not None:
+        run_command.params.append(
+            click.Option(
+                ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
+            )
+        )
     return run_command
 
 
@@ -866,6 +1112,7 @@ def main(
     *,
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
+    sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
@@ -880,7 +1127,14 @@ def main(
             selected = (rl_gate if args[0] == "compare" else rl_publication).command(table)
             args = args[1:]
         else:
-            selected = command(table, argv=tuple(args), init=init, entry_module=entry_module, forward_env=forward_env)
+            selected = command(
+                table,
+                argv=tuple(args),
+                init=init,
+                sft_presets=sft_presets,
+                entry_module=entry_module,
+                forward_env=forward_env,
+            )
         result = selected.main(args=args, standalone_mode=False)
         return result if isinstance(result, int) else 0
     except click.ClickException as error:

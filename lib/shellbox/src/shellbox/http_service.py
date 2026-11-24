@@ -24,6 +24,11 @@ MAX_PATH = http_service_guest.MAX_PATH
 WIRE_LIMIT = http_service_guest.WIRE_LIMIT
 TRANSPORT_TIMEOUT = 30
 CLEANUP_TIMEOUT = 5
+ENDED_STDERR_BYTES = 2048
+
+
+class HttpServiceEnded(ConnectionError):
+    """The sandbox's HTTP service process exited, so the guest can no longer reach the host handler."""
 
 
 @dataclass(frozen=True)
@@ -79,7 +84,8 @@ class _Frames:
                 raise ValueError("Sandbox HTTP frame exceeds its limit")
             data = await self.session.read(min(65536, WIRE_LIMIT - len(self.buffer)))
             if not data:
-                raise RuntimeError("Sandbox HTTP service process ended")
+                stderr = self.session.stderr[-ENDED_STDERR_BYTES:].decode(errors="replace")
+                raise HttpServiceEnded(f"Sandbox HTTP service process ended; stderr: {stderr!r}")
             self.buffer.extend(data)
 
 

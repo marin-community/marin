@@ -7,32 +7,34 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from finestore.rl.rl_progress import AttemptSummary, ComparisonRole
+from finestore.rl.rl_progress import (
+    EVALUATION_PROTOCOL_DIFFERS,
+    GROUP_COMPARISON_INVARIANTS,
+    SHARED_TASKS_INVARIANT,
+    AttemptSummary,
+)
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
-_HISTORY_FIELDS = (
-    "native_run_id",
-    "base_preset_revision",
-    "control_preset",
-    "evaluation_data_identity",
-    "evaluation_protocol_identity",
-)
 _RETAINED_FIELDS = (
     "issue",
+    "gate",
+    "gate_result",
     "model",
+    "evaldash_run_ids",
     "grader_report",
-    *(field for field in _HISTORY_FIELDS if field in AttemptSummary.model_fields),
+    "control",
+    "evaluation_data_identity",
+    "evaluation_protocol_identity",
+    "native_run_id",
+    "base_preset_revision",
 )
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
     for key in _RETAINED_FIELDS
 )
-_KEEP_HISTORY_GATE = """EXCLUDED.record ->> 'format_version' = '1'
-            AND rl_runs.record ->> 'format_version' = '2'
-            AND jsonb_typeof(rl_runs.record -> 'gate_result') = 'object'"""
 _UPSERT = text(
     f"""INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
@@ -40,30 +42,7 @@ _UPSERT = text(
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
-        ELSE EXCLUDED.record || jsonb_build_object(
-          {_RETAINED_VALUES},
-          'gate', CASE WHEN {_KEEP_HISTORY_GATE} THEN rl_runs.record -> 'gate'
-            ELSE COALESCE(NULLIF(EXCLUDED.record -> 'gate', 'null'::jsonb), rl_runs.record -> 'gate')
-          END,
-          'gate_result', CASE WHEN {_KEEP_HISTORY_GATE} THEN rl_runs.record -> 'gate_result'
-            ELSE COALESCE(NULLIF(EXCLUDED.record -> 'gate_result', 'null'::jsonb), rl_runs.record -> 'gate_result')
-          END,
-          'format_version', CASE WHEN '2' IN (EXCLUDED.record ->> 'format_version', rl_runs.record ->> 'format_version')
-            THEN 2 ELSE 1 END,
-          'evaldash_run_ids', (
-            SELECT jsonb_agg(link ORDER BY first_seen)
-            FROM (
-              SELECT link, min(position) AS first_seen
-              FROM jsonb_array_elements(
-                CASE WHEN jsonb_typeof(rl_runs.record -> 'evaldash_run_ids') = 'array'
-                  THEN rl_runs.record -> 'evaldash_run_ids' ELSE '[]'::jsonb END
-                || COALESCE(NULLIF(EXCLUDED.record -> 'evaldash_run_ids', 'null'::jsonb), '[]'::jsonb)
-              ) WITH ORDINALITY AS links(link, position)
-              WHERE jsonb_typeof(link) = 'string' AND link <> '""'::jsonb
-              GROUP BY link
-            ) saved_links
-          )
-        )
+        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
       END
     RETURNING record"""
 )
@@ -118,7 +97,7 @@ def create_api(services):
     def publish(record: dict[str, Any]) -> dict:
         try:
             encoded = json.dumps(record, allow_nan=False)
-            summary = AttemptSummary.model_validate_json(encoded, strict=True)
+            summary = AttemptSummary.model_validate_json(encoded, extra="forbid")
         except ValidationError as error:
             raise HTTPException(
                 422, detail=error.errors(include_input=False, include_context=False, include_url=False)
@@ -133,23 +112,19 @@ def create_api(services):
                     {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
                 repaired = dict(stored)
-                retained_fields = (*_RETAINED_FIELDS, "gate", "gate_result")
-                legacy_gate = incoming["format_version"] == 1 and repaired.get("format_version") == 2
-                for field in retained_fields:
-                    if incoming.get(field) is None or (legacy_gate and field == "gate_result"):
+                for field in _RETAINED_FIELDS:
+                    if incoming[field] is None:
                         try:
                             json.dumps(repaired.get(field), allow_nan=False)
                         except ValueError:
-                            repaired[field] = incoming.get(field)
+                            repaired[field] = None
                 try:
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
-                    for field in retained_fields:
-                        if field in invalid and (
-                            incoming.get(field) is None or (legacy_gate and field == "gate_result")
-                        ):
-                            repaired[field] = incoming.get(field)
+                    for field in _RETAINED_FIELDS:
+                        if field in invalid and incoming[field] is None:
+                            repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
                 if normalized != stored:
@@ -164,19 +139,6 @@ def create_api(services):
                             "record": summary.model_dump_json(),
                         },
                     )
-                if incoming["format_version"] == 1:
-                    legacy = {key: value for key, value in normalized.items() if key not in _HISTORY_FIELDS}
-                    legacy["format_version"] = 1
-                    if legacy_gate and (gate := legacy.get("gate_result")) is not None:
-                        legacy["gate_result"] = {
-                            key: value
-                            for key, value in gate.items()
-                            if key not in {"control_commit", "control_revision"}
-                        } | {
-                            "comparisons": [row for row in gate["comparisons"] if row["role"] != ComparisonRole.SLICE],
-                            "invariants": [fact for fact in gate["invariants"] if fact["replicate"] is not None],
-                        }
-                    return legacy
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
@@ -220,7 +182,15 @@ def create_api(services):
                     continue
                 record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
-        return {"runs": records, "skipped_records": skipped}
+        return {
+            "runs": records,
+            "skipped_records": skipped,
+            "comparison_contract": {
+                "group_invariants": sorted(GROUP_COMPARISON_INVARIANTS),
+                "shared_tasks": SHARED_TASKS_INVARIANT,
+                "protocol_differs": EVALUATION_PROTOCOL_DIFFERS,
+            },
+        }
 
     @api.get("/graders")
     def graders(run_id: str, attempt_id: str):

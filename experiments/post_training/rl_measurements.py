@@ -18,8 +18,8 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
-from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_evaluations
+from finestore.rl.rl_progress import Comparison, ComparisonRole, ControlReplicate, Invariant
+from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -51,36 +51,53 @@ def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
         raise InvalidComparison(str(error)) from None
 
 
-def native_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
-    """Multiply the stored native job window by its GPU allocation."""
+class NativeWindow(NamedTuple):
+    seconds: float
+    gpus: int
+
+
+def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWindow | None:
     result = attempt.native.result
     if result.started_at is None or result.finished_at is None:
         return None
     seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
-    return seconds * launch.num_nodes * launch.gpus_per_node / 3600 if seconds > 0 else None
+    if seconds < 0:
+        raise ValueError("Native completion precedes its recorded start")
+    return NativeWindow(seconds, launch.num_nodes * launch.gpus_per_node)
+
+
+def native_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Multiply the stored native job window by its GPU allocation."""
+    window = _native_window(attempt, launch)
+    return window.seconds * window.gpus / 3600 if window is not None and window.seconds > 0 else None
+
+
+def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | None:
+    """Read the native windows and allocations for a complete checkpoint lineage."""
+    if not history or history[-1].record.resumed_step not in (None, 0):
+        return None
+    windows = []
+    for entry in history:
+        record = entry.record
+        if record.config is None:
+            return None
+        try:
+            launch = read_recorded_launch(record)
+        except InvalidComparison:
+            return None
+        window = _native_window(record, launch)
+        if window is None:
+            return None
+        windows.append(window)
+    return windows
 
 
 def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
     """Sum native allocations over the complete recorded checkpoint lineage."""
     if not attempt.native.result.state.is_terminal:
         return None
-    lineage = attempt_lineage(launch.export_root, attempt.attempt_id)
-    if not lineage or lineage[-1].record.resumed_step not in (None, 0):
-        return None
-    total = 0.0
-    for entry in lineage:
-        record = entry.record
-        if record.config is None:
-            return None
-        try:
-            allocation = read_recorded_launch(record)
-        except InvalidComparison:
-            return None
-        hours = native_gpu_hours(record, allocation)
-        if hours is None:
-            return None
-        total += hours
-    return total
+    windows = lineage_windows(attempt_lineage(launch.export_root, attempt.attempt_id))
+    return sum(window.seconds * window.gpus for window in windows) / 3600 if windows else None
 
 
 def _selected_evaluation_record(
@@ -189,12 +206,32 @@ RUN_INPUTS_FILENAME = "run_inputs.json"
 GRADER_ERROR_LIMIT = 0.01
 
 
+class RunOptions(BaseModel, frozen=True):
+    checkpoints: presets.CheckpointPolicy
+    checkpoint_every: int | None
+    export: presets.CheckpointPolicy
+    priority: str
+
+    @classmethod
+    def from_preset(cls, preset: presets.Preset) -> RunOptions:
+        return cls(
+            checkpoints=preset.checkpoints,
+            checkpoint_every=preset.checkpoint_every,
+            export=preset.export,
+            priority=preset.recipe.layout.priority,
+        )
+
+
 class RunInputs(BaseModel, frozen=True):
     preset_name: str
+    control: ControlReplicate | None = None
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: presets.StoredInitializer | None = None
+    resume: presets.StoredResume | None = None
     requirements: tuple[str, ...] = ()
+    options: RunOptions | None = None
+    sft_preset: str | None = None
 
 
 def run_inputs(
@@ -203,6 +240,10 @@ def run_inputs(
     tasks: str | None = None,
     init: presets.StoredInitializer | None = None,
     requirements: Sequence[str] = (),
+    *,
+    resume: presets.StoredResume | None = None,
+    options: RunOptions | None = None,
+    sft_preset: str | None = None,
 ) -> RunInputs:
     values = recipe.override_document(tuple(settings))
     return RunInputs(
@@ -210,7 +251,10 @@ def run_inputs(
         settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),
         tasks=tasks.removeprefix(recipe.SELECTION_PREFIX + "/") if tasks else None,
         init=init,
+        resume=resume,
         requirements=tuple(dict.fromkeys(requirements)),
+        options=options,
+        sft_preset=sft_preset,
     )
 
 
@@ -321,6 +365,12 @@ def _session_invariants(
     return result
 
 
+def _checks_task_coverage(preset: presets.Preset, evaluation: presets.Evaluation) -> bool:
+    return evaluation == preset.guarded or (
+        evaluation.held_out and isinstance(preset.recipe.layout.workload, presets.Training)
+    )
+
+
 @dataclass(frozen=True)
 class RunMeasurements:
     config: dict
@@ -414,8 +464,7 @@ def read_measurements(
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
-        quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
-        required_coverage = evaluation == preset.guarded or bool(preset.checkpoint_every and evaluation.held_out)
+        required_coverage = _checks_task_coverage(preset, evaluation)
         recorded_tasks = recorded_task_sets[evaluation.name].task_ids
         recorded_answers = identities[evaluation.name][1]["n_samples_per_prompt"]
         all_scores = read_answers(evaluation, path, launch=launch, attempt=terminal)
@@ -433,7 +482,7 @@ def read_measurements(
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
-        if preset.checkpoint_every:
+        if preset.checkpoint_every or evaluation.every:
             scheduled = set(range(evaluation.every, preset.updates, evaluation.every)) if evaluation.every else set()
             sessions.extend(
                 (f"{evaluation.name}/step-{step}", all_scores.filter(pc.equal(all_scores["step"], step)), step)
@@ -459,7 +508,7 @@ def read_measurements(
             invariants.extend(
                 _session_invariants(session_name, session, recorded_tasks, recorded_answers, required_coverage)
             )
-            if quality:
+            if evaluation.held_out and required_coverage:
                 invariants.append(
                     _grader_errors(
                         [metrics.get(metric_step, {})],

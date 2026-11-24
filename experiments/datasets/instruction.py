@@ -49,7 +49,6 @@ from typing import Any
 
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
@@ -60,8 +59,6 @@ from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
-
-from experiments.llama import llama3_tokenizer
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",
@@ -680,39 +677,4 @@ def tulu_3_in_dolma() -> ArtifactStep[Artifact]:
             output_path=ctx.output_path,
         ),
         deps=(tulu3,),
-    )
-
-
-# levanter treats validation and training as separate so we tokenize twice.
-def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
-    """Tulu-3 Dolma corpus tokenized as a validation split.
-
-    "flat" means all chat messages are interpolated into a single string per doc.
-    """
-    dolma = tulu_3_in_dolma()
-    return tokenized(
-        "tulu_sft",
-        tokenizer=tokenizer,
-        raw=dolma,
-        glob="**/*.jsonl.gz",
-        validation=True,
-        pin="tokenized/tulu_sft-1bb7d4" if tokenizer == llama3_tokenizer else None,
-        version="2026.06.28",
-    )
-
-
-def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
-    """Tulu-3 Dolma corpus tokenized as a training split.
-
-    "flat" means all chat messages are interpolated into a single string per doc.
-    """
-    dolma = tulu_3_in_dolma()
-    return tokenized(
-        "tulu_sft",
-        tokenizer=tokenizer,
-        raw=dolma,
-        glob="**/*.jsonl.gz",
-        validation=False,
-        pin="tokenized/tulu_sft-349fb7/" if tokenizer == llama3_tokenizer else None,
-        version="2026.06.28",
     )

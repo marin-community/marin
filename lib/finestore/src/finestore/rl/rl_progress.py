@@ -9,9 +9,13 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
+SHARED_TASKS_INVARIANT = "shared_tasks"
+SHARED_TASK_FRACTION_INVARIANT = "shared_task_fraction"
+EVALUATION_PROTOCOL_DIFFERS = "evaluation protocol differs"
+GROUP_COMPARISON_INVARIANTS = frozenset({SHARED_TASKS_INVARIANT, SHARED_TASK_FRACTION_INVARIANT})
+
 GRADER_REPORTS_DIR = "grader_reports"
 GRADER_REPORT_FILENAME = "grader_report.json"
-RL_WANDB_PROJECT = "marin-rl"
 
 
 class Verdict(StrEnum):
@@ -49,7 +53,7 @@ class Invariant(BaseModel):
     limit: bool | int | float
     comparator: Literal["<=", ">=", "=="] | None = None
     holds: bool
-    replicate: int | None = 0
+    replicate: int = 0
 
 
 class Comparison(BaseModel):
@@ -122,48 +126,31 @@ class TaskSummary(SuccessSummary):
 class GraderReport(BaseModel):
     """Stored training and evaluation counts by subset and task."""
 
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, extra="ignore")
     training: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
     training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
     evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
     evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
 
 
-class RunIndexIdentity(BaseModel):
-    """Configuration identity and provenance shared by an attempt's public links."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    run_id: Identity
-    model: Identity
-    preset: Identity
-    preset_revision: Identity
-    user: Identity
-    branch: str | None
-    source_revision: Identity
-    dirty: bool
-    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
-    submitted_at: str | None = None
-
-    @property
-    def wandb_tags(self) -> list[str]:
-        tags = [self.model, self.preset, self.preset_revision, self.user]
-        if self.branch is not None:
-            tags.append(self.branch)
-        return tags
+class ControlReplicate(BaseModel, frozen=True):
+    commit: Identity
+    revision: Identity
+    replicate: Count
 
 
 class AttemptSummary(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    format_version: Literal[1, 2] = 1
+    model_config = ConfigDict(strict=True, extra="ignore")
+    format_version: Literal[1] = 1
     run_id: Identity
     native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
-    preset: Identity | None = None
     preset_revision: Identity | None = None
     base_preset_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control: ControlReplicate | None = None
     control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -194,7 +181,7 @@ class AttemptSummary(BaseModel):
     planned_updates: Count | None = None
     measured_updates: list[Count] | None = None
     source_revision: Identity
-    data_identity: Identity
+    data_identity: Identity | None
     initializer_identity: Identity
     artifact_uri: str | None
     evidence: list[str]
@@ -219,7 +206,13 @@ class AttemptSummary(BaseModel):
                 dict.fromkeys(
                     [
                         *self.failed_facts,
-                        *(fact.name for fact in gate.invariants if not fact.holds and fact.replicate == replicate),
+                        *(
+                            fact.name
+                            for fact in gate.invariants
+                            if not fact.holds
+                            and fact.replicate == replicate
+                            and fact.name.rpartition("/")[2] not in GROUP_COMPARISON_INVARIANTS
+                        ),
                     ]
                 )
             )

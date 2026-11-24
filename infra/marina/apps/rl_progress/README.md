@@ -35,10 +35,10 @@ The app's release migration creates its `rl_runs` table in the application schem
 Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
 attempts of the same model, preset, user and composed comparison configuration. Repeat
 publication refreshes that attempt's record. Null provenance fields, issue, gate, gate result and
-grader report fields preserve their stored values. EvalDash links accumulate by ID.
-History publishers write format 2. The API returns format 1 to format-1
-publishers and retains the stored history metadata. A terminal record takes precedence over a
-running update for the same attempt.
+grader report fields preserve their stored values. EvalDash IDs in a publication replace the stored list.
+The app uses format 1. A terminal record takes precedence over a
+running update for the same attempt. An explicit EvalDash ID list replaces
+the stored list.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
 Training grader errors are reported in rollout metrics; they do not fail an ungated run's status.
@@ -76,12 +76,10 @@ The `Marin - Release RL Progress` workflow runs on main pushes that change the
 app. Its manual dispatch defaults to inspection. The `rl-progress` CI job runs
 the packaged API and `marina journey rl_progress` browser owner.
 
-Release the run index runtime with format-1 `AttemptSummary` support before
-releasing the history app package. Confirm both the history app package and
-the runtime support format 2 before using the history publisher. The
-history app package accepts format-1 publisher writes and preserves saved
-history. Republishing an indexed attempt adds its native ID for older
-EvalDash backlinks.
+Release the shared runtime and history app together. The applet identity
+is declared in `applet.toml`. EvalDash uses its deployed URL for attempt
+backlinks. Republishing an indexed attempt records its native ID for
+backlinks from older evaluations.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
 current private revision, then release with its exact `--base-version`. Verify

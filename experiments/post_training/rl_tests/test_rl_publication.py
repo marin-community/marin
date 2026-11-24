@@ -14,11 +14,12 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary, Invariant, RunIndexIdentity, Verdict
+from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, AttemptSummary, Invariant, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
     LaunchReceipt,
+    RunIndexIdentity,
     read_attempts,
     read_evaluations,
     run_records_root,
@@ -62,14 +63,14 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
-        ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
+        ("versioned-missing-evaluation", None, 3600, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
-        ("lineage-unknown-allocation", 2, 7200, []),
+        ("lineage-unknown-allocation", 2, None, []),
         (
             "untracked-native",
             None,
-            None,
+            3600,
             ["eval_lite/grader_error_fraction", "eval_lite/initial/grader_error_fraction"],
         ),
         ("updates-override", 1, 3600, []),
@@ -144,6 +145,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             config=native_ancestor.config,
             result=native_ancestor.result,
             metrics_started_at=native_ancestor.result.started_at,
+            elapsed_excluding_eval_seconds=123.0,
         )
         if case == "lineage-unknown-grandparent":
             records["ancestor"] = records["ancestor"].model_copy(
@@ -157,6 +159,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         records["native-attempt"] = records["native-attempt"].model_copy(
             update={
                 "resumed_step": 1,
+                "elapsed_excluding_eval_seconds": 321.0,
                 "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
             }
         )
@@ -212,11 +215,38 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
     if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
         assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
+    if case == "checkpoint-lineage":
+        assert row["elapsed_excluding_eval_seconds"] == 444.0
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
         assert row["grader_report"] == report
     else:
         assert row["grader_report"] is None
+
+
+def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(preset_table, recorded_runs):
+    preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
+    table = preset_table(preset)
+    source = recorded_runs(preset.name, "tests/eval-coverage", attempt_id="recorded")
+    attempt = read_stored_skyrl_attempts(str(source))[1]["recorded"]
+    baseline = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    newer = replace(preset, held_out_tasks="eval-lite@2026.11.24.99")
+    write_json(Path(recipe.selection_artifact(newer.held_out_tasks).path()) / "summary.json", selection_summary(40))
+    report = gate.GateReport(
+        preset=preset.name,
+        verdict=Verdict.INVALID,
+        effect=None,
+        reason="Insufficient overlap",
+        run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
+        control=gate.ControlMetadata(commit="abcd1234", revision=preset.revision, replicates=2),
+        invariants=(Invariant(name=f"eval_lite/{SHARED_TASKS_INVARIANT}", value=9, limit=18, holds=False),),
+        comparisons=(),
+        gaps=(),
+    )
+    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt, report=report)
+    assert row.status == "succeeded" and row.failed_facts == []
+    assert row.evaluation_data_identity == baseline.evaluation_data_identity
+    assert row.gate_result is not None and not row.gate_result.invariants[0].holds
 
 
 def test_control_publication_rejects_ungated_presets(monkeypatch, capsys):
@@ -346,7 +376,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 run_id=attempt.run_id,
                 attempt_id=attempt_id,
                 issue=73 if index == 0 else None,
-                base_preset_revision=preset.revision if index == 0 else None,
                 index=(
                     RunIndexIdentity(
                         run_id=logical_id,
@@ -356,6 +385,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         user="tester",
                         branch="fixture",
                         source_revision="fixture",
+                        base_preset_revision=preset.revision,
                         dirty=False,
                     )
                     if index == 0
@@ -393,24 +423,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert "EvalDash catalog lookup was unavailable." in rows["native-0"]["evidence"]
     assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
     assert repeated.urls[str(sources[0])].endswith(f"#run={logical_id}&attempt=native-0")
-    newer = replace(preset, held_out_tasks="eval-lite@2026.11.24.99")
-    newer_selection = recipe.selection_artifact(newer.held_out_tasks).path()
-    write_json(Path(newer_selection) / "summary.json", selection_summary(40))
-    saved_attempt = read_stored_skyrl_attempts(str(sources[0]))[1]["native-0"]
-    earlier = publication.build_record(str(sources[0]), newer, table=preset_table(newer), attempt=saved_attempt)
-    assert earlier.status == "succeeded"
-    assert earlier.evaluation_data_identity == rows["native-0"]["evaluation_data_identity"]
-    insufficient_overlap = report.model_copy(
-        update={
-            "verdict": Verdict.INVALID,
-            "invariants": (Invariant(name="eval_lite/shared_tasks", value=9, limit=18, holds=False),),
-        }
-    )
-    control = publication.build_record(
-        str(sources[0]), preset, table=table, attempt=saved_attempt, report=insufficient_overlap
-    )
-    assert control.status == "succeeded" and not control.failed_facts
-    assert control.gate_result.invariants[0].replicate is None
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -480,8 +492,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
-        assert read_stored_skyrl_attempts(str(sources[index]))[1][f"native-{index}"].issue == 73 + index
-        assert retained["evaldash_run_ids"] == ([*automatic_links, *run_ids] if index == 0 else list(run_ids))
+        assert publication.lineage_issue(str(sources[index] / "exports")) == 73 + index
+        assert retained["evaldash_run_ids"] == list(run_ids)
+        assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -506,7 +519,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
     )
     assert conflict.exit_code == 1 and "conflicting lineage issues" in conflict.output
-    assert read_stored_skyrl_attempts(str(sources[0]))[1]["native-0"].issue == 73
+    assert publication.lineage_issue(str(sources[0] / "exports")) == 73
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)
@@ -543,7 +556,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == [*automatic_links, *run_ids]
+    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
         publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
@@ -556,7 +569,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
     linked_rows = stored()
     assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == [*automatic_links, *run_ids]
+    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))
@@ -683,6 +696,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         if row["attempt_id"].startswith("pinned-")
     ]
     assert len(served_controls) == pin.replicates
+    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
+    assert all(row["control"]["commit"] == pin.commit for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

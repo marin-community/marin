@@ -1,5 +1,4 @@
 const SVG = 'http://www.w3.org/2000/svg';
-const controlPath = /\/control\/[^/]+-([a-f0-9]{7,40})-r\d+(?:-retry\d+)?\/([^/]+)\/?$/;
 const evaluationMetric = /^([^@]+)@(\d+)\/(.+)$/;
 const comparableVerdicts = new Set(['pass', 'fail']);
 const score = (value) => `${(100 * value).toFixed(1)}%`;
@@ -21,10 +20,8 @@ function metrics(run) {
 function controlSets(runs) {
   const sets = new Map();
   for (const run of runs) {
-    const match = run.artifact_uri?.match(controlPath);
-    if (!match) continue;
-    const [, commit, version] = match;
-    const revision = run.preset_revision ?? version;
+    if (!run.control) continue;
+    const { commit, revision } = run.control;
     const key = `${revision}/${commit}`;
     if (!sets.has(key)) sets.set(key, { revision, commit, rows: [] });
     sets.get(key).rows.push(run);
@@ -35,7 +32,7 @@ function controlSets(runs) {
     for (const run of [...set.rows].sort((a, b) => time(b).localeCompare(time(a)))) {
       if (run.status !== 'succeeded' || latestByOutput.has(run.artifact_uri)) continue;
       if (report?.attempt_ids.length && !report.attempt_ids.includes(run.attempt_id)) continue;
-      if (!report && (run.dirty || (run.branch && run.branch !== 'main' && !sameCommit(run.source_revision, set.commit)))) continue;
+      if (run.dirty) continue;
       latestByOutput.set(run.artifact_uri, run);
     }
     const rows = [...latestByOutput.values()];
@@ -54,7 +51,7 @@ function comparison(report, metric) {
   return null;
 }
 
-function controlPoints(sets, scores, metric) {
+function controlPoints(sets, scores, metric, contract) {
   const points = sets.flatMap((set) => {
     const values = set.rows.map((run) => scores.get(run).get(metric)?.value).filter(Number.isFinite);
     if (!values.length) return [];
@@ -65,10 +62,10 @@ function controlPoints(sets, scores, metric) {
     const previous = points[index - 1];
     if (!previous) { point.segment = 0; continue; }
     const protocolChanged = (point.protocol && previous.protocol && point.protocol !== previous.protocol)
-      || point.report?.reason === 'evaluation protocol differs';
+      || (contract.protocol_differs != null && point.report?.reason === contract.protocol_differs);
     const dataChanged = point.data && previous.data && point.data !== previous.data;
     point.marker = protocolChanged ? 'Protocol changed' : dataChanged ? 'Evaluation set changed' : null;
-    const shared = point.report?.invariants.some((fact) => fact.name === `${metric.split('/')[0]}/shared_tasks` && fact.holds);
+    const shared = point.report?.invariants.some((fact) => fact.name === `${metric.split('/')[0]}/${contract.shared_tasks}` && fact.holds);
     if (shared && !protocolChanged && point.report.control_revision === previous.revision
       && sameCommit(point.report.control_commit, previous.commit)) {
       point.link = comparison(point.report, metric);
@@ -86,7 +83,7 @@ function branchPoints(runs, scores, controls, metric) {
   const groups = new Set();
   return runs.flatMap((run) => {
     const global = scores.get(run).get(metric)?.value;
-    if (!Number.isFinite(global) || controlPath.test(run.artifact_uri ?? '')) return [];
+    if (!Number.isFinite(global) || run.control) return [];
     const report = run.gate_result;
     const matching = controls.filter((control) => control.revision === run.base_preset_revision);
     const base = matching.find((control) => sameCommit(report?.control_commit, control.commit)) ?? matching.at(-1);
@@ -174,7 +171,7 @@ function plot(metric, controls, branches, route) {
   return chart;
 }
 
-export function showProgress(container, runs, reference, route) {
+export function showProgress(container, runs, reference, route, contract) {
   const scores = new Map([...runs, ...reference].map((run) => [run, metrics(run)]));
   const selected = [...new Set([...scores.values()].flatMap((values) => [...values.keys()]))]
     .filter((key) => /^([^/]+)\/(family_mean|family\/[^/]+\/mean|mean)$/.test(key));
@@ -185,7 +182,7 @@ export function showProgress(container, runs, reference, route) {
     && runs.every((run) => run.planned_updates == null || run.planned_updates === 0);
   container.replaceChildren();
   for (const metric of metricsToShow.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
-    const points = controlPoints(controls, scores, metric);
+    const points = controlPoints(controls, scores, metric, contract);
     const branches = branchPoints(runs, scores, points, metric);
     if (!points.length && !branches.length) continue;
     const figure = document.createElement('figure');

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode
@@ -20,6 +20,7 @@ from finestore.rl.rl_progress import (
     AttemptSummary,
     Comparison,
     ComparisonRole,
+    ControlReplicate,
     GateResult,
     GraderReport,
 )
@@ -32,6 +33,7 @@ from finestore.rl.run_records import (
     write_attempt,
 )
 from marin.execution.artifact import read_record
+from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
@@ -43,9 +45,7 @@ from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.identity import canonical_sha256
 
-from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url
@@ -54,6 +54,7 @@ from experiments.post_training.rl_measurements import (
     RunInputs,
     evaluation_protocol,
     evaluation_status,
+    lineage_windows,
     read_run_inputs,
     training_invariants,
 )
@@ -71,14 +72,11 @@ def publish_result(summary: AttemptSummary, service_url: str | None = None) -> s
     service_url = service_url or client.DEFAULT_MARINA_URL
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     origin = client.applet_origin(service_url, details["authenticated_url"])
-    served = AttemptSummary.model_validate_json(
-        json.dumps(
-            client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json")),
-            allow_nan=False,
-        ),
-        strict=True,
-    )
-    if (served.run_id, served.attempt_id) != (summary.run_id, summary.attempt_id):
+    served = client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json"))
+    if not isinstance(served, dict) or (served.get("run_id"), served.get("attempt_id")) != (
+        summary.run_id,
+        summary.attempt_id,
+    ):
         raise RuntimeError(f"Published attempt {summary.run_id}/{summary.attempt_id} has a different returned identity")
     return details["authenticated_url"] + "#" + urlencode({"run": summary.run_id, "attempt": summary.attempt_id})
 
@@ -142,28 +140,16 @@ def _terminal_measurements(
     )
     if isinstance(preset.recipe.layout.workload, presets.Generation) and optimizer_steps is not None:
         optimizer_steps = 0
-    windows = [
-        (
-            (entry.record.native.result.started_at, entry.record.native.result.finished_at)
-            if entry.record.config is not None
-            else (None, None)
-        )
-        for entry in history
-    ]
-    elapsed = None
-    if complete_history and all(start is not None and finish is not None for start, finish in windows):
-        durations = [recipe.utc_millis(finish) - recipe.utc_millis(start) for start, finish in windows]
-        if any(value < 0 for value in durations):
-            raise ValueError("Native completion precedes its recorded start")
-        elapsed = sum(durations) / 1000
-    else:
+    windows = lineage_windows(history)
+    elapsed = sum(window.seconds for window in windows) if windows is not None else None
+    if windows is None:
         evidence.append(
             "Checkpoint lineage timing is unknown: a shared attempt record or native time window is missing."
         )
     trainer_durations = [entry.record.elapsed_excluding_eval_seconds for entry in history]
     elapsed_excluding_eval = (
         float(sum(duration for duration in trainer_durations if duration is not None))
-        if complete_history and all(duration is not None for duration in trainer_durations)
+        if windows is not None and all(duration is not None for duration in trainer_durations)
         else None
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
@@ -200,10 +186,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         verdict=report.verdict,
         effect=report.effect,
         reason=report.reason,
-        invariants=[
-            fact.model_copy(update={"replicate": None}) if fact.name.endswith("/shared_tasks") else fact
-            for fact in report.invariants
-        ],
+        invariants=list(report.invariants),
         comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
@@ -223,7 +206,7 @@ def _evaluation_identities(launch: RecordedLaunch, evidence: list[str]) -> tuple
     except InvalidComparison:
         evidence.append("The stored evaluation protocol is unavailable.")
         return data, None
-    return data, canonical_sha256(protocols)
+    return data, fingerprint_hash(canonical_json(protocols))
 
 
 def build_record(
@@ -235,8 +218,8 @@ def build_record(
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     evaldash_run_ids: tuple[str, ...] | None = None,
-    running: bool = False,
     gate_failure: bool = False,
+    control: ControlReplicate | None = None,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
@@ -255,10 +238,8 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    terminal = result.state.is_terminal and not running
-    interrupted = attempt.interruption is not None and not terminal and not running
-    if not (terminal or running or interrupted):
-        raise ValueError("A progress record requires a terminal native attempt")
+    terminal = result.state.is_terminal
+    interrupted = attempt.interruption is not None and not terminal
     measured = (
         _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
     )
@@ -269,21 +250,20 @@ def build_record(
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
-    if index is not None and attempt.base_preset_revision is None:
+    if index is not None and index.base_preset_revision is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
     return AttemptSummary(
-        format_version=2,
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
         attempt_id=attempt_id,
         label=run_label(inputs),
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
-        preset=preset.name,
         preset_revision=index.preset_revision if index is not None else None,
-        base_preset_revision=attempt.base_preset_revision,
+        base_preset_revision=index.base_preset_revision if index is not None else None,
+        control=control or inputs.control,
         control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
         evaluation_protocol_identity=evaluation_protocol_id,
@@ -292,7 +272,7 @@ def build_record(
         dirty=index.dirty if index is not None else None,
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
-        issue=attempt.issue,
+        issue=lineage_issue(launch.export_root),
         run_date=started or tracking.get("started_at") or (index.submitted_at if index is not None else None),
         started_at=started,
         completed_at=finished if terminal else None,
@@ -303,13 +283,11 @@ def build_record(
         grafana_url=attempt_grafana_url(attempt, launch),
         timing_scope="checkpoint_lineage_native_jobs",
         source_revision=(
-            index.source_revision
+            f"base={index.source_revision} tree={index.tree_hash or 'Unknown'}"
             if index is not None
             else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        data_identity=(
-            "; ".join(source.identity for source in launch.train_data or launch.validation_data) or "Unknown"
-        ),
+        data_identity="; ".join(source.identity for source in launch.train_data) or None,
         initializer_identity=launch.model_identity,
         artifact_uri=run_output,
         evidence=evidence,
@@ -332,9 +310,11 @@ class IssueConflict(ValueError):
 
 
 def _check_issue(export_root: str, requested: int | None, reservation: VersionedBytes | None) -> int | None:
-    issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
-    if reservation is not None:
-        issues.add(int(reservation.data))
+    issues = (
+        {int(reservation.data)}
+        if reservation is not None
+        else {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
+    )
     if requested is not None:
         issues.add(requested)
     if len(issues) > 1:
@@ -342,7 +322,7 @@ def _check_issue(export_root: str, requested: int | None, reservation: Versioned
     return next(iter(issues), None)
 
 
-def lineage_issue(export_root: str, requested: int | None) -> int | None:
+def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
     """Read the run's issue and verify a proposed value against stored assignments."""
     assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
     return _check_issue(export_root, requested, assignment.read())
@@ -384,9 +364,9 @@ def publish_running(
     try:
         for attempt in _coordinator_attempts(path, coordinator).values():
             key = (attempt.index_run_id, attempt.attempt_id)
-            if key in published:
+            if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
                 continue
-            url = publish_result(build_record(path, preset, table=table, attempt=attempt, running=True), service_url)
+            url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
             published.add(key)
             click.echo(f"RL progress {url}")
     except Exception as error:
@@ -426,13 +406,6 @@ def _read_publication_gate(
     if report is not None and (report.run.replicates != replicates or report.run.attempt_ids != current_attempts):
         raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
     return report
-
-
-def _link_issue(receipt: AttemptRecord, issue: int) -> int | None:
-    export_root = recorded_launch(receipt).export_root
-    assigned = reserve_issue(export_root, issue)
-    write_attempt(export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, issue=assigned))
-    return assigned
 
 
 def _with_evaldash_links(summary: AttemptSummary, service_url: str | None) -> AttemptSummary:
@@ -481,6 +454,7 @@ def publish_runs(
     evaldash_run_ids: tuple[str, ...] | None = None,
     issue: int | None = None,
     failed_coordinator: str | None = None,
+    controls: Mapping[str, ControlReplicate] | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert each stored attempt, isolating publication failures."""
     if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
@@ -519,6 +493,8 @@ def publish_runs(
                 continue
             destination = (receipt.index_run_id, selected_id)
             try:
+                if not receipt.native.result.state.is_terminal and receipt.interruption is None:
+                    raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
                     gate_path is not None
@@ -539,10 +515,13 @@ def publish_runs(
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
                     gate_failure=missing_gate,
+                    control=controls.get(path) if controls is not None else None,
                 )
                 if issue is not None:
-                    record = record.model_copy(update={"issue": _link_issue(receipt, issue)})
-                if receipt.native.result.state.is_terminal:
+                    record = record.model_copy(
+                        update={"issue": reserve_issue(recorded_launch(receipt).export_root, issue)}
+                    )
+                if receipt.native.result.state.is_terminal and evaldash_run_ids is None:
                     record = _with_evaldash_links(record, service_url)
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
@@ -568,11 +547,18 @@ def publish_controls(
     except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
+    controls = {
+        gate.control_path(preset, pin, index, table=table): ControlReplicate(
+            commit=pin.commit, revision=pin.revision, replicate=index
+        )
+        for index in range(pin.replicates)
+    }
     result = publish_runs(
-        [gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates)],
+        tuple(controls),
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,
+        controls=controls,
     )
     if result.unserved_records:
         result.retry = "Repeat the control publication command."

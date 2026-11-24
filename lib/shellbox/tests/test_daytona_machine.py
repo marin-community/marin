@@ -16,13 +16,13 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientResponseError, RequestInfo, web
 from aiohttp.test_utils import TestServer
 
 pytest.importorskip("daytona")
@@ -33,12 +33,18 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
+    DaytonaTimeoutError,
+    DaytonaValidationError,
     Image,
     Resources,
+    SandboxState,
 )
+from daytona._utils.errors import intercept_errors
 from daytona_api_client_async import SnapshotState
+from multidict import CIMultiDict, CIMultiDictProxy
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
@@ -64,12 +70,15 @@ from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Command,
     CommandOutputLost,
+    CommandSemantics,
     DockerImage,
     ExitReason,
+    MachineDiskFull,
     MachineSpec,
     MachineTerminated,
     UnsupportedMachineSpec,
 )
+from yarl import URL
 
 
 @pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
@@ -284,7 +293,7 @@ def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell
 
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        self.sandbox = SimpleNamespace(id="fixture", fs=LocalFiles(), process=LocalProcess())
         self.deleted = False
         self.closed = False
         self.params = None
@@ -650,8 +659,10 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
                 result = await machine.run(command)
                 assert (result.stdout, result.stderr) == (b"out", b"err")
             else:
-                with pytest.raises(DaytonaOutputUnavailable):
+                with pytest.raises(DaytonaOutputUnavailable) as caught:
                     await machine.run(command)
+                # Callers retry a lost provider connection.
+                assert isinstance(caught.value, ConnectionError)
         finally:
             await machine.close()
 
@@ -843,21 +854,35 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
                 await pending
             assert failure.value.args == ("agent deadline",)
         else:
-            with pytest.raises(RuntimeError) as failure:
+            # The failed cleanup closes the machine, which callers retry as lost infrastructure.
+            with pytest.raises(MachineTerminated) as failure:
                 await pending
             assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
-            # An unanswered stop request means the sandbox is gone; an answered failure does not.
-            assert isinstance(failure.value, MachineTerminated) == (interrupt_failure == "timeout")
         assert client.deleted and client.closed
-        with pytest.raises(RuntimeError, match="closed"):
+        # Grading after the agent stops still uses the machine; callers retry its loss as infrastructure.
+        with pytest.raises(MachineTerminated, match="was closed after"):
             await machine.run(Command(("true",)))
+
+    asyncio.run(scenario())
+
+
+def test_daytona_machine_its_owner_closed_rejects_commands_as_misuse(tmp_path):
+    async def scenario():
+        client = LocalDaytona()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        await machine.close()
+        with pytest.raises(RuntimeError, match="Machine is closed") as failure:
+            await machine.run(Command(("true",)))
+        assert not isinstance(failure.value, MachineTerminated)
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 @pytest.mark.requires_host_setsid
-def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_path, interruption):
+def test_daytona_user_probe_interruption_preserves_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
     class BlockedProbe(LocalProcess):
@@ -888,15 +913,55 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
                 pending.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await pending
-                assert client.closed and client.deleted
             else:
                 result = await asyncio.wait_for(pending, timeout=0.5)
                 assert result.reason is ExitReason.TIMED_OUT
-                following = await machine.run(Command(("printf", "ready")))
-                assert (following.exit_code, following.stdout) == (0, b"ready")
-                assert not client.deleted
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+            assert not client.closed and not client.deleted
         finally:
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_cancellation_during_upload_removes_staged_command_and_preserves_machine(tmp_path):
+    async def scenario():
+        uploading = asyncio.Event()
+
+        class BlockedUpload(LocalFiles):
+            staged: Path | None = None
+
+            async def upload_file_stream(self, data: bytes, target: str) -> None:
+                await super().upload_file_stream(data, target)
+                if self.staged is None:
+                    self.staged = Path(target).parent
+                    uploading.set()
+                    await asyncio.Future()
+
+        client = LocalDaytona()
+        files = BlockedUpload()
+        client.sandbox.fs = files
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            pending = asyncio.create_task(machine.run(Command(("sh", "-c", "touch cancelled-command"))))
+            await asyncio.wait_for(uploading.wait(), timeout=5)
+            assert files.staged is not None and (files.staged / "command.sh").is_file()
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await pending
+            assert caught.value.args == ("agent deadline",)
+            assert not files.staged.exists()
+            graded = await machine.run(Command(("sh", "-c", "test ! -e cancelled-command && printf 1.0")))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.closed and not client.deleted
+        finally:
+            await machine.close()
+            if files.staged is not None and files.staged.exists():
+                shutil.rmtree(files.staged)
 
     asyncio.run(scenario())
 
@@ -925,6 +990,252 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
         finally:
             await machine.close()
         assert client.closed and client.deleted
+
+    asyncio.run(scenario())
+
+
+CONNECTION_RESET = DaytonaConnectionError("Failed to execute command: [Errno 104] Connection reset by peer")
+BAD_GATEWAY = DaytonaError("Failed to execute command: 502 Bad Gateway", status_code=502)
+
+
+class LostConnection(LocalProcess):
+    """Fail each request whose script contains ``marker`` in transit, at most ``losses`` times."""
+
+    def __init__(self, marker: str, *, losses: int, runs_first: bool, error: DaytonaError = CONNECTION_RESET):
+        super().__init__()
+        self.marker = marker
+        self.losses = losses
+        self.runs_first = runs_first
+        self.error = error
+
+    async def exec(self, command, **kwargs):
+        if self.marker not in command_script(command) or not self.losses:
+            return await super().exec(command, **kwargs)
+        self.losses -= 1
+        if self.runs_first:
+            await super().exec(command, **kwargs)
+        raise self.error
+
+
+class LostDownload(LocalFiles):
+    lost = False
+
+    async def download_file(self, source: str) -> bytes:
+        if not self.lost:
+            self.lost = True
+            raise DaytonaConnectionError("Failed to download file: [Errno 104] Connection reset by peer")
+        return await super().download_file(source)
+
+
+# Retry backoffs stay below this; the keepalive interval is minutes.
+LONGEST_RETRY_WAIT = 60
+
+
+@pytest.fixture
+def no_retry_wait(monkeypatch):
+    """Skip the retry waits; the keepalive wait keeps its length so that it does not spin."""
+
+    async def wait(delay):
+        if delay > LONGEST_RETRY_WAIT:
+            await asyncio.sleep(delay)
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+    monkeypatch.setattr("shellbox.backends.daytona.transient.sleep", wait)
+
+
+@pytest.mark.parametrize("error", [CONNECTION_RESET, BAD_GATEWAY], ids=["reset", "502"])
+@pytest.mark.parametrize("command_ran", [False, True])
+@pytest.mark.requires_host_setsid
+def test_daytona_command_runs_once_when_its_request_fails_in_transit(tmp_path, no_retry_wait, command_ran, error):
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=command_ran, error=error)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("sh", "-c", "echo candidate-run >> runs; printf out; exit 7")))
+        finally:
+            await machine.close()
+        assert (result.exit_code, result.stdout, result.reason) == (7, b"out", ExitReason.EXITED)
+        assert (tmp_path / "runs").read_text() == "candidate-run\n"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_path, no_retry_wait):
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=math.inf, runs_first=False)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(ConnectionError, match="Lost the connection") as failure:
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs")))
+            assert isinstance(failure.value.__cause__, DaytonaConnectionError)
+        finally:
+            await machine.close()
+        assert not (tmp_path / "runs").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_repeated_command_request_keeps_its_provider_failure(tmp_path, no_retry_wait):
+    class FailedStart(LostConnection):
+        async def exec(self, command, **kwargs):
+            if self.marker in command_script(command) and not self.losses:
+                return SimpleNamespace(exit_code=-1, result="fork/exec /usr/bin/zsh: no such file or directory")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedStart("candidate-run", losses=1, runs_first=False)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs")))
+        finally:
+            await machine.close()
+        assert any("fork/exec /usr/bin/zsh" in note for note in caught.value.__notes__)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_command_fails_when_its_shell_dies_after_a_lost_connection(tmp_path, no_retry_wait):
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=True)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            # The command kills the shell that holds the exit trap, so no exit code is recorded.
+            with pytest.raises(RuntimeError, match="without an exit code"):
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs; kill -9 $PPID")))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost", ["umask 077", "measure_and_cap", "tar xzf", "download"])
+@pytest.mark.requires_host_setsid
+def test_daytona_repeats_a_repeatable_request_that_lost_its_connection(tmp_path, no_retry_wait, lost):
+    async def scenario():
+        client = LocalDaytona()
+        if lost == "download":
+            client.sandbox.fs = LostDownload()
+        else:
+            client.sandbox.process = LostConnection(lost, losses=1, runs_first=True)
+        workdir = tmp_path / "work"
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        )
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "data").write_text("payload")
+        try:
+            await machine.upload(source, str(workdir / "uploaded"))
+            result = await machine.run(Command(("cat", "uploaded/data")))
+        finally:
+            await machine.close()
+        assert (result.exit_code, result.stdout) == (0, b"payload")
+
+    asyncio.run(scenario())
+
+
+def _bad_gateway() -> ClientResponseError:
+    url = URL("https://proxy.daytona.test/files/download")
+    request = RequestInfo(url, "GET", CIMultiDictProxy(CIMultiDict()), url)
+    return ClientResponseError(request, (), status=502, message="Bad Gateway")
+
+
+def _sdk_error(error: Exception) -> DaytonaError:
+    """The error the Daytona SDK raises when a request fails with ``error``."""
+
+    @intercept_errors(message_prefix="Failed to download file: ")
+    async def request():
+        raise error
+
+    with pytest.raises(DaytonaError) as caught:
+        asyncio.run(request())
+    return caught.value
+
+
+@pytest.mark.requires_host_setsid
+@pytest.mark.parametrize(
+    "provider_error,state,expected",
+    [
+        (DaytonaConnectionError("Connection reset by peer"), SandboxState.STARTED, ConnectionError),
+        (DaytonaTimeoutError("Request timed out"), SandboxState.STARTED, ConnectionError),
+        (_sdk_error(_bad_gateway()), SandboxState.STARTED, ConnectionError),
+        (DaytonaValidationError("Is the Sandbox started?"), SandboxState.STOPPED, MachineTerminated),
+        (DaytonaValidationError("Is the Sandbox started?"), None, MachineTerminated),
+        (DaytonaValidationError("Invalid request", status_code=400), SandboxState.STARTED, DaytonaValidationError),
+        (DaytonaValidationError("Invalid request", status_code=400), "unreachable", ConnectionError),
+    ],
+    ids=["lost-connection", "timed-out", "bad-gateway", "stopped", "destroyed", "started", "probe-unreachable"],
+)
+def test_daytona_provider_failures_report_a_lost_machine(provider_error, state, expected):
+    class FailedRequest(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-request" in command_script(command):
+                raise provider_error
+            return await super().exec(command, **kwargs)
+
+    probe_error = _sdk_error(_bad_gateway())
+
+    async def refresh_data(request_timeout=None):
+        if state is None:
+            raise DaytonaNotFoundError("Sandbox not found", status_code=404)
+        if state == "unreachable":
+            raise probe_error
+        client.sandbox.state = state
+
+    client = LocalDaytona()
+    client.sandbox.process = FailedRequest()
+    client.sandbox.refresh_data = refresh_data
+
+    async def scenario():
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
+        try:
+            with pytest.raises(expected) as caught:
+                await machine.run(Command(("candidate-request",)))
+            assert caught.value is provider_error or caught.value.__cause__ is provider_error
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_full_sandbox_reports_a_full_machine():
+    class FullDisk(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "mkdir -p /tmp/.shellbox-" in command:
+                return SimpleNamespace(exit_code=1, result="mkdir: cannot create directory: No space left on device")
+            return await super().exec(command, **kwargs)
+
+    client = LocalDaytona()
+    client.sandbox.process = FullDisk()
+
+    async def scenario():
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
+        try:
+            with pytest.raises(MachineDiskFull):
+                await machine.run(Command(("true",)))
+        finally:
+            await machine.close()
 
     asyncio.run(scenario())
 
@@ -981,7 +1292,7 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
-        with pytest.raises(RuntimeError) as caught:
+        with pytest.raises(ConnectionError) as caught:
             await machine.run(Command(("printf", "ready")))
         assert caught.value.__cause__ is output_error
         assert len(caught.value.__notes__) == 1
@@ -1347,6 +1658,13 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
     assert all(client.deleted and client.closed for client in clients)
 
 
+@dataclass(frozen=True)
+class LinuxRequirements:
+    command_semantics: CommandSemantics = CommandSemantics.LINUX_PROCESS
+    capabilities: tuple[str, ...] = ()
+    docker_image: str | None = None
+
+
 @pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
 @pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
 def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image_build):
@@ -1355,8 +1673,11 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     (tmp_path / "payload.tar").write_bytes(b"archive fixture")
     client = LocalDaytona()
     factory = DaytonaMachineFactory(lambda: client, image_build=image_build)
+    spec = MachineSpec(DockerfileSource(tmp_path, dockerfile))
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        asyncio.run(factory.create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
+        factory.check_environment(LinuxRequirements(), spec)
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        asyncio.run(factory.create(spec))
     assert not client.snapshot.snapshots
     assert client.params is None
 

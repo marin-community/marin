@@ -4,7 +4,7 @@
 from copy import deepcopy
 from urllib.parse import urlencode
 
-from finestore.rl.rl_progress import Comparison
+from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, Comparison
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -14,7 +14,6 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, pr
 def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     record = progress_record() | {
-        "format_version": 2,
         "run_id": "journey/run",
         "native_run_id": "native/journey/run",
         "label": "Learning fixture",
@@ -147,12 +146,10 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
 
     def attempt(name, revision, day, raw):
         return progress_record() | {
-            "format_version": 2,
             "run_id": name,
             "attempt_id": name,
             "label": name,
             "model": "snowball",
-            "preset": "learning-medium",
             "preset_revision": revision,
             "started_at": f"2026-11-0{day}T00:00:00Z",
             "completed_at": f"2026-11-0{day}T01:00:00Z",
@@ -172,25 +169,26 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             "control_revision": revisions[base],
             "invariants": [
                 {
-                    "name": "eval_lite/shared_tasks",
+                    "name": f"eval_lite/{SHARED_TASKS_INVARIANT}",
                     "value": 18 if overlap else 15,
                     "limit": 18,
                     "comparator": ">=",
                     "holds": overlap,
-                    "replicate": None,
+                    "replicate": 0,
                 },
             ],
             "comparisons": [
                 Comparison(metric=metric, role="slice", delta=delta, n_run=1, n_control=1).model_dump(mode="json")
                 for metric in (overall, family)
             ],
-            "verdict": "pass" if overlap else "invalid",
+            "verdict": "pass",
         }
 
     for i, (revision, raw) in enumerate(zip(revisions, (0.5, 0.4, 0.7, 0.75), strict=True)):
         name = f"control-{i}"
         record = attempt(name, revision, i + 1, raw) | {
-            "artifact_uri": f"s3://example/control/learning-medium-{commits[i]}-r0/{revision}",
+            "artifact_uri": f"s3://example/arbitrary/{name}",
+            "control": {"commit": commits[i], "revision": revision, "replicate": 0},
             "evaluation_data_identity": f"panel@{revisions[min(i, 2)]}",
             "evaluation_protocol_identity": "protocol-a" if i < 2 else "protocol-b",
             "gate_result": link(name, i - 1, 0.1, overlap=i != 3) if i else None,
@@ -199,7 +197,8 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
         assert response.ok, response.text()
 
     retry = attempt("control-0-retry", revisions[0], 1, 0.7) | {
-        "artifact_uri": f"s3://example/control/learning-medium-{commits[0]}-r0-retry1/{revisions[0]}",
+        "artifact_uri": "s3://example/arbitrary/control-retry",
+        "control": {"commit": commits[0], "revision": revisions[0], "replicate": 1},
         "branch": "control-proof",
         "dirty": False,
         "source_revision": commits[0],
@@ -236,5 +235,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
     expect(chart.locator("line.history-global > title").first).to_contain_text("50.0%\u201370.0%")
     expect(chart.get_by_role("link", name="unknown-base · 80.0%")).to_be_visible()
     expect(journey.page.get_by_role("group", name=family, exact=True).locator("line.history-chain")).to_have_count(1)
-    chart.get_by_role("link", name="branch-at-first-preset · 25.0%").locator("circle").first.click()
+    experiment = chart.get_by_role("link", name="branch-at-first-preset · 25.0%").locator("circle").first
+    assert experiment.get_attribute("cx") == chart.locator("circle.history-global").first.get_attribute("cx")
+    experiment.click()
     expect(journey.page.get_by_role("dialog")).to_contain_text(revisions[0])

@@ -21,6 +21,8 @@ from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 
+from jax.sharding import NamedSharding, PartitionSpec
+
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
@@ -30,6 +32,7 @@ from levanter.inference.jit_scheduler import (
 )
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
@@ -99,6 +102,9 @@ class InferenceEngineConfig:
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
     def __post_init__(self):
+        if self.max_rounds < 1:
+            raise ValueError("max_rounds must be positive")
+
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
             raise ValueError("max_queued_tokens must be >= max_seqs")
@@ -386,6 +392,19 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
+    """Gather only sampling rows, replicated for vocabulary-wide sampling."""
+    logits = logits.rearrange(("position", ...))
+    sharding = named_sharding_of(logits.array)
+    out_sharding = None
+    if sharding is not None and not sharding.mesh.empty:
+        # The sampler sorts across the vocabulary for nucleus sampling. Gather after
+        # selecting rows so prefill does not replicate every token's vocabulary logits.
+        out_sharding = NamedSharding(sharding.mesh, PartitionSpec())
+    values = logits.array.at[indices.array].get(out_sharding=out_sharding)
+    return hax.named(values, (*indices.axes, *logits.axes[1:]))
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -413,7 +432,7 @@ def _prefill_kernel(
     #     lens=decode_state.seq_lens.array,
     # )
     logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    logits_at_samples = logits["position", sample_indices]
+    logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -435,7 +454,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -595,7 +616,7 @@ def _handle_clones(
     tgt_ids = selected_safe
     src_pos = source_indices["seq", selected_safe]
     src_ids = slot_ids["position", src_pos]
-    logits_this_time = logits["position", src_pos]
+    logits_this_time = _gather_logits(logits, src_pos)
     pos_ids_this_time = pos_ids["position", src_pos]
 
     # Sample clones from the same boundary logits as their sources
@@ -603,7 +624,9 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -693,7 +716,7 @@ def _run_generation_loop(
 
         # Decode logits and sample new tokens
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = logits["position", sample_indices]
+        logits_at_samples = _gather_logits(logits, sample_indices)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
@@ -703,7 +726,9 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        new_tokens, log_probs = sampler.sample_positions(
+            logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+        )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -994,7 +1019,7 @@ class InferenceEngine:
             prompt_lengths[prefill_idx] = len(seq_tokens)
             prompt_tokens[prefill_idx, : len(seq_tokens)] = this_tokens
 
-            max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
+            max_num_tokens[prefill_idx] = min(int(seq_params.max_num_tokens), self.config.max_seq_len)
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
             top_ps[prefill_idx] = np.asarray(seq_params.top_p, dtype=np.float32).item()
             prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
@@ -1034,7 +1059,7 @@ class InferenceEngine:
                     clone_targets[clone_idx] = slot_id
                     prompt_lengths[clone_idx] = parent_length
                     # Clones reuse prompt tokens from their parent; no need to copy here.
-                    max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
+                    max_num_tokens[clone_idx] = max_num_tokens[prefill_idx]
                     temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
                     top_ps[clone_idx] = np.asarray(child_params.top_p, dtype=np.float32).item()
                     prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
@@ -1086,6 +1111,9 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
+        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
+            raise ValueError("Prompts must leave room for generation within max_seq_len")
+
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
@@ -1149,11 +1177,8 @@ class InferenceEngine:
                         return False
             return True
 
-        stagnant_iters = 0
         decode_iteration = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
-            if _all_done():
-                break
+        while not _all_done():
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1193,13 +1218,8 @@ class InferenceEngine:
 
             decode_iteration += 1
 
-            # Safety: if nothing new was produced, avoid infinite loop
-            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
-                stagnant_iters += 1
-            else:
-                stagnant_iters = 0
-            if stagnant_iters >= 2:
-                logger.warning("No progress in decoding for 2 consecutive iterations; breaking to avoid hang.")
+            if new_tokens == 0:
+                logger.warning("No progress in decoding with unfinished requests")
                 break
 
         # Assemble outputs in the order of the requests for this call

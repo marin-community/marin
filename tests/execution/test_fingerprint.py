@@ -45,6 +45,21 @@ def test_canonical_json_is_deterministic_and_field_sensitive():
     assert fingerprint_hash(same) != fingerprint_hash(canonical_json(_Cfg(lr=2e-3)))
 
 
+def test_legacy_value_preserves_fingerprint_after_default_changes():
+    @dataclasses.dataclass
+    class Model:
+        hidden_dim: int = 512
+        kernel: str = dataclasses.field(default="fixed", metadata={"fingerprint_omit_value": "native"})
+
+    @dataclasses.dataclass
+    class Recipe:
+        model: Model
+
+    before = {"model": {"hidden_dim": 512}}
+    assert canonical_json(Recipe(Model(kernel="native"))) == canonical_json(before)
+    assert canonical_json(Recipe(Model())) == canonical_json({"model": {"hidden_dim": 512, "kernel": "fixed"}})
+
+
 def test_dtype_and_timedelta_changes_register():
     assert canonical_json(_Cfg(lr=1.0, dtype=jnp.float32)) != canonical_json(_Cfg(lr=1.0, dtype=jnp.bfloat16))
     assert "float32" in canonical_json(_Cfg(lr=1.0, dtype=jnp.float32))

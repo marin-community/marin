@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import json
 from collections.abc import Callable
 from contextlib import contextmanager
 from functools import partial
@@ -31,10 +32,14 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210 import Micro210Run, micro210_step
 from experiments.evaluation.micro210_policy import Micro210Model
-from experiments.post_training import iceball_micro, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import mochi_rl as mochi_model
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
+from experiments.post_training.skyrl_test_support import selection_summary, write_training_families
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SUMMARY_FILENAME
 from experiments.post_training.task_sessions import validation
 from tests.rl.micro210_fixture import policy_fixture_reference
 
@@ -113,6 +118,32 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
 
+def _mochi_mixed_step() -> ArtifactStep[SkyRLRun]:
+    table = mochi_model.MOCHI
+    preset = table.by_name["train-medium-agentic"]
+    selection = recipe.selection_artifact(preset.tasks)
+    summary = selection_summary(910)
+    sources = [(selection, summary)]
+    if preset.held_out_tasks is not None:
+        held_out = recipe.selection_artifact(preset.held_out_tasks)
+        summary["recipe"]["exclusions"] = [
+            {
+                "uri": str(StoragePath(held_out.path()) / FULL_VALIDATION_FILENAME),
+                "version": held_out.version,
+            }
+        ]
+        sources.append((held_out, selection_summary(20)))
+    for source, summary in sources:
+        path = StoragePath(source.path()) / SUMMARY_FILENAME
+        path.parent.mkdirs()
+        if source is selection and preset.batch_mix is not None:
+            counts = dict.fromkeys(preset.batch_mix.shares, 256)
+            summary["training_family_counts"] = counts
+            write_training_families(path.parent, counts)
+        path.write_text(json.dumps(summary))
+    return rl.build_experiment(preset, tasks=selection, table=table).runs[0]
+
+
 def _iceball_step() -> ArtifactStep[SkyRLRun]:
     return iceball_micro.build_workflow(version=VERSION).rl
 
@@ -147,6 +178,7 @@ def launch_builders(
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
+    builders["mochi/train-medium-agentic"] = _mochi_mixed_step
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {
         "preset": canary.PRESETS,

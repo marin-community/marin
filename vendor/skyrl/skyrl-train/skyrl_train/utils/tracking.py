@@ -31,7 +31,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-from finestore.rl.rl_progress import RL_WANDB_PROJECT
+from finestore.rl.run_records import wandb_project
 from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
@@ -140,7 +140,7 @@ class Tracking:
                 else None
             )
             index = attempt.index if attempt is not None else None
-            wandb_project = RL_WANDB_PROJECT if index is not None else project_name
+            project = wandb_project(index, project_name)
             wandb_name = index.run_id if index is not None else experiment_name
             wandb_group = index.run_id if index is not None else tracking_config["run_id"]
             if index is not None:
@@ -153,7 +153,7 @@ class Tracking:
                     logger.warning(f"Failed to get node IP address, defaulting to 'head'. Error: {e}")
 
             run = wandb.init(
-                project=wandb_project,
+                project=project,
                 name=wandb_name,
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
@@ -174,7 +174,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                wandb_project, wandb_name, run_id, wandb_group, tracking_config, current_node_ip
+                project, wandb_name, run_id, wandb_group, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:

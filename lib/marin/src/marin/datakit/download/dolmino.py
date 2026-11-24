@@ -3,8 +3,6 @@
 
 """Dolmino dataset download definition and split metadata."""
 
-from marin.datakit.download.huggingface import download_hf_step
-from marin.execution.step_spec import StepSpec
 
 DOLMINO_DATASETS = {
     "dclm": ["**/*.json.zst"],
@@ -20,13 +18,3 @@ DOLMINO_DATASETS = {
     "stackexchange": ["**/*.json.gz"],
     "wiki": ["**/*.json.gz"],
 }
-
-
-def download_dolmino_step() -> StepSpec:
-    """Download the dolmino-mix-1124 dataset from HuggingFace."""
-    return download_hf_step(
-        "raw/dolmino-mix-1124",
-        hf_dataset_id="allenai/dolmino-mix-1124",
-        revision="bb54cab",
-        override_output_path="raw/dolmino-mix-1124-157960",
-    )

@@ -1,5 +1,7 @@
 """Configuration-only training checks shared by launch composition and GPU entrypoints."""
 
+from collections.abc import Mapping
+
 from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import R3Transport, reference_model_required
@@ -20,9 +22,29 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
+def validate_muonh_geometry(tensor_parallel: int, expert_tensor_parallel: int | None) -> None:
+    if tensor_parallel != 1:
+        raise ValueError("Grug MuonH fused-matrix updates require tensor parallel size 1")
+    if expert_tensor_parallel not in (None, 1):
+        raise ValueError("Grug MuonH whole-matrix updates require expert tensor parallel size 1")
+
+
+def validate_muonh_weight_decay(optimizer: Mapping, overrides: Mapping) -> None:
+    if float(optimizer.get("weight_decay", 0.0)) != 0.0:
+        raise ValueError("MuonH requires weight_decay=0")
+    if float(overrides.get("weight_decay", optimizer.get("weight_decay", 0.01))) != 0.0:
+        raise ValueError("MuonH requires weight_decay=0, including Megatron overrides")
+
+
 def validate_megatron_config(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
+
+    policy = cfg.trainer.policy
+    if str(policy.optimizer_config.optimizer).lower() == "muonh":
+        megatron = policy.megatron_config
+        validate_muonh_geometry(megatron.tensor_model_parallel_size, megatron.expert_tensor_parallel_size)
+        validate_muonh_weight_decay(policy.optimizer_config, megatron.optimizer_config_kwargs)
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -42,6 +64,13 @@ def validate_megatron_config(cfg: DictConfig):
                             f"trainer.{worker_type}.megatron_config.{kwargs_name}.{'.'.join(key_path)} "
                             "must stay false with moe_router_replay: the fused router bypasses the replay hook"
                         )
+    if policy.megatron_config.get("moe_router_replay", False) and not cfg.generator.engine_init_kwargs.get(
+        "enable_return_routed_experts", False
+    ):
+        raise ValueError(
+            "trainer.policy.megatron_config.moe_router_replay requires "
+            "generator.engine_init_kwargs.enable_return_routed_experts=true"
+        )
 
 
 def _iter_config_kwargs(node):

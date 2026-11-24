@@ -9,7 +9,7 @@ from taskcompendium.models import TaskSpec
 from skyrl_train.rollouts.genrm_grading import grade_genrm_rollouts
 from skyrl_train.rollouts.group_grader import GENRM_GROUP_GRADER, GroupGraderSpec
 from skyrl_train.rollouts.task_projections import rollout_loss_eligible
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig
 
 GroupGrader = Callable[
     [TaskSpec, GroupGraderSpec, Sequence[TrainingRollout], Sequence[bool], str], Sequence[TrainingRollout]

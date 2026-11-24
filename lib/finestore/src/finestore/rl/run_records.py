@@ -15,15 +15,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
-from finestore.rl.rl_progress import RunIndexIdentity
 from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, DataTable
+
+Identity = Annotated[str, Field(min_length=1)]
+RL_WANDB_PROJECT = "marin-rl"
 
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
@@ -78,6 +80,36 @@ class CheckpointReference(BaseModel):
     step: int
 
 
+class RunIndexIdentity(BaseModel):
+    """Configuration identity and provenance shared by an attempt's public links."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    run_id: Identity
+    model: Identity
+    preset: Identity
+    preset_revision: Identity
+    user: Identity
+    branch: str | None
+    source_revision: Identity
+    tree_hash: Identity | None = None
+    base_preset_revision: Identity | None = None
+    dirty: bool
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    submitted_at: str | None = None
+
+    @property
+    def wandb_tags(self) -> list[str]:
+        tags = [f"model:{self.model}", f"preset:{self.preset}", f"revision:{self.preset_revision}", f"user:{self.user}"]
+        if self.branch is not None:
+            tags.append(f"branch:{self.branch}")
+        return tags
+
+
+def wandb_project(index: RunIndexIdentity | None, default: str) -> str:
+    """Select the project for a run's stored tracking identity."""
+    return RL_WANDB_PROJECT if index is not None else default
+
+
 class AttemptRecord(BaseModel):
     """One native attempt with its receipt, startup facts and checkpoint parent."""
 
@@ -96,7 +128,6 @@ class AttemptRecord(BaseModel):
     result: LaunchResult | None = None
     issue: int | None = None
     index: RunIndexIdentity | None = None
-    base_preset_revision: str | None = None
     interruption: Literal["coordinator_terminated"] | None = None
     elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
 
@@ -164,6 +195,8 @@ class EvaluationTaskRow(BaseModel):
     error_type: str | None
     answers: list[EvaluationAnswerRow]
     model: str | None = None
+    model_source_identity: str | None = None
+    starting_checkpoint_identity: str | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -58,6 +58,9 @@ def run_config(config_path: Path) -> None:
             "coordinator_iris_job_id": config.run.coordinator_iris_job_id,
             "iris_job_id": str(job_info.job_id) if job_info is not None else None,
         }
+        if (checkpoint := config.inputs.starting_checkpoint) is not None:
+            config.skyrl.runtime.model_source_identity = str(config.inputs.model.identity)
+            config.skyrl.runtime.starting_checkpoint_identity = str(checkpoint.identity)
         if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:

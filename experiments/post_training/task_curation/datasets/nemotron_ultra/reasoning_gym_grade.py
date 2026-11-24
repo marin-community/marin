@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score a Nemotron Ultra Reasoning Gym reply with the puzzle task's own scorer and print the reward.
+"""Score a Nemotron Ultra Reasoning Gym reply with the pinned scorer and targeted repairs.
 
 The candidate is the final answer's last ``<answer>`` block, else its last boxed answer, else the whole
 final answer. The grader packages' ``reasoning_gym`` scores it against the row's question, answer and
