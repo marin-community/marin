@@ -6,6 +6,7 @@
 from typing import Any, TypedDict
 
 import yaml
+from finestore.rl.rl_progress import RL_WANDB_PROJECT
 from finestore.rl.run_records import (
     AttemptRecord,
     LaunchReceipt,
@@ -201,8 +202,9 @@ def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTr
         vllm_env={key: value for key, value in config.task_env.items() if key.startswith("VLLM_")},
         vllm_version=record.vllm_version,
     )
+    project = RL_WANDB_PROJECT if record.index is not None else config.project_name
     wandb_url = (
-        f"https://wandb.ai/{config.wandb_entity}/{config.project_name}/runs/{record.attempt_id}"
+        f"https://wandb.ai/{config.wandb_entity}/{project}/runs/{record.attempt_id}"
         if config.wandb_entity and "wandb" in config.logger
         else None
     )

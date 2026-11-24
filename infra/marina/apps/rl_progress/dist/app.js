@@ -56,14 +56,17 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Issue', run.issue],
+    ['Model', run.model], ['Preset', run.preset], ['Preset revision', run.preset_revision],
+    ['User', run.user], ['Branch', run.branch], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
+    ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
+    ['Elapsed excluding evaluation', run.elapsed_excluding_eval_seconds == null ? null : `${number(run.elapsed_excluding_eval_seconds, 1)} seconds`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
-    ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
+    ['Source', run.source_revision], ['Data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Artifact location', run.artifact_uri],
     ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];

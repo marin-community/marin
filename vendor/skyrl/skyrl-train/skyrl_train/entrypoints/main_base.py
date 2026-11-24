@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from collections.abc import Mapping
 
+from finestore.rl.run_records import AttemptRecord, write_attempt
 from skyrl_gym.task_factories import EpisodeFactory
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS
 
@@ -723,18 +724,36 @@ class BasePPOExp:
         # See agent_logs/2026-05-29_skyrl_uvloop_integration_and_robustness_research.md
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
-        with self.get_tracker() as tracker:
-            trainer = None
-            try:
-                trainer = self._setup_trainer(tracker)
-                asyncio.run(trainer.train())
-            finally:
-                # Release GPU actors before a Ray retry can start another attempt.
-                if trainer is not None:
-                    try:
-                        asyncio.run(trainer.shutdown())
-                    except Exception as e:
-                        logger.warning(f"Error shutting down trainer: {e}")
+        started = time.monotonic()
+        trainer = None
+        try:
+            with self.get_tracker() as tracker:
+                try:
+                    trainer = self._setup_trainer(tracker)
+                    asyncio.run(trainer.train())
+                finally:
+                    # Release GPU actors before a Ray retry can start another attempt.
+                    if trainer is not None:
+                        try:
+                            asyncio.run(trainer.shutdown())
+                        except Exception as e:
+                            logger.warning(f"Error shutting down trainer: {e}")
+        finally:
+            if trainer is not None:
+                elapsed = time.monotonic() - started - trainer.evaluation_wall_time
+                logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed)
+                runtime = self.cfg.runtime
+                try:
+                    write_attempt(
+                        str(self.cfg.trainer.export_path),
+                        AttemptRecord(
+                            run_id=runtime.run_id,
+                            attempt_id=runtime.attempt_id,
+                            elapsed_excluding_eval_seconds=elapsed,
+                        ),
+                    )
+                except Exception as error:
+                    logger.warning("Could not store trainer completion time: {}", type(error).__name__)
 
 
 @ray.remote(num_cpus=1, max_retries=0)

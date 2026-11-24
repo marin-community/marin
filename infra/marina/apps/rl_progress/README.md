@@ -22,7 +22,8 @@ Malformed records are skipped individually and named in a visible note.
 ## Data contract
 
 The app's release migration creates its `rl_runs` table in the application schema.
-Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
+Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
+attempts of the same model, preset, user and composed comparison configuration. Repeat
 publication refreshes that attempt's record; null model, issue, EvalDash links, gate and gate-result values
 preserve their stored values. Other attempts remain separate.
 

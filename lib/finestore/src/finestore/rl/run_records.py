@@ -13,13 +13,14 @@ import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
+from finestore.rl.rl_progress import RunIndexIdentity
 from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, DataTable
@@ -90,6 +91,13 @@ class AttemptRecord(BaseModel):
     config: dict[str, Any] | None = None
     result: LaunchResult | None = None
     issue: int | None = None
+    index: RunIndexIdentity | None = None
+    elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
+
+    @property
+    def index_run_id(self) -> str:
+        """Return the cross-system identity when this attempt has one."""
+        return self.index.run_id if self.index is not None else self.run_id
 
     @property
     def native(self) -> LaunchReceipt:

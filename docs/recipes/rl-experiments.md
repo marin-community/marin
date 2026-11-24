@@ -59,11 +59,14 @@ interface. Each preset's steps use its own `revision`.
 - **Plan and status.** The default mode and `--plan` run the SkyRL driver's configuration checks on CPU
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
+  Add `--check-pin` to compare the current defaults with stored control receipts before opening an issue.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
-- **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` for
-  the terminal report. Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
+- **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` to keep
+  the terminal report in the current shell. A detached launch prints the path to its publication log.
+  Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
-  Open a new issue only with the experimenter's explicit approval. The native attempt records the issue when supplied.
+  Open an approved issue after confirming the plan and control pin. Retries of the same native output
+  inherit its recorded issue.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
   The executor reuses successful artifacts. When training resumes, `train-long` loads its
   latest retained checkpoint and records the new attempt and parent checkpoint.
@@ -72,7 +75,8 @@ Submission without `--wait` returns 0 when accepted. A terminal invocation retur
 or successful ungated completion, 1 for FAIL, 2 for INVALID, 3 for an unexpected error, failed
 coordinator or unavailable required verdict, and 4 for refusal before execution.
 Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defaults to
-`marin-community`. Snowball logs to the `marin-snowball-rl` project.
+`marin-community`. The `marin-rl` project uses the run-index ID as the run name and group, and the
+native attempt ID as the W&B ID.
 
 Short presets use eight H100s; training presets use 40.
 East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
@@ -91,6 +95,8 @@ uv run python -m experiments.post_training.snowball_rl publish --preset train-lo
 
 Set `RUN_OUTPUT` to the path in the run's status, `ATTEMPT_ID` to the selected native attempt,
 and `MARINA_ORIGIN` to the target Marina origin. Both attempt selectors are required together.
+Use `--issue NUMBER` to associate that stored attempt with an issue. Each native output accepts
+one issue number across its attempts.
 Pass the complete `EvaluationResult.run_ids` tuple with one
 `--evaldash-run-id RUN_ID` per evaluation definition. Providing IDs sets the entire list for the
 selected attempt. Publishing without IDs preserves its saved links. Historical attempts retain their
@@ -109,9 +115,10 @@ Open **Grader stats** from the published attempt's details to see coverage,
 failure counts and grading latency. Expand **Individual tasks** for task results.
 Exported evaluation responses include `task_id` and `subset_id`.
 
-After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium and train-long attempts using the caller's Marina login. The row shows the model and
-the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
+The launcher publishes every prepared attempt and its terminal result using the caller's Marina
+login. The index groups attempts by `<model>-<preset>-<user>-<config hash>` from the gate's composed
+comparison configuration. Each row includes source and preset provenance, allocation cluster,
+status, and any linked issue. Record `rl_progress_url` with the result.
 Use `--marina-url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
@@ -287,9 +294,9 @@ when recording a result.
 
 | Sink | Where to find the run |
 |---|---|
-| W&B | Open the attempt's `wandb_url` from status. The Snowball project is `marin-snowball-rl` in the launch's W&B team. The model tag identifies Snowball runs in that project. |
-| Finelog and Grafana | Use the status's Grafana link for the native run and UTC execution window. Finelog uses service `marinskyrl`. Filter by model, cluster and run ID, and use the Iris job ID and attempt timestamps to inspect a retry. |
-| Marina RL progress | Open `rl_progress_url` from terminal status. The row is keyed by native run and attempt IDs and carries the model, issue link when supplied, and evaluation summaries. |
+| W&B | Open `wandb_url` from status for the attempt's exact project and team. The `marin-rl` project tags runs with model, preset, revision, branch and user. |
+| Finelog and Grafana | Use the status's Grafana link for the run-index ID and UTC execution window. Finelog uses service `marinskyrl`. Filter by model, cluster and run ID, and use the Iris job ID and attempt timestamps to inspect a retry. |
+| Marina RL progress | Open `rl_progress_url` from terminal status. The run-index ID and native attempt identify the row. |
 | EvalDash | An offline benchmark run has its own evaluation run ID. Publish the IDs returned in `EvaluationResult.run_ids` on the selected RL attempt to link them from the Marina row. |
 
 The dashboards are available through the [RL Grafana dashboard](https://grafana.oa.dev/d/marin-rl-runs/rl-post-training),
@@ -298,7 +305,8 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 
 ## What a run writes
 
-The status block names the run's artifact output and native job. Submission prints an open-ended
+The status block names the run's artifact output and native job, with its Iris URL and GPU-hours
+calculated from the recorded job window and allocation. Submission prints an open-ended
 Grafana link immediately; terminal status prints the recorded native time window. For evaluation
 presets, `evaluations` lists scored and attempted answer counts and the means for each weight step.
 Train-long checks every scheduled evaluation, requires at least 99% of its tasks to score, and

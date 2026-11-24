@@ -22,7 +22,11 @@ _UPSERT = text(
     f"""INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
     ON CONFLICT (run_id, attempt_id) DO UPDATE
-      SET record = EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+      SET record = CASE
+        WHEN EXCLUDED.record ->> 'status' = 'running'
+          AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
+        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+      END
     RETURNING record"""
 )
 
@@ -39,6 +43,31 @@ def migrate(connection: Connection) -> None:
             PRIMARY KEY (run_id, attempt_id)
         )
     """
+        )
+    )
+    connection.execute(
+        text(
+            """CREATE TABLE IF NOT EXISTS rl_legacy_runs (
+            run_id text NOT NULL,
+            attempt_id text NOT NULL,
+            record jsonb NOT NULL,
+            imported_at timestamptz NOT NULL
+        )"""
+        )
+    )
+    connection.execute(
+        text(
+            """WITH legacy AS (
+            DELETE FROM rl_runs
+            WHERE NOT record ? 'format_version' AND record ?& ARRAY['evaluation', 'baseline', 'final']
+            RETURNING run_id, attempt_id, record, imported_at
+        ) INSERT INTO rl_legacy_runs SELECT * FROM legacy"""
+        )
+    )
+    connection.execute(
+        text(
+            """UPDATE rl_runs SET record = record || jsonb_build_object('format_version', 1)
+            WHERE jsonb_typeof(record) = 'object' AND NOT record ? 'format_version'"""
         )
     )
 
@@ -106,7 +135,13 @@ def create_api(services):
         skipped = []
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT run_id, attempt_id, record FROM rl_runs ORDER BY run_id, attempt_id")
+                text(
+                    """SELECT run_id, attempt_id,
+                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report'
+                         ELSE record END AS record,
+                    COALESCE(record -> 'grader_report' <> 'null'::jsonb, false) AS has_grader_report
+                    FROM rl_runs ORDER BY run_id, attempt_id"""
+                )
             ).mappings()
             for row in rows:
                 try:
@@ -128,9 +163,7 @@ def create_api(services):
                     )
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
-                if record.get("grader_report") is not None:
-                    record = {key: value for key, value in record.items() if key != "grader_report"}
-                    record["has_grader_report"] = True
+                record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
         return {"runs": records, "skipped_records": skipped}
 

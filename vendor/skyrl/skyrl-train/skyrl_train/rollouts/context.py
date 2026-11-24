@@ -238,16 +238,21 @@ class TrainingContext:
         tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         try:
-            await self._write_grader_report()
+            await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             ray.kill(self._buffer)
 
-    async def _write_grader_report(self) -> None:
+    async def write_grader_report(self) -> None:
+        """Save aggregate grading diagnostics while the rollout buffer is available."""
         if self._grader_report_path is None:
             return
-        summary = await self._buffer.grader_summary.remote()
+        try:
+            async with asyncio.timeout(10):
+                summary = await self._buffer.grader_summary.remote()
+        except (TimeoutError, ray.exceptions.RayError) as error:
+            logger.warning("Grader summary unavailable: {}", type(error).__name__)
+            return
         if summary["subsets"]:
             write_grader_report(
                 self._grader_report_path,
@@ -335,7 +340,7 @@ class TrainingContext:
                     raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
-                await self._write_grader_report()
+                await self.write_grader_report()
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),

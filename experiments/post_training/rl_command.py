@@ -44,7 +44,9 @@ def grafana_url(
 def attempt_grafana_url(receipt: AttemptRecord, launch: RecordedLaunch) -> str | None:
     result = receipt.native.result
     if result.started_at:
-        return grafana_url(receipt.run_id, launch.cluster, launch.training_type, result.started_at, result.finished_at)
+        return grafana_url(
+            receipt.index_run_id, launch.cluster, launch.training_type, result.started_at, result.finished_at
+        )
     return None
 
 

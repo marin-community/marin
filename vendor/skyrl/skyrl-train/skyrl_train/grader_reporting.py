@@ -11,7 +11,14 @@ from statistics import mean
 from typing import Literal, TypedDict
 
 import numpy as np
-from finestore.rl.rl_progress import GRADER_REPORT_FILENAME
+from finestore.rl.rl_progress import (
+    GRADER_REPORT_FILENAME,
+    GraderReport,
+    SubsetSummary,
+    SuccessSummary,
+    TaskSummary,
+)
+from loguru import logger
 from marinskyrl.resource_locator import join_resource_path
 from rolloutengine.models import RolloutOperation
 from skyrl_gym.verification import VerificationStatus
@@ -63,35 +70,6 @@ class _SubsetStats:
 class _TaskStats:
     counts: _SuccessCounts = field(default_factory=_SuccessCounts)
     subset_ids: set[str] = field(default_factory=set)
-
-
-class GradingLatency(TypedDict):
-    count: int
-    mean: float | None
-    p95: float | None
-    max: float | None
-
-
-class SuccessSummary(TypedDict):
-    attempted: int
-    verified: int
-    passed: int
-    verification_coverage: float
-    success_rate: float | None
-
-
-class SubsetSummary(SuccessSummary):
-    subset_id: str
-    data_sources: list[str]
-    verification_statuses: dict[str, int]
-    grading_failures: dict[str, int]
-    rollout_failures: dict[str, int]
-    grading_latency_seconds: GradingLatency
-
-
-class TaskSummary(SuccessSummary):
-    task_id: str
-    subset_ids: list[str]
 
 
 class GraderSummary(TypedDict):
@@ -183,18 +161,21 @@ class GraderStats:
         }
 
 
-type GraderReportSection = Literal[
-    "training", "training_tasks", "evaluation", "evaluation_tasks", "evaluation_duration_seconds"
-]
+type GraderReportSection = Literal["training", "training_tasks", "evaluation", "evaluation_tasks"]
 
 
 def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
-    """Update the run report for one evaluation step or training attempt."""
+    """Store the diagnostic report without interrupting the workload."""
     path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
-        report = json.loads(io.read_bytes(path))
-    except FileNotFoundError:
-        report = {"training": {}, "evaluation": {}}
-    for section, value in sections.items():
-        report.setdefault(section, {})[key] = value
-    io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
+        try:
+            report = json.loads(io.read_bytes(path))
+        except FileNotFoundError:
+            report = {}
+        report.pop("evaluation_duration_seconds", None)
+        for section, value in sections.items():
+            report.setdefault(section, {})[key] = value
+        payload = GraderReport.model_validate(report).model_dump_json()
+        io.write_bytes_atomic(path, (payload + "\n").encode())
+    except Exception as error:
+        logger.warning("Could not write grader report for {} ({})", key, type(error).__name__)

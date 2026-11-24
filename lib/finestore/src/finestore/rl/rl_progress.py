@@ -5,12 +5,13 @@
 
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
 GRADER_REPORTS_DIR = "grader_reports"
 GRADER_REPORT_FILENAME = "grader_report.json"
+RL_WANDB_PROJECT = "marin-rl"
 
 
 class Verdict(StrEnum):
@@ -87,20 +88,90 @@ class GateResult(BaseModel):
     replicates: Annotated[StrictInt, Field(gt=0)]
 
 
+class GradingLatency(TypedDict):
+    count: Count
+    mean: FiniteFloat | None
+    p95: FiniteFloat | None
+    max: FiniteFloat | None
+
+
+class SuccessSummary(TypedDict):
+    attempted: Count
+    verified: Count
+    passed: Count
+    verification_coverage: FiniteFloat
+    success_rate: FiniteFloat | None
+
+
+class SubsetSummary(SuccessSummary):
+    subset_id: str
+    data_sources: list[str]
+    verification_statuses: dict[str, Count]
+    grading_failures: dict[str, Count]
+    rollout_failures: dict[str, Count]
+    grading_latency_seconds: GradingLatency
+
+
+class TaskSummary(SuccessSummary):
+    task_id: str
+    subset_ids: list[str]
+
+
+class GraderReport(BaseModel):
+    """Stored training and evaluation counts by subset and task."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    training: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+    evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+
+
+class RunIndexIdentity(BaseModel):
+    """Configuration identity and provenance shared by an attempt's public links."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    run_id: Identity
+    model: Identity
+    preset: Identity
+    preset_revision: Identity
+    user: Identity
+    branch: str | None
+    source_revision: Identity
+    dirty: bool
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    submitted_at: str | None = None
+
+    @property
+    def wandb_tags(self) -> list[str]:
+        tags = [self.model, self.preset, self.preset_revision, self.user]
+        if self.branch is not None:
+            tags.append(self.branch)
+        return tags
+
+
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
+    format_version: Literal[1] = 1
     run_id: Identity
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
+    preset: Identity | None = None
+    preset_revision: Identity | None = None
+    user: Identity | None = None
+    branch: str | None = None
+    dirty: bool | None = None
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    cluster: Identity | None = None
     issue: StrictInt | None = None
     evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None
     evaluations: list[Comparison] = Field(default_factory=list)
-    grader_report: dict[str, JsonValue] | None = None
+    grader_report: GraderReport | None = None
     engine: dict[str, Any] | None = None
     gate_result: GateResult | None = None
     gate: str | None = None
@@ -109,8 +180,9 @@ class AttemptSummary(BaseModel):
     started_at: str | None
     completed_at: str | None
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
+    elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
     timing_scope: Identity
-    status: Literal["succeeded", "failed"]
+    status: Literal["running", "succeeded", "failed"]
     optimizer_steps: Count | None
     planned_updates: Count | None = None
     measured_updates: list[Count] | None = None

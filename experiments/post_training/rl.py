@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -20,20 +23,20 @@ from pathlib import Path
 
 import click
 import yaml
-from finestore.rl.rl_progress import Verdict
+from finestore.rl.rl_progress import RunIndexIdentity, Verdict
 from finestore.rl.run_records import AttemptRecord, write_attempt
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
-from iris.resources.state import JobState
+from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version
-from marin.execution.fingerprint import fingerprint_hash
+from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import submit_or_run, validate_coordinator_graph
+from marin.rl.cli import RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     SkyRLModelSource,
@@ -50,7 +53,7 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempt,
 )
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance, git_output
+from rigging.provenance import Provenance, git_output, username_segment
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate, rl_publication
@@ -72,6 +75,9 @@ from experiments.post_training.rl_measurements import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
+_FOLLOW_JOB_ENV = "MARIN_RL_FOLLOW_JOB"
+_PUBLICATION_POLL_SECONDS = 10
+_IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 
 
@@ -103,9 +109,17 @@ def _run_rl(
     if not path.exists():
         path.parent.mkdirs()
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
-    if issue is not None:
+    metadata = os.environ.get(RUN_INDEX_ENV)
+    if issue is not None or metadata is not None:
+        issue = rl_publication.lineage_issue(config.output.export_root, config.attempt_id, issue)
         write_attempt(
-            config.output.export_root, AttemptRecord(run_id=config.run_id, attempt_id=config.attempt_id, issue=issue)
+            config.output.export_root,
+            AttemptRecord(
+                run_id=config.run_id,
+                attempt_id=config.attempt_id,
+                issue=issue,
+                index=RunIndexIdentity.model_validate_json(metadata) if metadata is not None else None,
+            ),
         )
     return run_skyrl(config, forward_env=forward_env)
 
@@ -138,6 +152,7 @@ def build_experiment(
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
     validate_plan: bool = False,
+    provenance: Provenance | None = None,
 ) -> RLExperiment:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
@@ -190,7 +205,7 @@ def build_experiment(
         "evaluations": sorted(evaluation_inputs),
     }
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
-    provenance = _provenance(control=control)
+    provenance = provenance or _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
     inputs = run_inputs(
         preset.name,
@@ -263,6 +278,11 @@ def _status(
         team = launch.wandb_entity if launch else execution.wandb_entity
         grafana = attempt_grafana_url(receipt, launch) if receipt is not None and launch is not None else None
         status_path = StoragePath(get_status_path(path))
+        iris_job_id = result.iris_job_id if result else None
+        gpu_hours = None
+        if result and launch and result.started_at and result.finished_at:
+            seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
+            gpu_hours = max(0, seconds) * launch.num_nodes * launch.gpus_per_node / 3600
         state = (
             result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
         )
@@ -281,7 +301,14 @@ def _status(
                 "name": step.name,
                 "version": step.version,
                 "state": state,
-                "iris_job_id": result.iris_job_id if result else None,
+                "iris_job_id": iris_job_id,
+                "run_id": receipt.index_run_id if receipt is not None else None,
+                "iris_url": (
+                    JobName.from_wire(iris_job_id).dashboard_url(_IRIS_DASHBOARD_URL)
+                    if iris_job_id and iris_job_id.startswith("/")
+                    else None
+                ),
+                "gpu_hours": gpu_hours,
                 "wandb_entity": team or preset.wandb_entity,
                 **{
                     key: tracking.get(key)
@@ -364,6 +391,56 @@ def _from_handles(handles: list[ArtifactStep]) -> RLExperiment:
     )
 
 
+def _branch_pr_number(provenance: Provenance) -> int | None:
+    if provenance.branch is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", "--json", "number", "--jq", ".number"],
+            cwd=recipe.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=4,
+        )
+        number = int(result.stdout)
+        return number if number > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def run_index(
+    launch: dict, preset: presets.Preset, table: presets.ModelPresets, provenance: Provenance, *, user: str
+) -> RunIndexIdentity:
+    """Name a composed launch by the gate's normalized comparison configuration."""
+    digest = fingerprint_hash(canonical_json(rl_gate.comparison_config(launch)))
+    return RunIndexIdentity(
+        run_id=f"{table.model}-{preset.name}-{user}-{digest}",
+        model=table.model,
+        preset=preset.name,
+        preset_revision=preset.revision,
+        user=user,
+        branch=provenance.branch,
+        source_revision=provenance.base_commit or "Unknown",
+        dirty=provenance.dirty,
+        pr_number=_branch_pr_number(provenance),
+    )
+
+
+def _follow_detached(module: str, argv: tuple[str, ...], job: JobName, provenance: Provenance) -> str:
+    """Start the caller's publication watcher and return its local log path."""
+    with tempfile.NamedTemporaryFile(prefix="marin-rl-publication-", suffix=".log", delete=False) as log:
+        subprocess.Popen(
+            [sys.executable, "-m", module, *argv],
+            env={**os.environ, _FOLLOW_JOB_ENV: json.dumps({"job": str(job), "source": provenance.to_json()})},
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return log.name
+
+
 def _wait_for_run(
     job: JobName,
     handles: list[ArtifactStep],
@@ -372,40 +449,40 @@ def _wait_for_run(
     table: presets.ModelPresets,
     service_url: str | None,
 ) -> None:
+    run = _from_handles(handles)
+    prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+    outputs = [step.path(prefix) for step in run.runs]
+    published = set()
+    deadline = time.monotonic() + preset.recipe.layout.coordinator_timeout_hours * 3600
     with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
-        parent = client.job(job).wait(
-            preset.recipe.layout.coordinator_timeout_hours * 3600, poll_interval=60, raise_on_failure=False
-        )
+        parent = client.job(job)
+        while not is_job_finished(parent_state := parent.state_only()):
+            if time.monotonic() >= deadline:
+                raise click.ClickException(f"Timed out waiting for {job}. Repeat the original command with --wait.")
+            for path in outputs:
+                rl_publication.publish_running(path, preset, table, str(job), service_url, published)
+            time.sleep(_PUBLICATION_POLL_SECONDS)
     coordinator_error = (
-        f"coordinator {job} is {parent.state}; required verdict unavailable"
-        if parent.state != JobState.SUCCEEDED
+        f"coordinator {job} is {parent_state}; required verdict unavailable"
+        if parent_state != JobState.SUCCEEDED
         else None
     )
-    run = _from_handles(handles)
     run = replace(run, gate=rl_gate.completed_gate(run.gate))
-    publication = None
-    if preset.publishes:
-        try:
-            prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
-            publication = rl_publication.publish_runs(
-                [step.path(prefix) for step in run.runs],
-                preset,
-                table=table,
-                gate_path=run.gate.path(prefix) if run.gate is not None else None,
-                service_url=service_url,
-            )
-        except Exception as error:
-            publication = rl_publication.PublicationOutcome(
-                errors=[str(error)], retry="Repeat the original command with --wait."
-            )
+    publication = rl_publication.publish_runs(
+        outputs,
+        preset,
+        table=table,
+        gate_path=run.gate.path(prefix) if run.gate is not None else None,
+        service_url=service_url,
+        failed_coordinator=str(job) if coordinator_error is not None else None,
+    )
     snapshot = _status(
         run,
         preset,
         stored_only=True,
-        publication_urls=publication.urls if publication is not None else None,
+        publication_urls=publication.urls,
     )
-    if publication is not None:
-        snapshot["publication"] = publication.to_dict()
+    snapshot["publication"] = publication.to_dict()
     if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
@@ -433,6 +510,10 @@ def _run_command(
         options = click.get_current_context().params
         preset = table.by_name[options["preset_name"]]
         if get_job_info() is None:
+            if follow := os.environ.get(_FOLLOW_JOB_ENV):
+                job = JobName.from_wire(json.loads(follow)["job"])
+                _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
+                return
             module = entry_module
             if module is None:
                 specification = sys.modules["__main__"].__spec__
@@ -440,16 +521,19 @@ def _run_command(
             if not module:
                 raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
             submitted_at = datetime.now(UTC).isoformat()
-            job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
-            training_type = click.get_current_context().meta["rl_training_type"]
+            meta = click.get_current_context().meta
+            index = meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+            job = submit_or_run(
+                module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: index.model_dump_json()}, argv=argv
+            )
             submitted = [
                 {
                     "name": step.name,
                     "grafana_links": {
                         "run": grafana_url(
-                            step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id,
+                            index.run_id,
                             execution.cluster,
-                            training_type,
+                            meta["rl_training_type"],
                             submitted_at,
                         )
                     },
@@ -457,7 +541,15 @@ def _run_command(
                 for step in _from_handles(handles).runs
                 if (execution := skyrl_execution(step)) is not None
             ]
-            _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
+            result = {
+                "coordinator_job_id": str(job),
+                "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
+                "submitted_at": submitted_at,
+                "runs": submitted,
+            }
+            if not options["wait"]:
+                result["publication_log"] = _follow_detached(module, argv, job, meta["rl_provenance"])
+            _print_status(result)
         else:
             validate_coordinator_graph(handles)
             _run_graph(handles, max_concurrent)
@@ -481,11 +573,12 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
+    @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
     @click.option("--marina-url", "url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
         "--wait",
         is_flag=True,
-        help="Wait after --run and publish dashboard records for supported presets. "
+        help="Wait after --run and print the terminal report. "
         "Exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
     )
     @click.option(
@@ -557,6 +650,7 @@ def command(
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
+        check_pin: bool,
     ) -> tuple[ArtifactStep, ...]:
         do_run = click.get_current_context().params["do_run"]
         if plan and do_run:
@@ -568,6 +662,8 @@ def command(
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
         from_launcher = get_job_info() is None
+        follow = os.environ.get(_FOLLOW_JOB_ENV) if from_launcher else None
+        provenance = Provenance.from_json(json.loads(follow)["source"]) if follow else _provenance(control=control)
         run = build_experiment(
             preset,
             table=table,
@@ -579,9 +675,10 @@ def command(
             control=control,
             requirements=requirements,
             issue=issue,
-            validate_plan=from_launcher,
+            validate_plan=from_launcher and not follow,
+            provenance=provenance,
         )
-        if do_run and from_launcher:
+        if (do_run or check_pin) and from_launcher and not follow:
             assert run.inputs is not None
             validated = rl_gate.validate_candidate(
                 preset,
@@ -589,7 +686,13 @@ def command(
                 control=control,
                 table=table,
             )
-            click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
+            if do_run:
+                meta = click.get_current_context().meta
+                meta["rl_training_type"] = validated["runtime"]["training_type"]
+                meta["rl_index"] = run_index(validated, preset, table, provenance, user=username_segment())
+                meta["rl_provenance"] = provenance
+        if follow:
+            return (*run.runs, *((run.gate,) if run.gate else ()))
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):

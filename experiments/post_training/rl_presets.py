@@ -281,7 +281,6 @@ class Preset:
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    publishes: bool = False
     control_preset: str | None = None
     checkpoint_every: int | None = None
     owned_keys: frozenset[str] = frozenset()

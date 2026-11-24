@@ -177,11 +177,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
-    grader_report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    report = {"training": {}, "training_tasks": {}, "evaluation": {"eval_lite/0": []}, "evaluation_tasks": {}}
     report_root = source / "exports" / "grader_reports"
     write_json(report_root / "other-attempt" / "grader_report.json", {"evaluation": {}})
     if case == "native-composed":
-        write_json(report_root / "native-attempt" / "grader_report.json", grader_report)
+        write_json(report_root / "native-attempt" / "grader_report.json", report)
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
@@ -202,18 +202,17 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
-        assert row["grader_report"] == grader_report
+        assert row["grader_report"] == report
     else:
         assert row["grader_report"] is None
 
 
-@pytest.mark.parametrize("name", ["speed-short", "speed-medium", "speed-long", "data-short"])
-def test_control_publication_rejects_presets_without_dashboard_controls(monkeypatch, capsys, name):
+def test_control_publication_rejects_ungated_presets(monkeypatch, capsys):
     def fail_storage_setup():
         pytest.fail("Control publication configured storage for an unsupported preset")
 
     monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
-    result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", name])
+    result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", "train-long"])
     assert result == 4
     assert "Choose a dashboard preset with controls" in capsys.readouterr().err
 
@@ -223,7 +222,7 @@ def test_control_publication_rejects_presets_without_dashboard_controls(monkeypa
 def test_snowball_publication_updates_attempts_and_publishes_controls(
     preset_table, rl_progress_client, recorded_runs, monkeypatch
 ):
-    client, request = rl_progress_client
+    client, request, _ = rl_progress_client
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"],
         guards=(*snowball_model.SNOWBALL.by_name["learning-medium"].guards, presets.Metric("policy/entropy", True)),
@@ -318,9 +317,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         return response
 
     monkeypatch.setattr("marina.client.marina_request", wrong_returned_key)
+    returned_row = {key: value for key, value in rows["native-0"].items() if key != "has_grader_report"}
     with pytest.raises(RuntimeError, match="different returned identity"):
         publication.publish_result(
-            AttemptSummary.model_validate_json(json.dumps(rows["native-0"]), strict=True), "http://localhost"
+            AttemptSummary.model_validate_json(json.dumps(returned_row), strict=True), "http://localhost"
         )
     monkeypatch.setattr("marina.client.marina_request", request)
     expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
@@ -358,6 +358,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         str(sources[index]),
                         "--attempt",
                         f"native-{index}",
+                        "--issue",
+                        str(73 + index),
                         *[value for run_id in run_ids for value in ("--evaldash-run-id", run_id)],
                     ],
                     init=ArtifactHfModel(
@@ -370,7 +372,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert republished.exit_code == 0, (republished.output, republished.exception)
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
-        assert retained["issue"] == (73 if index == 0 else None)
+        assert retained["issue"] == 73 + index
         assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
@@ -380,6 +382,23 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 73
+    conflict = CliRunner().invoke(
+        publication.command(table),
+        [
+            "--preset",
+            preset.name,
+            "--marina-url",
+            "http://localhost",
+            "--run-output",
+            str(sources[0]),
+            "--attempt",
+            "native-0",
+            "--issue",
+            "74",
+        ],
+    )
+    assert conflict.exit_code == 1 and "conflicting lineage issues" in conflict.output
+    assert read_stored_skyrl_attempts(str(sources[0]))[1]["native-0"].issue == 73
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)

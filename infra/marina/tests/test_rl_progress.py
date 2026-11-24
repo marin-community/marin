@@ -6,29 +6,35 @@ import json
 
 import pytest
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, progress_record
 
 pytestmark = pytest.mark.integration
 
 
+def _projection(record: dict) -> dict:
+    projected = record.copy()
+    projected["has_grader_report"] = projected.pop("grader_report", None) is not None
+    return projected
+
+
 def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
-    client, _ = rl_progress_client
+    client, _, _ = rl_progress_client
     api = f"/a/{APPLET_ID}/api"
     record = progress_record()
-    report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    report = grader_report()
     assert client.post(f"{api}/runs", json=record | {"grader_report": report}).status_code == 200
     assert client.post(f"{api}/runs", json=record | {"attempt_id": "native-second"}).status_code == 200
     assert client.post(f"{api}/runs", json=record).status_code == 200
     first, second = client.get(f"{api}/runs").json()["runs"]
     assert first["has_grader_report"] is True and "grader_report" not in first
-    assert second.get("has_grader_report") is None
+    assert second["has_grader_report"] is False
     query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
     assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
     assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
 
 
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
-    client, request = rl_progress_client
+    client, request, _ = rl_progress_client
     query_path = f"/a/{APPLET_ID}/query"
     api_path = f"/a/{APPLET_ID}/api/runs"
     insert_sql = "INSERT INTO rl_runs (run_id, attempt_id, record) VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))"
@@ -42,7 +48,10 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     sparse = {key: value for key, value in record.items() if value is not None}
     sparse.pop("evaluations")
     sparse.pop("failed_facts")
+    running = record | {"status": "running", "completed_at": None, "elapsed_seconds": None, "gate_result": None}
+    assert publish(running)["status"] == "running"
     assert publish(sparse) == record
+    assert publish(running) == record
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -135,9 +144,9 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == changed
-    assert rows["native-second"] == failed
-    assert rows["unknown"] == legacy | {"issue": None}
+    assert rows["native-first"] == _projection(changed)
+    assert rows["native-second"] == _projection(failed)
+    assert rows["unknown"] == _projection(legacy | {"issue": None})
     assert len(rows) == 3
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
@@ -155,7 +164,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         repaired = record | {"run_id": run_id, "attempt_id": "bad", "gate_result": None}
         assert publish(repaired | {"issue": None, "gate": None}) == repaired
         recovered = client.get(api_path).json()
-        assert repaired in recovered["runs"]
+        assert _projection(repaired) in recovered["runs"]
         assert run_id not in {row["run_id"] for row in recovered["skipped_records"]}
 
     before = client.get(api_path).json()
@@ -172,3 +181,36 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert response.status_code == 422
         assert response.json()["detail"]
         assert client.get(api_path).json() == before
+
+
+def test_release_archives_v9_rows_and_versions_retained_attempts(rl_progress_client):
+    client, request, publish_release = rl_progress_client
+    query_path = f"/a/{APPLET_ID}/query"
+
+    def query(sql, parameters=None):
+        return request("http://localhost", "POST", query_path, json_body={"sql": sql, "parameters": parameters or {}})
+
+    # The v9 ingester stores an evaluation descriptor and separate baseline/final scores.
+    legacy = {
+        "run_id": "checkpoints/snowball-rl/v9",
+        "attempt_id": "av9",
+        "evaluation": {"name": "snowball-fixed-development", "task_count": 100, "version": "2026.11.06.1"},
+        "baseline": 0.31,
+        "final": 0.42,
+        "preset": "learning-medium",
+    }
+    retained = progress_record()
+    retained.pop("format_version")
+    for row in (legacy, retained):
+        query(
+            "INSERT INTO rl_runs (run_id,attempt_id,record) VALUES (:run_id,:attempt_id,CAST(:record AS jsonb))",
+            {"run_id": row["run_id"], "attempt_id": row["attempt_id"], "record": json.dumps(row)},
+        )
+
+    publish_release()
+
+    assert query("SELECT record FROM rl_legacy_runs")["rows"] == [{"record": legacy}]
+    assert client.get(f"/a/{APPLET_ID}/api/runs").json() == {
+        "runs": [_projection(retained | {"format_version": 1})],
+        "skipped_records": [],
+    }

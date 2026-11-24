@@ -31,6 +31,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from finestore.rl.rl_progress import RL_WANDB_PROJECT
 from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
@@ -133,6 +134,17 @@ class Tracking:
         if "wandb" in backends:
             import wandb
 
+            attempt = (
+                read_attempt(str(config.trainer.export_path), tracking_config["attempt_id"])
+                if config is not None
+                else None
+            )
+            index = attempt.index if attempt is not None else None
+            wandb_project = RL_WANDB_PROJECT if index is not None else project_name
+            wandb_name = index.run_id if index is not None else experiment_name
+            wandb_group = index.run_id if index is not None else tracking_config["run_id"]
+            if index is not None:
+                tracking_config["run_index"] = index.model_dump(mode="json")
             current_node_ip = "head"
             if ray.is_initialized():
                 try:
@@ -141,12 +153,12 @@ class Tracking:
                     logger.warning(f"Failed to get node IP address, defaulting to 'head'. Error: {e}")
 
             run = wandb.init(
-                project=project_name,
-                name=experiment_name,
+                project=wandb_project,
+                name=wandb_name,
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
-                group=tracking_config["run_id"],
-                tags=[model] if model is not None else None,
+                group=wandb_group,
+                tags=index.wandb_tags if index is not None else [model] if model is not None else None,
                 resume="allow",
                 settings=wandb.Settings(
                     api_key=require_secret("WANDB_API_KEY"),
@@ -162,7 +174,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, tracking_config, current_node_ip
+                wandb_project, wandb_name, run_id, wandb_group, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:
@@ -195,7 +207,7 @@ class Tracking:
             self.logger["console"] = self.console_logger
 
     def _prepare_worker_nodes_systems_logging_wandb(
-        self, project_name, experiment_name, run_id, config, current_node_ip
+        self, project_name, experiment_name, run_id, group_name, config, current_node_ip
     ):
         """
         In multi-node training, we spawn WandbNodeLogger actors on each worker node to capture system metrics like
@@ -231,7 +243,7 @@ class Tracking:
                             experiment_name=experiment_name,
                             config=config,
                             run_id=run_id,
-                            group_name=config["run_id"],
+                            group_name=group_name,
                             x_label=f"node-{node_ip}",
                         )
                         self.remote_loggers.append(logger_actor)
