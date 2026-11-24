@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Annotated, override
 
 from pydantic import Field, TypeAdapter
@@ -29,57 +29,12 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
-from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
+from taskforge.effects.log import BufferSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 from taskforge.stages.classify import commitments
 
 JOURNAL_FORMAT = 15
-"""Format 15 checks judge settings when the author grades or submits a draft. A format-14 author could grade a
-draft that now returns a tool error, so replay would change the next model request and could diverge from its
-recorded sandbox operations. Formats 8 through 14 remain readable for reports.
-Format 14 records a solver generation still running at ``solver.time_limit`` as stopped at the time limit (stop
-reason and cause ``time_limit``), which a
-format-13 reader cannot decode; at 14 it refuses the root as another format. Format 13 recorded such a generation as a
-generation limit. A format-14 writer claimed only its own format because earlier trials used other clocks and
-recording rules.
-Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
-solver trial's row (``receipt``), so a later launch reuses that evidence. A format-13 writer claimed no format-12 root:
-it would decide again on re-observed evidence.
-Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
-revision N of M.``), and a too-easy placement's line no longer calls the round the one hardening attempt. Its rows
-decode as format 11's, but a format-12 writer claimed no format-11 root: a resumed format-11 author would send
-requests its recorded calls did not, and buy answers its recorded sandbox history refuses.
-Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
-generated once from the installed models and replayed by every later visit and launch. Format-10 readers cannot
-decode that row; at 11 they refuse the root as another format. A format-11 writer claimed no earlier root: their
-recorded author calls embedded a reference it cannot reproduce. Such a root stays with its own writer or is rerun at a
-fresh output prefix.
-Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
-the usage report no longer guesses it from overlapping scopes; request digests and replay keys are unchanged. Every
-format-8 and format-9 row means the same at 10, so a format-10 writer resumed both; the report
-charges their rows, which name no payer, to one unattributed bucket. Format-9 readers refuse a format-10 root as
-another format.
-Format 9 records a ``rollouts.solver_generation`` row: a slot's finished generation that its decision model did not
-score, which a resumed slot grades without generating again. Format-8 readers cannot decode that row, and would report
-the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9.
-Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
-terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
-round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
-finding (``responses``, each marked ``discarded`` once a restore drops the revision it answered), a final
-revision's optional notes, a confirmation record's shipped ``notes`` and a review finding's citation ``groups``: each
-is omitted at its default (``OMIT_*`` in ``model/review.py``), and a fault revision omits its placement
-(``OMIT_NONE``). This reader reads every
-format-8 row, including a null placement; a format-8 reader that predates the omitted placement cannot read a fault
-revision without one, but no such reader wrote or read a root outside tests, so the format stays 8.
-Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
-names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
-Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement
-supersedes, and a `decision_model.read` row, which format-5 readers cannot decode.
-Format 5 places a round over its scored solver slots, holds a slot without one, and falls back to an earlier
-submission named by digest; format 4 hydrated each trial without a detail and restored only a too-easy baseline.
-Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
-expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
-owners; format 2 replayed them by content, without owners."""
+"""Format 15 checks author judge settings at grade and submit. Replaying a format-14 draft can change the next action."""
 READABLE = frozenset({8, 9, 10, 11, 12, 13, 14, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
@@ -243,7 +198,7 @@ def read_journal(destination: str) -> Journal | None:
 
 
 async def _drained(work: Coroutine[object, object, None]) -> None:
-    """Run ``work`` to the end even when cancelled, then re-raise: a publishing thread or an fsync cannot stop midway."""
+    """Run ``work`` to the end even when cancelled, then re-raise: a publishing thread cannot stop midway."""
     task = asyncio.create_task(work)
     try:
         await asyncio.shield(task)
@@ -253,11 +208,11 @@ async def _drained(work: Coroutine[object, object, None]) -> None:
 
 
 class CheckpointSink(Sink):
-    """Append to this writer's private local stream; publish its new complete lines after 25 events or 60 seconds."""
+    """Hold the stream's unpublished suffix in memory; publish it after 25 events or 60 seconds."""
 
-    def __init__(self, workdir: Path, destination: str) -> None:
+    def __init__(self, destination: str) -> None:
         self.writer = uuid.uuid4().hex
-        self.local, self.destination = JsonlSink(str(workdir / f"{self.writer}.jsonl")), destination
+        self.local, self.destination = BufferSink(), destination
         self.head = conditional_object(prefix_join(destination, HEAD))
         self.pending = 0
         self.deferred = False  # After a transient failure the timer retries, not every later event.
@@ -299,11 +254,8 @@ class CheckpointSink(Sink):
         current = self.head.read()
         if current is None or (head := HEAD_JSON.validate_json(current.data)).writer != self.writer:
             raise Superseded(f"{self.destination}/{HEAD} is owned by another writer, not {self.writer}")
-        with Path(self.local.path).open("rb") as source:
-            source.seek(head.size)
-            events = source.read()
-        # A torn last line is not yet part of the stream; the local sink truncates it on the next append.
-        events = events[: events.rfind(b"\n") + 1]
+        self.local.drop(head.size)  # Named by this writer's head, even by a swap whose acknowledgment was lost.
+        events = bytes(self.local.data)
         if events:
             chunk = _put(prefix_join(self.destination, "chunks"), ".jsonl", events)
             head = replace(head, chunks=(*head.chunks, chunk), size=head.size + len(events))
@@ -315,6 +267,7 @@ class CheckpointSink(Sink):
                 return  # A retried final swap whose lost acknowledgment had in fact been applied.
             head = replace(head, workpiece=name)
         self._swap(replace(head, status=status, published_at=time.time()), current.version)
+        self.local.drop(head.size)
 
     def _stop(self, error: LogFailure) -> None:
         if self.stopped is None:
@@ -328,7 +281,7 @@ class CheckpointSink(Sink):
         async with self.lock:
             if self.stopped is not None:
                 raise self.stopped
-            await _drained(self.local.write(records))
+            await self.local.write(records)
             self.pending += len(records)
             if self.pending >= CHECKPOINT_EVENTS and not self.deferred:
                 await self._upload(Status(), None)

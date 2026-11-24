@@ -5,7 +5,7 @@ import asyncio
 import errno
 from collections.abc import Mapping, Sequence
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import override
 
 import pytest
@@ -19,7 +19,7 @@ from taskcompendium.runtime.resources import inline_resource
 from taskforge.effects.context import Context
 from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, ScopeEntered
 from taskforge.effects.issues import LogFailure, Restart, Unreproducible
-from taskforge.effects.log import EventLog, JsonlSink, Opened, Owners, Record
+from taskforge.effects.log import BufferSink, EventLog, Opened, Owners, Record
 from taskforge.harness.role import install_env
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
@@ -50,7 +50,7 @@ def opened(env: Env, owner: str = "author/0") -> Opened:
     return Opened(owner, env.fingerprint().digest)
 
 
-async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_path: Path) -> None:
+async def test_reload_reexecutes_environment_but_reuses_inference_and_ids() -> None:
     path = PurePosixPath("/workspace/binary")
     result = CommandResult(0, "done", "", 0.1, False)
     script = {"build": FakeCommand(result, {path: b"result"})}
@@ -61,7 +61,7 @@ async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_pa
         (ToolSchema("shell", "Run command", {"type": "object", "required": ("command",)}),),
         LLMPolicy(temperature=1),
     )
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = BufferSink()
     ctx = Context(log=EventLog(sink=sink))
     async with ctx.scope("author", opened(env)):
         configure(ctx, env, client, Ids(lambda: "original"))
@@ -86,7 +86,7 @@ async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_pa
     assert await replay_env.read(path) == b"result"
 
 
-async def test_jsonl_round_trips_resource_results_binary_payloads_and_envelopes(tmp_path: Path) -> None:
+async def test_jsonl_round_trips_resource_results_binary_payloads_and_envelopes() -> None:
     path = PurePosixPath("/workspace/file")
     spec = rollout_spec(arithmetic_task())
     grade = GradeResult(Outcome.GRADED, 1, diagnostics={"binary": b"\xff"})
@@ -105,7 +105,7 @@ async def test_jsonl_round_trips_resource_results_binary_payloads_and_envelopes(
             Resolved(GradeCandidate(spec, Candidate("12", (inline_resource("workspace/file", b"\xff"),))), (), grade),
         ),
     )
-    sink = JsonlSink(str(tmp_path / "results.jsonl"))
+    sink = BufferSink()
     await sink.write(records)
     assert local_records(sink) == records
 

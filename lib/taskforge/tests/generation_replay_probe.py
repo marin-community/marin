@@ -125,7 +125,6 @@ async def main(mode: str, directory: Path) -> None:
         proposals=str(source),
         policy=str(overlay),
         output=str(directory / "out"),
-        work_dir=str(directory / f"work-{mode}"),
         resume_held=mode == "sibling-recover",
         concurrency=1,
         buckets=4096,

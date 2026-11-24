@@ -57,7 +57,7 @@ from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, LogFailure
-from taskforge.effects.log import EventLog, JsonlSink, Record
+from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
 from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, ReadTool, SearchTool, Source
@@ -444,12 +444,12 @@ def lowered() -> TaskRolloutSpec:
     return lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
 
 
-async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls(tmp_path: Path) -> None:
+async def test_a_cold_reload_of_the_journal_replays_the_review_with_zero_calls() -> None:
     """Regression: a reloaded grade came back with its detail keys sorted, which changed the rendered
     evidence and its version, so a default-policy resume paid the reviewer again."""
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2, "b": 3}, "cut": 3.0})  # reloads as 3
     rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = BufferSink()
     log = EventLog(sink=sink)
     await log.record(
         Resolved(SolverRollout(lowered(), 1, 0), (Fingerprint("rollouts", "d", ReplayPolicy.CACHE),), rollout)
@@ -487,11 +487,11 @@ def test_a_tool_reply_keeps_the_call_it_answers() -> None:
     assert "tool (reply to a):\nPASS" in one.sources["trial/1"].parts[2]
 
 
-async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls(tmp_path: Path) -> None:
+async def test_two_parallel_evidence_reads_replay_cold_with_zero_calls() -> None:
     reads = tuple(
         ToolCall(f"r{start}", "read_evidence", json.dumps({"source": "trial/1", "start": start})) for start in (1, 2)
     )
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = BufferSink()
     log = EventLog(sink=sink)
     first = await reviewed(FakeInference((Completion("", reads, FinishReason.TOOL_CALLS), report())), log=log)
     await log.persist()
@@ -744,7 +744,6 @@ async def test_a_cold_driver_resume_buys_no_second_review(
     monkeypatch.setattr(CheckpointSink, "finish", final)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published(destination).head.status.terminal is None and len(first.requests) == 1
-    driver_args.work_dir += "-cold"
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED and not again.requests
 
@@ -968,13 +967,13 @@ def reloaded(records: Sequence[Record]) -> tuple[Submission, GradedRollout]:
 
 
 @pytest.mark.parametrize("variant", ["plain", "recorded"])
-async def test_evidence_is_the_same_before_and_after_a_journal_round_trip(variant: str, tmp_path: Path) -> None:
+async def test_evidence_is_the_same_before_and_after_a_journal_round_trip(variant: str) -> None:
     """Regression: for a task and trial before and after a JSONL round trip, every source
     and the version are identical."""
     submission = recorded_task() if variant == "recorded" else SUBMISSION
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"z": 1, "a": {"y": 2.0}})
     rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = BufferSink()
     log = EventLog(sink=sink)
     await log.record(journalled(submission, rollout))
     await log.persist()
@@ -1125,7 +1124,7 @@ async def test_a_held_root_resumes_only_its_unfinished_turns(
     assert (head.status.terminal, head.format, len(held.requests)) == (Terminal.HELD, checkpoint.JOURNAL_FORMAT, 4)
     if reworded:
         reword()
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert (len(author.requests), len(reviewer.requests)) == (1, 1)

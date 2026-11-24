@@ -9,7 +9,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.stage_fakes import transcript
 from lib.taskforge.tests.test_solve_review import (
@@ -24,23 +23,24 @@ from lib.taskforge.tests.test_solve_review import (
 from rolloutengine.models import GradedRollout, Rollout
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.effects.log import EventLog, JsonlSink
+from taskforge.effects.log import BufferSink, EventLog, decode
 from taskforge.model.review import TrialResult
 
 
 async def main(mode: str, directory: Path) -> None:
-    sink = JsonlSink(str(directory / "events.jsonl"))
+    sink, journal = BufferSink(), directory / "events.jsonl"
     if mode == "record":
         submission, grade = recorded_task(), GradeResult(Outcome.GRADED, 0.0)
         rollout = GradedRollout(Rollout("run-1", (transcript(LONG, "I answer 9."),), "stop"), grade)
         log, reviewer = EventLog(sink=sink), FakeInference((report(),))
         await log.record(journalled(submission, rollout))
     else:
-        records = local_records(sink)
+        records = decode(journal.read_bytes())
         (submission, rollout), log, reviewer = reloaded(records), EventLog(replay_from=records), FakeInference(())
     await reviewed(reviewer, (TRIALS[0], (TrialResult(1, rollout.grade), rollout)), log, submission=submission)
     if mode == "record":
         await log.persist()
+        journal.write_bytes(sink.data)
     print(f"{mode}: {len(reviewer.requests)} reviewer call(s)")
 
 

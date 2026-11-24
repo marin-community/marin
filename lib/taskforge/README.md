@@ -149,13 +149,15 @@ decide again on re-observed evidence. Format 12 words two author requests otherw
 with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt, so a resumed
 format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema reference in their
 author calls that this writer does not reproduce, so a resumed author would buy different answers that the recorded
-sandbox history then refuses. Format 11
+sandbox history then refuses. A format-8 workpiece omits author responses to findings, a final revision's notes, a
+confirmation's shipped notes and a finding's citation groups at their defaults (`OMIT_*` in `model/review.py`), and a
+fault revision's null placement; no reader that predates the omitted placement read a root outside tests. Format 11
 adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
 root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
-format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
-header cannot tell apart: one whose readers cannot decode a `decision_model.read` row, and one that could write
+format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 places a round over its scored solver slots and holds a slot
+without one; it covers two writers that its header cannot tell apart: one whose readers cannot decode a `decision_model.read` row, and one that could write
 `decision_model.read` rows but had no `effect.invalidated` row (the marker
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
 establish an operator's intent. Format 6 refuses both alike, and a reader of the first kind refuses a format-6 root

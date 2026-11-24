@@ -6,7 +6,7 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import override
 
 import pytest
@@ -18,7 +18,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, ScopeEntered
-from taskforge.effects.log import Billing, EventLog, JsonlSink
+from taskforge.effects.log import Billing, BufferSink, EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Exit, Harness, Stopped, StopReason, Tool, ToolResult
 from taskforge.harness.role import Answer, Fresh, Visit, sitting
@@ -40,8 +40,8 @@ def finish(call_id: str) -> Completion:
 # Regression: with the payer inserted as the fourth positional field, ``Visit(scope, owner, machine, files)``
 # took the files callback as its payer: the machine-less visit skipped hydration, paid for a model call and could not
 # journal it; ``Visit(scope, owner, machine)`` failed to construct.
-async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox(tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox() -> None:
+    sink = BufferSink()
     ctx = Context(log=EventLog(sink=sink))
     client = FakeInference((finish("f"),))
     bundle = replace(resources(ctx), role_inference={"adversary": client})

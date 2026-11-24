@@ -61,11 +61,11 @@ def inputs(proposal: TaskProposal, directory: Path, names: tuple[str, ...] = ("t
     return paths
 
 
-def argv(command: str, directory: Path, work: str = "work") -> list[str]:
+def argv(command: str, directory: Path) -> list[str]:
     source = directory / ("manifest.txt" if command == "run" else "test.proposal.json")
     options = {"proposals": source, "output": directory / "out", "policy": directory / "policy.json"}
     flags = [item for name, value in options.items() for item in (f"--{name}", str(value))]
-    flags += ["--work-dir", str(directory / work), "--glm-base-url", "http://fake/v1"]
+    flags += ["--glm-base-url", "http://fake/v1"]
     return [command, *flags, *(["--concurrency", "2"] if command == "run" else [])]
 
 
@@ -144,7 +144,7 @@ def counts(lines: list[str]) -> list[dict[str, int]]:
 
 def relaunch(command: str, tmp_path: Path) -> list[dict[str, int]]:
     """A plain relaunch on healthy resources, which must finish; the paid calls each child made."""
-    code, lines = run_to_end("resume", argv(command, tmp_path, "relaunch"), tmp_path / "relaunch.log")
+    code, lines = run_to_end("resume", argv(command, tmp_path), tmp_path / "relaunch.log")
     assert code == 0, (tmp_path / "relaunch.log").read_text()[-4000:]
     return counts(lines)
 

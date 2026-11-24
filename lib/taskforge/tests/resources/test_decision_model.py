@@ -7,7 +7,6 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
 
@@ -28,7 +27,7 @@ from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionMo
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, Retrying
 from taskforge.effects.issues import DecisionModelUnavailable, Hold
-from taskforge.effects.log import EventLog, JsonlSink, Record
+from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.lowering import IN_PROCESS_GRADER_TIMEOUT, InvalidTaskSpec, lower_with_settings, lowering_settings
@@ -298,9 +297,9 @@ HUGE = 10**5000  # 5,001 digits: no repr within the default limit
     ids=["7", "str", "word", "huge"],
 )
 async def test_an_off_scale_level_is_an_infrastructure_error_recorded_nowhere_and_read_again(
-    level: object, shown: str, tmp_path: Path
+    level: object, shown: str
 ) -> None:
-    policy, sink = overlaid(), JsonlSink(str(tmp_path / "events.jsonl"))
+    policy, sink = overlaid(), BufferSink()
     ctx = Context(log=EventLog(sink=sink))
     installed(policy, FakeReader(levels={"12": level}), ScriptedProvider(()), ctx, VirtualTime())
     grade = await ctx.emit(GradeCandidate(decision_spec(policy), Candidate("12")))
@@ -767,7 +766,7 @@ async def test_health_is_the_gateways_own_route_and_never_a_read(status: int, he
 
 
 async def length_stopped(
-    reader: FakeReader, sink: JsonlSink, history: Sequence[Record] = (), *, resume: bool = False
+    reader: FakeReader, sink: BufferSink, history: Sequence[Record] = (), *, resume: bool = False
 ) -> tuple[GradedRollout | DecisionModelUnavailable, int]:
     """One solver slot whose answer, 12, stops at the generation limit, graded through ``reader``; replays ``history``
     as a launch with or without ``--resume-held``."""
@@ -788,8 +787,8 @@ async def length_stopped(
 # Regression: an answer cut at its length limit is still graded, and an off-scale level is a grader
 # infrastructure error; the cutoff's replay exemption then replayed it forever. The limit decides the trial whatever
 # its grade, so the explicit resume replays it and reads nothing.
-async def test_an_off_scale_level_on_a_length_stopped_answer_is_a_settled_loss_that_replays(tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_an_off_scale_level_on_a_length_stopped_answer_is_a_settled_loss_that_replays() -> None:
+    sink = BufferSink()
     failed, _ = await length_stopped(FakeReader(levels={"12": 7}), sink)
     assert isinstance(failed, GradedRollout) and failed.rollout.stop_reason == LENGTH_STOP_REASON
     assert grade_cause(failed.grade) is Cause.GRADER_INFRA
@@ -799,10 +798,8 @@ async def test_an_off_scale_level_on_a_length_stopped_answer_is_a_settled_loss_t
     assert trial_cause(failed, arithmetic_task(grader=GRADER)) is Cause.GENERATION_LIMIT
 
 
-async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it(
-    tmp_path: Path,
-) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it() -> None:
+    sink = BufferSink()
     deferred, _ = await length_stopped(FakeReader(down={"12"}), sink)
     assert isinstance(deferred, DecisionModelUnavailable)
     history = local_records(sink)
