@@ -739,7 +739,8 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     graded = [row for row in final_reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]
     assert len(graded) == 2
     retry = next(row for row in graded if row["retry"] == 1)
-    assert retry["prompt_tokens"] == retry["completion_tokens"] == 0
+    # The retry grades the response its first attempt saved, so it records that response's usage and stop reason.
+    assert (retry["prompt_tokens"], retry["completion_tokens"], retry["stop_reason"]) == (10, 1, "stop")
     assert json.loads(final_reader.read_blob(retry["result_blob"]))["reused_response_from_retry"] == 0
     grade_details = [json.loads(final_reader.read_blob(row["result_blob"]))["grade"]["detail"] for row in graded]
     assert {detail["requested_model"] for detail in grade_details} == {"source-judge", "run-default"}

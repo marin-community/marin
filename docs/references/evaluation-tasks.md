@@ -303,7 +303,9 @@ without invalidating completed observations; model, source, selection and scorin
 settings must remain identical. Completed logical attempts,
 including zero grades, are skipped. Infrastructure failures retry with the same
 row, trial, and seed and a new physical retry index. A completed model response
-is reused if only grading failed. Model failures make a fresh request. The CLI
+is reused if only grading failed; the retry records that response's token usage
+and stop reason, and its evidence names the reused retry in
+`reused_response_from_retry`. Model failures make a fresh request. The CLI
 uses standard backoff between passes; each pass processes all supplied corpora before
 reporting retryable failures. Solver SDK retries are disabled. Verifyit handles
 judge HTTP retries separately under the source's transport policy.

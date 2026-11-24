@@ -664,8 +664,6 @@ async def _score_rollout(
         if turns
         else None
     )
-    if retry_turn is not None:
-        prompt_tokens = completion_tokens = 0
     await _save_attempt(
         writer,
         attempt,
