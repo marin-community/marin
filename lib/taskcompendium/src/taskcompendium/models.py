@@ -676,9 +676,8 @@ def verifyit_answer_file(spec: Spec) -> str | None:
 class VerifyitGrader(BaseModel):
     """A verifyit mode and its configuration table, without the ``mode`` key.
 
-    Without a placement the mode must be one verifyit grades in process, against the answer
-    extracted from the conversation. With a placement, the verifyit command grades in that
-    machine, with verifier resources under ``/tests``.
+    Without a placement, verifyit grades the captured answer in process. With a placement,
+    the verifyit command grades in that machine with verifier resources under ``/tests``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
