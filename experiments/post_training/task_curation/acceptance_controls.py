@@ -36,9 +36,8 @@ from shellbox.image import DockerfileSource
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.docker_build import materialize_build_directories
+from taskcompendium.runtime.docker_build import materialize_docker_build
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
-from taskcompendium.runtime.resources import resource_bytes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -112,17 +111,9 @@ def _docker_build_source(task: TaskSpec, workdir: Path) -> DockerfileSource | No
     build = task.environment_requirements.docker_build
     if build is None:
         return None
-    context = workdir / "build-context"
-    context.mkdir(parents=True, exist_ok=True)
-    materialize_build_directories(build, context)
-    for file in build.files:
-        target = context / file.path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(resource_bytes(file))
-    dockerfile = next((path for path in ("Dockerfile", "dockerfile") if (context / path).exists()), None)
-    if dockerfile is None:
-        raise ValueError(f"{task.id}: the build context carries no Dockerfile")
-    return DockerfileSource(context=context, dockerfile=context / dockerfile)
+    # The canonical materializer restores the declared bytes, modes and mtimes;
+    # the Daytona build admission rejects any other context as changed.
+    return materialize_docker_build(build, workdir / "build-context")
 
 
 async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
