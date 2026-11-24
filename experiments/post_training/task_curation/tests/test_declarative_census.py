@@ -157,5 +157,5 @@ def test_declarative_accounting_refuses_foreign_or_unresolved_execution(executed
         first = first.model_copy(update={"receipt": reference(path, payload)})
         qualification = qualification.model_copy(update={"tasks": (first, *qualification.tasks[1:])})
     proof = reference(tmp_path / "qualification.json", qualification.model_dump(mode="json"))
-    with pytest.raises(ValueError, match="another census|incomplete or belongs to another task|not declarative"):
+    with pytest.raises(ValueError, match=r"another census|incomplete or belongs to another task|not declarative"):
         bind_declarative_census(census, proof, str(tmp_path / "refused"))
