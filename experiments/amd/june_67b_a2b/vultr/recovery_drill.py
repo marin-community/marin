@@ -200,7 +200,9 @@ def _drill_step(make_step, faults: _Faults):
             if len(recent) > 2:
                 old_step, old_batch, valid = recent.popleft()
                 if not bool(valid):
-                    logger.warning("DRILL skipped step %d damaged %s", old_step, _damaged_arrays(old_batch, kwargs["vocab_size"]))
+                    logger.warning(
+                        "DRILL skipped step %d damaged %s", old_step, _damaged_arrays(old_batch, kwargs["vocab_size"])
+                    )
             if faults.fire("abort", step):
                 os.abort()
             return out

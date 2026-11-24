@@ -137,9 +137,7 @@ def trainer():
 
 def _poison_opt_state(state):
     """Non-finite optimizer moments: the next update makes the parameters non-finite while its loss stays finite."""
-    nan_moments = jax.tree.map(
-        lambda x: x * jnp.nan if jnp.issubdtype(x.dtype, jnp.floating) else x, state.opt_state
-    )
+    nan_moments = jax.tree.map(lambda x: x * jnp.nan if jnp.issubdtype(x.dtype, jnp.floating) else x, state.opt_state)
     return dataclasses.replace(state, opt_state=nan_moments)
 
 
