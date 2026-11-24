@@ -25,13 +25,12 @@ import base64
 import hashlib
 import json
 import random
-import subprocess
-import tempfile
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS
 from experiments.evaluation.micro210_replacements import (
     BROKEN_TASKS,
     REPLACEMENT_SEED,
@@ -40,7 +39,6 @@ from experiments.evaluation.micro210_replacements import (
     ot_tblite_candidate,
     tb2_candidate,
 )
-from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS, row_probes
 
 REPLACEMENT_ATTEMPTS_PER_FAMILY = 4
 CANDIDATE_RETRIES = 2
@@ -102,7 +100,9 @@ def candidate_is_eligible(outcome: dict) -> bool:
     repetitions = outcome.get("repetitions") or []
     if not repetitions or any(repetition.get("failed") for repetition in repetitions):
         return False
-    return all(repetition.get("oracle_reward") == 1.0 and repetition.get("nop_reward") == 0.0 for repetition in repetitions)
+    return all(
+        repetition.get("oracle_reward") == 1.0 and repetition.get("nop_reward") == 0.0 for repetition in repetitions
+    )
 
 
 def family_candidates(benchmark: str, template_row: dict, in_policy: set[str], limit: int) -> list[CandidateRow]:
@@ -120,7 +120,7 @@ def family_candidates(benchmark: str, template_row: dict, in_policy: set[str], l
                 candidates.append(tb2_candidate(source_task_id, template, _tb2_package(source_task_id)))
             else:
                 raise ValueError(f"No replacement pool for benchmark {benchmark!r}")
-        except Exception as error:  # noqa: BLE001 - a candidate that cannot be built is skipped
+        except Exception as error:
             print(f"candidate {source_task_id} skipped: {type(error).__name__}: {error}", flush=True)
     return candidates
 
@@ -141,7 +141,9 @@ def _family_pool(benchmark: str) -> list[str]:
 
     if benchmark == "humanevalplus":
         dataset, revision = "evalplus/humanevalplus", "v0.1.10"
-        path = hf_hub_download(dataset, repo_type="dataset", revision=revision, filename="data/test-00000-of-00001-5973903632b82d40.parquet")
+        path = hf_hub_download(
+            dataset, repo_type="dataset", revision=revision, filename="data/test-00000-of-00001-5973903632b82d40.parquet"
+        )
         return sorted(row["task_id"] for row in pq.read_table(path).to_pylist())
     if benchmark == "ot-tblite-recovery":
         dataset, revision = "DCAgent/dev_set_v2", "377118ff3031c934"
@@ -174,7 +176,9 @@ def _ot_tblite_package(source_task_id: str) -> dict[str, bytes]:
         relative = name[len(source_task_id) + 1 :]
         if relative.startswith("."):
             continue
-        package[relative] = Path(hf_hub_download(dataset, repo_type="dataset", revision=revision, filename=name)).read_bytes()
+        package[relative] = Path(
+            hf_hub_download(dataset, repo_type="dataset", revision=revision, filename=name)
+        ).read_bytes()
     required = ("task.toml", "instruction.md", "solution/solve.sh", "tests/test.sh", "environment/Dockerfile")
     missing = [name for name in required if name not in package]
     if missing:
@@ -194,7 +198,11 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
 
     base = f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{source_task_id}"
     package = {}
-    listing = _github_json(f"https://api.github.com/repos/harbor-framework/terminal-bench-1/git/trees/{_TB2_PIN}?recursive=1")
+    listing = _github_json(
+        f"https://api.github.com/repos/harbor-framework/terminal-bench-1/git/trees/{_TB2_PIN}?recursive=1"
+    )
+    if listing.get("truncated"):
+        raise ValueError("terminal-bench registry tree listing truncated; pin a narrower commit")
     prefix = f"original-tasks/{source_task_id}/"
     paths = [
         entry["path"]
@@ -207,8 +215,16 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
         relative = path[len(prefix) :]
         if relative.startswith("run-tests") or relative == "docker-compose.yaml":
             continue
-        with urllib.request.urlopen(f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{path}", timeout=60) as response:
-            package[relative] = response.read()
+        blob = next(entry for entry in listing.get("tree", []) if entry["path"] == path)
+        if blob.get("encoding") == "base64":
+            import base64 as base64_module
+
+            package[relative] = base64_module.b64decode(blob.get("content", ""))
+        else:
+            with urllib.request.urlopen(
+                f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{path}", timeout=60
+            ) as response:
+                package[relative] = response.read()
     for required in ("instruction.md", "tests", "solution.sh"):
         if not any(name.startswith(required) for name in package):
             raise ValueError(f"terminal-bench task {source_task_id} lacks {required} at {_TB2_PIN}")
@@ -221,10 +237,21 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
     return package
 
 
+def _github_headers() -> dict:
+    """GitHub API headers; the token avoids the unauthenticated rate limits."""
+    import os
+
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _github_json(url: str) -> dict:
     import urllib.request
 
-    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    request = urllib.request.Request(url, headers=_github_headers())
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read())
 
@@ -271,20 +298,52 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--table", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Enumerate and build candidates for every family without gating; print the orders",
+    )
+    parser.add_argument("--judge-credential", default="")
     arguments = parser.parse_args()
 
     table = pq.read_table(arguments.table)
     rows = table.to_pylist()
     in_policy_by_benchmark = {
         benchmark: {row["source_task_id"] for row in rows if row["benchmark"] == benchmark}
-        for benchmark in BROKEN_TASKS
+        for benchmark in {broken_row["benchmark"] for broken_row in rows if broken_row["task_id"] in BROKEN_TASKS}
     }
+    if arguments.dry_run:
+        for benchmark, members in in_policy_by_benchmark.items():
+            ordered = _deterministic_order(_family_pool(benchmark), members)
+            print(f"{benchmark}: pool order head (excl. policy): {ordered[:8]}")
+        # Exercise candidate construction for the head of each family (no builds/gating).
+        for broken_task_id in BROKEN_TASKS:
+            broken_row = next(row for row in rows if row["task_id"] == broken_task_id)
+            benchmark = broken_row["benchmark"]
+            members = in_policy_by_benchmark[benchmark]
+            ordered = _deterministic_order(_family_pool(benchmark), members)
+            for source_task_id in ordered:
+                try:
+                    if benchmark == "humanevalplus":
+                        candidate = humanevalplus_candidate(source_task_id, broken_row)
+                    elif benchmark == "ot-tblite-recovery":
+                        candidate = ot_tblite_candidate(source_task_id, broken_row, _ot_tblite_package(source_task_id))
+                    else:
+                        candidate = tb2_candidate(source_task_id, broken_row, _tb2_package(source_task_id))
+                except Exception as error:
+                    print(f"construct {source_task_id} failed: {type(error).__name__}: {error}")
+                    continue
+                print(f"{benchmark}: first constructible candidate = {candidate.task_id}")
+                break
+        return
 
     replacements = {}
     for broken_task_id, reason in BROKEN_TASKS.items():
         broken_row = next(row for row in rows if row["task_id"] == broken_task_id)
         benchmark = broken_row["benchmark"]
-        candidates = family_candidates(benchmark, broken_row, in_policy_by_benchmark[benchmark], REPLACEMENT_ATTEMPTS_PER_FAMILY)
+        candidates = family_candidates(
+            benchmark, broken_row, in_policy_by_benchmark[benchmark], REPLACEMENT_ATTEMPTS_PER_FAMILY
+        )
         chosen = None
         for candidate in candidates:
             print(f"gating candidate {candidate.task_id}", flush=True)
@@ -293,8 +352,10 @@ def main() -> None:
                 try:
                     outcome = grade_candidate(candidate, arguments.table, arguments.output)
                     break
-                except Exception as error:  # noqa: BLE001 - infra failures retry
-                    print(f"attempt {attempt} for {candidate.task_id} failed: {type(error).__name__}: {error}", flush=True)
+                except Exception as error:
+                    print(
+                        f"attempt {attempt} for {candidate.task_id} failed: {type(error).__name__}: {error}", flush=True
+                    )
             if outcome is not None and candidate_is_eligible(outcome):
                 chosen = candidate
                 break
