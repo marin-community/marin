@@ -118,13 +118,44 @@ why it died (`OOMKilled`, preempted, did not start).
 
 Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
-| file | contents |
+| path | contents |
 |---|---|
-| `events.jsonl` | the full effect log: every request, result, tool call, retry, scope; uploaded after 25 events or 60 s, whichever comes first |
-| `workpiece.json` | the frozen workpiece: proposal, submission, evidence per round, decisions, terminal |
-| `status.json` | `terminal` (`accepted`, `abandoned`, `held`, or `null` while running) and when the upload started |
+| `journal.json` | the head: `format` (the JSON integer 2); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
+| `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
-A driver restarted against the same output resumes each workpiece from these files and prints
+The event stream is the head's `chunks`, concatenated in order, each read from `chunks/<name>`. A
+reader checks every chunk and workpiece against the digest in its name and fails with
+`CorruptJournal`, naming the path, when one is missing or altered or the head is malformed,
+including a negative `size`, a chunk or workpiece name that is not a SHA-256 with its suffix, and a
+terminal `status` with a null `workpiece`. A finished root is recognised from the head
+alone, with one GET. Chunks and workpieces that no head names (a writer that lost the head, or one
+that died before its swap) stay behind; nothing collects them.
+
+Events are recorded by stable kinds (`inference.request`, `env.run_command`, ...; the table is in
+`effects/events.py`), never by Python module path. Each driver claims `journal.json` by
+compare-and-swap when it starts and advances it the same way after each chunk. A second driver on
+the same workpiece (a relaunch racing a live driver, a preempted worker's replacement) takes the
+head; the first then fails with `Superseded` at its next checkpoint and publishes nothing more.
+Readers follow only the chunks the head names. A root in any other journal format, including the
+format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), fails with an error naming
+the format found and is left untouched; such roots are converted once by a separate migration.
+A storage hiccup never costs paid model work; only an explicit refusal stops the writer
+(`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
+access, a bad key or signature, a missing bucket) or a local filesystem refusal (permission, a missing
+path, no space). Every other storage error, including resets, short reads, timeouts, throttling and
+any 5xx, is transient: a checkpoint's lines stay pending and are resent from the head's size on the
+next timer tick, and the final publication and the history reads on resume retry for several
+minutes. After any inconclusive conditional write (412, 409, or a transient error) the writer reads
+the target instead of trusting the error: its own bytes mean the write applied; a target still absent,
+or a head still at the version this writer observed, means it did not, and it is retried against that
+same version; other bytes under a content name are `CorruptJournal`, and a head naming another writer
+is `Superseded`. The claim at start retries the same way before any model call. A refusal, or final retries running out, stops the
+writer with `PublicationFailed`: the process fails, the head keeps its last checkpoint, and a relaunch
+replays that history and re-executes the effects after it. A collision found while publishing is
+`CorruptJournal`. Neither publishes a hold.
+
+A driver restarted against the same output resumes each workpiece from its journal and prints
 `SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held
 workpieces are resumed only when the launch passes `--resume-held`; use it under a new job prefix
 after an infrastructure outage (sandbox admission, a provider gap longer than
@@ -133,25 +164,26 @@ re-executed on fresh machines, so a resumed author session takes minutes before 
 Replay reuses recorded model results only while the re-executed commands return the output that
 was recorded; after the first difference, the remaining model calls run again.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
-its `status.json` keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+A workpiece process cancelled in-process publishes a terminal head only with the workpiece that
+reached it; one cancelled after its terminal event was written but before that workpiece came back
+publishes `terminal: null` over the full history, and the next launch replays it to the terminal
+workpiece without new model calls.
 
-**Rollout rule: never resume a root with an earlier driver.** A context-window refusal of an agent's request
-(author, adversary or reviewer) is recorded in `events.jsonl` as a `context_exceeded` completion, so a resumed
-visit replays the stop. This revision and later ones read every row earlier drivers wrote; drivers before it
-cannot decode that row. Such a driver, resumed with `--resume-held` on a held root containing it, publishes a held
-workpiece describing its decode error over `workpiece.json` and `status.json`, and leaves `events.jsonl` untouched.
-No format number fences it: the older drivers predate every one, and so roots written by this revision or later must
-never be resumed by an earlier driver, and a rollback of the binary uses a fresh output prefix. If it happens anyway,
-an ordinary launch of this driver skips the root (it reads as published `held`) and leaves the decode error in place;
-a launch with `--resume-held` rebuilds the snapshot from the unchanged stream, equal to resuming the root had the
-older driver never touched it.
+**Rollout rule: never launch a root with an earlier driver.** A context-window refusal of an agent's request
+(author, adversary or reviewer) is recorded as a `context_exceeded` completion, so a resumed visit replays the
+stop. This revision and later ones read every row earlier drivers wrote; earlier drivers reject that row. The
+earlier driver of this journal format raises while it reads the journal, before it claims or publishes anything,
+so the root stays as published: `CheckpointSink.claim` decodes the history before it swaps the head. No
+format number fences the drivers before this layout. So roots written by this revision or later must never be
+launched by an earlier driver, and a rollback of the binary uses a fresh output prefix.
 
-While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
-`upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
+While a driver is working on a workpiece, its head reads `terminal: null` with
+`published_at`; the hub's `job describe` for a finished federated driver can keep saying
 `running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
 
 Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
-with the storage credentials above. It reads published snapshots and event parts concurrently,
+with the storage credentials above. It reads each journal head and its chunks concurrently,
 then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
@@ -166,7 +198,8 @@ fail instead of silently producing an incomplete tally.
 The keys in `defaults/policy.json`, by group. Override any of them in the overlay.
 
 - **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model` and `adversary.model` (GLM-5.3),
-  each with `<role>.context_tokens`. There is no output cap; the prompt limit is the model's window.
+  with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
+  the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
   that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
   reverting to the earlier submission if the hardening broke something.
@@ -218,5 +251,5 @@ backend failed three times.
   resumes them from their last checkpoint (see Outputs).
 - S3 output roots (`marin/forge/...`), Iris job prefixes (`forge-pilot-*`), sandbox paths
   (`.forge-candidates/`, `/tmp/forge-hydration-*`) and the event-log encoding markers
-  (`__forge_*__`) keep the `forge` name of the pilot runs. Event logs name events by module
-  path, so logs written by the `forge` pilots do not replay under `taskforge`.
+  (`__forge_*__`) keep the `forge` name of the pilot runs. Roots written by the `forge` pilots
+  use journal format 1 and need the one-time migration before `taskforge` reads them.

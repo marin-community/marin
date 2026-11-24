@@ -4,10 +4,11 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from taskforge.effects.events import Event
-from taskforge.effects.log import Record, Sink
+from taskforge.effects.log import JsonlSink, Record, Sink, decode
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,11 +19,13 @@ class Answer:
 
 @dataclass(frozen=True, slots=True)
 class Query(Event[Answer]):
+    kind = "test.query"
     arguments: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
 class Number(Event[int]):
+    kind = "test.number"
     value: int
 
 
@@ -41,11 +44,13 @@ class FlakySink(Sink):
 
 @dataclass(frozen=True, slots=True)
 class Timed(Event[float]):
+    kind = "test.timed"
     timeout: float
 
 
 @dataclass(frozen=True, slots=True)
 class Choices(Event[frozenset[str]]):
+    kind = "test.choices"
     options: frozenset[str]
 
 
@@ -60,3 +65,9 @@ class PausedSink(Sink):
         self.started.set()
         await self.release.wait()
         self.batches += (tuple(records),)
+
+
+def local_records(sink: JsonlSink) -> tuple[Record, ...]:
+    """The complete lines of a local stream; a torn last line is not part of it."""
+    content = Path(sink.path).read_bytes()
+    return decode(content[: content.rfind(b"\n") + 1])

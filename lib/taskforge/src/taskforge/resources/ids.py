@@ -18,6 +18,7 @@ def _new_id() -> str:
 class NewId(Event[str]):
     """A deterministic call-site key; repeated emits of the same key replay the same value."""
 
+    kind = "ids.new_id"
     key: str
 
 

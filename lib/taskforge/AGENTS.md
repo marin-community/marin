@@ -25,5 +25,5 @@ effects, never whole stages.
 - `taskforge.llm` is the GLM transport kept from the previous package; extend it
   rather than adding a second client.
 - `Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance
-  for its phantom result type. The event-class registry is the module-state
+  for its phantom result type. The event-class registry, keyed by each class's stable `kind`, is the module-state
   exception needed for typed replay; logs never dynamically import classes.

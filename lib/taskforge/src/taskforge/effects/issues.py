@@ -36,6 +36,33 @@ class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
 
 
+class Superseded(LogFailure):
+    """Another writer took the published journal; stop and publish nothing.
+
+    A relaunch, a racing driver or a preempted worker's replacement owns the workpiece now. Holding would
+    publish a terminal status over the owner's journal, so the process exits with an error instead.
+    """
+
+
+class UnsupportedFormat(LogFailure):
+    """The root holds another journal format; leave it untouched for a migration, then rerun the proposal."""
+
+
+class CorruptJournal(LogFailure):
+    """The committed journal does not decode; resuming would misread or drop history, so nothing is claimed.
+
+    Relaunching fails the same way; an operator moves the root aside and reruns the proposal.
+    """
+
+
+class PublicationFailed(LogFailure):
+    """Storage refused a publication, such as by denied access, or the final one ran out of retries.
+
+    The writer publishes nothing more and the head keeps its last checkpoint. A hold would need the same storage, so
+    the process fails; a relaunch replays the committed history and re-executes the effects after it.
+    """
+
+
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 

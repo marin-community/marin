@@ -16,11 +16,13 @@ from taskforge.resources.execution import Notify, retry_effect
 
 @dataclass(frozen=True, slots=True)
 class WebSearch(Event[str]):
+    kind = "web.search"
     query: str
 
 
 @dataclass(frozen=True, slots=True)
 class WebFetch(Event[str]):
+    kind = "web.fetch"
     url: str
 
 

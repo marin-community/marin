@@ -12,6 +12,7 @@ from typing import override
 
 import httpx
 import pytest
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
@@ -233,7 +234,7 @@ async def test_tool_output_spill_slices_and_persisted_replay(
     assert content.startswith(original[:8] + "\n[Full output saved to ") and str(path) in content
     assert await ReadFileTool()(ctx, {"path": str(path), "offset": 8, "limit": 20}) == ToolResult(original[8:28])
     await ctx.drain()
-    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay = Context(log=EventLog(replay_from=local_records(sink)))
     replay_env, replay_client = environment(replay), FakeInference(())
     assert await harness.run(replay, initial, replay_client, tools) == result
     await replay.drain()
@@ -370,7 +371,7 @@ async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(
     if not recovers:
         assert result.detail == "565939 reasoning tokens, finish=length"
         assert result.session.messages == initial.messages
-    records = await sink.read()
+    records = local_records(sink)
     assert any(isinstance(record.event, Resolved) and record.event.value == failed for record in records)
     replay = Context(log=EventLog(replay_from=records))
     replay_client = FakeInference(())
@@ -621,7 +622,7 @@ async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(
     replies = [message for message in client.requests[1].conversation if message.role == "tool"]
     assert [message.tool_call_id for message in replies] == ["a", "b"] and "called alone" in replies[0].content
     assert result.session.messages[-1].tool_calls[0].id == "c" and result.session.messages[-1].reasoning == "plan"
-    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay = Context(log=EventLog(replay_from=local_records(sink)))
     replay_env, replay_client = environment(replay), FakeInference(())
     await replay.emit(RunCommand("task", 30))
     await replay.emit(RunCommand("controls", 30))

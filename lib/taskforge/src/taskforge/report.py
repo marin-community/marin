@@ -7,23 +7,21 @@ import re
 import time
 from collections import Counter, defaultdict
 from dataclasses import asdict
+from pathlib import PurePosixPath
 
-from pydantic import TypeAdapter
-from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.factory import url_to_fs
 
+from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import JsonlSink, Status
+from taskforge.effects.log import decode
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal
+from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
 
-
-def artifacts(path: str) -> tuple[Status, Workpiece]:
-    with open_url(path + "/status.json", "rb") as source:
-        status = TypeAdapter(Status).validate_json(source.read())
-    with open_url(path + "/workpiece.json", "rb") as source:
-        return status, WORKPIECE.validate_json(source.read())
+EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
+"""The request kinds whose wall-clock gaps are reported, with the labels dashboards key on."""
 
 
 def reason_class(reason: str) -> str:
@@ -41,32 +39,46 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     now = time.time()
     cutoff = now - since_hours * 3600 if since_hours is not None else -math.inf
     fs, prefix = url_to_fs(root.rstrip("/"))
-    paths = await asyncio.to_thread(fs.glob, prefix + "/**/status.json")
-    if not paths:
-        raise ValueError(f"No workpiece status files at {root}")
+    heads: list[PurePosixPath] = []
+    legacy: set[PurePosixPath] = set()
+    for path in map(PurePosixPath, await asyncio.to_thread(fs.find, prefix)):
+        if path.name == HEAD:
+            heads.append(path.parent)
+        elif path.name in FORMAT_1:
+            legacy.add(path.parent)
+        elif path.parent.name in FORMAT_1:  # A part under events.jsonl.parts/.
+            legacy.add(path.parent.parent)
+    named = ", ".join(sorted(map(str, legacy))[:5]) + (f" and {len(legacy) - 5} more" if len(legacy) > 5 else "")
+    if not heads:
+        found = f"; it holds {len(legacy)} journal format 1 roots ({named}), migrate them first" if legacy else ""
+        raise ValueError(f"No workpiece journals at {root}{found}")
     counts, reasons = Counter[str](), Counter[tuple[str, str]]()
     tokens: dict[str, Counter[str]] = defaultdict(Counter)
     durations: dict[str, list[float]] = defaultdict(list)
     accepted: list[float] = []
     gate = asyncio.Semaphore(32)
 
-    async def collect(path: str) -> None:
+    async def collect(path: PurePosixPath) -> None:
         async with gate:
-            directory = fs.unstrip_protocol(path).removesuffix("/status.json")
-            (status, workpiece), records = await asyncio.gather(
-                asyncio.to_thread(artifacts, directory), JsonlSink(directory + "/events.jsonl").read()
-            )
-            if not records or records[-1].wall_time < cutoff:
+            journal = await asyncio.to_thread(read_journal, fs.unstrip_protocol(str(path)))
+            if journal is None:
+                return
+            status = journal.head.status
+            records = await asyncio.to_thread(decode, await asyncio.to_thread(journal.events))
+            # A running root is current from its latest claim or checkpoint, even when its newest event is old.
+            latest = records[-1].wall_time if records else -math.inf
+            if max(latest, -math.inf if status.terminal else journal.head.published_at) < cutoff:
                 return
             terminal = str(status.terminal or "running")
             counts[terminal] += 1
             if status.terminal in (Terminal.HELD, Terminal.ABANDONED):
-                last = workpiece.decisions[-1] if workpiece.decisions else None
+                workpiece = await asyncio.to_thread(journal.workpiece)
+                last = workpiece.decisions[-1] if workpiece is not None and workpiece.decisions else None
                 for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
                     reasons[terminal, reason] += 1
             decision_time = None
             scopes: dict[str, list[float]] = defaultdict(list)
-            previous = records[0].wall_time
+            previous = records[0].wall_time if records else 0.0
             for record in records:
                 event, stamp = record.event, record.wall_time
                 if isinstance(event, StageCompleted) and event.terminal is Terminal.ACCEPTED:
@@ -80,9 +92,8 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                     if event.name in Stage and stamp >= cutoff:
                         durations[f"stage={event.name}"].append(max(0, stamp - start))
                 elif isinstance(event, Resolved) and not event.replayed and stamp >= cutoff:
-                    name = type(event.request).__name__
-                    if name in {"RunCommand", "WriteFile", "InferenceRequest"}:
-                        durations[f"event_gap={name}"].append(max(0, stamp - previous))
+                    if label := EVENT_GAPS.get(event.request.kind):
+                        durations[f"event_gap={label}"].append(max(0, stamp - previous))
                     if isinstance(event.request, InferenceRequest):
                         adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
                         role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
@@ -97,8 +108,10 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
             if status.terminal is Terminal.ACCEPTED and decision_time is not None:
                 accepted.append(decision_time)
 
-    await asyncio.gather(*(collect(path) for path in sorted(paths)))
+    await asyncio.gather(*(collect(path) for path in sorted(heads)))
     lines = [f"workpieces={sum(counts.values())} since_hours={since_hours if since_hours is not None else 'all'}"]
+    if legacy:
+        lines.append(f"skipped journal_format=1 count={len(legacy)} roots={named}")
     lines += [f"terminal={terminal} count={counts[terminal]}" for terminal in ("running", *Terminal)]
     lines += [
         f"terminal={terminal} reason={reason} count={count}" for (terminal, reason), count in sorted(reasons.items())
@@ -112,7 +125,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
         lines.append(f"tokens role={role} {usage}")
     for key in (
         *[f"stage={stage}" for stage in Stage],
-        *[f"event_gap={name}" for name in ("RunCommand", "WriteFile", "InferenceRequest")],
+        *[f"event_gap={label}" for label in EVENT_GAPS.values()],
     ):
         values = sorted(durations[key])
         quantiles = [f"{values[math.ceil(len(values) * q) - 1]:.3f}" if values else "n/a" for q in (0.5, 0.9)]

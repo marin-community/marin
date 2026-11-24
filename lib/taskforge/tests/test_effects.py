@@ -190,7 +190,7 @@ async def test_concurrent_scopes_keep_handlers_and_observers_separate() -> None:
 async def test_none_result_is_a_cache_hit_and_executor_failures_propagate_immediately() -> None:
     @dataclass(frozen=True, slots=True)
     class NoValue(Event[None]):
-        pass
+        kind = "test.no_value"
 
     log = EventLog()
     await log.record(Resolved(NoValue(), (), None))

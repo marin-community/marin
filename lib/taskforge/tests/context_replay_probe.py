@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resources.inference_fakes import Backend, provider_completion
 from lib.taskforge.tests.test_end_to_end import Envs, config, resources
@@ -37,7 +38,7 @@ async def main(mode: str, directory: Path) -> None:
     if mode == "record":
         backend, log = Backend((ContextExhausted("maximum context length exceeded", ()),)), EventLog(sink=sink)
     else:
-        backend, log = Backend((provider_completion(),)), driver_log(await sink.read(), resume=mode == "resume")
+        backend, log = Backend((provider_completion(),)), driver_log(local_records(sink), resume=mode == "resume")
     live = replace(resources(Envs(), ()), inference=GlmInference(backend, "provider"))
     wp = await run_workpiece(sample_proposal(), config(), live, log, install=install)
     (stop,) = wp.decisions

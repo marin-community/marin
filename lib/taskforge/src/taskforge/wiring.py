@@ -167,30 +167,19 @@ def build_resources(
     command_timeout = policy.setting("solver.command_timeout", float)
     base_engine = rollout_engine(factories, command_timeout=command_timeout)
     verifiers = RoundVerifier(base_engine, settings.limits.cleanup_timeout)
-    execution = digest((settings, command_timeout))
-    provider = {key: value for key, value in policy.entries.items() if key.startswith("provider.")}
+    # Solver trials and candidate grades run on the same machines, whose ShellSim output cap can fail either.
+    execution = digest((settings, command_timeout, policy.setting("sandbox.output_budget_mb", int)))
     sampling = policy_sampling(policy)
-    inference = {
-        role: GlmInference(
-            client,
-            digest(
-                (
-                    provider,
-                    role,
-                    policy.setting(f"{'solver' if role == 'judge' else role}.context_tokens", int),
-                    policy.entries.get(f"{role}.pool", policy.setting("provider.pool", str)),
-                )
-            ),
-        )
-        for role, client in clients.items()
-    }
+    # Transport settings (provider.*, pools, context limits) shape how a request is served, not what it
+    # returns, so replay keys carry only the model, the role and what the request itself records.
+    inference = {role: GlmInference(client, role) for role, client in clients.items()}
     return Resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, clients["solver"], sampling),
-            digest((provider, clients["solver"].model, sampling, execution)),
+            digest((clients["solver"].model, sampling, execution)),
         ),
         GradingResource(verifiers.grades, execution, base_engine),
         Ids(),
@@ -301,13 +290,10 @@ async def runtime(
         policy.setting("provider.unavailable_wait", float),
         DEFAULT_RETRY_MAX_ELAPSED,
     )
-    # provider.structured_repairs has no reader. It stays in policy.json because build_resources digests every
-    # provider.* entry into the inference and rollout fingerprints of recorded logs.
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
-        if key.startswith("provider.")
-        and key not in ("provider.unavailable_wait", "provider.pool", "provider.structured_repairs")
+        if key.startswith("provider.") and key not in ("provider.unavailable_wait", "provider.pool")
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
     provider_fields.update(max_attempts=1, hold_timeout=0)

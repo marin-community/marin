@@ -12,7 +12,8 @@ import os
 import subprocess
 import sys
 import traceback
-from dataclasses import asdict, dataclass
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -23,19 +24,36 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
 
-from taskforge.checkpoint import CheckpointSink
+from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
-from taskforge.effects.log import EventLog, JsonlSink, Status, fold
+from taskforge.effects.issues import (
+    CorruptJournal,
+    Hold,
+    LogFailure,
+    PublicationFailed,
+    Restart,
+    Superseded,
+    Transient,
+    UnsupportedFormat,
+)
+from taskforge.effects.log import EventLog, Status, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import endpoint_source, install, runtime
+
+SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
+OUTCOMES = {
+    SUPERSEDED: ("superseded", "another writer owns this root now; nothing to do"),
+    NEEDS_MIGRATION: ("needs_migration", "migrate this root to journal format 2, then rerun the proposal"),
+    CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
+}
+"""Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,44 +95,9 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     return paths
 
 
-SNAPSHOT_FILES = ("events.jsonl", "workpiece.json", "status.json")
-"""Published in this order, so an interrupted publish leaves the stream without its status."""
-
-
-def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
-    for name in names:
-        with (workdir / name).open("rb") as source, open_url(prefix_join(destination, name), "wb") as target:
-            target.write(source.read())
-
-
-async def recover(workdir: Path, destination: str) -> Status | None:
-    """Restore the published snapshot; the event stream, not status.json, decides whether work exists.
-
-    Starting fresh whenever the status is missing would append a second stream numbered from 1 beside
-    the published one, and the next read would splice the two.
-    """
-    sink = JsonlSink(prefix_join(destination, "events.jsonl"))
-    try:
-        snapshot = {"events.jsonl": await asyncio.to_thread(sink.read_bytes)}
-    except FileNotFoundError:
-        return None
-    for name in SNAPSHOT_FILES[1:]:
-        try:
-            with open_url(prefix_join(destination, name), "rb") as source:
-                snapshot[name] = source.read()
-        except FileNotFoundError:
-            logging.warning("Published %s lacks %s; resuming from its event stream", destination, name)
-    for name, data in snapshot.items():
-        (workdir / name).write_bytes(data)
-    if "status.json" in snapshot:
-        return TypeAdapter(Status).validate_json(snapshot["status.json"])
-    return fold(tuple(record.event for record in await sink.read()))
-
-
-def run_policy(path: str) -> tuple[Policy, Policy]:
-    declared = load_policy(DEFAULTS_DIR)
+def run_policy(path: str) -> Policy:
     with open_url(path, "rt") as source:
-        return declared, declared.overlaid(parse_overlay(source.read()))
+        return load_policy(DEFAULTS_DIR).overlaid(parse_overlay(source.read()))
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
@@ -130,28 +113,24 @@ async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
-    _, policy = run_policy(args.policy)
+    policy = run_policy(args.policy)
     if not eligible(proposal, policy):
         return
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
-    workdir = Path(args.work_dir) / identity
-    workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
-    sink = JsonlSink(str(workdir / "events.jsonl"))
+    # Another journal format or undecodable history raises before anything is claimed or published.
+    journal = await asyncio.to_thread(read_journal, destination)
+    status = journal.head.status if journal else Status()
+    if status.finished or (status.terminal is Terminal.HELD and not args.resume_held):
+        logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
+        return
+    checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
+    previous = await asyncio.to_thread(checkpoints.claim, journal)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
     wp = Workpiece(proposal.header.id, proposal)
-    log: EventLog | None = None
-    skipped = False
     try:
-        restored = await recover(workdir, destination)
-        if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
-            logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
-            skipped = True
-            return
-        previous = await sink.read() if Path(sink.path).exists() else ()
-        checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
-        log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
         async with checkpoints.running():
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
@@ -162,29 +141,31 @@ async def one(args: argparse.Namespace) -> None:
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
+    except* (Superseded, CorruptJournal, PublicationFailed):
+        raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
+        if checkpoints.stopped is not None:
+            raise  # A stopped writer records nothing more; the failure beside the stop keeps its identity.
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
+        if checkpoints.stopped is not None:
+            raise
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+        await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
             raise error.exceptions[0] from None
         raise
     finally:
-        if not skipped:
-            (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
-            # A stream that could not be read is left as published, so its parts stay repairable.
-            status = (
-                fold(tuple(record.event for record in log.records)) if log is not None else Status(terminal=wp.terminal)
-            )
-            (workdir / "status.json").write_text(json.dumps(asdict(status)))
-            publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
+        if checkpoints.stopped is None:
+            # A terminal head needs the workpiece that reached it. A cancelled run holds an earlier value, even after
+            # its terminal event is durable, so it publishes a checkpoint that the next launch resumes by replay.
+            status = fold(tuple(record.event for record in log.records))
+            matched = wp.terminal is not None and (status.round, status.terminal) == (wp.round, wp.terminal)
+            await checkpoints.finish(status if matched else Status(), wp)
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -197,8 +178,8 @@ async def run(args: argparse.Namespace) -> None:
         path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
     )
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
-    failures: list[str] = []
-    _, policy = run_policy(args.policy)
+    labels, failed = Counter[str](), list[str]()
+    policy = run_policy(args.policy)
     skipped = completed = submitted = 0
     try:
         exhausted = False
@@ -229,16 +210,34 @@ async def run(args: argparse.Namespace) -> None:
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
-                    if task.result() != 0:
-                        failures.append(path)
+                    if (code := task.result()) == 0:
+                        continue
+                    label, action = OUTCOMES.get(code, ("failed", "see its log"))
+                    labels[label] += 1
+                    print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
+                    if code != SUPERSEDED:
+                        failed.append(path)
     finally:
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
-    print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
-    if failures:
-        raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
+    outcomes = " ".join(f"{label}={labels[label]}" for label, _ in OUTCOMES.values())
+    print(
+        f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} {outcomes}",
+        flush=True,
+    )
+    if failed:
+        raise RuntimeError(f"{len(failed)} workpieces failed: {failed}")
+
+
+def exit_code(error: Exception) -> int | None:
+    """The outcome code when every leaf of ``error`` is that one outcome; anything mixed is an ordinary failure."""
+    group = error if isinstance(error, ExceptionGroup) else ExceptionGroup("one", [error])
+    for code, issue in ((SUPERSEDED, Superseded), (NEEDS_MIGRATION, UnsupportedFormat), (CORRUPT, CorruptJournal)):
+        if group.split(issue)[1] is None:
+            return code
+    return None
 
 
 def main() -> None:
@@ -264,8 +263,16 @@ def main() -> None:
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    elif args.command == "run":
+        asyncio.run(run(args))
     else:
-        asyncio.run(run(args) if args.command == "run" else one(args))
+        try:
+            asyncio.run(one(args))
+        except Exception as error:
+            if (code := exit_code(error)) is None:
+                raise
+            logging.exception("Taskforge workpiece published nothing: %s", OUTCOMES[code][0])
+            sys.exit(code)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from taskforge.resources.execution import Notify, retry_effect
 
 @dataclass(frozen=True, slots=True)
 class InferenceRequest(Event[Completion]):
+    kind = "inference.request"
     messages: tuple[Message, ...]
     tools: tuple[ToolSchema, ...]
     sampling: LLMPolicy
@@ -94,11 +95,11 @@ class GlmInference(InferenceClient):
     """Translate retryable transport failures; invalid requests remain typed bugs."""
 
     client: CompletionBackend
-    provider_digest: str
+    role: str
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", digest((self.client.model, self.provider_digest)), ReplayPolicy.CACHE)
+        return Fingerprint("inference", digest((self.client.model, self.role)), ReplayPolicy.CACHE)
 
     @override
     async def complete(self, request: InferenceRequest) -> Completion:

@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
+import asyncio
+import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -10,15 +11,16 @@ from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, R
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.effects.events import Event, Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import JsonlSink, Record
+from taskforge.checkpoint import CheckpointSink, read_journal
+from taskforge.effects.events import Event, Note, Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.effects.log import Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import reason_class, report
@@ -45,7 +47,7 @@ def test_report_reason_class(reason: str, expected: str) -> None:
     assert reason_class(reason) == expected
 
 
-async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
+async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("taskforge.report.time.time", lambda: 1000000.0)
@@ -82,16 +84,14 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
         directory = tmp_path / name
         directory.mkdir()
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
-        (directory / "workpiece.json").write_bytes(
-            WORKPIECE.dump_json(Workpiece(name, proposal, terminal=terminal, decisions=decisions))
-        )
-        (directory / "status.json").write_text(json.dumps({"terminal": terminal}))
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
         records = tuple(Record(i, 1000000 - age + offset, event) for i, (offset, event) in enumerate(data, 1))
-        sink = JsonlSink(str(directory / "events.jsonl"))
-        await sink.write(records[:1])
-        if len(records) > 1:
-            sink.append_bytes(b"".join(sink._line(record) for record in records[1:]))
+        sink = CheckpointSink(tmp_path / "work", str(directory))
+        sink.claim(None)
+        await sink.local.write(records[:1])
+        await asyncio.to_thread(sink._publish, Status(), None)
+        await sink.local.write(records[1:])
+        await sink.finish(Status(terminal=terminal), Workpiece(name, proposal, terminal=terminal, decisions=decisions))
     lines = await report(str(tmp_path))
     assert "terminal=accepted count=2" in lines
     assert "terminal=held reason=Restart count=1" in lines
@@ -111,3 +111,30 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
 async def test_report_empty_root_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No workpiece"):
         await report(str(tmp_path))
+
+
+async def test_report_names_format_1_roots_and_counts_a_claimed_empty_root_as_running(tmp_path: Path) -> None:
+    for name, artefact in (("old", "status.json"), ("parts", "events.jsonl.parts/000000000001.jsonl")):
+        (tmp_path / name / artefact).parent.mkdir(parents=True)
+        (tmp_path / name / artefact).write_text("{}")
+    with pytest.raises(ValueError, match=f"2 journal format 1 roots .*{tmp_path / 'old'}, {tmp_path / 'parts'}"):
+        await report(str(tmp_path))
+    CheckpointSink(tmp_path / "work", str(tmp_path / "claimed")).claim(None)
+    lines = await report(str(tmp_path), 1)
+    assert f"skipped journal_format=1 count=2 roots={tmp_path / 'old'}, {tmp_path / 'parts'}" in lines
+    assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
+
+
+async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    """A held root resumed now is running now, though its newest event is a day old."""
+    destination = str(tmp_path / "reclaimed")
+    first = CheckpointSink(tmp_path / "work", destination)
+    first.claim(None)
+    await first.local.write((Record(1, time.time() - 86400, Note("yesterday")),))
+    await first.finish(Status(terminal=Terminal.HELD), Workpiece("reclaimed", proposal, terminal=Terminal.HELD))
+    CheckpointSink(tmp_path / "work", destination).claim(read_journal(destination))
+    lines = await report(str(tmp_path), 1)
+    assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
+    assert "tokens role=author prompt=0 cached=0 completion=0" in lines
