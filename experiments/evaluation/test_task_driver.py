@@ -270,7 +270,7 @@ def test_worker_regrades_a_responses_root_without_asking_the_endpoint_again(
 
     assert len(recovery_endpoint.requests) == asked == 8
     terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
-    assert [(row["outcome"], row["completion_tokens"]) for row in terminal] == [("graded", 0)] * 8
+    assert [(row["outcome"], row["completion_tokens"]) for row in terminal] == [("graded", 1)] * 8
     assert sum(dict(row["metrics"]).get("accuracy", 0) for row in ReadView(output).iter_rows("samples")) == 6
 
 

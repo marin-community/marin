@@ -383,7 +383,7 @@ class _StoredResponses:
             logger.warning("%s stored no %s responses to reuse", root, benchmark)
         self._attempts: dict[tuple[str, str, int], list[Attempt]] = {}
         for row in self._reader.iter_rows(ATTEMPTS_TABLE):
-            attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
+            attempt = attempt_from_row(row)
             if attempt.phase is AttemptPhase.FINISHED and attempt.dataset in datasets:
                 key = (datasets[attempt.dataset], attempt.source_row, attempt.trial)
                 self._attempts.setdefault(key, []).append(attempt)

@@ -392,8 +392,9 @@ configuration must keep the source run's model identity. Judged tasks call the
 judge again, so judge variation also changes grades.
 
 Raw evidence names the source root, its run identity, and the evidence blob in
-`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
-that reuses its own response after a grading failure does. `evaluation/run.json`
+`reused_response_from_run`. A reused attempt records the stored response's token
+usage and stop reason, as an attempt that reuses its own response after a
+grading failure does. `evaluation/run.json`
 lists each source in `response_sources` with its root, run identity, and
 `driver_revision`, so a regraded root differs from a fresh run on the same
 corpus without opening the evidence. Only model identity is checked, so the

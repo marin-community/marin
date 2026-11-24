@@ -1617,7 +1617,9 @@ async def test_reuse_answers_identical_requests_with_each_trial_s_own_stored_res
         }
         assert stored_text(raw) == stored_text(stored_raw)
         assert raw["grade"]["reward"] == float(stored_text(raw).lower() == "red")
-        assert (attempt["outcome"], attempt["prompt_tokens"], attempt["completion_tokens"]) == ("graded", 0, 0)
+        assert attempt["outcome"] == "graded"
+        recorded = ("prompt_tokens", "completion_tokens", "stop_reason")
+        assert [attempt[name] for name in recorded] == [stored_attempt[name] for name in recorded] == [3, 1, "stop"]
 
 
 @pytest.mark.asyncio
@@ -1676,7 +1678,7 @@ async def test_reuse_reads_source_responses_concurrently_and_asks_the_model_wher
     assert {attempt["outcome"] for attempt, _ in evidence} == {"graded"}
     assert Counter(
         (stored_text(raw), raw[REUSED_FROM_RUN] is not None, attempt["completion_tokens"]) for attempt, raw in evidence
-    ) == {("red", True, 0): 6, ("Red", False, 1): 3}
+    ) == {("red", True, 1): 6, ("Red", False, 1): 3}
 
 
 @pytest.mark.asyncio
@@ -1798,7 +1800,7 @@ async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_pat
                 stored_raw["grade"]["status"],
                 stored_raw["grade"]["reward"],
             )
-            assert attempt["completion_tokens"] == 0
+            assert attempt["completion_tokens"] == stored_attempt["completion_tokens"]
         else:
             assert raw.get(REUSED_FROM_RUN) is None
 
@@ -1846,6 +1848,25 @@ async def test_judged_reuse_keeps_retried_responses_in_the_source_and_the_regrad
     stored = terminal_evidence(source)
     assert sorted(attempt["retry"] for attempt, _ in stored.values()) == [0, 1]
     for key, (attempt, raw) in terminal_evidence(output).items():
-        assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 0)
+        assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 1)
         assert raw["reused_response_from_retry"] == 0
         assert raw[REUSED_FROM_RUN]["result_blob"] == stored[key][0]["result_blob"]
+
+
+@pytest.mark.asyncio
+async def test_reuse_reads_a_source_saved_before_attempts_recorded_stop_reasons(tmp_path, run_config):
+    config = run_config.model_copy(update={"source_limit": None})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    current, earlier, output = (str(tmp_path / name) for name in ("current", "earlier", "regraded"))
+    await run_evaluation((strict,), current, config, ScriptedModel(dict.fromkeys(COLORS, "Red")), machine_factories={})
+    save_before_stop_reasons(current, earlier)
+    refusing = ScriptedModel({})
+
+    await run_evaluation((lenient,), output, config, refusing, machine_factories={}, reuse_from=earlier)
+
+    assert not refusing.asked
+    evidence = terminal_evidence(output).values()
+    assert {(attempt["outcome"], attempt["stop_reason"], raw["grade"]["reward"]) for attempt, raw in evidence} == {
+        ("graded", "stop", 1)
+    }
