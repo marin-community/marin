@@ -81,6 +81,10 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
             assert kwargs == {"repo_id": repo, "repo_type": "dataset", "private": True, "exist_ok": False}
             writes.append("create")
 
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            assert dataset == repo and repo_type == "dataset" and recursive is True
+            return [SimpleNamespace(path=name) for name in ()]
+
         def repo_info(self, dataset, **kwargs):
             assert dataset == repo and kwargs["repo_type"] == "dataset"
             return SimpleNamespace(private=True, sha=kwargs.get("revision", "c" * 40))
@@ -583,3 +587,65 @@ def test_publication_license_gate_calls_current_checker_with_exact_pin(revision)
             license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
         return
     license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
+
+
+
+
+
+def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeypatch):
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"frozen source task bytes")
+    repo = "open-athena/fixture-publication"
+    writes = []
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            assert kwargs["exist_ok"] is False
+            raise RuntimeError("409 Conflict: the repo already exists")
+
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            assert dataset == repo and recursive is True
+            return [SimpleNamespace(path="README.md")]
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo
+            return SimpleNamespace(private=True, sha="c" * 40)
+
+        def upload_folder(self, **kwargs):
+            writes.append("upload")
+            return SimpleNamespace(oid="d" * 40)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", lambda repo, name, **kwargs: str(tmp_path / name))
+    monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train")
+    result = license_publication.publish_private_dataset(prepared)
+    assert writes == ["upload"] and result.revision == "d" * 40
+
+
+def test_private_publication_rejects_a_repo_with_other_content(tmp_path, monkeypatch):
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"frozen source task bytes")
+    repo = "open-athena/fixture-publication"
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            raise RuntimeError("409 Conflict")
+
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            return [SimpleNamespace(path="README.md"), SimpleNamespace(path="stale.parquet")]
+
+        def repo_info(self, dataset, **kwargs):
+            return SimpleNamespace(private=True, sha="c" * 40)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train")
+    with pytest.raises(ValueError, match="already exists with other content"):
+        license_publication.publish_private_dataset(prepared)

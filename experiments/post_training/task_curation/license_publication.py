@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -98,7 +99,20 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
         if observed != digest:
             raise ValueError(f"Prepared private publication changed before creation: {name}")
     api = HfApi()
-    api.create_repo(repo_id=prepared.repo, repo_type="dataset", private=True, exist_ok=False)
+    try:
+        api.create_repo(repo_id=prepared.repo, repo_type="dataset", private=True, exist_ok=False)
+    except Exception as error:
+        # A prior attempt of this same frozen campaign may have created the repo before
+        # its gate stopped; reuse it only when its inventory is exactly this publication's.
+        existing = {entry.path for entry in api.list_repo_tree(prepared.repo, repo_type="dataset", recursive=True)
+                    if getattr(entry, "path", None)}
+        expected = set(prepared.file_hashes)
+        if not existing <= expected or not any(existing):
+            raise ValueError(f"Private publication repo already exists with other content: {prepared.repo}") from error
+        existing_private = api.repo_info(prepared.repo, repo_type="dataset")
+        if not existing_private.private:
+            raise ValueError("Private publication destination is not private") from error
+        logging.info("PUBLICATION_REPO_REUSED repo=%s files=%d", prepared.repo, len(existing))
     initial = api.repo_info(prepared.repo, repo_type="dataset")
     if not initial.private:
         raise ValueError("Private publication destination is not private")
