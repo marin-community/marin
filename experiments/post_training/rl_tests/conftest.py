@@ -12,6 +12,11 @@ recorded_runs = pytest.fixture(fixtures.recorded_runs)
 preset_table = pytest.fixture(fixtures.preset_table)
 
 
+@pytest.fixture(scope="session")
+def native_receipt_configs():
+    return {}
+
+
 @pytest.fixture
 def mochi_sft_presets(monkeypatch):
     from experiments.grug.moe_hero_ep import launch_hero_sft, sft_recipe  # noqa: PLC0415

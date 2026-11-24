@@ -393,7 +393,7 @@ def evaluation_task_rows(
     ]
 
 
-def recorded_runs(selection, tmp_path, monkeypatch, request):
+def recorded_runs(selection, tmp_path, monkeypatch, request, native_receipt_configs):
     monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
@@ -470,8 +470,27 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 runtime_args=step.runtime_args,
                 deps=step.deps,
             )
-            document.write_text(step.build_config(context).launch_config_yaml)
-            config = gate.compose_configs([str(document)])[0]
+            rendered = step.build_config(context).launch_config_yaml
+            attempt_id = yaml.safe_load(rendered)["run"]["attempt_id"]
+            # Share fixture receipts across cases that differ only in their isolated paths or attempt ID.
+            locations = (
+                (str(source_root), "<fixture-output>"),
+                (str(tmp_path), "<fixture-root>"),
+                (attempt_id, "<fixture-attempt>"),
+            )
+            normalized = rendered
+            for old, token in locations:
+                normalized = normalized.replace(old, token)
+            if normalized not in native_receipt_configs:
+                document.write_text(rendered)
+                encoded = json.dumps(gate.compose_configs([str(document)])[0])
+                for old, token in locations:
+                    encoded = encoded.replace(old, token)
+                native_receipt_configs[normalized] = encoded
+            encoded = native_receipt_configs[normalized]
+            for old, token in locations:
+                encoded = encoded.replace(token, old)
+            config = json.loads(encoded)
             templates[key] = (source_root, config)
         return templates[key]
 
