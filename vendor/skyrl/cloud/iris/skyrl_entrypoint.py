@@ -81,16 +81,15 @@ def run_config(config_path: Path) -> None:
             config.skyrl.runtime.starting_checkpoint_identity = str(checkpoint.identity)
         if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
-        if config.run.mode == RunMode.TRAIN and (prepared_cache := _prepared_task_cache_source(config)) is not None:
-            config.skyrl.runtime.prepared_task_cache = OmegaConf.structured(prepared_cache)
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:
         _start_attempt_record(config)
     run = cast(Callable[[DictConfig], None], getattr(importlib.import_module(module), "run"))
     topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True)).role_topology
-    if topology is not None:
-        with open_dict(config.skyrl):
-            if "runtime" not in config.skyrl:
-                config.skyrl.runtime = {}
+    # Benchmark gates compare the recorded launch against the preset before task-local bindings.
+    with open_dict(config.skyrl.runtime):
+        if config.run.mode == RunMode.TRAIN and (prepared_cache := _prepared_task_cache_source(config)) is not None:
+            config.skyrl.runtime.prepared_task_cache = OmegaConf.structured(prepared_cache)
+        if topology is not None:
             config.skyrl.runtime.placement = {
                 "policy": topology.selector("policy"),
                 "engines": [topology.selector(role) for role in topology.roles if role != "policy"],
