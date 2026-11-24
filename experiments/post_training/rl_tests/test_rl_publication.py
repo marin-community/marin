@@ -494,7 +494,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert retained["issue"] == 73 + index
         assert publication.lineage_issue(str(sources[index] / "exports")) == 73 + index
         assert retained["evaldash_run_ids"] == list(run_ids)
-        assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
