@@ -680,7 +680,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
         original_subprocess = subprocess.run
-        for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
+        secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
+        for diagnostic in ("timeout", "empty", "whitespace", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -689,9 +690,12 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
+                    if diagnostic == "bootstrap" and "import sys; print(sys.executable)" in command:
+                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                     if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
                         if diagnostic == "timeout":
-                            raise subprocess.TimeoutExpired(command, 120)
+                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {secret}".encode()
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
                         return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
@@ -704,6 +708,11 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 ), report
                 if diagnostic == "timeout":
                     assert "timed out after 120 s" in report["reason"]
+                    assert "Import native modules" in report["reason"]
+                    assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
+                if diagnostic == "bootstrap":
+                    assert "Prepare SkyRL CPU environment" in report["reason"]
+                    assert "timed out after 300 s" in report["reason"]
         return
     reasons = {
         "stale-default": ("control config differs",),

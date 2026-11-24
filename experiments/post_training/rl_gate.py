@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import statistics
@@ -16,6 +17,7 @@ from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
 from pathlib import Path
+from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -24,6 +26,7 @@ from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
+    SKYRL_PROJECT,
     ArtifactHfModel,
     ResolvedModelLocator,
     SkyRLPolicyModel,
@@ -32,6 +35,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     read_skyrl_attempt,
     skyrl_cpu_command,
+    skyrl_cpu_environment,
     skyrl_execution,
     skyrl_step,
 )
@@ -39,6 +43,7 @@ from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rigging.redaction import redact_string
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from tabulate import tabulate
@@ -60,6 +65,10 @@ from experiments.post_training.rl_scoring import AAII_WEIGHTS
 GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
+_NATIVE_PREPARATION_TIMEOUT = 300
+_NATIVE_PHASE = "SkyRL configuration phase: "
+
+logger = logging.getLogger(__name__)
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -134,9 +143,9 @@ def validate_requirements(
 def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: ModelPresets, control: bool = False) -> dict:
     """Return the composed candidate after checking gated controls against current defaults."""
     if control or not preset.gated:
-        (candidate,) = _compose_plans(preset, (inputs,))
+        (candidate,) = _compose_plans(((preset, inputs),))
         return candidate
-    defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
+    defaults, candidate = _compose_plans(((preset, RunInputs(preset_name=preset.name)), (preset, inputs)))
     pin = control_pin(preset, table=table)
     for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
@@ -562,12 +571,12 @@ def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[s
 
 
 def _compose_plans(
-    preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
+    plans: Sequence[tuple[presets.Preset, RunInputs]], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="rl-current-config-") as directory:
         root = Path(directory)
         paths = []
-        for index, candidate in enumerate(inputs):
+        for index, (preset, candidate) in enumerate(plans):
             try:
                 spec = recipe.run_spec(
                     preset,
@@ -589,26 +598,69 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_json(*command: str, timeout: int = 120):
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+def _native_failure(error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
+    phase = diagnostic = ""
+    if isinstance(error, OSError):
+        cause = error.strerror or str(error)
+    else:
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        phase = next((line.removeprefix(_NATIVE_PHASE) for line in reversed(lines) if line.startswith(_NATIVE_PHASE)), "")
+        diagnostic = next((line for line in reversed(lines) if not line.startswith(_NATIVE_PHASE)), "")
+        cause = (
+            f"timed out after {error.timeout:g} s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"exited with status {error.returncode}"
         )
+    context = " ".join(part for part in (phase, cause, diagnostic) if part)
+    return "".join(char for char in redact_string(context) if char.isprintable())[:400]
+
+
+def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
+    """Run one native step and return its last nonempty stdout line."""
+    started = monotonic()
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, errors="replace", env=env, timeout=timeout)
         result.check_returncode()
-        return json.loads(result.stdout.splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise InvalidComparison(
+            f"native configuration cannot be composed: {operation} after {monotonic() - started:.2f} s. "
+            f"{_native_failure(error)}"
+        ) from error
+    logger.info("%s took %.2f s", operation, monotonic() - started)
+    if not result.stdout.strip():
+        raise InvalidComparison(f"native configuration cannot be composed: {operation} returned no output")
+    return result.stdout.strip().splitlines()[-1]
+
+
+def _native_json(operation: str, program: str, *args: str, timeout: int = 120):
+    env = skyrl_cpu_environment()
+    # Resolve and verify the frozen CPU venv before starting the composition deadline.
+    interpreter = Path(
+        _native_output(
+            "Prepare SkyRL CPU environment",
+            skyrl_cpu_command("python", "-c", "import sys; print(sys.executable)"),
+            env=env,
+            timeout=_NATIVE_PREPARATION_TIMEOUT,
+        )
+    )
+    expected = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv" / "bin"
+    if interpreter.parent.resolve() != expected.resolve() or not interpreter.is_file():
+        raise InvalidComparison("native configuration cannot be composed: expected the vendor SkyRL CPU interpreter")
+    output = _native_output(operation, [str(interpreter), "-c", program, *args], env=env, timeout=timeout)
+    try:
+        return json.loads(output)
+    except ValueError as error:
+        raise InvalidComparison(f"native configuration cannot be composed: {operation} returned invalid JSON") from error
 
 
 def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> str:
     return (
-        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+        "import json,sys\n"
+        f"def phase(name): print({_NATIVE_PHASE!r} + name, file=sys.stderr, flush=True)\n"
+        "phase('Import native modules')\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
         "from importlib import import_module\n"
         f"assert all(Path(import_module(name).__file__).resolve().is_relative_to({native_root!r}) "
         f"for name in {modules!r})\n" + body
@@ -623,14 +675,19 @@ def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> l
         "from cloud.iris import launch_config\n"
         "from rigging.filesystem.s3_compat import configure_coreweave_s3\n"
         "configure_coreweave_s3()\n"
-        "configs = [launch_config.load_launch_config(path) for path in sys.argv[1:]]\n"
+        "configs = []\n"
+        "for index, path in enumerate(sys.argv[1:], 1):\n"
+        "    phase(f'Compose document {index}/{len(sys.argv)-1}')\n"
+        "    configs.append(launch_config.load_launch_config(path))\n"
+        "phase('Convert native configurations')\n"
         "documents = [OmegaConf.to_container(config, resolve=True) for config in configs]\n"
         f"if {validate_driver!r}:\n"
-        "    for config in configs:\n"
+        "    for index, config in enumerate(configs, 1):\n"
+        "        phase(f'Validate driver for document {index}/{len(configs)}')\n"
         "        launch_config.validate_launch_driver_config(config)\n"
         "print(json.dumps(documents))\n",
     )
-    return _native_json("python", "-c", program, *paths)
+    return _native_json("Compose native launch configurations", program, *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -686,13 +743,14 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
         native_project,
         ("cloud.iris.launch_config", "cloud.iris.rl_config_translation"),
         "from cloud.iris import launch_config, rl_config_translation\n"
+        "phase('Read native schema defaults')\n"
         "config = rl_config_translation.compose_config_groups(json.loads(sys.argv[1]), config_name='ppo_base_config')\n"
         "defaults = OmegaConf.to_container(\n"
         "    OmegaConf.structured(launch_config.SkyRLLaunchConfig), resolve=False, enum_to_str=True)\n"
         "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
         "print(json.dumps(defaults))\n",
     )
-    return _native_json("python", "-c", program, json.dumps(dict(groups)))
+    return _native_json("Read native schema defaults", program, json.dumps(dict(groups)))
 
 
 def _check_control_config(
@@ -776,7 +834,7 @@ def _write_gate(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
         )
         current_config, expected_config = _compose_plans(
-            preset, (RunInputs(preset_name=preset.name), inputs), model=resolved_model
+            ((preset, RunInputs(preset_name=preset.name)), (preset, inputs)), model=resolved_model
         )
         current, expected = _gate_config(current_config), _gate_config(expected_config)
         changed = _changed_config_keys(current, expected)

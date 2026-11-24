@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.rl.skyrl import skyrl_cpu_command, skyrl_cpu_environment
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 
@@ -51,7 +52,15 @@ def native_json(*uv_options: str):
         source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
         program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
         try:
-            return gate._native_json(*uv_options, "python", "-c", program, *paths, timeout=170)
+            if uv_options:
+                result = gate._native_output(
+                    "Run isolated native test program",
+                    skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
+                    env=skyrl_cpu_environment(),
+                    timeout=170,
+                )
+                return json.loads(result)
+            return gate._native_json("Run native test program", program, *paths, timeout=170)
         except gate.InvalidComparison as error:
             cause = error.__cause__
             if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:

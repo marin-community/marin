@@ -107,7 +107,13 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
+    coordinator = tmp_path / "coordinator-env"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(coordinator)], check=True, timeout=20)
+    before = set(coordinator.rglob("*"))
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
+    monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
     gate.compose_configs(launch_paths, validate_driver=True)
+    assert set(coordinator.rglob("*")) == before
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):

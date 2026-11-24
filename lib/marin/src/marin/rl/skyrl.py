@@ -907,12 +907,18 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
-    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Isolate native SkyRL CPU processes from the enclosing Python environment."""
     environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
+    return environment
+
+
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
+    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+    environment = skyrl_cpu_environment(env_vars)
     with (
         tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
         subprocess.Popen(
