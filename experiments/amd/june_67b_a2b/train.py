@@ -327,23 +327,52 @@ def _make_train_step(
             _INPUTS_VALID_KEY: inputs_valid,
             **summarized_metrics,
         }
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
         if diagnose_numerics:
-            metrics.update(
-                {
-                    "train/supervised_tokens": jnp.sum(batch.loss_weight),
-                    "train/grads_finite": _tree_all_finite(grads),
-                    "train/updates_finite": _tree_all_finite(updates),
-                }
-            )
+            metrics["train/supervised_tokens"] = jnp.sum(batch.loss_weight)
+            metrics["train/grads_finite"] = _tree_all_finite(grads)
 
-        if ema_beta is None:
-            ema_params = None
-        else:
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new, qb_ema_params, params
+        def updated_state(_):
+            updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+            params = optax.apply_updates(qb_params, updates)
+            if ema_beta is None:
+                ema_params = None
+            else:
+                ema_params = jax.tree_util.tree_map(
+                    lambda old, new: ema_beta * old + (1.0 - ema_beta) * new, qb_ema_params, params
+                )
+            compute_params = mp.cast_to_compute(params)
+            if gathered_blocks is not None:
+                # The buffers the first microbatch gathered into: the next step gathers the updated expert weights from
+                # their ZeRO-1 shard into them again, so none are gathered here.
+                stacked = jax.tree.map(
+                    lambda c, g: c if g is None else g,
+                    compute_params.stacked_blocks.stacked,
+                    gathered_blocks,
+                    is_leaf=lambda x: x is None,
+                )
+                compute_params = eqx.tree_at(lambda t: t.stacked_blocks.stacked, compute_params, stacked)
+            new_state = (
+                params,
+                opt_state,
+                ema_params,
+                metrics["qb_beta_per_layer"],
+                resharded_like(compute_params, state.compute_params),
             )
+            updates_finite = _tree_all_finite(updates) if diagnose_numerics else jnp.array(True)
+            return new_state, updates_finite, updates if compute_watch else None
+
+        def kept_state(_):
+            kept = (state.params, state.opt_state, state.ema_params, state.pending_qb_betas, state.compute_params)
+            no_updates = jax.tree.map(jnp.zeros_like, qb_params) if compute_watch else None
+            return kept, jnp.array(True), no_updates
+
+        # A step whose inputs were damaged leaves the state as it was, apart from the step count: its batch is skipped.
+        # A conditional, not a select, so a normal step makes no extra pass over the state.
+        (params, opt_state, ema_params, pending_qb_betas, compute_params), updates_finite, updates = jax.lax.cond(
+            inputs_valid, updated_state, kept_state, None
+        )
+        if diagnose_numerics:
+            metrics["train/updates_finite"] = updates_finite
 
         watch_stats = None
         if watch_config is not None and compute_watch:
@@ -360,29 +389,6 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
-        compute_params = mp.cast_to_compute(params)
-        if gathered_blocks is not None:
-            # The buffers the first microbatch gathered into: the next step gathers the updated expert weights from
-            # their ZeRO-1 shard into them again, so none are gathered here.
-            stacked = jax.tree.map(
-                lambda c, g: c if g is None else g,
-                compute_params.stacked_blocks.stacked,
-                gathered_blocks,
-                is_leaf=lambda x: x is None,
-            )
-            compute_params = eqx.tree_at(lambda t: t.stacked_blocks.stacked, compute_params, stacked)
-        updated = (
-            params,
-            opt_state,
-            ema_params,
-            metrics["qb_beta_per_layer"],
-            resharded_like(compute_params, state.compute_params),
-        )
-        kept = (state.params, state.opt_state, state.ema_params, state.pending_qb_betas, state.compute_params)
-        # A step whose inputs were damaged leaves the state as it was, apart from the step count: its batch is skipped.
-        params, opt_state, ema_params, pending_qb_betas, compute_params = jax.tree.map(
-            lambda new, old: jnp.where(inputs_valid, new, old), updated, kept
-        )
         metrics[_OPTIMIZER_HYPERPARAMS_KEY] = _optimizer_hyperparams(opt_state)
         metrics["train/params_finite"] = _tree_all_finite(params)
         metrics["train/qb_betas_finite"] = jnp.all(jnp.isfinite(pending_qb_betas))
