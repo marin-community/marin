@@ -14,7 +14,7 @@ import reasoning_gym
 from reasoning_gym.factory import DATASETS
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
-from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
+from taskcompendium.models import TaskSpec, TextMessage, grader_environment, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.runtime.resources import resource_bytes
@@ -381,7 +381,7 @@ def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
     assert TASKTROVE_ENTRY["question"] in prompt
     assert "/app/answer.txt" not in prompt
     assert converted.changes[0].original == TASKTROVE_INSTRUCTION
-    assert task.grader.environment == fixture_context(pipeline).grader_environment
+    assert grader_environment(task.grader) == fixture_context(pipeline).grader_environment
     tests = tmp_path / "tests"
     tests.mkdir()
     for resource in task.resources.verifier:

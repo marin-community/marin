@@ -17,7 +17,15 @@ from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
-from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    GraderMachine,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    grader_environment,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
@@ -64,7 +72,11 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
 def convert_local_answer(row, context):
     task = answer_task(row, prompt=row.data["prompt"], spec=ExactSpec((row.data["answer"],), ignore_case=False))
     return task.model_copy(
-        update={"grader": task.grader.model_copy(update={"environment": required_grader_environment(context)})}
+        update={
+            "grader": task.grader.model_copy(
+                update={"placement": GraderMachine(environment=required_grader_environment(context))}
+            )
+        }
     )
 
 
@@ -107,7 +119,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     task = TaskSpec.model_validate_json(records[0]["task_json"])
     grader = cast(VerifyitGrader, task.grader)
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
-    environment = cast(EnvironmentRequirements, grader.environment)
+    environment = cast(EnvironmentRequirements, grader_environment(grader))
     with artifact_prefix(str(tmp_path / "downloads")):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))

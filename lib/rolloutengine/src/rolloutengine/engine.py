@@ -6,13 +6,15 @@
 import asyncio
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import CONVERSATION_ANSWERS
 from taskcompendium.runtime.output_capture import captured_output_files
+from taskcompendium.submission import conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.event_delivery import _EventDelivery
@@ -69,6 +71,7 @@ class _Attempt:
     events: _EventDelivery
     grade: GradeResult
     outputs: dict[str, bytes]
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
     setup_seconds: float = 0.0
     grading_seconds: float | None = None
 
@@ -100,7 +103,14 @@ class RolloutEngine:
             raise ValueError(f"Unknown harness: {spec.harness!r}")
         self.harnesses[spec.harness].check(spec.task, spec.limits)
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(
+        self,
+        spec: TaskRolloutSpec,
+        model: Model,
+        *,
+        run_id: str | None = None,
+        verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+    ) -> GradedRollout:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
         The events of the attempt and ``Rollout.run_id`` carry ``run_id``, a new random ID unless the caller gives
@@ -109,6 +119,7 @@ class RolloutEngine:
         events go to the observer within the cleanup deadline after the attempt releases its resources, and
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
+        ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
         """
         self.check(spec)
         harness = self.harnesses[spec.harness]
@@ -123,6 +134,7 @@ class RolloutEngine:
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
             {},
+            verifier,
         )
         started = time.monotonic()
         try:
@@ -140,8 +152,6 @@ class RolloutEngine:
         rollout = attempt.recorder.rollout(run_id, attempt.outputs)
         metrics = {**rollout.metrics, **delivery}
         grade = attempt.grade
-        if attempt.recorder.no_response_reason is not None:
-            grade = GradeResult(Outcome.UNAVAILABLE, None, attempt.recorder.no_response_reason)
         if attempt.cleanup.errors:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
             grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
@@ -194,12 +204,23 @@ class RolloutEngine:
         if machine is not None:
             attempt.setup_seconds = time.monotonic() - started
             events.emit(MachineReady(attempt.setup_seconds))
-        # The harness's resources close after grading, before the machines.
-        cleanup = _CleanupScope(resources, attempt.cleanup)
+        released = AsyncExitStack()
+        await resources.enter_async_context(released)
+        stopped = AsyncExitStack()
+        await resources.enter_async_context(stopped)
+        cleanup = _CleanupScope(stopped, released, attempt.cleanup)
         context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
-        failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt_deadline=deadline)
-        # A model failure leaves the completed turns intact, so the engine grades them.
-        if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
+        recorder = attempt.recorder
+        failure = await _run_harness(attempt.harness, context, recorder, attempt_deadline=deadline)
+        # As Harbor cancels its agent before verifying, the agent stops before output capture and grading, so that
+        # it cannot change the task machine while it is graded. What the agent left running, such as a service in
+        # its terminal, stays for the grader; the released closes run with the machines, after grading.
+        await stopped.aclose()
+        if failure is None and not recorder.has_response and task.answer_type in CONVERSATION_ANSWERS:
+            attempt.grade = GradeResult(Outcome.UNAVAILABLE, None, recorder.no_response_reason)
+        # A model failure leaves the completed turns intact, so the engine grades them. An attempt that ended
+        # before the first response, at a limit or with an agent that gave up, leaves its answer on the machine.
+        elif failure is None or (failure[0] == RolloutOperation.MODEL and recorder.has_response):
             try:
                 await self._grade(attempt, machine, resources)
             except _Interrupted as interrupted:
@@ -213,7 +234,9 @@ class RolloutEngine:
     async def _grade(self, attempt: _Attempt, machine: Machine | None, resources: AsyncExitStack) -> None:
         spec, recorder = attempt.spec, attempt.recorder
         messages = recorder.graded_messages()
-        assert messages is not None
+        if messages is None:
+            # The attempt ended before the first response, so the grader sees an empty reply to the task.
+            messages = (*conversation_messages(spec.task.context.events), {"role": "assistant", "content": ""})
         started = time.monotonic()
         try:
             async with asyncio.timeout(spec.limits.verifier_timeout):
@@ -227,6 +250,7 @@ class RolloutEngine:
                     attempt.cleanup,
                     resources,
                     stop_reason=recorder.stop_reason,
+                    verifier=attempt.verifier,
                 )
         except TimeoutError as error:
             attempt.grade = GradeResult(

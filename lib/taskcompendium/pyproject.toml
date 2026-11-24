@@ -15,6 +15,7 @@ dependencies = [
     # The runtime staging copies tomli's package directory for the 3.10 grader machines.
     "tomli>=2.0.1",
     "tomlkit>=0.13",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

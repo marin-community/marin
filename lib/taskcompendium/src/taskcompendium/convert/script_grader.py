@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from taskcompendium.grader import GraderPackage
-from taskcompendium.models import EnvironmentRequirements, ScriptGrader, StdoutReward, TaskResource
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    GraderMachine,
+    ScriptGrader,
+    StdoutReward,
+    TaskResource,
+)
 from taskcompendium.runtime.resources import inline_resource
 
 GRADE_ARGV = ("python3", "/tests/grade.py")
@@ -52,7 +58,7 @@ def script_package(
         argv=GRADE_ARGV,
         cwd="/",
         env=dict(env or {}),
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         answer_path=answer_path,
         reward=StdoutReward(),
         timeout=timeout,

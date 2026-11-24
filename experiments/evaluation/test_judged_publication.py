@@ -9,14 +9,18 @@ import threading
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from taskcompendium.grading import grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.evalchemy.judge_prompts import SIMPLEQA_VERIFIED_GRADER_TEMPLATE
+from taskcompendium.importers.evalchemy.multichallenge import MULTICHALLENGE_JUDGE_TEMPLATE
 from taskcompendium.models import ConversationTrace, GradingAttempt, TextMessage
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
+from experiments.evaluation.benchmarks.multichallenge import sources as multichallenge_sources
 from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa_verified_source
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.publication_cases import published_cases
@@ -163,6 +167,45 @@ def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_ans
     assert state["requests"][-1]["messages"][-1]["content"] == SIMPLEQA_VERIFIED_GRADER_TEMPLATE.format(
         question="Who wrote it?", target="Ada", predicted_answer="It was Ada."
     )
+
+
+@pytest.mark.parametrize("verdict,reward", [("YES", 1), ("NO", 0)])
+def test_multichallenge_replays_history_and_passes_on_the_expected_verdict(
+    tmp_path, monkeypatch, judge_http, verdict, reward
+):
+    conversation = {"role": ["user", "assistant", "user"], "content": ["I am vegan.", "Noted!", "Suggest a dinner."]}
+
+    def write_rows(file):
+        row = {
+            "question_id": "q1",
+            "axis": "INFERENCE_MEMORY",
+            "conversation": conversation,
+            "target_question": "Is the dinner vegan?",
+            "pass_criteria": "YES",
+            "num_turns": 3,
+        }
+        pq.write_table(pa.Table.from_pylist([row]), file)
+
+    (source,) = multichallenge_sources()
+    (case,) = published_cases(source, write_rows, tmp_path, monkeypatch, 1)
+    assert conversation_messages(case.task.context.events) == [
+        {"role": role, "content": content}
+        for role, content in zip(conversation["role"], conversation["content"], strict=True)
+    ]
+    assert case.item.operation.response_selection == "final_only"
+    assert case.item.groups == {"axis": "INFERENCE_MEMORY"}
+    state, connection = judge_http
+    state["response"] = judge_response("MultiChallenge", reply=f"The dinner has no animal products.\n{verdict}")
+    connection = replace(connection, default_model="fixture-judge")
+    result = grade_remote_judge_answer(case.task, judged_attempt(case.task, "Lentil curry."), connection)
+    assert result.status is Outcome.GRADED
+    assert result.reward == reward
+    assert state["requests"][-1]["messages"] == [
+        {
+            "role": "user",
+            "content": MULTICHALLENGE_JUDGE_TEMPLATE.format(candidate="Lentil curry.", reference="Is the dinner vegan?"),
+        }
+    ]
 
 
 def test_physics_verified_drops_figure_rows_and_judges_each_labelled_answer(tmp_path, monkeypatch, judge_http):

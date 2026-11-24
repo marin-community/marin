@@ -191,9 +191,12 @@ grader, and reporting a collapse on that basis would be the same error as hiding
 names the flag and links the run, and `include_flagged=1` admits it, starred.
 
 Several settings of one benchmark can share a leaderboard column. The launcher writes explicit
-groupings to each run's `eval.family`. Harbor runs without an explicit family use their dataset as the
-family, so policies and dataset versions over the same benchmark group automatically. Other runs
-without a family keep their own column. `/panel` returns each family, its requested variants, and the
+groupings to each run's `eval.family`. Curated runs use their selected benchmark. Harbor runs without
+an explicit family use the curated benchmark that replaced their dataset
+(`evalrecords.historical_protocols.HISTORICAL_HARBOR_BENCHMARKS`), else the dataset itself, so policies,
+dataset versions and curated agent runs over the same benchmark group automatically. Their cells stay
+distinct by mechanism and corpus identity. Harbor's `mean_reward` and a curated protocol's `reward`
+share the canonical `reward` metric. Other runs without a family keep their own column. `/panel` returns each family, its requested variants, and the
 selected variant. It selects the variant with the most admitted cells for that request, breaking ties
 by eval name. Requesting one variant pins it.
 

@@ -8,6 +8,7 @@ from functools import cache, partial
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
+    agentic,
     biomedical,
     code,
     commonsense,
@@ -26,6 +27,7 @@ from experiments.evaluation.benchmarks import (
     math,
     mmlu,
     mmlu_redux,
+    multichallenge,
     multiple_choice,
     nupa,
     pdbthink,
@@ -70,10 +72,12 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             facts_grounding,
             genomeqa,
             simpleqa,
+            multichallenge,
             econevals,
             long_context,
             longbench,
             nupa,
+            agentic,
             supergpqa,
             pdbthink,
             physics_verified,

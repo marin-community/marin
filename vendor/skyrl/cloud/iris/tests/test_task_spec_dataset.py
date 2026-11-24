@@ -20,6 +20,7 @@ from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
+    GraderMachine,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
@@ -122,10 +123,10 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
         update={
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                environment=EnvironmentRequirements(
+                placement=GraderMachine(environment=EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS,
                     docker_image="fixture@sha256:" + "0" * 64,
-                ),
+                )),
             )
         }
     )
@@ -136,10 +137,10 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
             "grader": ScriptGrader(
                 argv=("python", "/tests/grade.py"),
-                environment=EnvironmentRequirements(
+                placement=GraderMachine(environment=EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS,
                     packages_lock="s3://fixture/grader.lock",
-                ),
+                )),
             ),
         }
     )

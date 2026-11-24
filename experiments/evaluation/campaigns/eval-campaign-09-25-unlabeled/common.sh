@@ -9,10 +9,7 @@ CANONICAL_CONFIG_ROOT="$SCRIPT_DIR"
 CAMPAIGN_CONFIG="$CANONICAL_CONFIG_ROOT/campaign.yaml"
 MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/model-configs"
 CHAT_TEMPLATE_DIR="$CANONICAL_CONFIG_ROOT/chat-templates"
-EVALUATION_CONFIG="$CANONICAL_CONFIG_ROOT/evalchemy.yaml"
-HARBOR_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/harbor-configs"
-JUDGE_MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/judge-model-configs"
-JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG_DIR/MiniMaxAI-MiniMax-M3-MXFP8.yaml"
+EVALUATION_CONFIG="$CANONICAL_CONFIG_ROOT/evaluations.yaml"
 CONFIG_SNAPSHOT_DIR="$MARIN_DIR/experiments/evaluation/campaigns/.launch-snapshots/eval-campaign-09-25-unlabeled"
 STAGING_ROOT="$MARIN_DIR/experiments/evaluation/campaigns/.launch-staging/eval-campaign-09-25-unlabeled"
 EVAL_CAMPAIGN_SECRETS_ENV="${EVAL_CAMPAIGN_SECRETS_ENV:-}"
@@ -21,11 +18,8 @@ COREWEAVE_SECRET_PROJECT="${COREWEAVE_SECRET_PROJECT:-hai-gcp-models}"
 
 FEDERATED_CLUSTER="${FEDERATED_CLUSTER:-cw-rno2a}"
 PRIORITY="${PRIORITY:-interactive}"
-JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
-TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
-CAMPAIGN_DATASET_REGISTRY_REVISION="38742b0f9f411c95e0c01468785cac7bb77c9894"
 eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
@@ -50,8 +44,6 @@ reset_staging_root() {
 validate_marin_checkout() {
   git -C "$MARIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || die "MARIN_DIR is not a git worktree: $MARIN_DIR"
-
-  (cd "$MARIN_DIR" && uv lock --project vendor/harbor --check)
 
   local unexpected
   unexpected=$(git -C "$MARIN_DIR" status --porcelain \
@@ -136,25 +128,20 @@ resolve_coreweave_credentials() {
   fi
 }
 
-prepare_judge_environment() {
+prepare_credentials() {
   resolve_hf_token
   resolve_together_api_key
-  export JUDGE_API_KEY="$TOGETHER_API_KEY"
-  export JUDGE_BASE_URL
-  export OPENAI_API_KEY="$TOGETHER_API_KEY" OPENAI_BASE_URL="$JUDGE_BASE_URL"
-  export TAU2_USER_MODEL="$TAU2_JUDGE_MODEL"
-  export TAU2_NL_ASSERTIONS_MODEL="$TAU2_JUDGE_MODEL"
 }
 
-# Apply model-specific policy values and harness profiles to canonical Harbor configs.
-# The resulting effective configs are snapshotted at launch.
-stage_harbor_configs() {
+# Select each evaluation's protocol for a model whose window cannot hold the default one.
+# The resulting effective config is snapshotted at launch.
+stage_evaluation_config() {
   local model=$1
-  STAGED_HARBOR_DIR="$STAGING_ROOT/$model/harbor"
-  export STAGED_HARBOR_DIR
-  mkdir -p "$STAGED_HARBOR_DIR"
-  cp -R "$HARBOR_CONFIG_DIR/." "$STAGED_HARBOR_DIR/"
-  CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" STAGED_HARBOR_DIR="$STAGED_HARBOR_DIR" \
+  STAGED_EVALUATION_CONFIG="$STAGING_ROOT/$model/evaluations.yaml"
+  export STAGED_EVALUATION_CONFIG
+  mkdir -p "$(dirname "$STAGED_EVALUATION_CONFIG")"
+  CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" EVALUATION_CONFIG="$EVALUATION_CONFIG" MODEL_NAME="$model" \
+  STAGED_EVALUATION_CONFIG="$STAGED_EVALUATION_CONFIG" \
     uv run --project "$MARIN_DIR" python - <<'PY'
 import os
 from pathlib import Path
@@ -162,29 +149,11 @@ from pathlib import Path
 import yaml
 
 campaign = yaml.safe_load(Path(os.environ["CAMPAIGN_CONFIG"]).read_text())
-model_info = (campaign.get("harbor_model_info") or {}).get(os.environ["MODEL_NAME"])
-profiles = campaign.get("harbor_harness_profiles") or {}
-profile_by_eval = campaign.get("harbor_eval_harness_profiles") or {}
-for path in Path(os.environ["STAGED_HARBOR_DIR"]).glob("*.yaml"):
-    document = yaml.safe_load(path.read_text())
-    changed = False
-    profile_name = profile_by_eval.get(path.stem)
-    profile = profiles.get(profile_name) if profile_name else None
-    for agent in document.get("agents") or []:
-        configured_kwargs = agent.get("kwargs") or {}
-        configured_model_info = configured_kwargs.get("model_info")
-        if model_info and configured_model_info:
-            configured_model_info.update(model_info)
-            changed = True
-        if profile and agent.get("name") == profile["agent"]:
-            configured_kwargs.update(profile.get("kwargs") or {})
-            configured_kwargs.update(
-                (profile.get("model_kwargs") or {}).get(os.environ["MODEL_NAME"], {})
-            )
-            agent["kwargs"] = configured_kwargs
-            changed = True
-    if changed:
-        path.write_text(yaml.safe_dump(document, sort_keys=False))
+document = yaml.safe_load(Path(os.environ["EVALUATION_CONFIG"]).read_text())
+protocols = (campaign.get("model_evaluation_protocols") or {}).get(os.environ["MODEL_NAME"], {})
+for name, protocol in protocols.items():
+    document["evaluations"][name]["protocol"] = protocol
+Path(os.environ["STAGED_EVALUATION_CONFIG"]).write_text(yaml.safe_dump(document, sort_keys=False))
 PY
 }
 
@@ -224,10 +193,7 @@ validate_campaign_configs() {
   MODEL_CONFIG_DIR="$MODEL_CONFIG_DIR" \
   CHAT_TEMPLATE_DIR="$CHAT_TEMPLATE_DIR" \
   EVALUATION_CONFIG="$EVALUATION_CONFIG" \
-  HARBOR_CONFIG_DIR="$HARBOR_CONFIG_DIR" \
   CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" \
-  JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG" \
-  CAMPAIGN_DATASET_REGISTRY_REVISION="$CAMPAIGN_DATASET_REGISTRY_REVISION" \
   uv run python - <<'PY'
 import os
 import re
@@ -241,47 +207,20 @@ from marin.evaluation.model_config import load_model_config
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])
-evalchemy = Path(os.environ["EVALUATION_CONFIG"])
-
-harbor = Path(os.environ["HARBOR_CONFIG_DIR"])
-campaign_config = Path(os.environ["CAMPAIGN_CONFIG"])
+evaluations = Path(os.environ["EVALUATION_CONFIG"])
+campaign = yaml.safe_load(Path(os.environ["CAMPAIGN_CONFIG"]).read_text())
 
 model_documents = {
     path.stem: yaml.safe_load(path.read_text())
     for path in models.glob("*.yaml")
 }
-campaign = yaml.safe_load(campaign_config.read_text())
-harbor_model_info = campaign.get("harbor_model_info") or {}
-harbor_harness_profiles = campaign.get("harbor_harness_profiles") or {}
-harbor_eval_harness_profiles = campaign.get("harbor_eval_harness_profiles") or {}
 native_32k_models = {
     name
     for name, document in model_documents.items()
     if document.get("serve", {}).get("max_model_len") == 32768
 }
-assert set(harbor_model_info) == native_32k_models
-for name in native_32k_models:
-    assert harbor_model_info[name] == {"max_input_tokens": 32768}
-assert harbor_eval_harness_profiles == {
-    "bixbench-pi": "pi-65k-16k",
-    "tau3-pi": "tau3-pi-131k-32k",
-    "swebench-verified": "mini-swe-k2-tool-history",
-}
-expected_model_kwargs = {
-    name: {"compaction_reserve_tokens": 16384}
-    for name in native_32k_models
-}
-assert set(harbor_harness_profiles) == set(harbor_eval_harness_profiles.values())
-assert harbor_harness_profiles["pi-65k-16k"] == {
-    "agent": "pi",
-    "kwargs": {"compaction_reserve_tokens": 32768},
-    "model_kwargs": expected_model_kwargs,
-}
-assert harbor_harness_profiles["mini-swe-k2-tool-history"] == {
-    "agent": "mini-swe-agent",
-    "model_kwargs": {"IFM-K2-Horizon-MoVA-36B-A4B": {"model_format": "k2_horizon"}},
-}
-assert harbor_harness_profiles["tau3-pi-131k-32k"]["agent"] == "acp"
+model_evaluation_protocols = campaign.get("model_evaluation_protocols") or {}
+assert model_evaluation_protocols == {name: {"bixbench-pi": "pi-32k"} for name in native_32k_models}
 assert {path.stem for path in chat_templates.glob("*.jinja")} <= {path.stem for path in models.glob("*.yaml")}
 for path in models.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
@@ -298,8 +237,15 @@ for path in models.glob("*.yaml"):
         actual_thinking_format,
         expected_thinking_format,
     )
-for selection in load_evaluations(evalchemy):
+selections = {selection.name: selection for selection in load_evaluations(evaluations)}
+for selection in selections.values():
     corpus_steps(resolve_selection(selection, None), CampaignRuntime())
+for protocols in model_evaluation_protocols.values():
+    for name, protocol in protocols.items():
+        corpus_steps(
+            resolve_selection(selections[name].model_copy(update={"protocol": protocol}), None),
+            CampaignRuntime(),
+        )
 
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
@@ -314,78 +260,9 @@ for path in models.glob("*.yaml"):
     revision = yaml.safe_load(path.read_text()).get("revision", "")
     assert re.fullmatch(r"[0-9a-f]{40}", revision), f"unpinned model revision in {path}"
 
-judge = load_model_config(Path(os.environ["JUDGE_MODEL_CONFIG"]))
-assert judge.location == "MiniMaxAI/MiniMax-M3-MXFP8"
-assert re.fullmatch(r"[0-9a-f]{40}", judge.revision or "")
-assert judge.serve.tensor_parallel_size == 8
-assert judge.serve.object_store_load_mode.value == "stage_local"
-assert "--enforce-eager" not in judge.serve.vllm_extra_args
-assert "--model-loader-extra-config" not in judge.serve.vllm_extra_args
-
-
-nupa = yaml.safe_load(evalchemy.read_text())["evaluations"]["nupa"]
+nupa = yaml.safe_load(evaluations.read_text())["evaluations"]["nupa"]
 assert nupa["benchmark"] == "nupa5k-loose"
 assert "max_tokens" not in nupa.get("run", {})
-
-terminal_bench = yaml.safe_load((harbor / "tb2-recovery.yaml").read_text())
-assert terminal_bench["n_attempts"] == 3
-assert terminal_bench["datasets"] == [{"name": "terminal-bench/terminal-bench-2-1", "ref": "6"}]
-assert terminal_bench["agents"][0]["kwargs"]["model_info"] == {
-    "max_input_tokens": 65536,
-    "max_output_tokens": 16384,
-}
-bixbench = yaml.safe_load((harbor / "bixbench-pi.yaml").read_text())
-assert "compaction_reserve_tokens" not in bixbench["agents"][0]["kwargs"]
-assert bixbench["agents"][0]["kwargs"]["model_info"] == {
-    "max_input_tokens": 65536,
-    "max_output_tokens": 16384,
-}
-bfcl = yaml.safe_load((harbor / "bfclparity-pi.yaml").read_text())
-assert bfcl["agents"][0]["kwargs"]["version"] == "0.87.0"
-openthoughts = yaml.safe_load((harbor / "ot-tblite-recovery.yaml").read_text())
-assert openthoughts["n_attempts"] == 3
-swebench = yaml.safe_load((harbor / "swebench-verified.yaml").read_text())
-assert swebench["n_attempts"] == 1
-assert swebench["agents"][0]["name"] == "mini-swe-agent"
-assert swebench["agents"][0]["kwargs"]["version"] == "2.1.0"
-assert swebench["datasets"] == [
-    {
-        "name": "swebench-verified",
-        "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/registry.json",
-    }
-]
-for name in (
-    "swebench-verified",
-    "ot-tblite-recovery",
-    "ds-1000-local",
-    "bfclparity-pi",
-    "sotopia-hard",
-):
-    document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
-    assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
-assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwargs"]["model_info"] == {
-    "max_input_tokens": 131072,
-    "max_output_tokens": 32768,
-}
-
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/"
-for path in harbor.glob("*.yaml"):
-    document = yaml.safe_load(path.read_text())
-    assert document.get("trial_attempt_timeout_sec") == 5400, path
-    for agent in document.get("agents") or []:
-        assert agent.get("override_setup_timeout_sec") == 360, path
-        assert agent.get("override_timeout_sec") == 1800, path
-        assert "thinking_format" not in (agent.get("kwargs") or {}), path
-    assert (document.get("verifier") or {}).get("override_timeout_sec") == 300, path
-    retry = document.get("retry") or {}
-    assert retry.get("exclude_exceptions") == [], path
-    included = set(retry.get("include_exceptions") or [])
-    assert {"AgentSetupTimeoutError", "VerifierTimeoutError"} <= included, path
-    assert "TrialTimeoutError" not in included, path
-    for dataset in document.get("datasets") or []:
-        registry_url = dataset.get("registry_url")
-        assert not registry_url or registry_url.startswith(registry_prefix), path
 PY
   )
 
@@ -406,7 +283,7 @@ from pathlib import Path
 
 import yaml
 
-config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evaluation-config", "--policy-finalization-config"}
+config_flags = {"--model-config", "--evaluation-config", "--policy-finalization-config"}
 arguments = sys.argv[1:]
 files = []
 for index, argument in enumerate(arguments[:-1]):
