@@ -3,7 +3,6 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-
 from dataclasses import replace
 from pathlib import Path
 
@@ -39,7 +38,9 @@ from experiments.post_training.task_curation.datasets.evalchemy import mmlu as e
 from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
+from experiments.post_training.task_curation.datasets.endless import tasks as endless
 from experiments.post_training.task_curation.datasets.facet import tasks as facet
+from experiments.post_training.task_curation.datasets import facet_terminal
 from experiments.post_training.task_curation.datasets.fineenvs import tasks as fineenvs
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
@@ -182,6 +183,8 @@ def configured_sources() -> list[RlDataSource]:
         *polaris.sources(),
         *pdbthink.sources(),
         *facet.sources(),
+        *facet_terminal.sources(),
+        *endless.cohort_source(),
         *fineenvs.sources(fineenvs.PUBLISHED_IMAGES),
         *mimo.sources(),
         *terminal_lego.sources(),

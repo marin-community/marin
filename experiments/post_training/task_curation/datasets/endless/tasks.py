@@ -9,7 +9,7 @@ import json
 import tomllib
 from collections.abc import Iterator
 from decimal import Decimal
-from functools import partial
+from functools import cache, partial
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference
@@ -37,6 +37,31 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 VERSION = "2026.11.20.1"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/endless/2026.11.19.1"
+COHORT_SOURCE_ID = "FWeindel:validated-tasks/endless"
+COHORT_COUNT = 2069
+COHORT_LOCATORS = ContentEvidenceReference(
+    uri=PREFIX + "/inputs/endless-cohort-locators-v1.json",
+    sha256="2ad3b5910a64af0b3d6fb62d0baebbf7810dc7b24616d76ce3542b85d65c6e47",
+)
+COHORT_LOCATOR_NOTE = (
+    "The verified original-pair cohort's stable row locators, extracted from the sealed oracle-filter cohort "
+    "(endless_v2: 1,948 + endless_v3: 121); the declared conversion selects exactly these rows."
+)
+COHORT_IMAGES = ContentEvidenceReference(
+    uri=PREFIX + "/registry-v6/result.json",
+    sha256="c694feec0d0f6acff758ebf5cfe55babd43be2a8e9ac52384c47cd8e760d4611",
+)
+COHORT_CENSUS = ContentEvidenceReference(
+    uri=PREFIX + "/native-contract-census-v1/report.json",
+    sha256="56a0e368e276697e5ed78a315f6239b508a7aa945c6c27ed8ddebb286a2f8347",
+)
+
+
+def cohort_source() -> list[RlDataSource[CurationRecipe]]:
+    """The combined original-pair cohort declaration at its sealed image and census pins."""
+    return cohort_sources(COHORT_IMAGES, COHORT_CENSUS)
+
+
 IMAGE_INDEX = ContentEvidenceReference(
     uri=PREFIX + "/inputs/verified-sif-image-index-v1.json",
     sha256="81424898d51e7db35d16c93aaecef5e2a44ecb0287933fe034434f2fce5394f6",
@@ -221,6 +246,122 @@ def convert_endless(row: RawRow, context: ConversionContext) -> TaskSpec | Impor
             },
         }
     )
+
+
+def read_cohort_rows(
+    path: StoragePath,
+    context: ConversionContext,
+    *,
+    images_reference: ContentEvidenceReference,
+    census_reference: ContentEvidenceReference,
+) -> Iterator[dict]:
+    """Yield every native row of one folder in upstream order, annotated with its stable locator.
+
+    The annotation carries the row's original ``file:index`` locator so the cohort select
+    can drop the ten nop-only rows without renumbering the survivors: the declared
+    conversion's task identities stay byte-identical to the sealed cohort's.
+    """
+    file = "/".join(str(path).rsplit("/", 2)[-2:])
+    rows = read_endless_rows(
+        path, context, folder=folder_of(file), images_reference=images_reference, census_reference=census_reference
+    )
+    for index, row in enumerate(rows):
+        yield {**row, "endless_cohort_locator": f"{file}:{index}"}
+
+
+def folder_of(file: str) -> str:
+    folder = file.rsplit("/", 1)[0]
+    if folder not in EXPECTED_TASKS:
+        raise ValueError(f"Endless cohort file names another folder: {file}")
+    return folder
+
+
+def select_cohort_rows(row: dict, _context: ConversionContext, *, locators_reference: ContentEvidenceReference) -> bool:
+    """Keep exactly the sealed original-pair cohort's rows, identified by their stable locators."""
+    locator = row["endless_cohort_locator"]
+    file, separator, index = locator.rpartition(":")
+    if not separator or not index.isdigit():
+        raise ValueError(f"Endless cohort row carries no stable locator: {locator}")
+    locators = cohort_locators(locators_reference.uri, locators_reference.sha256)
+    return int(index) in locators.get(file, frozenset())
+
+
+@cache
+def cohort_locators(uri: str, sha256: str) -> dict[str, frozenset[int]]:
+    document = pinned_json(uri, sha256)
+    locators = {folder: frozenset(indices) for folder, indices in document.items()}
+    if {folder: len(indices) for folder, indices in locators.items()} != EXPECTED_COHORT_COUNTS:
+        raise ValueError("Endless cohort locator set differs from the sealed original-pair accounting")
+    return locators
+
+
+EXPECTED_COHORT_COUNTS = {"endless_v2/tasks.parquet": 1948, "endless_v3/tasks.parquet": 121}
+
+
+def cohort_sources(
+    images: ContentEvidenceReference, census: ContentEvidenceReference
+) -> list[RlDataSource[CurationRecipe]]:
+    """The combined original-pair cohort at the upstream pin (ruling 2026-11-24, option B).
+
+    One source over both kept folders whose population is exactly the sealed 2,069-task
+    verified original-pair cohort: the read keeps every upstream row in order and the
+    select drops the ten nop-only rows by their stable locators, so the declared
+    conversion reproduces the cohort's task identities and bytes exactly. The per-folder
+    license evidence stays bound per folder (the repackager ruling); the sealed release
+    card carries the per-folder lineage table.
+    """
+    return [
+        RlDataSource(
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                origin=SourceOrigin.FWEINDEL,
+                upstream_dataset="validated-tasks",
+                upstream_name="EndlessTerminals native tasks",
+                upstream_url=f"https://huggingface.co/datasets/{DATASET}/tree/{TASK_REVISION}",
+                subset="endless",
+                count=COHORT_COUNT,
+                family="terminal",
+                task_format=TaskFormat.TASKSPEC,
+                build_path=(
+                    "Combined original-pair cohort at the upstream pin; pristine per-folder image runtimes preserved"
+                ),
+                tags=("endless", "terminal", "pristine-sif", "cohort:original-pair"),
+                notes=(
+                    "The verified original-pair cohort (2,069 of the 2,079 census tasks; the ten nop-only v2 rows "
+                    "never completed original oracle pairs). The declared conversion reproduces the sealed cohort's "
+                    f"task identities and bytes exactly except one grader field: the shell quiesce script carries the "
+                    "shellbox keeper-payload guard landed after the cohort was built (taskcompendium "
+                    f"2026-11-24); {COHORT_LOCATOR_NOTE} "
+                    "The admission serves the sealed release bytes, and the census, lexical and dedup receipts bind "
+                    "the sealed cohort. Per-folder license evidence stays bound per folder (the repackager ruling). "
+                    "Coordinator disposition 2026-11-24 15:35 EST: the sealed pre-guard quiesce is the "
+                    "machine-keeper-killing variant on pre-PID-1 shellbox, so the sealed-bytes admission stands only "
+                    "after the landed keeper PID 1 fix (atlas-env-audit dc44e1740b) is verified in-region on one "
+                    "sealed Endless task grading on the LOCAL tier; until then the source does not mark Available. "
+                    "If the fix had not been landed in time, the disposition was to re-release with the current "
+                    "converter's keeper-safe quiesce (ids unchanged; SAMPLE re-run on the new task_specs_sha)."
+                ),
+            ),
+            config=CurationRecipe(
+                name="endless",
+                version=VERSION,
+                source=HfSource(
+                    DATASET,
+                    TASK_REVISION,
+                    ("endless_v2/tasks.parquet", "endless_v3/tasks.parquet"),
+                    SourceFormat.PARQUET,
+                    read=partial(read_cohort_rows, images_reference=images, census_reference=census),
+                    select=partial(select_cohort_rows, locators_reference=COHORT_LOCATORS),
+                    decode=decode_endless,
+                ),
+                convert=convert_endless,
+                intended_use=IntendedUse.TRAIN,
+                rubric=RUBRIC,
+                oracle_solutions=True,
+            ),
+            pipeline=process_rows,
+        )
+    ]
 
 
 def sources(images: ContentEvidenceReference, census: ContentEvidenceReference) -> list[RlDataSource[CurationRecipe]]:

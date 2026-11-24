@@ -6,7 +6,16 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseBan, LicenseDecision, LicenseReceipt, LicenseSourcePin
+from finestore.rl.licenses import (
+    LICENSE_RESOLVER_VERSION,
+    LicenseBan,
+    LicenseCheck,
+    LicenseCheckRule,
+    LicenseCheckVerdict,
+    LicenseDecision,
+    LicenseReceipt,
+    LicenseSourcePin,
+)
 from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
@@ -120,21 +129,39 @@ def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
     card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     """The repackager ruling: the card states each included folder's upstream license."""
     folder_notice = b"Folder-lineage attribution.\n"
-    snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card, "endless_v2/NOTICE": folder_notice})
+    snapshot_hub(
+        tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card, "endless_v2/NOTICE": folder_notice}
+    )
     lineage = {
         "FWeindel:validated-tasks/endless_v2": {
-            "source_id": "FWeindel:validated-tasks/endless_v2", "dataset_id": "FWeindel/validated-tasks",
+            "source_id": "FWeindel:validated-tasks/endless_v2",
+            "dataset_id": "FWeindel/validated-tasks",
             "revision": REVISION,
-            "decisions": [{"kind": "exception", "approved": True,
-                           "rationale": "accepts Endless v1-v3 from obiwan96/endless-terminals@2" * 40 + " as MIT.",
-                           "evidence_urls": [PREFIX + "endless_v2"]}],
-            "evidence": [{"url": PREFIX + "endless_v2/README.md", "kind": "dataset_card",
-                          "sha256": hashlib.sha256(card).hexdigest(), "license_ids": ["missing"]}],
+            "decisions": [
+                {
+                    "kind": "exception",
+                    "approved": True,
+                    "rationale": "accepts Endless v1-v3 from obiwan96/endless-terminals@2" * 40 + " as MIT.",
+                    "evidence_urls": [PREFIX + "endless_v2"],
+                }
+            ],
+            "evidence": [
+                {
+                    "url": PREFIX + "endless_v2/README.md",
+                    "kind": "dataset_card",
+                    "sha256": hashlib.sha256(card).hexdigest(),
+                    "license_ids": ["missing"],
+                }
+            ],
         },
     }
     publication = license_publication.prepare_license_publication(
-        source_receipt(card), tmp_path / "published", use="train", lineage=lineage,
-        folders=["FWeindel:validated-tasks/endless_v2"])
+        source_receipt(card),
+        tmp_path / "published",
+        use="train",
+        lineage=lineage,
+        folders=["FWeindel:validated-tasks/endless_v2"],
+    )
     assert publication.metadata["license"] == "mit"
     assert len(publication.license_table) == 1
     assert publication.license_table[0]["identifier"] == "MIT"
@@ -150,16 +177,22 @@ def test_publication_states_other_for_divergent_folder_licenses(tmp_path, monkey
     lineage = {}
     for folder, identifier in (("endless_v2", "MIT"), ("endless_v3", "Apache-2.0")):
         lineage[f"FWeindel:validated-tasks/{folder}"] = {
-            "source_id": f"FWeindel:validated-tasks/{folder}", "dataset_id": "FWeindel/validated-tasks",
+            "source_id": f"FWeindel:validated-tasks/{folder}",
+            "dataset_id": "FWeindel/validated-tasks",
             "revision": REVISION,
-            "decisions": [{"kind": "exception", "approved": True,
-                           "rationale": f"explicitly accepts the folder as {identifier}.",
-                           "evidence_urls": [PREFIX + folder]}],
+            "decisions": [
+                {
+                    "kind": "exception",
+                    "approved": True,
+                    "rationale": f"explicitly accepts the folder as {identifier}.",
+                    "evidence_urls": [PREFIX + folder],
+                }
+            ],
             "evidence": [],
         }
     publication = license_publication.prepare_license_publication(
-        source_receipt(card), tmp_path / "published", use="train", lineage=lineage,
-        folders=sorted(lineage))
+        source_receipt(card), tmp_path / "published", use="train", lineage=lineage, folders=sorted(lineage)
+    )
     assert publication.metadata["license"] == "other"
     assert {row["identifier"] for row in publication.license_table} == {"MIT", "Apache-2.0"}
 
@@ -167,12 +200,18 @@ def test_publication_states_other_for_divergent_folder_licenses(tmp_path, monkey
 def test_lineage_folder_identifier_requires_an_approved_decision():
     with pytest.raises(ValueError, match="lacks an approved decision"):
         license_publication.lineage_folder_identifier(
-            {"source_id": "fixture:folder", "decisions": [{"kind": "exception", "approved": False,
-                                                           "rationale": "accepts it as MIT"}]})
+            {
+                "source_id": "fixture:folder",
+                "decisions": [{"kind": "exception", "approved": False, "rationale": "accepts it as MIT"}],
+            }
+        )
     with pytest.raises(ValueError, match="does not name"):
         license_publication.lineage_folder_identifier(
-            {"source_id": "fixture:folder", "decisions": [{"kind": "exception", "approved": True,
-                                                           "rationale": "no identifier here"}]})
+            {
+                "source_id": "fixture:folder",
+                "decisions": [{"kind": "exception", "approved": True, "rationale": "no identifier here"}],
+            }
+        )
 
 
 def test_publication_preserves_folder_lineage_license_documents(tmp_path, monkeypatch):
@@ -496,23 +535,37 @@ def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, mo
 
 def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_path, monkeypatch):
     """The repackager ruling: the folder lineage carries the pass at a repackager pin."""
-    from finestore.rl.licenses import LicenseCheck, LicenseCheckRule, LicenseCheckVerdict
-
     receipt = lineage_receipt(REVISION, ["train"])
     registered_lineage(monkeypatch, receipt)
-    failing = LicenseCheck(source_id=receipt.source_id, dataset_id=receipt.dataset_id, revision=receipt.revision,
-                           verdict=LicenseCheckVerdict.FAIL, rule_id=LicenseCheckRule.MISSING,
-                           quote="L1: ---", evidence_url=PREFIX + "README.md")
+    failing = LicenseCheck(
+        source_id=receipt.source_id,
+        dataset_id=receipt.dataset_id,
+        revision=receipt.revision,
+        verdict=LicenseCheckVerdict.FAIL,
+        rule_id=LicenseCheckRule.MISSING,
+        quote="L1: ---",
+        evidence_url=PREFIX + "README.md",
+    )
     monkeypatch.setattr(license_publication, "check_license", lambda actual, ban=None: failing)
-    lineage = {receipt.source_id: {
-        "source_id": receipt.source_id, "dataset_id": receipt.dataset_id, "revision": receipt.revision,
-        "decisions": [{"kind": "exception", "approved": True,
-                       "rationale": "explicitly accepts the folder's upstream as MIT.",
-                       "evidence_urls": [PREFIX + "endless_v2"]}],
-        "evidence": [],
-    }}
-    evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision,
-                                                     "train", lineage=lineage)
+    lineage = {
+        receipt.source_id: {
+            "source_id": receipt.source_id,
+            "dataset_id": receipt.dataset_id,
+            "revision": receipt.revision,
+            "decisions": [
+                {
+                    "kind": "exception",
+                    "approved": True,
+                    "rationale": "explicitly accepts the folder's upstream as MIT.",
+                    "evidence_urls": [PREFIX + "endless_v2"],
+                }
+            ],
+            "evidence": [],
+        }
+    }
+    evidence = license_publication.check_publication(
+        receipt.source_id, receipt.dataset_id, receipt.revision, "train", lineage=lineage
+    )
     assert evidence["verdict"] == "PASS"
     assert evidence["folder_lineage"]["identifier"] == "MIT"
     assert evidence["folder_lineage"]["upstream"] == f"{receipt.dataset_id}@{receipt.revision}"
@@ -589,9 +642,6 @@ def test_publication_license_gate_calls_current_checker_with_exact_pin(revision)
     license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
 
 
-
-
-
 def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeypatch):
     card = b"---\nlicense: mit\n---\n# Dataset\n"
     receipt = source_receipt(card)
@@ -621,7 +671,8 @@ def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeyp
     monkeypatch.setattr(license_publication, "hf_hub_download", lambda repo, name, **kwargs: str(tmp_path / name))
     monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
     prepared = license_publication.prepare_private_dataset(
-        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train")
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train"
+    )
     result = license_publication.publish_private_dataset(prepared)
     assert writes == ["upload"] and result.revision == "d" * 40
 
@@ -646,6 +697,7 @@ def test_private_publication_rejects_a_repo_with_other_content(tmp_path, monkeyp
     monkeypatch.setattr(license_publication, "HfApi", Hub)
     monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
     prepared = license_publication.prepare_private_dataset(
-        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train")
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train"
+    )
     with pytest.raises(ValueError, match="already exists with other content"):
         license_publication.publish_private_dataset(prepared)

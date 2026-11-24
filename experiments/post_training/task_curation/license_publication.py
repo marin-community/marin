@@ -104,8 +104,11 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
     except Exception as error:
         # A prior attempt of this same frozen campaign may have created the repo before
         # its gate stopped; reuse it only when its inventory is exactly this publication's.
-        existing = {entry.path for entry in api.list_repo_tree(prepared.repo, repo_type="dataset", recursive=True)
-                    if getattr(entry, "path", None)}
+        existing = {
+            entry.path
+            for entry in api.list_repo_tree(prepared.repo, repo_type="dataset", recursive=True)
+            if getattr(entry, "path", None)
+        }
         # The Hub creates .gitattributes on repo creation; platform boilerplate is not
         # publication content. Anything else outside this publication fails the reuse.
         existing.discard(".gitattributes")
@@ -306,15 +309,18 @@ def prepare_license_publication(
                 raise ValueError(f"Folder lineage receipt lacks the included folder: {folder}")
             identifier = lineage_folder_identifier(record)
             identifiers.add(identifier.lower())
-            license_table.append({
-                "folder": folder,
-                "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
-                "identifier": identifier,
-                "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
-            })
+            license_table.append(
+                {
+                    "folder": folder,
+                    "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
+                    "identifier": identifier,
+                    "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
+                }
+            )
             evidence_urls.update(record.get("decisions", [])[-1].get("evidence_urls", []))
             evidence_urls.update(
-                item["url"] for item in record.get("evidence", [])
+                item["url"]
+                for item in record.get("evidence", [])
                 if isinstance(item, dict) and item.get("url", "").startswith("https://huggingface.co/")
             )
         ordered = sorted(identifiers)
@@ -334,7 +340,9 @@ def prepare_license_publication(
             identifiers = sorted(set(citation.license_ids) - {"missing"})
             metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
         elif "license" not in metadata:
-            identifiers = sorted({identifier for item in source_evidence for identifier in item.license_ids} - {"missing"})
+            identifiers = sorted(
+                {identifier for item in source_evidence for identifier in item.license_ids} - {"missing"}
+            )
             if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
                 raise ValueError("Checked grant supplies no publishable permissive license identifier")
             metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
@@ -403,9 +411,7 @@ def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, u
     )
 
 
-def check_publication(
-    source_id: str, dataset_id: str, revision: str, use: str, *, lineage: dict | None = None
-) -> dict:
+def check_publication(source_id: str, dataset_id: str, revision: str, use: str, *, lineage: dict | None = None) -> dict:
     """Require the new private pin's own checker result before returning publication evidence.
 
     A card-check escalation stays blocked unless the receipts registry binds this exact
@@ -437,11 +443,12 @@ def check_publication(
         record = lineage.get(source_id)
         resolved = (result.dataset_id, result.revision)
         wrapper = evidence.get("receipt", {}).get("resolved_source") or {}
-        if record is None or (record.get("dataset_id"), record.get("revision")) not in (resolved, (wrapper.get("dataset_id"), wrapper.get("revision"))):
+        wrapper_pin = (wrapper.get("dataset_id"), wrapper.get("revision"))
+        if record is None or (record.get("dataset_id"), record.get("revision")) not in (resolved, wrapper_pin):
             record = None
             for candidate in lineage.values():
                 pin = (candidate.get("dataset_id"), candidate.get("revision"))
-                if pin in (resolved, (wrapper.get("dataset_id"), wrapper.get("revision"))):
+                if pin in (resolved, wrapper_pin):
                     record = candidate
                     break
         if record is not None:

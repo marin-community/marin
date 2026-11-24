@@ -163,6 +163,7 @@ class SourceOrigin(StrEnum):
     CODEPARROT = "CodeParrot"
     ELEUTHERAI = "EleutherAI"
     EVALCHEMY = "Evalchemy"
+    FACET_TERMINAL = "FACET-Terminal"
     FWEINDEL = "FWeindel"
     GPQA = "GPQA"
     GRETEL = "Gretel"
