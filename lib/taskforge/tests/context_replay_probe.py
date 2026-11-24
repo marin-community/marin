@@ -23,13 +23,13 @@ from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import ContextExhausted
 from taskforge.model.review import Abandon
 from taskforge.resources.inference import GlmInference
-from taskforge.stages.classify import replay_rule
+from taskforge.stages.classify import replaced_refusals, replayable_grade
 from taskforge.wiring import install
 
 
 def driver_log(previous: Sequence[Record], *, resume: bool) -> EventLog:
     """The log ``driver.one`` builds over a published stream; ``resume`` is its ``--resume-held``."""
-    return EventLog(replay_from=previous, replayable=replay_rule(previous, resume))
+    return EventLog(replay_from=previous, replayable=replayable_grade, replaces=replaced_refusals(previous, resume))
 
 
 async def main(mode: str, directory: Path) -> None:

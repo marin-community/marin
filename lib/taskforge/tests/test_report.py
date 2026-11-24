@@ -13,10 +13,12 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.checkpoint import HEAD, JOURNAL_FORMAT, CheckpointSink, read_journal
+from taskforge.effects.context import Context
 from taskforge.effects.events import (
     ENVIRONMENT,
     Event,
     Fingerprint,
+    Invalidated,
     Note,
     ReplayPolicy,
     Resolved,
@@ -24,7 +26,7 @@ from taskforge.effects.events import (
     ScopeExited,
     StageCompleted,
 )
-from taskforge.effects.log import Opened, Record, Status
+from taskforge.effects.log import EventLog, Opened, Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
@@ -88,6 +90,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         (31, ScopeExited("adversary:a", False)),
         (32, Resolved(SolverRollout(spec, 0, 0), (), result)),
         (33, Resolved(SolverRollout(spec, 0, 0), (), result, replayed=True)),
+        (33, Invalidated(SolverRollout(spec, 0, 0), ())),  # an authorised replacement starts: no usage
         (34, StageCompleted(Stage.REVIEW, "", "Accepted", terminal=Terminal.ACCEPTED)),
     ]
     for name, age, terminal, reasons in (
@@ -124,6 +127,45 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     assert "event_gap=InferenceRequest n=2 p50_seconds=5.000 p90_seconds=10.000" in lines
     assert "event_gap=WriteFile n=1 p50_seconds=3.000 p90_seconds=3.000" in lines
     assert "terminal=accepted count=1" in await report(str(tmp_path), 1)
+
+
+class Profile:
+    """The author model under ``name``: a cached resource whose fingerprint is the profile."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("inference", self.name, ReplayPolicy.CACHE)
+
+
+# Review 2026-11-21: cold launches under author profiles A, then B, then A reported
+# cumulative author tokens 40/20, 80/40 and 120/60: the third bought again what A had already paid. It reports 80/40.
+async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
+    request = InferenceRequest((), (), LLMPolicy())
+
+    async def answer(_event: InferenceRequest, _profile: Profile) -> Completion:
+        return Completion("ok", usage=Usage(prompt_tokens=40, completion_tokens=20))
+
+    history: tuple[Record, ...] = ()
+    reported = []
+    for launch, profile in enumerate("ABA"):
+        ctx = Context(log=EventLog(replay_from=history))
+        ctx.handle(InferenceRequest, answer, Profile(profile))
+        async with ctx.scope("author"):
+            await ctx.emit(request)
+        await ctx.drain()
+        history = ctx._log.records
+        root = tmp_path / f"launch-{launch}"
+        (root / "workpiece").mkdir(parents=True)
+        sink = CheckpointSink(tmp_path / f"work-{launch}", str(root / "workpiece"))
+        sink.claim(None)
+        await sink.local.write(history)
+        await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
+        reported += [line for line in await report(str(root)) if line.startswith("tokens role=author")]
+    assert reported == [f"tokens role=author prompt={40 * n} cached=0 completion={20 * n}" for n in (1, 2, 2)]
 
 
 async def test_report_empty_root_fails_closed(tmp_path: Path) -> None:

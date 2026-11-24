@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Final
+
 from taskforge.model.workpiece import Conversation
 
 
@@ -42,6 +44,18 @@ class Unreproducible(Hold):
     Rationale: every later recorded result would describe state that does not exist, so the workpiece holds for a
     person instead of continuing on it.
     """
+
+
+class DecisionModelUnavailable(Hold):
+    """The decision model answered no read for ``decision_model.unavailable_wait``; defer until it answers again.
+
+    Rationale: the decision model is one preemptible service that can be down for hours. Waiting longer holds a
+    driver slot, and failing or scoring would discard authored work or invent evidence. So the read ends in this
+    hold, never ``TimeoutError`` (which RolloutEngine reports as a verifier deadline); siblings finish, resolved
+    effects stay journalled, and the hold names what it ``awaits`` so the driver resumes it once the model answers.
+    """
+
+    awaits: Final = "decision_model"
 
 
 class RequestRejected(Hold):

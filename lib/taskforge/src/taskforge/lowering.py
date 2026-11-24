@@ -6,16 +6,18 @@
 """Bind authored tasks to Taskforge's machine factories and RolloutEngine limits."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
+from taskcompendium.decision_model import DecisionModelConnection, DecisionModelRequest
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     CommandSemantics,
+    DecisionModelGrader,
     EnvironmentRequirements,
     Grader,
     ScriptGrader,
@@ -143,6 +145,7 @@ def lower(
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
     judge_connection: JudgeConnection | None = None,
+    decision_model: DecisionModelConnection | None = None,
 ) -> TaskRolloutSpec:
     """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
@@ -166,6 +169,7 @@ def lower(
         task=task,
         harness=TOOL_HARNESS,
         judge_connection=judge_connection,
+        decision_model=decision_model,
         task_machine=(None if task_machine is None else machine_runtime(task_machine, task.environment_requirements)),
         verifier_machine=(
             None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading)
@@ -226,6 +230,8 @@ class LoweringSettings:
     verifier_machine: MachineSettings
     limits: RolloutLimits
     judge_model: str = ""
+    decision_model: str = field(default="", metadata={"serialize": False})
+    """``decision_model.model``, empty when disabled; replay keys carry it only where one is configured."""
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -244,7 +250,8 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     if memory_mb <= 0:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
-    return LoweringSettings(settings, settings, limits, policy.setting("judge.model", str))
+    judge, decision_model = policy.setting("judge.model", str), policy.setting("decision_model.model", str)
+    return LoweringSettings(settings, settings, limits, judge, decision_model)
 
 
 def lower_with_settings(
@@ -266,13 +273,20 @@ def lower_with_settings(
         connection = JudgeConnection(
             "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
         )
+    decision_model = None
+    if isinstance(task.grader, DecisionModelGrader):
+        if not settings.decision_model:
+            raise InvalidTaskSpec(
+                "Decision-model grading is disabled: set policy decision_model.model or use another grader"
+            )
+        decision_model = DecisionModelConnection(settings.decision_model, unbound_read)
     grader = grading_environment(task)
     if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
         raise InvalidTaskSpec(
             f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
         )
     timeout = verifier_timeout(task.grader)
-    if judge is not None:
+    if judge is not None or decision_model is not None:  # the model's own availability window ends first
         timeout = max(timeout, settings.limits.model_turn_timeout or 0)
     limits = settings.limits.model_copy(update={"verifier_timeout": timeout})
     return lower(
@@ -282,7 +296,12 @@ def lower_with_settings(
         limits=limits,
         factories=factories,
         judge_connection=connection,
+        decision_model=decision_model,
     )
+
+
+async def unbound_read(_request: DecisionModelRequest) -> float:
+    raise RuntimeError("A decision-model read is bound at grade setup, by the installed decision model")
 
 
 def check_candidates(task: TaskSpec, candidates: Sequence[Candidate]) -> None:

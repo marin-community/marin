@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import errno
 import gzip
 import hashlib
@@ -22,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast, override
 
+import httpx
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
 from connectrpc.code import Code
@@ -39,11 +41,12 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
+from taskcompendium.decision_model import DecisionModelRequest
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
-from taskforge import checkpoint, driver
+from taskforge import checkpoint, coordinator, driver
 from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal, read_journal
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
@@ -60,6 +63,7 @@ from taskforge.effects.events import (
 )
 from taskforge.effects.issues import (
     CorruptJournal,
+    DecisionModelUnavailable,
     Hold,
     LogFailure,
     OutputBudgetExhausted,
@@ -76,7 +80,7 @@ from taskforge.llm.policy import GLM_5_3, ModelProfile
 from taskforge.lowering import rollout_engine
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
-from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
+from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import (
     VALIDATION_RESULT,
     Abandon,
@@ -97,6 +101,16 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submiss
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
+from taskforge.resources.decision_model import (
+    ClefReader,
+    DecisionModel,
+    DecisionModelDown,
+    DecisionModelHealth,
+    DecisionModelPolicy,
+    DecisionModelRead,
+    DecisionModelReader,
+    read_level,
+)
 from taskforge.resources.env import (
     CommandResult,
     EnvFactory,
@@ -111,6 +125,7 @@ from taskforge.resources.ids import Ids, NewId
 from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
+from taskforge.stages import STAGES
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
@@ -446,7 +461,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         policy=str(overlay),
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
-        resume_held=False,
+        resume_held=False,  # and no probe: an in-process caller built before the flag existed
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -2101,7 +2116,8 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert VALIDATION_RESULT.dump_json(VALIDATION_RESULT.validate_json(written)) == written
     decisions = (Accept(BandOutcome.IN_BAND), Modify(("harder",), BandOutcome.TOO_EASY), Incomplete(("held",)))
     snapshot = json.loads(WORKPIECE.dump_json(Workpiece("w", proposal, decisions=decisions)))
-    assert "fallback" not in snapshot and not {"restore", "fallback"} & {key for d in snapshot["decisions"] for key in d}
+    keys = {key for decision in snapshot["decisions"] for key in decision}
+    assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
 
 
 # Review 2026-11-21: an empty restore and None serialised alike, so an invalid direct restore became an
@@ -3170,6 +3186,415 @@ async def test_hydration_failure_on_a_caller_path_stays_the_callers_and_repeats(
         assert "Unreproducible" not in str(workpiece.decisions[-1]) and executions(attempt_resources) == (0, 0)
         assert not [r for r in history(destination) if isinstance(r.event, Failed)]
         driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+
+
+OUTAGE = DecisionModelUnavailable("clef@fixture-1 answered no read for 900s; last HTTP 503: clef_unavailable")
+
+
+# A decision-model outage is no case for a person: the published hold names what it awaits, and the next launch
+# resumes it without --resume-held, paying only what the held launch had not bought. Any other hold stays put.
+@pytest.mark.parametrize("hold, resumes", [(OUTAGE, True), (Hold("relay unavailable"), False)], ids=["outage", "hold"])
+async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_unasked(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, hold: Hold, resumes: bool
+) -> None:
+    first = replace(resources(Envs(), ()), inference=FakeInference((*script()[:2], hold)))
+    resumed = replace(resources(Envs(), ()), inference=ServedOnce(script()[2:], ()))
+    serve(monkeypatch, first, resumed)
+    assert await driver.one(driver_args) == (driver.DEFERRED if resumes else 0)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    held = published_workpiece(destination)
+    assert held.terminal is Terminal.HELD and isinstance(last := held.decisions[-1], Incomplete)
+    assert last.awaits == ("decision_model" if resumes else None)
+    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
+    resumed.inference.served = {event_digest(request) for request in first.inference.requests[:-1]}
+    assert await driver.one(driver_args) == 0  # driver_args.resume_held stays False
+    if not resumes:
+        assert published_workpiece(destination) == held and not resumed.inference.requests
+        return
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
+
+
+# Review 2026-11-21: an ordinary launch entered a human hold and replayed its refusals as if an
+# operator had passed --resume-held. Only the exact typed marker that an outage-only hold records is entered again,
+# and the refusal replay rule always sees the operator's own flag.
+@pytest.mark.parametrize(
+    "error, enters",
+    [
+        (OUTAGE, True),
+        (Hold("waits for the decision model: an operator rejected clef@fixture-1's levels"), False),
+        (BaseExceptionGroup("validation", [OUTAGE, Hold("request rejected")]), False),
+    ],
+    ids=["outage", "human hold naming the decision model", "outage beside another hold"],
+)
+async def test_only_the_typed_outage_marker_reopens_a_hold_without_the_operators_flag(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, error: BaseException, enters: bool
+) -> None:
+    async def held(*_: object) -> object:
+        raise error
+
+    entered: list[bool] = []
+
+    def rule(previous: Sequence[Record], resume: bool) -> Any:
+        entered.append(resume)
+        return lambda _: False
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: held})
+    monkeypatch.setattr(driver, "replaced_refusals", rule)
+    serve(monkeypatch, resources(Envs(), ()), resources(Envs(), ()))
+    deferred = driver.DEFERRED if enters else 0
+    assert await driver.one(driver_args) == deferred
+    assert await driver.one(driver_args) == deferred  # driver_args.resume_held stays False
+    assert entered == [False] * (1 + enters)
+    held_wp = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held_wp.terminal is Terminal.HELD and driver.deferred(held_wp) is enters
+    positional = Incomplete(("held",), "incomplete")  # the earlier constructor: the second argument is still the kind
+    assert (positional.kind, positional.awaits) == ("incomplete", None)
+    assert not driver.deferred(held_wp.with_(decisions=(*held_wp.decisions, positional)))
+
+
+def answering(*answers: DecisionModelHealth) -> tuple[list[DecisionModelHealth], Any]:
+    """A health read giving ``answers`` in turn and then the last one; the list collects each answer given."""
+    given: list[DecisionModelHealth] = []
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        given.append(answers[min(len(given), len(answers) - 1)])
+        return given[-1]
+
+    return given, health
+
+
+def batch(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    codes: Mapping[str, Sequence[int]],
+    concurrency: int = 1,
+) -> list[str]:
+    """A run over one proposal per ``codes`` entry, decision-model ones unless named ``code``, whose children exit with
+    their codes in turn and then 0; the list collects each child launch, starred for a probe, and none carries
+    --resume-held."""
+    decision = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
+    paths = {name: tmp_path / f"{name}.proposal.json" for name in codes}
+    for name, path in paths.items():
+        path.write_bytes(TASK_PROPOSAL.dump_json(proposal if name == "code" else decision))
+    manifest, overlay = tmp_path / "manifest.txt", Path(driver_args.policy)
+    manifest.write_text("\n".join(map(str, paths.values())))
+    overlay.write_text(json.dumps({**json.loads(overlay.read_text()), "decision_model.retry_interval": 0.0}))
+    driver_args.proposals, driver_args.concurrency = str(manifest), concurrency
+    remaining = {str(path): list(codes[name]) for name, path in paths.items()}
+    launches: list[str] = []
+
+    async def child(args: Namespace) -> int:
+        assert not args.resume_held, "only the operator reopens a hold"
+        launches.append(Path(args.proposals).stem.removesuffix(".proposal") + "*" * getattr(args, "probe", False))
+        return (remaining[args.proposals] or [0]).pop(0)
+
+    monkeypatch.setattr(driver, "one", child)
+    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
+    return launches
+
+
+async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_proposals_until_healthy(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    codes = {"first": [driver.DEFERRED], "second": [], "code": []}
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
+    given, health = answering(DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    await driver.run(driver_args)
+    assert launches == ["first", "code", "first", "second"]
+    assert given == [DecisionModelHealth.DOWN, DecisionModelHealth.HEALTHY]
+    out = capsys.readouterr().out
+    assert f"OUTCOME deferred exit={driver.DEFERRED} proposal={tmp_path / 'first.proposal.json'}" in out
+    assert "submitted=4 completed=4 failed=0 skipped=0" in out
+
+
+# Review 2026-11-21: with one child slot, a code proposal never started while a health read was
+# pending. The run reads health in the background and keeps reaping and launching children while it waits.
+async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"first": [driver.DEFERRED], "code": []})
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        while "code" not in launches:  # answers only once the unrelated proposal has run
+            await asyncio.sleep(0)
+        return DecisionModelHealth.HEALTHY
+
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    async with asyncio.timeout(30.0):  # a health read that blocks dispatch never answers
+        await driver.run(driver_args)
+    assert launches == ["first", "code", "first"]
+
+
+# Review 2026-11-21: without a health route, a probe child that crashed, was superseded, needed a
+# migration or found a corrupt journal reopened the queue. Only a probe that is not deferred again releases the
+# rest; any other exit is reported as usual and another parked proposal probes after the interval.
+@pytest.mark.parametrize("code", [1, driver.SUPERSEDED, driver.NEEDS_MIGRATION, driver.CORRUPT])
+async def test_without_a_health_route_only_an_answered_probe_reopens_decision_model_work(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+    code: int,
+) -> None:
+    codes = {"a": [driver.DEFERRED, code], "b": [driver.DEFERRED], "c": [driver.ANSWERED]}
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, codes)
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    with contextlib.suppress(RuntimeError):  # a failed probe fails the run, once every proposal has run
+        await driver.run(driver_args)
+    # a defers, and b and c wait behind it; a probes and fails, so b probes and defers again, then c probes and is
+    # answered, which releases b. Health is read before each probe: after a's hold, a's failed probe and b's hold.
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*", "b"], 3)
+    label = "failed" if code == 1 else driver.OUTCOMES[code][0]
+    assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21: an ordinary child exiting 10 was counted a success. Only the
+# designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
+async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal: TaskProposal,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"code": [driver.ANSWERED]})
+    with pytest.raises(RuntimeError, match="1 workpieces failed"):
+        await driver.run(driver_args)
+    assert launches == ["code"]
+    assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
+
+
+# Review 2026-11-21: a probe whose grade replayed a cached read exited 0 having made no
+# decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
+# parked proposal probes in turn after the interval, and none is released on its evidence.
+async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    launches = batch(driver_args, tmp_path, monkeypatch, proposal, {"a": [driver.DEFERRED, 0], "b": [], "c": []})
+    given, health = answering(DecisionModelHealth.UNSUPPORTED)
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    await driver.run(driver_args)
+    assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
+
+
+# Review 2026-11-21: after one healthy reading the first released child deferred again,
+# and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
+# everything not yet started: no decision-model child launches while health is being read.
+async def test_a_fresh_outage_parks_released_work_that_has_not_started(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    codes = {"a": [driver.DEFERRED, driver.DEFERRED], "b": [], "c": [], "d": []}
+    launches, started, seen = batch(driver_args, tmp_path, monkeypatch, proposal, codes), list[str](), list[int]()
+    popen = driver.subprocess.Popen
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: started.append(command[-1]) or popen(command))
+
+    async def health(_policy: Policy) -> DecisionModelHealth:
+        seen.append(len(started))  # admission is synchronous: a launch beside this read happened before it
+        return DecisionModelHealth.HEALTHY
+
+    monkeypatch.setattr(driver, "clef", lambda policy, *_: SimpleNamespace(health=partial(health, policy)))
+    await driver.run(driver_args)
+    assert (seen, sorted(launches)) == ([1, 2], ["a", "a", "a", "b", "c", "d"])
+
+
+class ProbeReader(DecisionModelReader):
+    """Answers 1.0, except that "13" is down and "hang" is dispatched and never answered; ``reads`` collects them."""
+
+    def __init__(self, reads: list[str]) -> None:
+        self.reads = reads
+
+    async def read(self, request: DecisionModelRequest) -> float:
+        self.reads.append(request.candidate)
+        if request.candidate == "13":
+            raise DecisionModelDown("HTTP 503: clef_unavailable")
+        if request.candidate == "hang":
+            await asyncio.Event().wait()
+        return 1.0
+
+    async def health(self) -> DecisionModelHealth:
+        return DecisionModelHealth.HEALTHY
+
+
+def asked(candidate: str) -> DecisionModelRead:
+    return DecisionModelRead(
+        DecisionModelRequest("clef@fixture-1", "whole", ("no", "yes"), "Sum.", "The sum.", "12", candidate)
+    )
+
+
+def probe_bundles(
+    reads: list[str], count: int, reader: DecisionModelReader | None = None, request_timeout: float = 30.0
+) -> list[Resources]:
+    """Launch resources whose decision model reads through ``ProbeReader``: two slots, a 10 s wait, a 30 s request
+    deadline, and a backoff that lasts until it is cancelled."""
+
+    async def backoff(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    policy = DecisionModelPolicy("clef@fixture-1", 2, request_timeout, 10.0, 1.0, 1.0, 0.0)
+    return [
+        replace(resources(Envs(), ()), decision_model=DecisionModel(reader or ProbeReader(reads), policy, sleep=backoff))
+        for _ in range(count)
+    ]
+
+
+# Review 2026-11-21: what a probe child reports. Only a probe that resolved a decision-
+# model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
+async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), bundle.decision_model)
+        await ctx.emit(asked("12"))
+        raise Hold("a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles(reads, 3))
+    codes = []
+    for resume in (False, True, False):  # fresh; replayed on an explicit resume; skipped as held
+        driver_args.probe, driver_args.resume_held = True, resume
+        codes.append(await driver.one(driver_args))
+    assert (codes, reads) == ([driver.ANSWERED, 0, 0], ["12"])
+
+
+CLEF_BODIES: Mapping[str, httpx.Response] = {
+    "off-scale": httpx.Response(200, content=b'{"answers": {"whole": {"probabilities": {"0": Infinity, "1": 1}}}}'),
+    "forbidden": httpx.Response(403, text="forbidden"),
+    "malformed": httpx.Response(200, json={"unexpected": True}),
+}
+
+
+# Review 2026-11-21: through the default reader, one 200 followed only by an off-scale level, an
+# HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
+# manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
+# of a read in flight leaves the earlier answer standing. A read whose own request deadline expired, its
+# waiter then cancelled during the HTTP cleanup, ended in CancelledError and was taken for the caller's leaving; a
+# cancellation is the caller's only while neither the request's deadline nor the overall wait has expired.
+@pytest.mark.parametrize(
+    "second, code",
+    [("off-scale", 0), ("forbidden", 0), ("malformed", 0), ("cancelled", driver.ANSWERED), ("lapsed", 0)],
+)
+async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, second: str, code: int
+) -> None:
+    sent, clock, cleanup = list[str](), LoopTime(), asyncio.Event()
+
+    async def gateway(call: httpx.Request) -> httpx.Response:
+        candidate = json.loads(call.content)["state"]["z_candidate_answer"]
+        sent.append(candidate)
+        if candidate == "lapsed":  # its request deadline cancels it; the waiter's cancellation arrives during cleanup
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup.set()
+                await asyncio.Event().wait()
+        if candidate == "cancelled":
+            await asyncio.Event().wait()
+        probabilities = {"0": 0.0, "1": 1.0}
+        return CLEF_BODIES.get(candidate) or httpx.Response(
+            200, json={"answers": {"whole": {"probabilities": probabilities}}}
+        )
+
+    source = FixedEndpoint(GlmEndpoint("http://gateway/v1", "secret", Pool.HIGH))
+    reader = ClefReader(source, httpx.AsyncClient(transport=httpx.MockTransport(gateway)))
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), bundle.decision_model)
+        assert await ctx.emit(asked("12")) == 1.0
+        read = asyncio.create_task(ctx.emit(asked(second)))
+        while len(sent) < 2:
+            await asyncio.sleep(0)
+        if second == "lapsed":  # past the 1 s request deadline, well inside the 10 s wait
+            await clock.sleep(2.0)
+            while not cleanup.is_set():
+                await asyncio.sleep(0)
+        if second in ("cancelled", "lapsed"):  # the caller leaves while its read is in flight
+            read.cancel()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await read
+        raise Hold("a sibling's refusal: a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles([], 1, reader, request_timeout=1.0))
+    driver_args.probe = True
+    assert await driver.one(driver_args) == code
+    held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held.terminal is Terminal.HELD and not driver.deferred(held) and sent == ["12", second]
+
+
+# Review 2026-11-21: a probe that read 200 and then met a 503 ended on a human hold yet
+# answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
+# and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
+# reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at
+# its deadline, proves nothing; a read that expired only waiting for a slot is no evidence; a pure outage defers.
+@pytest.mark.parametrize(
+    "scenario, code",
+    [
+        ("answered", 10),
+        ("same-tick-200-then-503", 0),
+        ("in-flight-expiry", 0),
+        ("queue-only-expiry", 10),
+        ("pure-outage", 75),
+    ],
+)
+async def test_a_probe_child_reports_its_readers_last_physical_outcome(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, scenario: str, code: int
+) -> None:
+    reads: list[str] = []
+    clock = LoopTime()
+
+    async def lapsed(read: asyncio.Task[float]) -> asyncio.Task[float]:
+        for _ in range(10):  # the read arms its deadline, then the clock passes the 10 s wait
+            await asyncio.sleep(0)
+        await clock.sleep(11.0)
+        return read
+
+    async def expired(ctx: Context, candidate: str) -> None:
+        with pytest.raises(DecisionModelUnavailable):
+            await (await lapsed(asyncio.create_task(ctx.emit(asked(candidate)))))
+
+    async def reading(ctx: Context, _wp: object, _config: object, bundle: Resources) -> object:
+        model = bundle.decision_model
+        assert model is not None
+        ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), model)
+        if scenario == "pure-outage":
+            await (await lapsed(asyncio.create_task(ctx.emit(asked("13")))))  # the typed outage: the workpiece defers
+        if scenario == "same-tick-200-then-503":
+            answered, down = asyncio.create_task(ctx.emit(asked("12"))), asyncio.create_task(ctx.emit(asked("13")))
+            await answered
+            while len(reads) < 2:
+                await asyncio.sleep(0)
+            down.cancel()
+            await asyncio.gather(down, return_exceptions=True)
+        else:
+            for candidate in ("1", "2", "3") if scenario == "in-flight-expiry" else ("12",):
+                await ctx.emit(asked(candidate))
+        if scenario == "in-flight-expiry":
+            await expired(ctx, "hang")
+        if scenario == "queue-only-expiry":  # both slots held, so the read is never dispatched
+            for _ in range(2):
+                await model.gate.acquire()
+            await expired(ctx, "queued")
+        raise Hold("a sibling's refusal: a human reads this")
+
+    monkeypatch.setattr(coordinator, "STAGES", {**STAGES, Stage.AUTHOR: reading})
+    serve(monkeypatch, *probe_bundles(reads, 1))
+    driver_args.probe = True
+    assert await driver.one(driver_args) == code
+    held = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
+    assert held.terminal is Terminal.HELD and driver.deferred(held) is (code == driver.DEFERRED)
+    assert "queued" not in reads
 
 
 def test_a_second_process_replays_a_provider_context_refusal_without_asking_again(tmp_path: Path) -> None:

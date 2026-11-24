@@ -664,7 +664,38 @@ class NoGrader(BaseModel):
         return self
 
 
-Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
+DECISION_QUESTION = (
+    "Compare the whole candidate answer with the reference answer (which earned full credit), against the whole "
+    "rubric. Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or "
+    "retracted mention does not count as asserting something; keyword lists without the corresponding claim earn "
+    "nothing; when the answer states several values, the designated final block governs."
+)
+"""The one question a decision model answers about a candidate."""
+DECISION_LEVELS = (
+    "missing: the candidate does not address this (empty, off-task, or only keywords)",
+    "contradicts the reference: the candidate addresses it but its content disagrees with the reference",
+    "partially matches: part agrees with the reference, part is wrong or missing",
+    "equivalent to the reference: different notation, wording, units or order, same correct content",
+    "matches exactly: the same content as the reference",
+)
+"""The ordered answers to ``DECISION_QUESTION``; a read is a level from 0 to 4, or an expected level between."""
+DECISION_CUT_MIN, DECISION_CUT_MAX = 2.0, 3.5
+"""A cut below "partially matches" would credit partial answers; above 3.5 an exact match may not reach it."""
+
+
+class DecisionModelGrader(BaseModel):
+    """A decision model's level for the answer on ``DECISION_LEVELS``; 1 at or above ``cut``. Not an LLM judge."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    kind: Literal["decision_model"] = "decision_model"
+    deliverable: str = Field(min_length=1)
+    rubric: str = Field(min_length=1)
+    reference: str = Field(min_length=1)
+    cut: float = Field(ge=DECISION_CUT_MIN, le=DECISION_CUT_MAX)
+
+
+Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader | DecisionModelGrader, Field(discriminator="kind")]
 
 
 def grades_in_process(grader: Grader) -> bool:
@@ -953,6 +984,14 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
+        if isinstance(self.grader, DecisionModelGrader) and (
+            self.answer_type not in CONVERSATION_ANSWERS
+            or not {TextSubmission, ActionSubmission} & set(self.answer_format.submission_types)
+        ):
+            raise ValueError(
+                f"A decision_model grader reads a text or action answer, not a {self.answer_type} answer "
+                f"in {self.answer_format.kind}"
+            )
         if (
             isinstance(self.grader, VerifyitGrader)
             and self.grader.environment is None

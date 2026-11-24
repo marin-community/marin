@@ -9,7 +9,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import override
+from typing import cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import twelve
@@ -29,15 +29,15 @@ from shellbox.machine import MachineTerminated
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from taskforge.effects.context import Context
-from taskforge.effects.events import Note, Resolved, event_digest
-from taskforge.effects.issues import Hold, Restart, Unreproducible
+from taskforge.effects.events import Invalidated, Note, Resolved, event_digest
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Unreproducible
 from taskforge.effects.log import EventLog, Record
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.model.review import Cause, TrialResult
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
-from taskforge.stages.classify import replay_rule
+from taskforge.stages.classify import replaced_refusals, replayable_grade
 from taskforge.stages.validate import solver_batch
 from taskforge.wiring import build_config
 
@@ -77,7 +77,7 @@ class Slots(Engine):
 
 
 def context(engine: Slots, recorded: Sequence[Record] = (), *, resume: bool = False) -> tuple[Context, EventLog]:
-    log = EventLog(replay_from=recorded, replayable=replay_rule(recorded, resume))
+    log = EventLog(replay_from=recorded, replayable=replayable_grade, replaces=replaced_refusals(recorded, resume))
     ctx = Context(log=log)
     ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.notify), RolloutResource(engine, twelve, "solver"))
     return ctx, log
@@ -413,6 +413,62 @@ async def test_a_generation_limit_is_a_failed_slot_and_an_outage_restarts_after_
     await resumed.drain()
     assert again.executed == ["arithmetic:1:0"]  # the outage recorded no slot, so only it executes
     assert results[2].cause is Cause.GENERATION_LIMIT and results[2].grade is not None  # a failed, graded trial
+
+
+def waits() -> RolloutInterrupted:
+    """What the engine raises when a slot's grade gets no decision-model read within the wait."""
+    error = RolloutInterrupted(Rollout("waits", (), "interrupted"), RolloutOperation.GRADE)
+    error.__cause__ = DecisionModelUnavailable("clef@fixture-1 answered no read for 900s")
+    return error
+
+
+# Review 2026-11-21: a refusal beside a slot waiting for the decision model was dropped, the child
+# deferred, and the next launch bought the refused slot again. Holds beyond the allowance outrank the outage; within it
+# the outage defers alone and the recorded refusal replays.
+@pytest.mark.parametrize("allowance", [0, 1])
+async def test_a_refusal_beside_a_decision_model_outage_is_settled_before_the_batch_waits(allowance: int) -> None:
+    ctx, log = context(Slots(failures={1: rejected(), 2: waits()}))
+    with pytest.raises(BaseException) as raised:
+        await solver_batch(
+            ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT, max_missing=allowance
+        )
+    await ctx.drain()
+    if allowance == 0:
+        assert type(raised.value) is Hold and str(raised.value) == f"solver trial 1: {REFUSED}"
+        return
+    assert isinstance(raised.value, BaseExceptionGroup)
+    assert [type(error) for error in raised.value.exceptions] == [DecisionModelUnavailable]
+    again = Slots(failures={0: AssertionError("slot 0 ran again"), 1: AssertionError("slot 1 ran again")})
+    resumed, _ = context(again, log.records)  # an ordinary launch, never --resume-held
+    results = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
+    await resumed.drain()
+    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+
+
+# Review 2026-11-21: an operator retried a refused slot, the replacement met a decision-
+# model outage, and the healthy automatic resume replayed the superseded refusal, asking for a second approval. The
+# replacement's start supersedes the refusal it replaces: it resumes, while a refusal it never reached still replays.
+async def test_an_authorised_replacement_cut_short_by_an_outage_resumes_and_never_replays_its_refusal() -> None:
+    ctx, log = context(Slots(failures={0: rejected(), 1: rejected()}))
+    refused = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=2, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    assert [trial.cause for trial in refused] == [Cause.HELD] * 2  # review holds it for the operator
+    paid = [r.event for r in log.records if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverRollout)]
+    slot0 = next(event for event in paid if cast(SolverRollout, event.request).trial == 0)
+    ctx, log = context(Slots(failures={0: waits()}), log.records, resume=True)  # the operator's --resume-held
+    with pytest.raises(BaseExceptionGroup):
+        await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=1, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    invalidated = [record.event for record in log.records if isinstance(record.event, Invalidated)]
+    assert [(event.request, event.fingerprints) for event in invalidated] == [
+        (slot0.request, slot0.fingerprints)  # the started replacement names exactly the refusal it replaces
+    ]
+    healthy = Slots()
+    ctx, log = context(healthy, log.records)  # the automatic resume
+    resumed = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 2, concurrency=1, heartbeat=HEARTBEAT)
+    await ctx.drain()
+    assert healthy.executed == ["arithmetic:0:0"]
+    assert [trial.cause for trial in resumed] == [None, Cause.HELD] and resumed[1].detail == REFUSED
 
 
 # Review 2026-11-21: zero concurrency stalled a pending slot forever and a zero heartbeat wrote 1,088 notes in 25 ms.

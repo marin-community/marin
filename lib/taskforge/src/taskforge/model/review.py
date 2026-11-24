@@ -6,7 +6,7 @@
 """Completed validation evidence and the decisions made from it."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -105,6 +105,8 @@ class Retry:
 class Incomplete:
     reasons: tuple[str, ...]
     kind: Literal["incomplete"] = "incomplete"
+    awaits: Annotated[Literal["decision_model"] | None, OMIT_NONE] = field(default=None, kw_only=True)
+    """The one service whose recovery resumes this hold without a person; None holds for review."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -30,6 +31,7 @@ from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import (
     CorruptJournal,
+    DecisionModelUnavailable,
     Hold,
     LogFailure,
     PublicationFailed,
@@ -39,14 +41,16 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
-from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
+from taskforge.llm.glm_provider import EndpointSource
+from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
-from taskforge.stages.classify import replay_rule
-from taskforge.wiring import endpoint_source, install, runtime
+from taskforge.resources.decision_model import DecisionModel, DecisionModelHealth
+from taskforge.stages.classify import replaced_refusals, replayable_grade
+from taskforge.wiring import clef, endpoint_source, install, runtime
 
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
 OUTCOMES = {
@@ -55,6 +59,16 @@ OUTCOMES = {
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
+DEFERRED, ANSWERED = 75, 10
+"""``one``'s exit status for a workpiece held until the decision model answers again (EX_TEMPFAIL), and a ``--probe``
+child's when its own reader's last physical outcome was a valid answer, the only evidence that the model answers."""
+
+
+def deferred(wp: Workpiece | None) -> bool:
+    """Whether ``wp`` is held only until the decision model answers, so that a launch enters it unasked."""
+    last = wp.decisions[-1] if wp is not None and wp.decisions else None
+    awaits = last.awaits if isinstance(last, Incomplete) else None
+    return wp is not None and wp.terminal is Terminal.HELD and awaits == DecisionModelUnavailable.awaits
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,21 +116,34 @@ def run_policy(path: str) -> Policy:
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
-    for field, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
-        value = getattr(proposal.header, field).value
+    for name, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
+        value = getattr(proposal.header, name).value
         if value not in policy.setting(key, tuple):
-            logging.info("SKIP %s: %s=%s", proposal.header.id, field, value)
+            logging.info("SKIP %s: %s=%s", proposal.header.id, name, value)
             return False
     return True
 
 
-async def one(args: argparse.Namespace) -> None:
+def glm_source(policy: Policy) -> EndpointSource:
+    """The GLM gateway this process reaches, from ``GLM_BASE_URL`` or ``GLM_RELAY_JOB``."""
+    return endpoint_source(
+        os.environ.get("GLM_BASE_URL"),
+        os.environ.get("GLM_RELAY_JOB"),
+        require_secret("GLM_API_KEY"),
+        policy.setting("author.model", str),
+        policy.setting("provider.pool", str),
+    )
+
+
+async def one(args: argparse.Namespace) -> int:
+    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, ``ANSWERED`` when a
+    ``--probe`` run got a fresh decision-model answer, else 0."""
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
     policy = run_policy(args.policy)
     if not eligible(proposal, policy):
-        return
+        return 0
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -124,23 +151,21 @@ async def one(args: argparse.Namespace) -> None:
     # Another journal format or undecodable history raises before anything is claimed or published.
     journal = await asyncio.to_thread(read_journal, destination)
     status = journal.head.status if journal else Status()
-    if status.finished or (status.terminal is Terminal.HELD and not args.resume_held):
+    held = status.terminal is Terminal.HELD
+    enter = args.resume_held or (held and journal is not None and deferred(await asyncio.to_thread(journal.workpiece)))
+    if status.finished or (held and not enter):
         logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
-        return
+        return 0
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replay_rule(previous, args.resume_held))
+    replaces = replaced_refusals(previous, args.resume_held)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade, replaces=replaces)
     wp = [Workpiece(proposal.header.id, proposal)]  # the current workpiece: each stage's start, then the returned one
+    readers: list[DecisionModel | None] = [None]  # this process's decision model, as the runtime built it
     try:
         async with checkpoints.running():
-            source = endpoint_source(
-                os.environ.get("GLM_BASE_URL"),
-                os.environ.get("GLM_RELAY_JOB"),
-                require_secret("GLM_API_KEY"),
-                policy.setting("author.model", str),
-                policy.setting("provider.pool", str),
-            )
-            async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+            async with runtime(policy, glm_source(policy), get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+                readers[0] = resources.decision_model
                 wp[0] = await run_workpiece(
                     proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
                 )
@@ -169,6 +194,21 @@ async def one(args: argparse.Namespace) -> None:
             status = fold(tuple(record.event for record in log.records))
             matched = wp[0].terminal is not None and (status.round, status.terminal) == (wp[0].round, wp[0].terminal)
             await checkpoints.finish(status if matched else Status(), wp[0])
+    # A probe answers only when its own reader's last physical outcome is an answer; in-process callers omit the flag.
+    reader = readers[0] if getattr(args, "probe", False) else None
+    return DEFERRED if deferred(wp[0]) else ANSWERED if reader is not None and reader.answered else 0
+
+
+async def recovery(policy: Policy) -> DecisionModelHealth:
+    """HEALTHY once the default decision model's host (``one``'s gateway) says so; UNSUPPORTED after a host without
+    the health route says so and ``decision_model.retry_interval`` passes, when one deferred proposal probes it."""
+    async with httpx.AsyncClient() as http:
+        reader = clef(policy, glm_source(policy), http)
+        while (health := await reader.health()) is not DecisionModelHealth.HEALTHY:
+            await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
+            if health is DecisionModelHealth.UNSUPPORTED:
+                break
+    return health
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -183,48 +223,77 @@ async def run(args: argparse.Namespace) -> None:
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     labels, failed = Counter[str](), list[str]()
     policy = run_policy(args.policy)
+    # Decision-model proposals wait in ``parked`` while one background ``waiting`` health read runs, or while the one
+    # ``probe`` of a host without the route runs; ``ready`` is what a recovery released, launched first.
+    parked, ready = list[str](), list[str]()
+    waiting: asyncio.Task[DecisionModelHealth] | None = None
+    probe: str | None = None
     skipped = completed = submitted = 0
     try:
         exhausted = False
-        while active or not exhausted:
-            while len(active) < args.concurrency and not exhausted:
-                path = next(proposals, None)
-                if path is None:
+        while active or not exhausted or parked or ready:
+            while len(active) < args.concurrency:
+                if ready:
+                    path = ready.pop(0)
+                elif exhausted or (path := next(proposals, None)) is None:
                     exhausted = True
                     break
-                with open_url(path, "rt") as source:
-                    proposal = TASK_PROPOSAL.validate_json(source.read())
-                if not eligible(proposal, policy):
-                    skipped += 1
-                    continue
+                else:
+                    with open_url(path, "rt") as source:
+                        proposal = TASK_PROPOSAL.validate_json(source.read())
+                    if not eligible(proposal, policy):
+                        skipped += 1
+                        continue
+                    if (waiting or probe) and proposal.header.verification is Verification.DECISION_MODEL:
+                        parked.append(path)
+                        continue
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
                 command += [
                     item
                     for name in ("output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
-                if args.resume_held:
+                if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
                     command.append("--resume-held")
+                command += ["--probe"] * (path == probe)
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
-            if active:
-                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    path, _ = active.pop(task)
-                    completed += 1
-                    if (code := task.result()) == 0:
-                        continue
+            if not active and waiting is None:
+                break  # the manifest ran out during admission, with nothing parked
+            done, _ = await asyncio.wait([*active, *([waiting] if waiting else [])], return_when=asyncio.FIRST_COMPLETED)
+            if waiting is not None and waiting in done:
+                if waiting.result() is DecisionModelHealth.HEALTHY:
+                    ready, parked = ready + parked, []
+                else:
+                    ready.append(probe := parked.pop(0))
+                waiting = None
+            for task in [task for task in active if task in done]:
+                path, _ = active.pop(task)
+                completed += 1
+                code = task.result()
+                if path == probe:  # only a probe's fresh answer shows the decision model reads; from others, a failure
+                    probe = None
+                    if code == ANSWERED:
+                        ready, parked, code = ready + parked, [], 0
+                if code == DEFERRED:  # a fresh outage parks what was released but has not started
+                    print(f"OUTCOME deferred exit={code} proposal={path}: waits for the decision model", flush=True)
+                    parked, ready = ([*parked, path], ready) if probe else ([*parked, *ready, path], [])
+                elif code != 0:
                     label, action = OUTCOMES.get(code, ("failed", "see its log"))
                     labels[label] += 1
                     print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
                     if code != SUPERSEDED:
                         failed.append(path)
+            if parked and waiting is None and probe is None:
+                waiting = asyncio.create_task(recovery(policy))
     finally:
+        if waiting is not None:
+            waiting.cancel()
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
-        await asyncio.gather(*active, return_exceptions=True)
+        await asyncio.gather(*active, *([waiting] if waiting else []), return_exceptions=True)
     outcomes = " ".join(f"{label}={labels[label]}" for label, _ in OUTCOMES.values())
     print(
         f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} {outcomes}",
@@ -262,6 +331,8 @@ def main() -> None:
             command.add_argument("--buckets", type=int, default=4096)
             command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
+        else:
+            command.add_argument("--probe", action="store_true", help="Exit ANSWERED after a fresh decision-model read")
     args = parser.parse_args()
     if args.command == "report":
         configure_coreweave_s3()
@@ -270,12 +341,12 @@ def main() -> None:
         asyncio.run(run(args))
     else:
         try:
-            asyncio.run(one(args))
+            code = asyncio.run(one(args))
         except Exception as error:
             if (code := exit_code(error)) is None:
                 raise
             logging.exception("Taskforge workpiece published nothing: %s", OUTCOMES[code][0])
-            sys.exit(code)
+        sys.exit(code)
 
 
 if __name__ == "__main__":

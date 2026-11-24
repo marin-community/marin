@@ -15,7 +15,7 @@ from functools import reduce
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, StageCompleted
-from taskforge.effects.issues import Hold, Restart, Transient, describe_exception
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
@@ -170,7 +170,9 @@ async def run_workpiece(
                     stage = following
     except* (Hold, Restart, Transient) as error:
         interrupted = True
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+        # Only a hold every leaf of which is a decision-model outage resumes without a person.
+        awaits = DecisionModelUnavailable.awaits if error.split(DecisionModelUnavailable)[1] is None else None
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error), awaits=awaits)))
     finally:
         try:
             await ctx.drain()

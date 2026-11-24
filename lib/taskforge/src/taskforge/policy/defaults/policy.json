@@ -41,5 +41,13 @@
   "sampling.reasoning_effort": "high",
   "sampling.max_continuations": 0,
   "judge.model": "",
-  "judge.pool": "high"
+  "judge.pool": "high",
+  "decision_model.model": "",
+  "decision_model.route": "glm-5.3",
+  "decision_model.concurrency": 2,
+  "decision_model.request_timeout": 300.0,
+  "decision_model.unavailable_wait": 900.0,
+  "decision_model.backoff_initial": 1.0,
+  "decision_model.backoff_maximum": 60.0,
+  "decision_model.retry_interval": 300.0
 }

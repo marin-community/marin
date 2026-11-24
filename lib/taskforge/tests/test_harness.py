@@ -331,6 +331,40 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
     assert client.requests[2].conversation[-1].content.startswith("Grading this candidate failed and produced no grade")
 
 
+# Review 2026-11-21: a live grade showed "cut": 3.0, "level": 4.0 and the same grade
+# reloaded from the journal showed 3 and 4, so the author's next request changed and a cold resume paid for a recorded
+# turn. The grade tool renders the numbers one way either side of a resume.
+@pytest.mark.parametrize("level", [4.0, 4, 3.5])
+async def test_a_decision_model_grade_renders_identically_after_a_cold_resume(tmp_path: Path, level: float) -> None:
+    async def graded(event: GradeCandidate) -> GradeResult:
+        read = {"model": "clef-test", "level": level, "cut": 3.0}
+        return GradeResult(Outcome.GRADED, 1.0, detail={"decision_model": read})
+
+    async def unpaid(event: GradeCandidate) -> GradeResult:
+        raise AssertionError("a recorded grade is read again")
+
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    tools = {
+        "grade": GradeTool("/workspace/task.json", {}, settings),
+        "shell": ShellTool(30, 120),
+        "finish": FinishTool(),
+    }
+    script = (call("shell", {"command": "task"}, "1"), call("grade", {"reply": "12"}, "2"))
+    harness = AgenticHarness(1000, LLMPolicy(), "continue", 20000, replay_arguments)
+    sink = JsonlSink(str(tmp_path / "author.jsonl"))
+    live = FakeInference((*script, call("finish", {"reason": "done"}, "3")))
+    results, cold = [], FakeInference(())
+    for ctx, handler, client in ((Context(log=EventLog(sink=sink)), graded, live), (None, unpaid, cold)):
+        ctx = ctx or Context(log=EventLog(replay_from=local_records(sink)))  # a cold process: the journal alone
+        env = environment(ctx)
+        ctx.handle(GradeCandidate, handler)
+        async with opened(ctx, env):
+            results.append(await harness.run(ctx, Conversation((), ()), client, tools))
+        await ctx.drain()
+    assert json.loads(live.requests[2].conversation[-1].content)["decision_model"]["cut"] == 3
+    assert (cold.requests, results[0]) == ([], results[1])  # every author turn replays: the same request bytes
+
+
 async def test_grade_holds_when_the_host_cannot_lower_a_valid_draft() -> None:
     ctx = Context(log=EventLog())
     env = environment(ctx)

@@ -25,15 +25,25 @@ from taskforge.resources.bundle import Resources
 # The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
 # wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
 AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v2.json"
+# The decision-model grader kind, inserted into v2 only where a decision model is configured: without one, the author
+# keeps v2's bytes and recorded author calls replay.
+DECISION_MODEL_GRADER = DEFAULTS_DIR / "author-reference-v2-decision-model.json"
 
 
-def author_reference() -> str:
+def author_reference(decision_model: bool) -> str:
     """The pinned reference in the compact form the system prompt embeds."""
-    return json.dumps(json.loads(AUTHOR_REFERENCE.read_text()), sort_keys=True, separators=(",", ":"))
+    reference = json.loads(AUTHOR_REFERENCE.read_text())
+    if decision_model:
+        task = reference["TaskSpec"]
+        task["$defs"]["DecisionModelGrader"] = json.loads(DECISION_MODEL_GRADER.read_text())
+        task["properties"]["grader"]["discriminator"]["mapping"]["decision_model"] = "#/$defs/DecisionModelGrader"
+        task["properties"]["grader"]["oneOf"].append({"$ref": "#/$defs/DecisionModelGrader"})
+    return json.dumps(reference, sort_keys=True, separators=(",", ":"))
 
 
 def system_prompt(policy: Policy) -> str:
     """Render the author's system prompt around the pinned task and control reference."""
+    decision_model = bool(policy.setting("decision_model.model", str))
     environments = tuple(
         environment.model_dump(mode="json", include={"docker_image", "command_semantics"})
         for environment in (
@@ -46,7 +56,8 @@ def system_prompt(policy: Policy) -> str:
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
     return policy.prompt("author.system").render(
-        reference=author_reference(),
+        reference=author_reference(decision_model),
+        decision_model=f"\n\n{policy.prompt('author.decision_model').template}" if decision_model else "",
         environment=environment,
         author_image=image or "none (ShellSim)",
         workdir=policy.setting("author.workdir", str),

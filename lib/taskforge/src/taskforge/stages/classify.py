@@ -113,7 +113,8 @@ def replayable_grade(event: Resolved[object]) -> bool:
     return refused(event.value) or not unavailable
 
 
-def replay_rule(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:
-    """``replayable_grade``, except that an explicit resume runs the slot holds an earlier launch recorded again."""
+def replaced_refusals(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:
+    """The slot holds an earlier launch recorded, which an explicit resume runs again: each replacement invalidates the
+    refusal it replaces as it starts, so a later launch resumes the replacement and still replays any other refusal."""
     stale = {id(record.event) for record in previous if resume and isinstance(record.event, Resolved)}
-    return lambda event: replayable_grade(event) and not (id(event) in stale and refused(event.value))
+    return lambda event: id(event) in stale and refused(event.value)

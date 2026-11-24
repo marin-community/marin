@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import math
 import subprocess
 import sys
@@ -11,9 +12,11 @@ from pathlib import Path
 import pytest
 from lib.taskforge.tests.effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed, local_records
 
+from taskforge.effects.context import Context
 from taskforge.effects.events import (
     Event,
     Fingerprint,
+    Invalidated,
     Note,
     ReplayPolicy,
     Resolved,
@@ -21,7 +24,7 @@ from taskforge.effects.events import (
     StageCompleted,
     event_digest,
 )
-from taskforge.effects.issues import LogFailure
+from taskforge.effects.issues import LogFailure, Restart
 from taskforge.effects.log import EventLog, JsonlSink, Missing, Record, Status, decode, fold
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, Message, Role
@@ -223,3 +226,131 @@ async def test_driver_import_decodes_held_journal_in_cold_process() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["57"]
+
+
+class Paid:
+    """A cached resource bought under ``profile``; ``calls`` collects the profile of each paid execution."""
+
+    def __init__(self, profile: str, calls: list[str]) -> None:
+        self.profile, self.calls = profile, calls
+
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("paid", self.profile, ReplayPolicy.CACHE)
+
+
+async def pay(event: Timed, resource: Paid) -> float:
+    resource.calls.append(resource.profile)
+    return event.timeout * 2
+
+
+async def launch(path: Path, profile: str, calls: list[str]) -> None:
+    """One cold process: the journal at ``path`` alone, then one request of the paid effect, appended to it."""
+    sink = JsonlSink(str(path))
+    ctx = Context(log=EventLog(sink=sink, replay_from=local_records(sink) if path.exists() else ()))
+    ctx.handle(Timed, pay, Paid(profile, calls))
+    await ctx.emit(Timed(5))
+    await ctx.drain()
+
+
+# Review 2026-11-21: a bare request row discarded the cached result for its request digest under
+# every fingerprint. Cold runs under profiles A, then B, then A paid three times; the third replays A's result.
+async def test_a_result_under_one_fingerprint_survives_a_run_under_another(tmp_path: Path) -> None:
+    calls: list[str] = []
+    for profile in ("A", "B", "A"):
+        await launch(tmp_path / "journal.jsonl", profile, calls)
+    assert calls == ["A", "B"]
+
+
+# Review 2026-11-21: a replay's durable prefix ending between its request row and its replayed
+# resolution discarded the paid result, and the next process paid again. No cut of a normal replay costs a call.
+@pytest.mark.parametrize("rows", [2, 3, 4], ids=["before-request", "after-request", "after-resolution"])
+async def test_no_durable_prefix_of_a_replay_costs_a_paid_call(tmp_path: Path, rows: int) -> None:
+    journal, calls = tmp_path / "journal.jsonl", list[str]()
+    for _ in range(2):  # a paid run, then its replay
+        await launch(journal, "A", calls)
+    cut = tmp_path / "cut.jsonl"
+    cut.write_bytes(b"".join(journal.read_bytes().splitlines(keepends=True)[:rows]))
+    await launch(cut, "A", calls)
+    assert calls == ["A"]
+
+
+# Review 2026-11-21: an invalidation names one result exactly, resource fingerprint included.
+async def test_an_invalidation_for_one_fingerprint_leaves_another_fingerprints_result(tmp_path: Path) -> None:
+    sink, request = JsonlSink(str(tmp_path / "journal.jsonl")), Timed(5)
+    x, y = Paid("X", []).fingerprint(), Paid("Y", []).fingerprint()
+    log = EventLog(sink=sink)
+    for event in (Resolved(request, (x,), 1.0), Resolved(request, (y,), 2.0), Invalidated(request, (x,))):
+        await log.record(event)
+    reloaded = EventLog(replay_from=local_records(sink))
+    assert (reloaded.lookup(request, (y,)), type(reloaded.lookup(request, (x,)))) == (2.0, Missing)
+
+
+REFUSED = 2.0
+"""The stand-in refusal: a result the operator's explicit resume selects for replacement."""
+
+
+async def resumed(path: Path, *, explicit: bool, outcome: float | None, paid: list[float]) -> EventLog:
+    """One cold process over ``path`` asking ``Timed(5)``: explicit resumes replace a recorded refusal, and the paid
+    call answers ``outcome`` or, with None, meets an outage."""
+    sink = JsonlSink(str(path))
+    history = local_records(sink) if path.exists() else ()
+    stale = {id(record.event) for record in history if explicit}
+    log = EventLog(sink=sink, replay_from=history, replaces=lambda event: id(event) in stale and event.value == REFUSED)
+    ctx = Context(log=log)
+
+    async def answer(_event: Timed, _resource: Paid) -> float:
+        if outcome is None:
+            raise Restart("the decision model is down")
+        paid.append(outcome)
+        return outcome
+
+    ctx.handle(Timed, answer, Paid("A", []))
+    with contextlib.suppress(Restart):
+        await ctx.emit(Timed(5))
+    await ctx.drain()
+    return log
+
+
+def markers(log: EventLog) -> int:
+    return sum(isinstance(record.event, Invalidated) for record in log.records)
+
+
+# Review 2026-11-21: one key recorded a success and then a refusal (two concurrent emits).
+# An ordinary reload replays the latest, the refusal; an explicit one replayed the older success with no call and no
+# marker. The latest result per key is what the operator's selection applies to.
+async def test_an_explicit_resume_replaces_the_latest_result_and_never_replays_an_older_one(tmp_path: Path) -> None:
+    journal, request, fingerprint = tmp_path / "journal.jsonl", Timed(5), Paid("A", []).fingerprint()
+    log = EventLog(sink=JsonlSink(str(journal)))
+    for value in (1.0, REFUSED):
+        await log.record(Resolved(request, (fingerprint,), value))
+    assert EventLog(replay_from=local_records(JsonlSink(str(journal)))).lookup(request, (fingerprint,)) == REFUSED
+    paid: list[float] = []
+    log = await resumed(journal, explicit=True, outcome=3.0, paid=paid)
+    assert (paid, markers(log), log.lookup(request, (fingerprint,))) == ([3.0], 1, 3.0)
+
+
+# Review 2026-11-21: explicit resume, outage, explicit resume, outage wrote two markers
+# for one refusal. A refusal already invalidated is not invalidated again, and the eventual replacement pays once.
+async def test_one_refusal_gets_one_marker_across_explicit_resumes_cut_short_by_outages(tmp_path: Path) -> None:
+    journal, paid = tmp_path / "journal.jsonl", list[float]()
+    await resumed(journal, explicit=False, outcome=REFUSED, paid=paid)
+    for _ in range(2):
+        await resumed(journal, explicit=True, outcome=None, paid=paid)
+    for explicit in (False, True):  # paid once, then replayed even by another explicit resume
+        log = await resumed(journal, explicit=explicit, outcome=3.0, paid=paid)
+    assert (paid, markers(log)) == ([REFUSED, 3.0], 1)
+
+
+# Review 2026-11-21: a marker recorded live left its result readable in the live log and
+# removed it on cold reload. One fold serves both: the live log and a cold rebuild of its journal agree.
+@pytest.mark.parametrize("tail", ["marker", "marker-then-result"])
+async def test_the_live_log_and_a_cold_rebuild_of_its_journal_agree_after_a_marker(tmp_path: Path, tail: str) -> None:
+    sink, request, fingerprint = JsonlSink(str(tmp_path / "journal.jsonl")), Timed(5), Paid("A", []).fingerprint()
+    log = EventLog(sink=sink)
+    events: list[Event[object]] = [Resolved(request, (fingerprint,), REFUSED), Invalidated(request, (fingerprint,))]
+    for event in events + ([Resolved(request, (fingerprint,), 3.0)] if tail == "marker-then-result" else []):
+        await log.record(event)
+    cold = EventLog(replay_from=local_records(sink))
+    found = [log.lookup(request, (fingerprint,)), cold.lookup(request, (fingerprint,))]
+    shown = [None if isinstance(value, Missing) else value for value in found]
+    assert shown == ([None, None] if tail == "marker" else [3.0, 3.0])

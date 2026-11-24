@@ -91,4 +91,8 @@ class GradeTool(ValidatedTool[CandidateArgs]):
                 "Grader checks must be a list of {name: string, passed: boolean, weight: number}; "
                 f"fix the grader output: {error}"
             )
-        return ToolResult(pretty_json({"reward": result.reward, "status": result.status, "grader_checks": checks}))
+        shown: dict[str, object] = {"reward": result.reward, "status": result.status, "grader_checks": checks}
+        if read := (result.detail or {}).get("decision_model"):  # the level an author sets the cut from
+            # Floats either way: the journal stores 3.0 as 3, and a resumed author must see the bytes it saw live.
+            shown["decision_model"] = {**read, "cut": float(read["cut"]), "level": float(read["level"])}
+        return ToolResult(pretty_json(shown))
