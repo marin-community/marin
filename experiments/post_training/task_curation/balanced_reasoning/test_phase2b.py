@@ -7,12 +7,9 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.task_curation.balanced_reasoning.catalog import (
-    CensusEntry,
     build_tasks_manifest,
     manifest_rows,
     read_census_entries,
@@ -30,7 +27,7 @@ from experiments.post_training.task_curation.balanced_reasoning.launch import (
     driver_command,
     parse_endpoint_address,
 )
-from experiments.post_training.task_curation.balanced_reasoning.test_lane import make_task
+from experiments.post_training.task_curation.balanced_reasoning.test_lane import _write_census_release, make_task
 
 SHA_A = "aa" * 32
 SHA_B = "bb" * 32
@@ -75,41 +72,6 @@ def test_validate_task_spec_strips_unknown_fields() -> None:
     assert parsed.id == "t-strip"
     exact, _ = validate_task_spec(task.model_dump_json())
     assert exact.id == "t-strip" and exact.grader.kind == "verifyit"
-
-
-def _write_census_release(root: Path, release: str, rows: list[dict]) -> CensusEntry:
-    """A one-source census release: censuses.json plus the normalized tasks parquet."""
-    release_dir = root / release
-    source_dir = release_dir / ("0" * 20)
-    normalized = source_dir / "normalized" / "tasks.parquet"
-    normalized.parent.mkdir(parents=True)
-    table = pa.Table.from_pydict(
-        {
-            "id": [row["id"] for row in rows],
-            "path": [row["id"] for row in rows],
-            "task_spec": [row["task_spec"] for row in rows],
-            "task_sha256": [row["task_sha256"] for row in rows],
-            "runtime": ["{}" for _ in rows],
-        }
-    )
-    pq.write_table(table, normalized)
-    (release_dir / "censuses.json").write_text(
-        json.dumps(
-            [
-                {
-                    "source_id": "org:source",
-                    "normalized_path": str(normalized),
-                    "population": {"dataset_id": "org/dataset-retained"},
-                }
-            ]
-        )
-    )
-    return CensusEntry(
-        source_id="org:source",
-        release=release,
-        normalized_path=str(normalized),
-        dataset_id="org/dataset-retained",
-    )
 
 
 def test_build_tasks_manifest_joins_census_to_ledger(tmp_path: Path) -> None:

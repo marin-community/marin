@@ -75,6 +75,10 @@ class ManifestRow:
     stripped_fields: tuple[str, ...]
     difficulty_basis: str
     """The difficulty basis the plan will band this task on."""
+    solve_rate: float
+    """The per-task or source-pooled solve rate the plan bands on."""
+    scored: int
+    """Scored attempts behind the rate."""
 
     def document(self) -> dict:
         return {
@@ -88,6 +92,8 @@ class ManifestRow:
             "census_release": self.census_release,
             "stripped_fields": list(self.stripped_fields),
             "difficulty_basis": self.difficulty_basis,
+            "solve_rate": self.solve_rate,
+            "scored": self.scored,
         }
 
 
@@ -262,6 +268,8 @@ def build_tasks_manifest(
                     census_release=entry.release,
                     stripped_fields=stripped,
                     difficulty_basis=difficulty.basis,
+                    solve_rate=difficulty.solve_rate,
+                    scored=difficulty.scored,
                 )
             )
     manifest_path = f"{output_prefix.rstrip('/')}/{MANIFEST_FILENAME}"
@@ -337,6 +345,8 @@ def manifest_rows(path: str) -> list[ManifestRow]:
                     census_release=row["census_release"],
                     stripped_fields=tuple(row.get("stripped_fields", ())),
                     difficulty_basis=row.get("difficulty_basis", "unknown"),
+                    solve_rate=float(row.get("solve_rate", 0.0)),
+                    scored=int(row.get("scored", 0)),
                 )
             )
     return rows

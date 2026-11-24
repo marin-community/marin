@@ -11,7 +11,9 @@ import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band
+from experiments.post_training.task_curation.balanced_reasoning.catalog import build_tasks_manifest
 from experiments.post_training.task_curation.balanced_reasoning.cli import build_parser, quota_from_arguments
+from experiments.post_training.task_curation.balanced_reasoning.difficulty import TaskDifficulty
 from experiments.post_training.task_curation.balanced_reasoning.lane import run_selected_task
 from experiments.post_training.task_curation.balanced_reasoning.selection import write_selection
 from experiments.post_training.task_curation.balanced_reasoning.store import (
@@ -22,6 +24,7 @@ from experiments.post_training.task_curation.balanced_reasoning.store import (
 )
 from experiments.post_training.task_curation.balanced_reasoning.test_lane import (
     FakeBackend,
+    _write_census_release,
     lane_policy_defaults,
     lane_resources,
     make_task,
@@ -109,61 +112,28 @@ def test_run_command_refuses_without_the_live_gate(tmp_path: Path, capsys: pytes
     assert "gated" in capsys.readouterr().err
 
 
-def test_plan_command_bands_from_a_local_ledger(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    ledger = tmp_path / "ledger" / "rows" / "part-0.jsonl"
-    ledger.parent.mkdir(parents=True)
-    task_sha = "ab" * 32
-    rows = [
-        {
-            "source_id": "src",
-            "task_sha256": task_sha,
-            "solver": "hosted",
-            "outcome": "scored",
-            "reward": 1.0,
-            "attempt_id": "a1",
-            "task_id": "t1",
-        },
-        {
-            "source_id": "src",
-            "task_sha256": task_sha,
-            "solver": "hosted",
-            "outcome": "scored",
-            "reward": 1.0,
-            "attempt_id": "a2",
-            "task_id": "t1",
-        },
-        {
-            "source_id": "src",
-            "task_sha256": task_sha,
-            "solver": "hosted",
-            "outcome": "scored",
-            "reward": 0.0,
-            "attempt_id": "a3",
-            "task_id": "t1",
-        },
-    ]
-    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    tasks = tmp_path / "tasks.jsonl"
-    tasks.write_text(
-        json.dumps(
-            {
-                "task_id": "t1",
-                "source_id": "src",
-                "task_sha256": task_sha,
-                "domain": "math",
-                "task_path": "/tasks/t1.json",
-            }
-        )
-        + "\n"
+def test_plan_command_bands_from_the_manifest(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """The plan bands on the manifest's own per-row difficulty, not a ledger re-read."""
+    task = make_task("What is 2 + 2? Answer with the number only.", "4", task_id="t1")
+    entry = _write_census_release(
+        tmp_path,
+        "2026.11.13.1",
+        [{"id": "t1", "task_spec": task.model_dump_json(), "task_sha256": "ab" * 32}],
     )
+    difficulty = {
+        ("org:source", "ab" * 32): TaskDifficulty(
+            source_id="org:source", task_sha256="ab" * 32, task_id="t1", solve_rate=0.5, scored=2, basis="ledger:pooled"
+        )
+    }
+    manifest_prefix = tmp_path / "manifest"
+    receipt = build_tasks_manifest(difficulty, [entry], str(manifest_prefix), max_unmeasured_per_band_source=0)
+    assert receipt["rows"] == 1
     parser = build_parser()
     args = parser.parse_args(
         [
             "plan",
             "--tasks",
-            str(tasks),
-            "--ledger",
-            str(tmp_path / "ledger"),
+            str(manifest_prefix / "tasks.jsonl"),
             "--output",
             str(tmp_path / "run"),
             "--easy-quota",

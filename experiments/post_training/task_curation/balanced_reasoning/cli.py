@@ -32,10 +32,12 @@ from experiments.post_training.task_curation.balanced_reasoning.catalog import (
     CENSUS_ROOT,
     LEDGER_ROOT,
     build_tasks_manifest,
+    manifest_rows,
     read_census_entries,
 )
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     SOLVER_ALL,
+    TaskDifficulty,
     read_ledger_attempts,
     tally_attempts,
     url_protocol,
@@ -75,26 +77,6 @@ GATE_MESSAGE = (
 )
 
 
-def read_candidate_tasks(path: str) -> list[CandidateTask]:
-    """Read the verified-task manifest: one JSON object per line."""
-    with fsspec.open(path, "rt") as source:
-        candidates = []
-        for line in source:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            candidates.append(
-                CandidateTask(
-                    task_id=row["task_id"],
-                    source_id=row["source_id"],
-                    task_sha256=row["task_sha256"],
-                    domain=row.get("domain", "unknown"),
-                    task_path=row["task_path"],
-                )
-            )
-        return candidates
-
-
 def read_task_spec(path: str) -> TaskSpec:
     """Load one task's ``TaskSpec`` from its JSON file."""
     with open_url(path, "rt") as source:
@@ -128,8 +110,29 @@ def manifest_machines() -> tuple[Policy | None, Mapping[str, MachineFactory] | N
 
 
 def command_plan(args: argparse.Namespace) -> int:
-    candidates = read_candidate_tasks(args.tasks)
-    difficulty = tally_attempts(read_ledger_attempts(args.ledger), solver=args.solver)
+    """Band and quota the manifest's verified tasks; the manifest carries their difficulty."""
+    rows = manifest_rows(args.tasks)
+    candidates = [
+        CandidateTask(
+            task_id=row.task_id,
+            source_id=row.source_id,
+            task_sha256=row.task_sha256,
+            domain=row.domain,
+            task_path=row.task_path,
+        )
+        for row in rows
+    ]
+    difficulty = {
+        (row.source_id, row.task_sha256): TaskDifficulty(
+            source_id=row.source_id,
+            task_sha256=row.task_sha256,
+            task_id=row.task_id,
+            solve_rate=row.solve_rate,
+            scored=row.scored,
+            basis=row.difficulty_basis,
+        )
+        for row in rows
+    }
     selected, census = select_tasks(candidates, difficulty, quota_from_arguments(args))
     digest_value = write_selection(f"{args.output.rstrip('/')}/selection.json", selected, census)
     print(f"PLAN selected={len(selected)} digest={digest_value}")
@@ -325,11 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="balanced_reasoning", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    plan = commands.add_parser("plan", help="band and quota the verified tasks (no model calls)")
-    plan.add_argument(
-        "--tasks", required=True, help="JSONL of verified tasks: task_id, source_id, task_sha256, domain, task_path"
-    )
-    plan.add_argument("--ledger", default=LEDGER_ROOT, help="Atlas difficulty ledger root")
+    plan = commands.add_parser("plan", help="band and quota the manifest's verified tasks (no model calls)")
+    plan.add_argument("--tasks", required=True, help="The lane's tasks.jsonl manifest (carries each task's difficulty)")
     plan.add_argument("--output", required=True, help="Run root for selection.json")
     plan.add_argument(
         "--solver",

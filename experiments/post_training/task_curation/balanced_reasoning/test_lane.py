@@ -14,6 +14,8 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from rolloutengine.models import GradedRollout, Rollout
 from taskcompendium.grader import verifyit_package
@@ -37,6 +39,7 @@ from taskforge.wiring import build_resources
 from verifyit.spec import ExactSpec
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band, budget_for
+from experiments.post_training.task_curation.balanced_reasoning.catalog import CensusEntry
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import TaskDifficulty
 from experiments.post_training.task_curation.balanced_reasoning.graceful import BEST_EFFORT_MARKER
 from experiments.post_training.task_curation.balanced_reasoning.lane import (
@@ -63,6 +66,41 @@ def make_task(prompt: str, expected: str, task_id: str = "lane-test-task") -> Ta
         answer_format=PlainText(),
         grader=verifyit_package(ExactSpec(expected=(expected,))).grader,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
+    )
+
+
+def _write_census_release(root: Path, release: str, rows: list[dict]) -> CensusEntry:
+    """A one-source census release: censuses.json plus the normalized tasks parquet."""
+    release_dir = root / release
+    source_dir = release_dir / ("0" * 20)
+    normalized = source_dir / "normalized" / "tasks.parquet"
+    normalized.parent.mkdir(parents=True)
+    table = pa.Table.from_pydict(
+        {
+            "id": [row["id"] for row in rows],
+            "path": [row["id"] for row in rows],
+            "task_spec": [row["task_spec"] for row in rows],
+            "task_sha256": [row["task_sha256"] for row in rows],
+            "runtime": ["{}" for _ in rows],
+        }
+    )
+    pq.write_table(table, normalized)
+    (release_dir / "censuses.json").write_text(
+        json.dumps(
+            [
+                {
+                    "source_id": "org:source",
+                    "normalized_path": str(normalized),
+                    "population": {"dataset_id": "org/dataset-retained"},
+                }
+            ]
+        )
+    )
+    return CensusEntry(
+        source_id="org:source",
+        release=release,
+        normalized_path=str(normalized),
+        dataset_id="org/dataset-retained",
     )
 
 
