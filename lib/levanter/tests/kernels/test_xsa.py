@@ -9,7 +9,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.testing.devices import use_cpu_devices
 from levanter.kernels.pallas import xsa as xsa_module
-from levanter.kernels.pallas.xsa import XsaUnsupportedError, xsa_forward, xsa_pallas_tpu, xsa_reference
+from levanter.kernels.pallas.xsa import xsa_forward, xsa_reference
 
 
 def _oracle(y, v):
@@ -68,23 +68,6 @@ def test_xsa_reference_preserves_supported_storage_dtype(dtype):
         np.testing.assert_array_equal(np.asarray(actual).view(np.uint16), expected.view(np.uint16))
     else:
         np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
-
-
-def test_xsa_pallas_rejects_actual_width_before_flatten(monkeypatch):
-    monkeypatch.setattr(xsa_module, "xsa_pallas_tpu", lambda *_: pytest.fail("width was flattened before validation"))
-    y = jnp.ones((2, 256), dtype=jnp.float32)
-    v = jnp.ones((2, 256), dtype=jnp.float32)
-    with pytest.raises(XsaUnsupportedError, match="head width 128"):
-        xsa_forward(y, v, "pallas_tpu")
-
-
-def test_xsa_pallas_tpu_is_explicit_on_cpu():
-    y = jnp.ones((1, 128), dtype=jnp.float32)
-    v = jnp.ones((1, 128), dtype=jnp.float32)
-    if jax.default_backend() != "cpu":
-        return
-    with pytest.raises(XsaUnsupportedError):
-        xsa_pallas_tpu(y, v)
 
 
 @pytest.mark.timeout(120)

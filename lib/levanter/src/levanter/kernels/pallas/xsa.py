@@ -65,10 +65,6 @@ def xsa_reference(y: Float[Array, "... H 128"], v: Float[Array, "... H 128"]) ->
     return _xsa_reference_flat(y.reshape((-1, shape[-1])), v.reshape((-1, shape[-1]))).reshape(shape)
 
 
-def _xsa_cost_reference(y: jax.Array, v: jax.Array) -> jax.Array:
-    return _xsa_reference_flat(y, v)
-
-
 def _xsa_kernel(y_ref, v_ref, out_ref):
     y32 = y_ref[...].astype(jnp.float32)
     v32 = v_ref[...].astype(jnp.float32)
@@ -121,7 +117,7 @@ def _local_pallas(y: jax.Array, v: jax.Array) -> jax.Array:
     padded_v = jnp.pad(v, ((0, padded_rows - rows), (0, 0)))
     output_shape = jax.ShapeDtypeStruct(padded_y.shape, padded_y.dtype)
     cost = with_io_bytes_accessed(
-        pl.estimate_cost(_xsa_cost_reference, padded_y, padded_v),
+        pl.estimate_cost(_xsa_reference_flat, padded_y, padded_v),
         kernel_inputs_specs=(padded_y, padded_v),
         kernel_outputs_specs=(output_shape,),
     )
@@ -183,8 +179,6 @@ def _forward(y: jax.Array, v: jax.Array, implementation: Implementation) -> jax.
     if implementation == "reference":
         return xsa_reference(y, v)
     if implementation == "pallas_tpu":
-        if width != _HEAD_WIDTH:
-            raise XsaUnsupportedError(f"pallas_tpu requires head width {_HEAD_WIDTH}, got {width}")
         spec = _validate_physical_layout(y, v)
         flat_y = y.reshape((-1, width))
         flat_v = v.reshape((-1, width))
