@@ -206,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
 
     status_parser = modes.add_parser("status", help="Per-node artifact and preflight state")
     status_parser.add_argument("--json", action="store_true")
+    status_parser.add_argument("--source", help="The census/corpus slice source the receipts were sealed with")
 
     resume_parser = modes.add_parser("resume", help="Rerun: skip completed, restart failed alone")
     resume_parser.add_argument("--stage", action="append")
