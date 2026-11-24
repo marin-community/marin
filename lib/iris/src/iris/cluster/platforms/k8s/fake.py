@@ -128,6 +128,43 @@ def _node_selector_matches(node: FakeNode, selector: dict[str, str]) -> bool:
     return all(node.labels.get(k) == v for k, v in selector.items())
 
 
+def _match_expression_matches(node: FakeNode, expression: dict) -> bool:
+    """Evaluate one node-affinity matchExpression against node labels.
+
+    Mirrors Kubernetes label-selector semantics: NotIn matches a node that
+    does not carry the key at all.
+    """
+    label = node.labels.get(expression.get("key", ""))
+    operator = expression.get("operator", "")
+    values = expression.get("values") or []
+    if operator == "In":
+        return label is not None and label in values
+    if operator == "NotIn":
+        return label is None or label not in values
+    if operator == "Exists":
+        return label is not None
+    if operator == "DoesNotExist":
+        return label is None
+    return False
+
+
+def _node_affinity_matches(node: FakeNode, affinity: dict) -> bool:
+    """Required node affinity: the node must satisfy at least one selector term.
+
+    Pod (anti-)affinity is deliberately not evaluated (see _schedule_pod);
+    this covers only requiredDuringSchedulingIgnoredDuringExecution node terms.
+    """
+    terms = (
+        affinity.get("nodeAffinity", {})
+        .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+        .get("nodeSelectorTerms")
+        or []
+    )
+    if not terms:
+        return True
+    return any(all(_match_expression_matches(node, e) for e in term.get("matchExpressions") or []) for term in terms)
+
+
 def _tolerations_satisfy_taints(tolerations: list[dict], taints: list[dict]) -> bool:
     """Every NoSchedule taint must be tolerated. Mirrors k8s TaintToleration plugin."""
     for taint in taints:
@@ -345,6 +382,8 @@ class InMemoryK8sService:
 
         for node in self._nodes.values():
             if not _node_selector_matches(node, node_selector):
+                continue
+            if not _node_affinity_matches(node, spec.get("affinity") or {}):
                 continue
             if not _tolerations_satisfy_taints(tolerations, node.taints):
                 continue

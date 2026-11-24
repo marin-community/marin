@@ -279,7 +279,8 @@ Daytona records process-group leader PIDs as root in a root-only directory befor
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
-For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+For Daytona, set `DAYTONA_API_KEY`. The API URL and target region are constants
+(`https://app.daytona.io/api` and `us`).
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
 Each machine owns and closes its client. In the default build mode, the factory
 creates sandboxes from shared snapshots. Snapshot names derive from the registry

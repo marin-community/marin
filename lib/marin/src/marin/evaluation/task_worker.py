@@ -5,7 +5,6 @@
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -25,7 +24,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
@@ -50,8 +49,6 @@ JUDGE_ENDPOINT = "EVALUATION_JUDGE_ENDPOINT"
 JUDGE_API_KEY = "EVALUATION_JUDGE_API_KEY"
 DAYTONA_API_KEY = "DAYTONA_API_KEY"
 """The worker secret holding the Daytona eval-org key; launchers resolve it from ``DAYTONA_EVAL_API_KEY``."""
-DAYTONA_API_URL = "DAYTONA_API_URL"
-DAYTONA_TARGET = "DAYTONA_TARGET"
 DAYTONA_EGRESS = ("app.daytona.io", "*.app.daytona.io")
 MACHINE_BACKENDS = frozenset({Backend.LOCAL, Backend.DOCKER, Backend.DAYTONA})
 MODEL_REQUEST_RETRIES = 8
@@ -159,12 +156,7 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
 
 
 def daytona_connection(api_key: str) -> DaytonaConnection:
-    """The Daytona account for ``api_key``, with the API URL and target forwarded to evaluation jobs."""
-    return DaytonaConnection(
-        api_key=api_key,
-        api_url=os.environ.get(DAYTONA_API_URL, DEFAULT_DAYTONA_API_URL),
-        target=os.environ.get(DAYTONA_TARGET),
-    )
+    return DaytonaConnection(api_key=api_key)
 
 
 def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
@@ -203,8 +195,13 @@ async def execute(
     api_key: str,
     judge_connection: JudgeConnection | None,
     daytona: DaytonaConnection | None = None,
+    *,
+    responses_from: str | None = None,
 ) -> None:
-    """Evaluate the supplied corpora and persist raw results, retaining completed attempts on resume."""
+    """Evaluate the supplied corpora and persist raw results, retaining completed attempts on resume.
+
+    Model responses stored in the result root ``responses_from`` answer identical requests.
+    """
     configure_coreweave_s3()
     config = execution_config(config)
     tokenizer = load_tokenizer(config.model.tokenizer, revision=config.model.tokenizer_revision, trust_remote_code=False)
@@ -225,6 +222,7 @@ async def execute(
             harnesses=episode_harnesses(config, client),
             tokenizer=tokenizer,
             judge_connection=judge_connection,
+            reuse_from=responses_from,
         )
 
 
@@ -238,19 +236,30 @@ def execute_with_retries(
     *,
     daytona: DaytonaConnection | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    responses_from: str | None = None,
 ) -> None:
     """Resume infrastructure failures with the same run identity and Marin's standard backoff."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
     retry_with_backoff(
-        lambda: asyncio.run(execute(datasets, output, config, endpoint, api_key, judge_connection, daytona)),
+        lambda: asyncio.run(
+            execute(
+                datasets, output, config, endpoint, api_key, judge_connection, daytona, responses_from=responses_from
+            )
+        ),
         retryable=lambda error: isinstance(error, EvaluationInfrastructureError),
         max_attempts=max_attempts,
         operation="TaskSpec evaluation",
     )
 
 
-def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConfig, max_attempts: int) -> None:
+def run_worker(
+    datasets: tuple[str, ...],
+    output: str,
+    config: EvaluationRunConfig,
+    max_attempts: int,
+    responses_from: str | None = None,
+) -> None:
     """Execute the corpora and persist resumable raw results using Iris-provided connections."""
     logging.basicConfig(level=logging.INFO)
     # Iris endpoint URLs can contain scoped credentials.
@@ -270,4 +279,5 @@ def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConf
         judge,
         daytona=daytona,
         max_attempts=max_attempts,
+        responses_from=responses_from,
     )
