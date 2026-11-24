@@ -3,8 +3,8 @@
 
 """Adoption: registering pre-existing data as a managed ``name@version``.
 
-An adopted artifact points at data already on disk — consumers resolve to that source and
-nothing is recomputed — while a provenance record at the canonical address records the alias.
+Consumers resolve an adopted artifact to its existing source. Registered adoption records the
+alias at its canonical address. Read-only adoption verifies the source.
 """
 
 import logging
@@ -22,7 +22,7 @@ def test_adopt_resolves_to_source_not_canonical():
 
 
 @pytest.mark.parametrize("read_only", [False, True], ids=["register", "read-only"])
-def test_adopt_records_pointer_at_canonical_address(tmp_path, monkeypatch, read_only):
+def test_adopt_writes_a_pointer_only_when_registered(tmp_path, monkeypatch, read_only):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     source = tmp_path / "pre_existing"
     source.mkdir()
