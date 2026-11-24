@@ -790,8 +790,9 @@ async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
         ("events.jsonl.parts/000000000001.jsonl", 1, "format 1"),
         ("status.json", 1, "format 1"),
         ("workpiece.json", 1, "format 1"),
-        # The version gate refuses every format but its own: the format-2 reader refuses this one's heads.
-        (HEAD, checkpoint.JOURNAL_FORMAT - 1, f"format {checkpoint.JOURNAL_FORMAT - 1}"),
+        # The version gate refuses every format but its own and format 8, whose rows it reads unchanged; the format-2
+        # reader refuses this one's heads.
+        (HEAD, 7, "format 7"),
         (HEAD, checkpoint.JOURNAL_FORMAT + 1, f"format {checkpoint.JOURNAL_FORMAT + 1}"),
     ],
 )

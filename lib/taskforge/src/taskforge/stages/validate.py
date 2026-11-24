@@ -120,16 +120,18 @@ async def solver_batch(
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
     re-executes only it; more than ``max_missing`` held slots hold the batch instead. A decision-model outage defers
-    the batch the same way. Once a slot waits for the decision model or ``stopped()`` says a validation sibling holds,
-    no further slot starts, so no rollout is bought to wait; the batch then returns short only beside that sibling.
+    the batch the same way, and any other hold a slot raises holds it, each once every admitted sibling has settled.
+    Once a slot waits for the decision model or holds, or ``stopped()`` says a validation sibling holds, no further
+    slot starts, so no rollout is bought to wait; the batch then returns short only beside that sibling.
     """
     first = max(occupied, default=-1) + 1
     gate, running = asyncio.Semaphore(concurrency), dict[int, float]()
     outages: list[DecisionModelUnavailable] = []
+    holds: list[Hold] = []
 
     async def slot(trial: int) -> TrialResult | Restart | DecisionModelUnavailable | None:
         async with gate:
-            if outages or stopped():
+            if outages or holds or stopped():
                 return None
             running[trial] = clock()
             try:
@@ -139,6 +141,9 @@ async def solver_batch(
             except DecisionModelUnavailable as error:
                 outages.append(error)
                 return error
+            except Hold as error:  # such as a decision model refusing a read: it must not cancel a sibling's evidence
+                holds.append(error)
+                return None
             finally:
                 del running[trial]
 
@@ -158,7 +163,10 @@ async def solver_batch(
         await asyncio.gather(ticker, return_exceptions=True)
     results = [slot.result() for slot in slots]
     unfinished = [result for result in results if isinstance(result, Restart | DecisionModelUnavailable)]
-    if unfinished and (held := refusal([r for r in results if isinstance(r, TrialResult)], max_missing)):
+    held = refusal([r for r in results if isinstance(r, TrialResult)], max_missing)
+    if holds:
+        raise BaseExceptionGroup(f"Solver {phase} slots held", [*holds, *([held] if held else [])])
+    if unfinished and held:
         raise held  # what review would decide, before anything unfinished is bought again
     if unfinished:
         raise BaseExceptionGroup(f"Solver {phase} slots did not finish", unfinished)

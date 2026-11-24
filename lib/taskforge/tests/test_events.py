@@ -36,7 +36,7 @@ from taskforge.resources.env import ReadFile, RunCommand, WriteFile, WriteFiles
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import NewId
 from taskforge.resources.inference import InferenceRequest
-from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.rollouts import SolverGeneration, SolverRollout
 from taskforge.resources.web import WebFetch, WebSearch
 
 KINDS: dict[str, type[Event[object]]] = {
@@ -53,6 +53,7 @@ KINDS: dict[str, type[Event[object]]] = {
     "grading.grade_candidate": GradeCandidate,
     "ids.new_id": NewId,
     "inference.request": InferenceRequest,
+    "rollouts.solver_generation": SolverGeneration,
     "rollouts.solver_rollout": SolverRollout,
     "scope.entered": ScopeEntered,
     "scope.exited": ScopeExited,

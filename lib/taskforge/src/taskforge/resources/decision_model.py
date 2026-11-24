@@ -10,26 +10,39 @@ equivalent read replays without a call and another model identity misses.
 """
 
 import asyncio
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol, cast, override
 
 import httpx
-from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
-from taskcompendium.decision_model import DecisionModelRequest
+from rolloutengine.models import (
+    GradedRollout,
+    Model,
+    Rollout,
+    RolloutInterrupted,
+    RolloutOperation,
+    TaskRolloutSpec,
+)
+from taskcompendium.chat import chat_conversation
+from taskcompendium.decision_model import DecisionModelConnection, DecisionModelRequest, grade_decision_model_answer
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import GradingAttempt
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest, event_digest
-from taskforge.effects.issues import DecisionModelUnavailable
+from taskforge.effects.issues import DecisionModelUnavailable, Hold, describe_exception
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
-from taskforge.resources.rollouts import Engine
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverGeneration, SolverRollout, run_rollout
 
 CLEF_MODEL, CLEF_QUESTION = "clef", "whole"
 DOWN_STATUSES = frozenset({404, 408, 429})
 """Besides any 5xx, the gateway statuses that mean Clef cannot answer now, such as its 503 ``clef_unavailable``."""
 HEALTH_TIMEOUT = 5.0
+DIAGNOSTIC_LIMIT = 300
+"""Characters of an unusable answer's diagnostic, its cause and the body together, that a hold keeps."""
 
 
 class DecisionModelHealth(StrEnum):
@@ -53,8 +66,9 @@ class OffScale(Exception):
 
 
 class DecisionModelReader(Protocol):
-    """One host's decision model: ``read`` returns a level or raises ``DecisionModelDown``; ``health`` is the host's
-    own readiness answer and never a read."""
+    """One host's decision model: ``read`` returns a level, raises ``DecisionModelDown`` while the host cannot answer,
+    or a ``Hold`` when it refuses the read or answers it malformed; ``health`` is the host's own readiness answer and
+    never a read."""
 
     async def read(self, request: DecisionModelRequest) -> float: ...
 
@@ -89,12 +103,21 @@ class ClefReader(DecisionModelReader):
         if (status := response.status_code) in DOWN_STATUSES or status >= 500:
             raise DecisionModelDown(f"HTTP {status}: {response.text[:200]}", retry_after(response))
         if status != 200:
-            raise RuntimeError(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")
-        probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
-        weights = [float(probabilities[str(level)]) for level in range(len(request.levels))]
-        if min(weights) < 0 or not sum(weights) > 0:
-            raise RuntimeError(f"Clef probabilities are not a distribution: {weights}")
-        return sum(level * weight for level, weight in enumerate(weights)) / sum(weights)
+            raise Hold(f"Decision model refused the read with HTTP {status}: {response.text[:300]}")  # no outage
+        try:  # any answer that is no distribution over the levels is one refusal: a retry would read it again
+            probabilities = response.json()["answers"][CLEF_QUESTION]["probabilities"]
+            values = [probabilities[str(level)] for level in range(len(request.levels))]
+            if any(isinstance(value, bool) for value in values):
+                raise TypeError("a boolean is no probability")
+            weights = [float(value) for value in values]
+            total = sum(weights)
+            if not all(map(math.isfinite, (*weights, total))) or min(weights) < 0 or not total > 0:
+                raise ValueError(f"probabilities {weights} are not a distribution")
+        except (ValueError, LookupError, TypeError, ArithmeticError) as error:  # malformed JSON, a missing field or
+            # level, another shape, a number too large for a float
+            detail = f"{describe_exception(error)}; body {response.text}"
+            raise Hold(f"Decision model answered unusably: {detail[:DIAGNOSTIC_LIMIT]}") from None
+        return sum(level * weight for level, weight in enumerate(weights)) / total
 
     @override
     async def health(self) -> DecisionModelHealth:
@@ -222,6 +245,18 @@ async def read_level(event: DecisionModelRead, model: DecisionModel, *, ctx: Con
             await asyncio.gather(flight.task, return_exceptions=True)
 
 
+def recorded_reads(connection: DecisionModelConnection, ctx: Context) -> DecisionModelConnection:
+    """``connection`` reading through recorded ``DecisionModelRead`` effects."""
+
+    async def read(request: DecisionModelRequest) -> float:
+        try:
+            return await ctx.emit(DecisionModelRead(request))
+        except OffScale as error:
+            return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
+
+    return replace(connection, read=read)
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionModelEngine:
     """Bind each decision-model spec's read, at grade setup, to recorded ``DecisionModelRead`` effects."""
@@ -231,12 +266,34 @@ class DecisionModelEngine:
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         if (connection := spec.decision_model) is not None:
-
-            async def read(request: DecisionModelRequest) -> float:
-                try:
-                    return await self.ctx.emit(DecisionModelRead(request))
-                except OffScale as error:
-                    return cast(float, error.args[0])  # graded INFRA_ERROR; the level was never recorded
-
-            spec = spec.model_copy(update={"decision_model": replace(connection, read=read)})
+            spec = spec.model_copy(update={"decision_model": recorded_reads(connection, self.ctx)})
         return await self.engine.run_task(spec, model, run_id=run_id)
+
+
+async def regraded(spec: TaskRolloutSpec, rollout: Rollout, ctx: Context) -> GradeResult:
+    """Grade a checkpointed generation as RolloutEngine grades a finished one: TaskCompendium's decision-model grade of
+    the chat of its last conversation with a model turn, its captured outputs and its stop reason."""
+    assert spec.decision_model is not None
+    chat = [record.messages for record in rollout.conversations if record.steps][-1]
+    attempt = GradingAttempt(chat_conversation(list(chat)), rollout.outputs, stop_reason=rollout.stop_reason)
+    return await grade_decision_model_answer(spec.task, attempt, recorded_reads(spec.decision_model, ctx))
+
+
+async def decided_rollout(event: SolverRollout, resource: RolloutResource, *, ctx: Context) -> GradedRollout:
+    """``run_rollout``, except that a finished generation its decision model did not score (an outage, or an
+    off-scale level) is journalled as a ``SolverGeneration`` before the slot holds, and a later execution of the slot
+    grades that generation again instead of generating it. Every other outcome is ``run_rollout``'s."""
+    spec, trial, attempt = event.spec, event.trial, event.attempt
+    if spec.decision_model is None:
+        return await run_rollout(event, resource, notify=ctx.notify)
+    if (generated := ctx.recorded(SolverGeneration(spec, trial, attempt))) is not None:
+        return GradedRollout(generated, await regraded(spec, generated, ctx))
+    try:
+        result = await run_rollout(event, resource, notify=ctx.notify)
+    except DecisionModelUnavailable as outage:
+        if isinstance(cause := outage.__cause__, RolloutInterrupted) and cause.operation is RolloutOperation.GRADE:
+            await ctx.emit(SolverGeneration(spec, trial, attempt, replace(cause.rollout, failure=None)))
+        raise
+    if result.grade.status is Outcome.INFRA_ERROR:  # TaskCompendium's grade of an off-scale level, never recorded
+        await ctx.emit(SolverGeneration(spec, trial, attempt, result.rollout))
+    return result

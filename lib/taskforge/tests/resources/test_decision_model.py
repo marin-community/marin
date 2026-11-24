@@ -40,6 +40,7 @@ from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.decision_model import (
+    DIAGNOSTIC_LIMIT,
     ClefReader,
     DecisionModel,
     DecisionModelDown,
@@ -656,7 +657,7 @@ async def test_the_installed_grade_reads_clef_through_the_callers_iris_client() 
     assert (grade.reward, [str(call.url) for call in sent]) == (1.0, ["http://gateway/v1/systemone"])
 
 
-async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_bugs() -> None:
+async def test_the_default_reader_reads_unavailability_as_down_and_other_refusals_as_holds() -> None:
     with pytest.raises(DecisionModelDown, match="HTTP 503: clef_unavailable") as raised:
         await gateway(lambda _: httpx.Response(503, text="clef_unavailable", headers={"retry-after": "30"})).read(
             request("12")
@@ -666,8 +667,55 @@ async def test_the_default_reader_reads_unavailability_as_down_and_other_refusal
         await gateway(lambda call: (_ for _ in ()).throw(httpx.ConnectError("refused", request=call))).read(
             request("12")
         )
-    with pytest.raises(RuntimeError, match="refused the read with HTTP 400"):
+    with pytest.raises(Hold, match="refused the read with HTTP 400") as refused:
         await gateway(lambda _: httpx.Response(400, text="bad state")).read(request("12"))
+    assert not isinstance(refused.value, DecisionModelUnavailable)  # a refusal is no outage: nothing defers on it
+
+
+def weighted(*pairs: object) -> str:
+    """A Clef answer whose probabilities are zero but at the ``level, weight`` pairs."""
+    probabilities: dict[str, object] = dict.fromkeys("01234", 0.0)
+    probabilities.update({str(level): weight for level, weight in zip(pairs[::2], pairs[1::2], strict=True)})
+    return json.dumps({"answers": {"whole": {"probabilities": probabilities}}})
+
+
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        ("{", "answered unusably: JSONDecodeError"),
+        ('{"answers": {}}', "answered unusably: KeyError: 'whole'"),
+        ('{"answers": {"whole": {"probabilities": [0.5, 0.5]}}}', "answered unusably: TypeError"),
+        (weighted(0, "high"), "answered unusably: ValueError"),
+        ('{"answers": {"whole": {"probabilities": {"0": 1}}}}', "answered unusably: KeyError: '1'"),
+        (json.dumps({"answers": {"whole": {"probabilities": dict.fromkeys("01234", 0)}}}), "are not a distribution"),
+        (json.dumps({"answers": {"whole": {"probabilities": dict.fromkeys("01234", -1)}}}), "are not a distribution"),
+        (
+            '{"answers": {"whole": {"probabilities": {"0": 1, "1": NaN, "2": 0, "3": 0, "4": 0}}}}',
+            "are not a distribution",
+        ),
+        (weighted(4, 10**309), "answered unusably: OverflowError"),
+        (weighted(4, True), "answered unusably: TypeError: a boolean is no probability"),
+        (weighted(0, 1e308, 1, 1e308), "are not a distribution"),  # finite weights whose sum is not
+        (weighted(4, "x" * 2000), "answered unusably: ValueError: could not convert string to float"),
+    ],
+)
+async def test_the_default_reader_refuses_an_answer_that_is_no_distribution_over_the_levels(
+    body: str, reason: str
+) -> None:
+    with pytest.raises(Hold, match=re.escape(reason)) as refused:
+        await gateway(lambda _: httpx.Response(200, text=body)).read(request("12"))
+    assert not isinstance(refused.value, DecisionModelUnavailable)
+    assert len(str(refused.value)) <= len("Decision model answered unusably: ") + DIAGNOSTIC_LIMIT
+
+
+# The control for the refusals above: every answer that is a distribution reads the level it read before, integer
+# and unnormalised weights included.
+@pytest.mark.parametrize(
+    "body, level",
+    [(weighted(3, 0.5, 4, 0.5), 3.5), (weighted(4, 1), 4.0), (weighted(0, 1), 0.0), (weighted(1, 2, 3, 2), 2.0)],
+)
+async def test_the_default_reader_reads_the_expected_level_of_any_distribution(body: str, level: float) -> None:
+    assert await gateway(lambda _: httpx.Response(200, text=body)).read(request("12")) == level
 
 
 @pytest.mark.parametrize(
@@ -709,9 +757,10 @@ async def length_stopped(
     return outcome, len(solver.bodies)
 
 
-# Review 2026-11-21: an answer cut at its length limit is still graded, and an off-scale level is a
-# grader infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made
-# no solver call and no read and republished the hold.
+# Review 2026-11-21: an answer cut at its length limit is still graded, and an off-scale level is a grader
+# infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made no
+# solver call and no read and republished the hold. The explicit resume reads the checkpointed generation again and
+# generates nothing.
 async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(
     tmp_path: Path,
 ) -> None:
@@ -722,7 +771,7 @@ async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_
     healthy = FakeReader()
     graded, solved = await length_stopped(healthy, sink, local_records(sink), resume=True)
     assert isinstance(graded, GradedRollout) and graded.grade.reward == 1.0 and grade_cause(graded.grade) is None
-    assert healthy.reads == [request("12")] and solved == 1
+    assert healthy.reads == [request("12")] and solved == 0
 
 
 async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it(

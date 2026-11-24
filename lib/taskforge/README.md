@@ -105,7 +105,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 8); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 9); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -132,8 +132,11 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 8` and reports the
-rest. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 9` and reports the
+rest. Format 8 is the exception: every format-8 row means the same at format 9, so this reader resumes a format-8
+root and its claim writes 9. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
+decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
+format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
 header cannot tell apart: Taskforge before decision-model grading, whose readers cannot decode a `decision_model.read` row,
 and the first decision-model writers, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
@@ -169,9 +172,36 @@ after an infrastructure outage (sandbox admission, a provider gap longer than
 its last decision is `Incomplete(..., awaits="decision_model")` and its `one` child exits 75. Every later launch
 enters it without the flag, and `run` parks such proposals until the decision model's health route reports healthy,
 or, on a gateway without that route, until a `one --probe` child exits 10 because its own reader's last physical
-outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual. Model calls replay from the event log; shell commands are
+outcome in that process was a valid answer. A hold that mixes the outage with any other cause stays manual.
+
+**Generation checkpoints.** When a solver trial (validation or confirmation) is graded by the decision model and
+its generation finished but the grade did not come back, because the decision model gave no read within
+`decision_model.unavailable_wait` or returned a level off its scale, the generated rollout (every conversation, the
+graded chat, native actions, stop reason, captured outputs and usage) is journalled as a `rollouts.solver_generation`
+row before the slot holds. It is keyed by the slot's own identity (task spec, trial, attempt) under the solver's
+rollout fingerprint. The next execution of that slot (an unflagged relaunch after an outage, `--resume-held` after
+an off-scale level) dispatches no solver request: it grades the recorded generation again through the same
+TaskCompendium decision-model grade and recorded read, so an equal answer reads the decision model once. `report`
+charges each generation once, reading the journal in order: a checkpoint row charges its generation (including one
+still awaiting its grade), the slot results after it were graded from it and add nothing, and a slot result before it
+(a refused slot's paid turns, a format-8 off-scale result) paid for an earlier generation and keeps its charge. The
+order is read over the whole journal, so `--since-hours` charges only rows inside the window. Limits: a generation interrupted before it finished (a machine or model failure, a cancelled process) is
+generated again, as is a slot whose solver fingerprint changed (solver model, sampling, execution settings or the
+grader identities it records). A trial with no answer, or a refused slot, is no generation awaiting a grade and
+keeps its existing replay. Graders that run in a sandbox or through the LLM judge keep their existing path. The
+row reaches the published journal with the next checkpoint and with the held publication; if the process dies
+abruptly between the read's failure and that publication, or at any time while the read is still waiting, the
+next launch generates the answer again. A gateway refusing the resumed read (an HTTP 4xx other than 404, 408 and
+429), or answering it with an HTTP 200 that is no distribution over the levels (a body that is not JSON, a missing
+field or level, another shape, a boolean, a number too large for a float, a non-finite or negative probability, a
+non-finite sum, or all zero), is no outage: the reader raises a hold whose diagnostic (cause and body together) is
+capped at 300 characters and records no read, the solver batch lets every admitted slot settle and starts no
+further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
+stage. A refusal of a slot's first read still restarts the stage, as before.
+
+Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-format-8 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
+format-8 or format-9 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
 author's system prompt embeds the pinned reference, so a wording-only change in TaskCompendium's schema does not
 affect it.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
@@ -294,8 +324,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   then a final review over all of them; 0 makes the acceptance final at its validation round. The shipped
   round is the one the acceptance chose (a restored fallback's included), and its scored trials and
   transcripts are read from the journal, never bought again. That holds for completed slots whose results the
-  journal can reuse: an answer generated in full whose grading then failed is generated again today, so a grading
-  outage can repeat a fully generated answer (a follow-up will checkpoint the generation). The new slots number past that round's
+  journal can reuse, and, for a decision-model grader, for an answer generated in full whose grade did not come back
+  (see "Generation checkpoints"). The new slots number past that round's
   indices under their own attempt, through the same solver batch, concurrency, heartbeat and
   `budget.max_missing_trials` allowance (a refused slot beyond it holds). The batch and its grade observers
   settle as validation's do, so an outage beside another hold is a manual hold, and only a pure
