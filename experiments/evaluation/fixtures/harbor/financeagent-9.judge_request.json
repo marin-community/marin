@@ -1,0 +1,9 @@
+{
+  "model": "openai/gpt-5-2025-08-07",
+  "messages": [
+    {
+      "role": "user",
+      "content": "You are a fair judge evaluating financial question answers.\n\n## Question\nCalculate the 3 year revenue CAGR for Palantir Technologies from 2021 to 2024.\n\n## Reference Answer (Ground Truth)\n2024: 2,865,507\n2021: 1,541,889\n\nCAGR: 22.9%\n\n## Model's Answer\nCAGR: 30%\n\n## Your Task\nDetermine if the model's answer is correct. Consider:\n1. The core factual content must match (numbers, dates, names)\n2. Minor phrasing differences are acceptable\n3. Additional context is fine as long as the key answer is correct\n4. For numerical answers, small rounding differences are acceptable\n\nRespond with ONLY valid JSON in this exact format:\n{\n    \"judgment\": \"CORRECT\" or \"INCORRECT\",\n    \"explanation\": \"Brief explanation of your judgment\"\n}"
+    }
+  ]
+}

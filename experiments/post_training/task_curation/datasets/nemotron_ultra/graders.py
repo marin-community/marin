@@ -40,6 +40,7 @@ from taskcompendium.models import (
     AnswerType,
     EnvironmentRequirements,
     FinalAction,
+    GraderMachine,
     NoGrader,
     PlainText,
     ProviderRequirement,
@@ -71,6 +72,7 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     JudgeSpec,
     MathSpec,
+    StripReasoningBlocks,
 )
 
 from experiments.post_training.glm import GLM_MODEL
@@ -377,11 +379,13 @@ def convert_instruction_following(row: RawRow, context: ConversionContext) -> No
         constraints=deterministic_constraints,
         rubric=RUBRIC_CHECKLIST,
         model=GLM_MODEL,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    package = verifyit_package(spec, (resource,), environment=required_grader_environment(context))
+    package = verifyit_package(
+        spec, (resource,), placement=GraderMachine(environment=required_grader_environment(context))
+    )
     normalized = blend_task(row, request, package)
     task = normalized.task.model_copy(update={"tags": ("judge", "instruction-following", "multi-turn")})
     return NormalizedTask(task, normalized.changes)
@@ -411,18 +415,20 @@ def convert_abstention(row: RawRow, context: ConversionContext) -> NormalizedTas
         references=(answer,),
         question=question,
         rubric=RUBRIC_LABELS,
+        transport_attempts=1,
+        parse_attempts=1,
         model=GLM_MODEL,
         prompt_template=ABSTENTION_PROMPT,
         label_scores={"A": 1.0, "B": 0.0, "C": 0.5},
         exact_gate_answers=("[IDK]", r"\boxed{[IDK]}"),
         exact_gate_label="C",
         strip_reasoning_blocks=True,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         label_scan="lines",
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    package = verifyit_package(spec, environment=required_grader_environment(context))
+    package = verifyit_package(spec, placement=GraderMachine(environment=required_grader_environment(context)))
     normalized = blend_task(row, request, package)
     task = normalized.task.model_copy(update={"tags": ("judge", "abstention")})
     return NormalizedTask(task, normalized.changes)
@@ -473,11 +479,13 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> Normalize
         context=MULTICHALLENGE_CONTEXT,
         rubric=RUBRIC_CHECKLIST,
         model=GLM_MODEL,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    package = verifyit_package(spec, (resource,), environment=required_grader_environment(context))
+    package = verifyit_package(
+        spec, (resource,), placement=GraderMachine(environment=required_grader_environment(context))
+    )
     normalized = blend_task(row, request, package)
     task = normalized.task.model_copy(update={"tags": ("judge", "multichallenge")})
     return NormalizedTask(task, normalized.changes)
@@ -499,17 +507,19 @@ def convert_jailbreak(row: RawRow, context: ConversionContext) -> NormalizedTask
         references=(requirement,),
         question=adversarial_prompt,
         rubric=RUBRIC_LABELS,
+        transport_attempts=1,
+        parse_attempts=1,
         model=GLM_MODEL,
         system_prompt=JAILBREAK_JUDGE_SYSTEM,
         prompt_template=JAILBREAK_JUDGE_PROMPT,
         label_scores={"PASS": 1.0, "PARTIAL": 0.3, "FAIL": 0.0},
         strip_reasoning_blocks=True,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         label_scan="lines",
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    package = verifyit_package(spec, environment=required_grader_environment(context))
+    package = verifyit_package(spec, placement=GraderMachine(environment=required_grader_environment(context)))
     normalized = blend_task(row, request, package)
     task = normalized.task.model_copy(update={"tags": ("judge", "jailbreak", str(policy))})
     return NormalizedTask(task, normalized.changes)
@@ -557,16 +567,18 @@ def convert_genrm(row: RawRow, context: ConversionContext) -> NormalizedTask | I
         references=(principle,),
         question=conversation,
         rubric=RUBRIC_LABELS,
+        transport_attempts=1,
+        parse_attempts=1,
         model=GLM_MODEL,
         system_prompt=GENRM_JUDGE_SYSTEM,
         prompt_template=GENRM_JUDGE_PROMPT,
         label_scores={f"[[{score}]]": (score - 1) / 4 for score in range(1, 6)},
         strip_reasoning_blocks=True,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         label_scan="lines",
         request_timeout=JUDGE_REQUEST_TIMEOUT,
     )
-    package = verifyit_package(spec, environment=required_grader_environment(context))
+    package = verifyit_package(spec, placement=GraderMachine(environment=required_grader_environment(context)))
     normalized = blend_task(row, request, package, changes=tuple(changes))
     task = normalized.task.model_copy(update={"tags": ("judge", "preference", "genrm-absolute")})
     return NormalizedTask(task, normalized.changes)
@@ -737,11 +749,13 @@ def _semantic_tool_action(
     spec = JudgeSpec(
         references=(reference,),
         rubric=RUBRIC_LABELS,
+        transport_attempts=1,
+        parse_attempts=1,
         system_prompt=TOOL_ACTION_JUDGE_SYSTEM,
         prompt_template=TOOL_ACTION_JUDGE_PROMPT,
         label_scores={"PASS": 1.0, "FAIL": 0.0},
         strip_reasoning_blocks=True,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         label_scan="lines",
         reasoning_effort=TOOL_ACTION_JUDGE_REASONING_EFFORT,
         incomplete_retry_tokens=TOOL_ACTION_JUDGE_RETRY_TOKENS,
@@ -751,7 +765,7 @@ def _semantic_tool_action(
     # The raw audit ledger preserves the legacy expected action. Do not package it as
     # private grader state: semantic grading does not use it, and duplicate public tasks
     # with different legacy targets would otherwise look like conflicting references.
-    package = verifyit_package(spec, environment=required_grader_environment(context))
+    package = verifyit_package(spec, placement=GraderMachine(environment=required_grader_environment(context)))
     answer_type = AnswerType.NATIVE_ACTION if request.tools else AnswerType.TEXT
     normalized = blend_task(row, request, package, answer_type)
     update: dict[str, Any] = {"tags": ("judge", "tool-use")}

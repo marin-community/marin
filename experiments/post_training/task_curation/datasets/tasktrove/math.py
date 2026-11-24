@@ -20,6 +20,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -174,7 +175,7 @@ class MathConverter:
                 inline_resource("verifier_data.json", files[VERIFIER_DATA]),
                 inline_resource("source/test.sh", runner),
             ),
-            environment=required_grader_environment(context),
+            placement=GraderMachine(environment=required_grader_environment(context)),
         )
         task = TaskSpec(
             id=row.id,

@@ -19,6 +19,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     ShellToolBinding,
@@ -77,7 +78,9 @@ def _task(
     """A probe task whose answer is ``task_id``'s nonce; ``fields`` sets its tools, outputs and resources."""
     expected = probe_nonce(task_id)
     spec = ExactSpec((expected,), output=ANSWER_PATH) if answer_type == AnswerType.FILE else ExactSpec((expected,))
-    package = verifyit_package(spec, environment=grader_environment)
+    package = verifyit_package(
+        spec, placement=None if grader_environment is None else GraderMachine(environment=grader_environment)
+    )
     return TaskSpec(
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.format(nonce=expected)),)),

@@ -37,7 +37,7 @@ def validate_source_instructions(spec: InstructionSpec) -> None:
     if not spec.constraints:
         raise InvalidTask("Instruction benchmarks require nonempty constraints")
     if spec.profile is InstructionProfile.HARNESS:
-        resolve_checks(tuple(_harness_constraint(spec, constraint) for constraint in spec.constraints))
+        resolve_checks(tuple(_harness_constraint(constraint) for constraint in spec.constraints))
         return
     unknown = sorted({constraint.name for constraint in spec.constraints} - source_registry(spec.profile).keys())
     if unknown:
@@ -59,9 +59,9 @@ def _instruction(spec: InstructionSpec, constraint: Constraint) -> Instruction:
     return instruction
 
 
-def _harness_constraint(spec: InstructionSpec, constraint: Constraint) -> Constraint:
-    if constraint.name == "combination:repeat_prompt":
-        return Constraint(constraint.name, {**constraint.params, "prompt": spec.prompt})
+def _harness_constraint(constraint: Constraint) -> Constraint:
+    if constraint.name == "language:response_language":
+        return Constraint("harness:response_language", constraint.params)
     return constraint
 
 
@@ -85,6 +85,10 @@ def loose_responses(response: str) -> tuple[str, ...]:
 def grade_source_instructions(spec: InstructionSpec, response: str) -> Reward:
     """Retain per-instruction flags, weights and category evidence for later reduction."""
     validate_source_instructions(spec)
+    if spec.profile is InstructionProfile.HARNESS and any(
+        constraint.name == "language:response_language" for constraint in spec.constraints
+    ):
+        import_module("langdetect")
     metrics: dict[str, float] = {}
     weights: dict[str, int] = {}
     reducer_inputs: dict[str, bool | list[bool]] = {}
@@ -94,7 +98,7 @@ def grade_source_instructions(spec: InstructionSpec, response: str) -> Reward:
         flags = []
         for constraint in spec.constraints:
             if spec.profile is InstructionProfile.HARNESS:
-                prepared = _harness_constraint(spec, constraint)
+                prepared = _harness_constraint(constraint)
                 ifeval = IfevalSpec((prepared,))
                 flags.append(any(grade_ifeval_candidate(ifeval, candidate).reward == 1.0 for candidate in candidates))
             else:

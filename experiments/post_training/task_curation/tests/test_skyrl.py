@@ -21,6 +21,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     VerifyitGrader,
+    grader_environment,
 )
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
@@ -244,7 +245,7 @@ def verifier_file(task: TaskSpec, path: str) -> bytes:
 def test_in_process_grader_scores_the_known_answer(name):
     task = converted_task(RECIPES[name], ROWS[name])
     correct, wrong = ANSWERS[name]
-    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is None
+    assert isinstance(task.grader, VerifyitGrader) and task.grader.placement is None
     assert grade_reply(task, correct).reward == 1.0
     assert grade_reply(task, wrong).reward == 0.0
 
@@ -283,7 +284,7 @@ def test_code_task_golden_control_replays_the_known_solution(name):
     task = converted_task(RECIPES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
+    assert grader_environment(grader) == fixture_context(RECIPES[name]).grader_environment
     final_prompt = task.context.events[-1]
     assert isinstance(final_prompt, TextMessage) and final_prompt.role == "user"
     golden = code.reference_solution(task)
@@ -311,8 +312,18 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
 def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
     task = converted_task(RECIPES["rlvr_ifeval"], ROWS["rlvr_ifeval"])
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment == fixture_context(RECIPES["rlvr_ifeval"]).grader_environment
+    assert grader_environment(task.grader) == fixture_context(RECIPES["rlvr_ifeval"]).grader_environment
     assert grader_config(task)["constraints"] == [{"name": "punctuation:no_comma", "params": {}}]
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+def test_rlvr_ifeval_converter_rejects_response_language(as_list):
+    descriptor = {"func_name": "validate_response_language", "language": "de"}
+    ground_truth = [descriptor, {"func_name": "validate_no_commas"}] if as_list else descriptor
+    row = {**ROWS["rlvr_ifeval"], "ground_truth": json.dumps(ground_truth)}
+    result = convert_row(RECIPES["rlvr_ifeval"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_ifeval_constraint")
 
 
 def test_nemotron_task_gives_verifyit_the_ifeval_instructions_without_null_arguments():

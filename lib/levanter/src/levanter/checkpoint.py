@@ -37,6 +37,7 @@ from jaxtyping import PyTree
 from rigging import telemetry
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.deletion import delete_prefix
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
@@ -48,6 +49,9 @@ from levanter.tensorstore_serialization import (
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
+
+CHECKPOINT_METADATA_FILENAME = "metadata.json"
+_OBJECT_STORE_SCHEMES = frozenset({"s3", "s3a", "gs", "gcs"})
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
@@ -71,36 +75,6 @@ def _current_process_rss_bytes() -> int | None:
         return None
 
     return rss * 1024
-
-
-CheckpointDebugStateProvider = Callable[[], Mapping[str, Any]]
-_DEBUG_CHECKPOINTER_STATE_PROVIDERS: dict[str, CheckpointDebugStateProvider] = {}
-_DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK = threading.Lock()
-
-
-def register_debug_checkpointer_state_provider(name: str, provider: CheckpointDebugStateProvider) -> None:
-    """Register a debug state provider that contributes extra checkpoint diagnostics."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS[name] = provider
-
-
-def unregister_debug_checkpointer_state_provider(name: str) -> None:
-    """Unregister a previously registered checkpoint debug state provider."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS.pop(name, None)
-
-
-def _collect_debug_checkpointer_state() -> dict[str, Any]:
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        providers = list(_DEBUG_CHECKPOINTER_STATE_PROVIDERS.items())
-
-    snapshots: dict[str, Any] = {}
-    for name, provider in providers:
-        try:
-            snapshots[name] = dict(provider())
-        except Exception as exc:
-            snapshots[name] = {"provider_error": f"{type(exc).__name__}: {exc}"}
-    return snapshots
 
 
 def _manager_debug_state(manager: GlobalAsyncCheckpointManager | None) -> dict[str, Any]:
@@ -244,9 +218,6 @@ class _CheckpointProgressLogger:
         manager_state = _manager_debug_state(self.manager)
         if manager_state:
             state["manager"] = manager_state
-        extra_state = _collect_debug_checkpointer_state()
-        if extra_state:
-            state["providers"] = extra_state
         if rss_bytes is not None:
             self._publish("checkpoint_process_peak_rss_bytes", rss_bytes, event=event, phase=self.phase)
 
@@ -778,13 +749,34 @@ class Checkpointer:
             self._async_checkpoint_remover_queue.put(checkpoint)
 
     def _do_rm_checkpoint(self, cp_path):
+        cp_url = str(cp_path)
         # have to strip protocol from path because fsspec filesystems don't like them
         fs, plain_path = _get_fs_and_plain_path(cp_path)
+        metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
 
         try:
             logger.info(f"Deleting old checkpoint from {cp_path}")
             time_in = time.time()
-            fs.rm(plain_path, recursive=True)
+            # Remove and verify absence of metadata.json first so discovery skips this prefix
+            # if recursive payload removal is interrupted or fails midway.
+            if fs.exists(metadata_path):
+                try:
+                    fs.rm(metadata_path)
+                except FileNotFoundError:
+                    pass
+                if fs.exists(metadata_path):
+                    raise RuntimeError(f"Checkpoint metadata marker still exists after removal: {metadata_path}")
+            if StoragePath(cp_url).scheme in _OBJECT_STORE_SCHEMES:
+                try:
+                    delete_prefix(cp_url)
+                except FileNotFoundError:
+                    pass
+                fs.invalidate_cache(plain_path)
+            elif fs.exists(plain_path):
+                try:
+                    fs.rm(plain_path, recursive=True)
+                except FileNotFoundError:
+                    pass
             time_out = time.time()
             logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
         except Exception:  # pylint: disable=broad-except
@@ -952,7 +944,7 @@ def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
         "is_temporary": is_temporary,
     }
     if jax.process_index() == 0:
-        metadata_path = StoragePath(prefix_join(checkpoint_path, "metadata.json"))
+        metadata_path = StoragePath(prefix_join(checkpoint_path, CHECKPOINT_METADATA_FILENAME))
         if metadata_path.is_remote:
             # Object-store writers publish the completed object when they close. A sibling rename
             # would copy and then delete its temporary source, which protected checkpoint prefixes
@@ -1135,7 +1127,7 @@ def load_checkpoint_metadata(checkpoint_path, fs=None) -> dict[str, Any]:
     """Read a concrete checkpoint's ``metadata.json``: step, timestamp, retention, and application metadata."""
     if fs is None:
         fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
-    with fs.open(os.path.join(checkpoint_path, "metadata.json")) as metadata_in:
+    with fs.open(os.path.join(checkpoint_path, CHECKPOINT_METADATA_FILENAME)) as metadata_in:
         metadata = json.load(metadata_in)
     return metadata
 
@@ -1259,7 +1251,7 @@ def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSyst
     base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):
-        return fs.exists(os.path.join(path, "metadata.json"))
+        return fs.exists(os.path.join(path, CHECKPOINT_METADATA_FILENAME))
 
     def maybe_unstrip_protocol(path: str):
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
@@ -1377,7 +1369,7 @@ def is_checkpoint_path(path: str) -> bool:
         # Sometimes we have incomplete checkpoints due to preemption or other issues.
         # try to find a metadata file in the path
         fs, plain_path = _get_fs_and_plain_path(path)
-        metadata_path = os.path.join(plain_path, "metadata.json")
+        metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
         if fs.exists(metadata_path):
             return True
         # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories

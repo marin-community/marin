@@ -57,7 +57,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 |---|---|---|
 | `refresh-fork` | External fork refresh and validated adoption | Fork-specific references govern source promotion and release |
 | `add-dataset` | Dataset registration with verified schema and content mapping | Uses existing dataset builders; general graph design belongs to `write-pipeline` |
-| `add-eval` | Curated non-agentic benchmarks: source pins, prompts, scorers, protocols, and validation through a reference comparison and smoke run | Harbor agentic benchmarks use Harbor configs; judge audits belong to `audit-grader` |
+| `add-eval` | Curated non-agentic benchmarks, including source pins, prompts, scorers, protocols, reference comparisons, and smoke runs | Follow the [evaluation task reference](../references/evaluation-tasks.md) for curated agent benchmarks. Judge audits belong to `audit-grader`. |
 | `add-pallas-kernel` | Kernel implementation, reference parity, and requested tuning | Uses profiling evidence; does not own production deployment |
 | `change-grug` | Grug variants and promotion into the base template | Launch-only operation and hero cutovers have separate workflows |
 | `launch-rl` | RL artifact recipe, role geometry, validation, and submission | Iris owns execution mechanics; hero management owns production lifecycle |

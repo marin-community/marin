@@ -8,15 +8,15 @@ from collections.abc import Mapping
 from shellbox.machine import MachineFactory
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    AgentMachine,
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
-    ScriptGrader,
     TaskSpec,
     VerifyitGrader,
     grades_with_judge,
-    require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
 
@@ -44,8 +44,11 @@ def task_machine_reason(task: TaskSpec) -> str | None:
         return "Output paths require a task machine"
     if not isinstance(grader, NoGrader) and task.answer_type in WORKSPACE_ANSWERS:
         return "Workspace tasks require a task machine"
-    if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts):
+    placement = None if isinstance(grader, NoGrader) else grader.placement
+    if isinstance(placement, GraderMachine) and (placement.collect or placement.artifacts):
         return "Artifact grading requires a task machine"
+    if isinstance(placement, AgentMachine):
+        return "Grading in the agent's machine requires a task machine"
     return None
 
 
@@ -55,24 +58,23 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     grader = task.grader
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)
-    grader_environment = (
-        grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not host_judge else None
-    )
+    placement = None if isinstance(grader, NoGrader) or host_judge else grader.placement
+    grader_environment = placement.environment if isinstance(placement, GraderMachine) else None
     if judge:
         judge_connection(spec)
-        if task.answer_type not in CONVERSATION_ANSWERS:
-            raise NotImplementedError(f"The engine grades a judge only on a conversation answer, not {task.answer_type}")
+        if task.answer_type not in CONVERSATION_ANSWERS | {AnswerType.FILE}:
+            raise NotImplementedError(
+                f"The engine grades a judge only on a conversation or file answer, not {task.answer_type}"
+            )
     if task.answer_type == AnswerType.STATE and not isinstance(grader, NoGrader):
         raise NotImplementedError("The engine does not capture a state answer, so it cannot grade one")
-    require_resolved_environment(task.environment_requirements)
-    if grader_environment is not None:
-        require_resolved_environment(grader_environment)
     if grader_environment is not None and spec.verifier_machine is None:
         raise ValueError("A grader with an environment requires a verifier machine")
     if grader_environment is None and spec.verifier_machine is not None:
         raise ValueError("The task's grader does not use a verifier machine")
     task_resources = task.resources.all + task.resources.worker
-    selections = [(spec.task_machine, task.environment_requirements, task_resources)]
+    staged = task.resources.verifier if isinstance(placement, AgentMachine) else ()
+    selections = [(spec.task_machine, task.environment_requirements, task_resources + staged)]
     if grader_environment is not None:
         selections.append((spec.verifier_machine, grader_environment, task_resources + task.resources.verifier))
     for selection, requirements, resources in selections:
@@ -80,7 +82,8 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
             continue
         if selection.backend not in machine_factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
-        validate_machine_spec(requirements, machine_factories[selection.backend], _machine_spec(requirements, selection))
+        with _machine_spec(requirements, selection) as machine_spec:
+            validate_machine_spec(requirements, machine_factories[selection.backend], machine_spec)
         if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR and any(
             resource.mtime_ns is not None for resource in resources
         ):

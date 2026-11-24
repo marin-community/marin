@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from taskcompendium.models import (
+    GraderMachine,
     AnswerType,
     ArtifactKind,
     CommandSemantics,
@@ -215,9 +216,7 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
         argv=("bash", GRADER_PATH),
         # Harbor runs its tests in the image's working directory; an unset one becomes the root.
         cwd=verifier_requirements.working_directory or "/",
-        environment=verifier_requirements,
-        answer_path=None,
-        artifacts=tuple(
+        placement=GraderMachine(environment=verifier_requirements, artifacts=tuple(
             VerifierArtifact(
                 source=artifact.source,
                 # Harbor's destination names the host collection path, not the verifier path.
@@ -227,7 +226,8 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
                 missing=MissingArtifactPolicy.SKIP,
             )
             for artifact in artifacts
-        ),
+        )),
+        answer_path=None,
         reward=FileReward(
             pass_above=0,
             files=(

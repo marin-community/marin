@@ -321,6 +321,7 @@ export default function (pi) {
         thinking_format: str | None = None,
         http_idle_timeout: float | None = None,
         mcp_excluded_tools: Sequence[str] = (),
+        mcp_adapter_version: str | None = None,
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -361,6 +362,7 @@ export default function (pi) {
         self._thinking_format = thinking_format
         self._http_idle_timeout = http_idle_timeout
         self._mcp_excluded_tools = tuple(mcp_excluded_tools)
+        self._mcp_adapter_version = mcp_adapter_version
         model_info = model_info or {}
         self._configure_compaction = (
             api_base is not None
@@ -501,6 +503,11 @@ export default function (pi) {
 
     async def install(self, environment: BaseEnvironment) -> None:
         """Check the Pi runtime supplied by the environment image."""
+        if self.mcp_servers and self._mcp_adapter_version is not None:
+            raise RuntimeError(
+                f"Pi cannot honor pi-mcp-adapter version {self._mcp_adapter_version} with MCP servers: "
+                "this agent loads the image-provided pi-mcp-extension"
+            )
         result = await self.exec_as_agent(environment, command="pi --version")
         installed_version = self.parse_version(result.stdout)
         if self._version is not None and installed_version != self._version:

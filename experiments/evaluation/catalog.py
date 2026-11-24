@@ -8,12 +8,14 @@ from functools import cache, partial
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
+    agentic,
     biomedical,
     code,
     commonsense,
     econevals,
     facts_grounding,
     financebench,
+    genomeqa,
     gsm8k,
     instruction_following,
     jee,
@@ -25,8 +27,10 @@ from experiments.evaluation.benchmarks import (
     math,
     mmlu,
     mmlu_redux,
+    multichallenge,
     multiple_choice,
     nupa,
+    physics_verified,
     question_answering,
     reasoning,
     simpleqa,
@@ -65,12 +69,16 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             facts_grounding,
+            genomeqa,
             simpleqa,
+            multichallenge,
             econevals,
             long_context,
             longbench,
             nupa,
+            agentic,
             supergpqa,
+            physics_verified,
         )
         for benchmark in family.benchmarks()
     ]

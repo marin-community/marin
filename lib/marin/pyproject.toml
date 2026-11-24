@@ -191,6 +191,9 @@ dedup = [
     "marin-dupekit",
 ]
 
+# The Daytona SDK for evaluation workers that run task machines on Daytona.
+daytona = ["marin-shellbox[daytona]"]
+
 datakit = [
     "luxical",
     "huggingface-hub",
