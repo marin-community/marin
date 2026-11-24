@@ -371,7 +371,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the pinned
-`TaskSpec` and control reference (`defaults/author-reference-v1.json`), and the adversary's user prompt renders its brief and the task without
+`TaskSpec` and control reference (`defaults/author-reference-v2.json`, with the decision-model grader kind from
+`defaults/author-reference-v2-decision-model.json` inserted where a decision model is configured), and the adversary's user prompt renders its brief and the task without
 file payloads (they are in the workdir).
 
 ## Models and providers
