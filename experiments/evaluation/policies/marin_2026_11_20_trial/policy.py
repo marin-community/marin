@@ -140,7 +140,7 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
 
 # Not declared:
 # - τ³-bench and SOTOPIA-hard: their Harbor agents were removed from main.
-# - BixBench: its package grader asks a MiniMax-M3 judge, which October served beside the candidate;
-#   the policy has no way yet to declare a co-hosted judge.
+# - BixBench: its package grader asks a MiniMax-M3 judge served beside the candidate, which the policy
+#   does not declare yet; it joins once the policy launcher can start a judge for one benchmark.
 
 POLICY = EvalPolicy(version=VERSION, candidates=(GLIMMER, NEMOTRON, QWEN), in_distribution=EVALUATIONS)

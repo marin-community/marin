@@ -30,7 +30,7 @@ Not run:
 | Benchmark | Reason |
 | --- | --- |
 | τ³-bench, SOTOPIA-hard | [#11080](https://github.com/marin-community/marin/pull/11080) removed their Harbor agents (ACP relay, SOTOPIA agent). |
-| BixBench (Pi) | Its package grader asks a MiniMax-M3 judge that October served beside the candidate; a policy cannot yet declare a co-hosted judge. |
+| BixBench (Pi) | Its package grader asks a MiniMax-M3 judge served beside the candidate, which this policy does not declare yet. |
 
 Run, with a known difference:
 
