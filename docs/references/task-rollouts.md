@@ -628,15 +628,15 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | `model_turn_timeout` | One model request |
 | `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
-| `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
+| `total_turn_timeout` | The time from the first model request or the end of explicit agent setup, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
 | `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer |
 | `RolloutLimits.cleanup_timeout` | Each cleanup action, outside the attempt deadline |
 | Machine `cleanup_timeout` | Optional override for that machine's cleanup action |
 
-The total-turn deadline excludes startup, the harness's work before its first request, and final verification.
+The total-turn deadline excludes task startup and final verification. Pi and Terminus-2 start it as soon as they finish setup when setup has its own timeout.
 Its expiration cancels the harness and starts grading with `stop_reason="total_turn_timeout"`.
-No model response means `grade.status=Outcome.UNAVAILABLE` and `grade.reward=None`.
+A conversation grader receives no submission when the model never replies. A workspace grader can still score work left on the machine.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
 The command limit is separate from the tool-turn deadline.
 When these limits are finite, the shell harness's check requires the command limit to be less than the tool-turn deadline.
@@ -740,9 +740,9 @@ Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
 `RewardFileFormat.VERDICT_JSON` requires a zero exit code and reads Verifyit's
 structured verdict, retaining scored, invalid-task and infrastructure-error
-outcomes with their details. A scripted judge declares `ScriptGrader.judge`;
-the runtime stages `/tests/judge.toml` and supplies its connection credentials
-only in the verifier machine's environment.
+outcomes with their details. A scripted judge declares `ScriptGrader.judge`.
+The runtime stages `/tests/judge.toml` and sets the judge connection for the verifier.
+A fresh Daytona verifier receives a machine-local endpoint. Its requests are forwarded through the host client, where the upstream key stays.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A grading failure has no reward.

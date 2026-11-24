@@ -12,6 +12,7 @@ from rolloutengine.harness.external import AgentHarness
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Command
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
 from skyrl_train.trajectory_runners.model_clients import (
@@ -21,6 +22,7 @@ from skyrl_train.trajectory_runners.model_clients import (
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
+from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
@@ -174,6 +176,56 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
     assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert np.sum(batch["rewards"]) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(agent_harnesses, worker_config):
+    class WaitingClient:
+        async def generate(self, _request):
+            await asyncio.Future()
+
+    async def agent(context, complete):
+        try:
+            await complete(Prompt(({"role": "user", "content": "Start"},), {}))
+        finally:
+            await context.machine.run(Command(("sh", "-c", "touch /workspace/agent-stopped")))
+
+    task = text_task().model_copy(
+        update={
+            "environment_requirements": SHELL_ENVIRONMENT,
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "grader": ScriptGrader(
+                argv=("sh", "-c", "test -f /workspace/agent-stopped && echo 1"),
+                cwd="/workspace",
+                answer_path=None,
+                placement=AgentMachine(),
+            ),
+        }
+    )
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(task, "pi", backend="shellsim", total_turn_timeout=0.1)),),
+    )
+    worker = TaskRolloutWorker(
+        worker_config,
+        WholeTaskProjection(worker_config, WorkerTokenizer()),
+        WaitingClient(),
+        {"shellsim": ShellSimMachineFactory()},
+        agents=agent_harnesses(agent),
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [result])
+    finally:
+        await worker.shutdown()
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+    assert result.failure is None
+    assert result.steps == result.response_token_ids == ()
+    assert batch["verification_results"][0].score == 1.0
+    assert batch["loss_masks"] == [[0]]
+    assert batch["rollout_logprobs"][0] == pytest.approx([0.0])
 
 
 @pytest.mark.asyncio

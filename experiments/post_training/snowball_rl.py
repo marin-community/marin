@@ -483,7 +483,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-checkpoint-eval",
-        revision=_PRESET_REVISION,
+        revision="2026.11.24.2",
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),

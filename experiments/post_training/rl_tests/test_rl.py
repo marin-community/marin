@@ -353,10 +353,16 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
-def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
+@pytest.mark.parametrize("retry_budget", [None, 0, 3], ids=["default-retry", "disabled-retry", "custom-retry"])
+def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path, retry_budget):
     table = snowball_model.SNOWBALL
     preset = table.by_name["train-long-checkpoint-eval"]
-    spec = recipe.run_spec(preset, name="checkpoint-evaluation-coverage", model_name=table.model)
+    spec = recipe.run_spec(
+        preset,
+        name="checkpoint-evaluation-coverage",
+        model_name=table.model,
+        settings=() if retry_budget is None else (f"environment.task_sessions.retry.max_retries={retry_budget}",),
+    )
     step = recipe.run_step(preset, spec)
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
@@ -368,10 +374,17 @@ from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, retry_delay
 
 path = Path(sys.argv[1])
 config = load_launch_config(path)
 assert not config.skyrl.generator.enable_http_endpoint
+retry = RetrySettings.model_validate(dict(config.skyrl.environment.task_sessions.retry))
+failure = ErrorIdentity(exception_type="TaskMachineError", retry_disposition=RetryDisposition.TRANSIENT)
+budget = int(sys.argv[2])
+for used in range(budget):
+    assert retry_delay(failure, retry, used) is not None
+assert retry_delay(failure, retry, budget) is None
 state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
 scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26),
              (100, 100, 29, 29), (99, 99, 31, 30))
@@ -400,7 +413,7 @@ for index, (primary_attempted, primary_scored, bfcl_attempted, bfcl_scored) in e
     results.append(json.loads(record.read_text()) if record.exists() else None)
 print(json.dumps(results))
 """,
-        [str(path)],
+        [str(path), str(1 if retry_budget is None else retry_budget)],
     )
     chosen, *rejected = results
     assert chosen["attempted"] == 190
@@ -579,7 +592,11 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.8": "984f3cfb",
             "2026.11.24.1": "c8577baa",
         },
-        "train-long-checkpoint-eval": {"2026.11.23.1": "6f49b36f", "2026.11.24.1": "9885d84b"},
+        "train-long-checkpoint-eval": {
+            "2026.11.23.1": "6f49b36f",
+            "2026.11.24.1": "9885d84b",
+            "2026.11.24.2": "af1e1b7b",
+        },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",

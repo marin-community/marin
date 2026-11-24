@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from daytona import DaytonaConnectionError
 from rolloutengine.test_support import shell_call
+from rolloutengine.models import CLEANUP_ERRORS_DIAGNOSTIC
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
 from taskcompendium.models import ResourceGroups, ScriptGrader
@@ -275,3 +276,52 @@ async def test_model_failure_after_sampled_work_does_not_restart(worker_config, 
     assert evidence.waits == []
     assert evidence.result.steps
     assert evidence.result.failure.retry_disposition is RetryDisposition.TRANSIENT
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_cleanup_keeps_a_transient_startup_failure_terminal(worker_config):
+    close_error = ConnectionError("cleanup confirmation lost")
+
+    class FailedCleanupMachine(ResettingMachine):
+        async def close(self):
+            await self.machine.close()
+            raise close_error
+
+    class FailedCleanupFactory(ResettingFactory):
+        async def create(self, spec):
+            self.creations += 1
+            return FailedCleanupMachine(await ShellSimMachineFactory().create(spec), reset=True, operation=Reset.UPLOAD)
+
+    factory = FailedCleanupFactory(failures=1)
+    waits = []
+
+    async def wait(delay):
+        waits.append(delay)
+
+    task = text_task().model_copy(
+        update={
+            "environment_requirements": SHELL_ENVIRONMENT,
+            "resources": ResourceGroups(worker=(inline_resource("input.txt", b"task input"),)),
+        }
+    )
+    worker = TaskRolloutWorker(
+        worker_config,
+        WholeTaskProjection(worker_config, WorkerTokenizer()),
+        ScriptedClient([sampled_reply()]),
+        {"shellsim": factory},
+        retry=RETRY_SETTINGS,
+        retry_wait=wait,
+        shutdown_timeout=5,
+    )
+    request = TaskRequestBatch(rows=(task_input(lowered_task(task, backend="shellsim")),))
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        with pytest.raises(ExceptionGroup) as shutdown:
+            await worker.shutdown()
+    assert shutdown.value.exceptions[0].exceptions[0] is close_error
+    assert factory.creations == 1
+    assert waits == []
+    assert not result.steps
+    assert result.grade.diagnostics[CLEANUP_ERRORS_DIAGNOSTIC]
+    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT

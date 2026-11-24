@@ -536,7 +536,8 @@ class TaskRolloutWorker:
                     ):
                         evidence.append(receipt)
                 replayable = not result.steps
-                delay = retry_delay(result.failure, self.retry, retries) if replayable else None
+                cleanup_confirmed = not result.grade.diagnostics.get(CLEANUP_ERRORS_DIAGNOSTIC)
+                delay = retry_delay(result.failure, self.retry, retries) if replayable and cleanup_confirmed else None
                 if (
                     delay is not None
                     and classify_failure(result.failure, self.error_handling) is ErrorTreatment.PASSTHROUGH

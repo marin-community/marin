@@ -108,7 +108,8 @@ and permanent causes take precedence.
 
 Configure task retries at `environment.task_sessions.retry`. The settings apply
 to every task kind. The base budget is zero retries. Mixed-task Snowball and
-Mochi recipes select one retry for every task kind.
+Mochi recipes select one retry for every task kind. Checkpoint-evaluation recipes
+also default to one retry; explicit settings take precedence.
 For example:
 
 ```yaml
@@ -130,11 +131,11 @@ category; exclusions win. Permanent failures stop even when included. Failures
 with an unknown retry disposition need an explicit inclusion. The budget counts retries after the first
 attempt. Backoff grows to `max_wait_sec`, then applies proportional jitter.
 
-The worker retries only attempts with no recorded rollout steps. Failures after
+The worker retries only attempts with no recorded rollout steps and confirmed cleanup. Failures after
 sampled work retain their original retry disposition but do not restart the task.
 SkyRL also keeps passthrough results terminal so that retries do not discard usable
-verifier output. Native Harbor may
-retry a passthrough failure when environment teardown is unconfirmed. The final failed attempt
+verifier output. Harbor retries an unconfirmed teardown only when the configured filters select
+`PhaseCancellationError`. The final failed attempt
 for a native trial can seal as an unscored archive row under the
 [Harbor archive rules](../harbor-integration.md#trial-error-taxonomy);
 its reward and partial trajectory remain raw evidence.

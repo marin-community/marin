@@ -2081,12 +2081,14 @@ def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypa
     assert caught.value is conflict
 
 
-def test_daytona_connection_and_delete_conflict_use_shared_retry_identity():
+@pytest.mark.parametrize("status_code", [None, HTTPStatus.CONFLICT])
+def test_daytona_connection_and_delete_conflict_use_shared_retry_identity(status_code):
     reset = daytona_error_identity(DaytonaConnectionError("connection reset"), operation="create")
     assert reset.retry_disposition is RetryDisposition.TRANSIENT
-    conflict = DaytonaConflictError("state change in progress", status_code=409)
+    conflict = DaytonaConflictError("state change in progress", status_code=status_code)
     assert daytona_error_identity(conflict, operation="delete").retry_disposition is RetryDisposition.TRANSIENT
-    assert daytona_error_identity(conflict, operation="create").retry_disposition is RetryDisposition.TRANSIENT
+    expected = RetryDisposition.UNKNOWN if status_code is None else RetryDisposition.TRANSIENT
+    assert daytona_error_identity(conflict, operation="create").retry_disposition is expected
 
 
 @pytest.mark.parametrize(

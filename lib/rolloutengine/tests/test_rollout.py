@@ -2479,6 +2479,7 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
     relay_port = 9000
     relay_commands = []
     verifier_users = []
+    startup_error = ValueError("Relay startup failed")
 
     class Session:
         stderr = b""
@@ -2517,7 +2518,7 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
         async def open_process(self, command):
             relay_commands.append(command)
             if relay == "failed":
-                raise ValueError("Relay startup failed")
+                raise startup_error
             return Session()
 
     class Factory(DockerMachineFactory):
@@ -2539,9 +2540,11 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
                         assert base_url == f"http://127.0.0.1:{relay_port}"
                 else:
                     error = ValueError if relay == "failed" else UnsupportedMachineSpec
-                    with pytest.raises(error):
+                    with pytest.raises(error) as caught:
                         async with service:
                             pytest.fail("An unavailable relay started")
+                    if relay == "failed":
+                        assert caught.value is startup_error
             return Prompt(({"role": "user", "content": "Run the task."},), {})
 
         async def advance(self, turn):

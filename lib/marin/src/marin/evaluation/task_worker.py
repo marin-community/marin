@@ -16,7 +16,7 @@ from rigging.secrets import get_secret, require_secret
 from rigging.timing import retry_with_backoff
 from rolloutengine.agents.mini_swe.agent import MiniSweOptions, mini_swe_harness
 from rolloutengine.agents.model_relay import VllmTokenizer
-from rolloutengine.agents.pi.agent import PiOptions, PiThinking, pi_harness
+from rolloutengine.agents.pi.agent import PI_HARNESS, PiOptions, PiThinking, pi_harness
 from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
@@ -62,7 +62,7 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 # parsing, tools or options change, so its runs get new identities instead of resuming older episodes.
 # tests/evaluation/test_harness_revisions.py pins each revision to a digest of its harness's sources.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
-    {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", "pi": "2026.11.23.1", "mini-swe-agent": "2026.11.23.1"}
+    {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", PI_HARNESS: "2026.11.24.1", "mini-swe-agent": "2026.11.23.1"}
 )
 
 
@@ -112,7 +112,7 @@ def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mappi
         )
         return mini_swe_harness(options, tokenizer)
 
-    factories = {"shell": _shell, "terminus-2": _terminus, "pi": pi, "mini-swe-agent": mini_swe}
+    factories = {"shell": _shell, "terminus-2": _terminus, PI_HARNESS: pi, "mini-swe-agent": mini_swe}
     # Planning records a revision for each kind it accepts; the worker must build every one of them.
     assert factories.keys() == EPISODE_HARNESS_REVISIONS.keys(), sorted(
         factories.keys() ^ EPISODE_HARNESS_REVISIONS.keys()

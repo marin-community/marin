@@ -3,7 +3,6 @@
 
 """Daytona provider causes expressed through the shared task error schema."""
 
-from http import HTTPStatus
 from typing import NotRequired, TypedDict
 
 from daytona import DaytonaConflictError, DaytonaConnectionError, DaytonaError
@@ -22,7 +21,7 @@ def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity
     if (isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None) or (
         isinstance(error, DaytonaConflictError)
         and operation == DAYTONA_DELETE_OPERATION
-        and identity.provider_status_code in {None, HTTPStatus.CONFLICT}
+        and identity.provider_status_code is None
     ):
         return identity.model_copy(update={"retry_disposition": RetryDisposition.TRANSIENT})
     return identity
