@@ -24,6 +24,7 @@ Same architecture, parameters and checkpoint layout as ``experiments/june_tpu_67
 """
 
 import functools
+import math
 from typing import NamedTuple
 
 import equinox as eqx
@@ -263,6 +264,68 @@ def _weight_gradient(partials: jax.Array, weight: jax.Array) -> jax.Array:
     if jax.typeof(weight).sharding.spec.reduced:
         return local_to_unreduced(partials.astype(weight.dtype))
     return reshard(jnp.sum(partials, axis=0).astype(weight.dtype), jax.typeof(weight).sharding.spec)
+
+
+def _token_row_sums(ids: jax.Array, rows: jax.Array, first_id: jax.Array, num_ids: int) -> jax.Array:
+    """``out[v - first_id]`` = the float32 sum of ``rows[i]`` over ``ids[i] == v`` for the ``num_ids`` ids from
+    ``first_id``, [num_ids, D], in a fixed order: a stable sort of the ids, a segmented scan over the sorted rows, and a
+    gather of each id's last running sum."""
+    order = jnp.argsort(ids, stable=True)
+    sorted_ids = ids[order]
+    sorted_rows = rows[order].astype(jnp.float32)
+    starts = jnp.concatenate([jnp.ones((1,), bool), sorted_ids[1:] != sorted_ids[:-1]])
+
+    def combine(a, b):
+        a_start, a_sum = a
+        b_start, b_sum = b
+        return a_start | b_start, jnp.where(b_start[..., None], b_sum, a_sum + b_sum)
+
+    _, running = jax.lax.associative_scan(combine, (starts, sorted_rows))
+    vocab = first_id.astype(sorted_ids.dtype) + jnp.arange(num_ids, dtype=sorted_ids.dtype)
+    end = jnp.maximum(jnp.searchsorted(sorted_ids, vocab, side="right") - 1, 0)
+    return jnp.where((sorted_ids[end] == vocab)[:, None], running[end], 0.0)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
+def embedding_lookup(embed: jax.Array, token_ids: jax.Array, out_sharding: P) -> jax.Array:
+    """``embed.at[token_ids].get(out_sharding=...)`` for token ids [B, S], with a bitwise-deterministic backward.
+
+    The gather's own backward is a scatter-add over repeated ids, whose bits vary from run to run on MI355X even with
+    ``--xla_gpu_deterministic_ops=true``. Here each device sums its own rows per id for its shard of the vocabulary
+    (``_token_row_sums``), and the per-device sums are reduced like any replicated weight's (``_weight_gradient``)."""
+    return embed.at[token_ids].get(out_sharding=out_sharding)
+
+
+def _embedding_lookup_fwd(embed, token_ids, out_sharding):
+    return embedding_lookup(embed, token_ids, out_sharding), (embed, token_ids)
+
+
+def _embedding_lookup_bwd(out_sharding, residuals, cotangent):
+    embed, token_ids = residuals
+    vocab_size, hidden = embed.shape
+    mesh = get_abstract_mesh()
+    if mesh.empty:
+        grad = _token_row_sums(token_ids.reshape(-1), cotangent.reshape(-1, hidden), jnp.int32(0), vocab_size)
+        return grad.astype(embed.dtype), None
+    batch = jax.typeof(cotangent).sharding.spec.partitions[0]
+    vocab_entry = jax.typeof(embed).sharding.spec.partitions[0]
+    vocab_axes = _axis_names(vocab_entry)
+    shard_rows = vocab_size // math.prod(mesh.shape[a] for a in vocab_axes)
+
+    def local(ids, rows):
+        first_id = jax.lax.axis_index(vocab_axes) * shard_rows if vocab_axes else jnp.int32(0)
+        return _token_row_sums(ids.reshape(-1), rows.reshape(-1, hidden), first_id, shard_rows)[None]
+
+    partials = shard_map(
+        local,
+        in_specs=(P(batch, None), P(batch, None, None)),
+        out_specs=P(batch, vocab_entry, None),
+        check_vma=False,
+    )(reshard(token_ids, P(batch, None)), cotangent)
+    return _weight_gradient(partials, embed), None
+
+
+embedding_lookup.defvjp(_embedding_lookup_fwd, _embedding_lookup_bwd)
 
 
 def _norm_and_gate_fwd(x, residual, weight, w_down, w_up, eps, return_h):
@@ -672,7 +735,7 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        hidden = embedding_lookup(self.token_embed, token_ids, _batch_spec())
         # Keep gather fusion from changing normalization rounding between scoring and AD.
         hidden = jax.lax.optimization_barrier(hidden)
         hidden = fused_norm_and_gate(hidden, None, self.embed_norm, self.embed_gated_norm, return_h=False)

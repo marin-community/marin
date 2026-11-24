@@ -13,6 +13,7 @@ June's, so checkpoints move between the two.
 |---|---|---|---|
 | q/k head norm, half-RoPE, q scale | Separate XLA ops | One Pallas-Triton kernel per direction (`kernels/qk_norm_rope.py`) | XLA splits them into several kernels per tensor and direction on GPU |
 | RMSNorm + GatedNorm (per block, embedding, final) | Separate modules | One custom VJP over the residual add, the norm and the gate, with Pallas-Triton kernels (`kernels/add_rms_norm.py`, `kernels/gated_norm.py`) | One pass over the rows in each direction instead of several |
+| Token-embedding gradient | The gather's backward, a scatter-add over repeated token ids | Per device: a stable sort of the ids, a segmented float32 scan over their rows, a gather of each id's sum (`embedding_lookup`) | The scatter-add gives different bits on every run on MI355X, also with `--xla_gpu_deterministic_ops=true`; this one is bitwise reproducible, and the d768 rehearsal step is no slower (9% faster on one node) |
 | MoE backend | `moe_implementation` | Always Levanter's `ring_filtered` | The MI355X selected backend; Levanter picks its kernels by device |
 | Routing statistics, QB thresholds, capacity drops | Reduced across devices in every layer | Kept per batch shard and reduced once after the layer scan | With expert parallelism, one collective per step instead of several per layer |
 | Router diagnostics | Entropy, counts, load balance and z-loss in every layer | Only the z-loss, always logged; added to the loss only when `router_z_loss_coef != 0` | June does not train on the others |
