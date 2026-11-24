@@ -231,7 +231,8 @@ def main() -> None:
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     document["manifest"] = ArtifactRef(**document["manifest"])
     inputs = ValidationInputs(**document)
-    receipt = run_validation(inputs, dry_run=args.mode == "dry-run")
+    repo_root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+    receipt = run_validation(inputs, dry_run=args.mode == "dry-run", repo_root=repo_root)
     label = "BACKEND-VALIDATION-DRY-RUN" if args.mode == "dry-run" else "BACKEND-VALIDATION-SEALED"
     print(f"{label} {json.dumps(receipt)}", flush=True)
 
