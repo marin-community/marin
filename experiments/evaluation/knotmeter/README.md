@@ -7,7 +7,6 @@ CPU. Run it against both servers using the same receipt and accelerator type.
 ```bash
 uv run python -m experiments.evaluation.knotmeter.workload \
   --series experiments/evaluation/knotmeter/snowball-v01-tpu-64k.yaml \
-  --cache-root gs://marin-us-central1/tmp/ttl=30d/agentx-workload \
   --output /tmp/agentx-prepare
 
 uv run python -m experiments.evaluation.knotmeter.profile \
@@ -17,7 +16,8 @@ uv run python -m experiments.evaluation.knotmeter.profile \
   --output /tmp/agentx-profile
 ```
 
-Prepare and profile in the same storage region. The profiler verifies the
+The preparation command defaults to the active region's temporary bucket. Run
+preparation and profiling in the same storage region. The profiler verifies the
 archive checksum and requires an AgentX native cache hit. Run it on the server's
 host with the checkpoint revision in the recipe, a 65,536-token context, and
 equivalent CPU allocations for both implementations. Use the same three-minute
