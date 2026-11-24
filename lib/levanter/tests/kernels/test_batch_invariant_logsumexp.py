@@ -41,6 +41,7 @@ STOP_LOGITS = np.array(
     ],
     dtype=np.float32,
 )
+STOP_LOGITS.setflags(write=False)
 
 
 @pytest.mark.tpu
@@ -105,7 +106,7 @@ def test_logprobs_with_masked_vocabulary_match_reference():
 def test_selected_logprobs_match_separately_normalized_distribution():
     for rows in (1, 4, 129):
         logits = jnp.asarray(np.random.default_rng(rows).normal(size=(rows, 23)).astype(np.float32))
-        targets = jnp.arange(rows) % 23
+        targets = jnp.arange(rows) % logits.shape[-1]
         selected = jax.jit(
             lambda x, ids: jnp.take_along_axis(x, ids[:, None], axis=-1).squeeze(-1) - batch_invariant_logsumexp(x)
         )(logits, targets)

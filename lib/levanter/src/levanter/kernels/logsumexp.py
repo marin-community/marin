@@ -63,7 +63,7 @@ def _logsumexp_vmap(_axis_size, in_batched, logits):
 
 @jax.custom_jvp
 def batch_invariant_logsumexp(logits: jax.Array) -> jax.Array:
-    """Reduce the final vocabulary axis using the same FP32 schedule for every row.
+    """Normalize each row over the final vocabulary axis in FP32.
 
     Explicit meshes use a fixed reduction order independent of the leading
     dimensions and preserve leading-axis sharding. Auto meshes delegate
