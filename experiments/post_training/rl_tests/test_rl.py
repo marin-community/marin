@@ -614,6 +614,34 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
 
 
+def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    [default_run] = snowball.build_experiment(preset, table=table).runs
+    [plain_run] = snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding=null",)).runs
+    default = yaml.safe_load(materialized_config(default_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    assert default_run.name != plain_run.name
+    assert default["skyrl"]["generator"].pop("speculative_decoding")["method"] == "dspark"
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
+    assert default["inputs"] == plain["inputs"]
+
+
+def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    initializer = ArtifactHfModel(
+        ArtifactStep.adopt("tests/alternate-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint),
+        relative_path="",
+    )
+    [alternate] = snowball.build_experiment(preset, table=table, init=initializer).runs
+    config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
+
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
+
+
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
     learning = snowball_model.SNOWBALL.by_name["learning-medium"]
     data = snowball_model.SNOWBALL.by_name["data-short"]

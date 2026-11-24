@@ -105,6 +105,10 @@ def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec |
         from .harness_generation import grade_harness_generation_candidate
 
         return grade_harness_generation_candidate(config["profile"], config["references"], response, config["question"])
+    if scorer == "arc_agi":
+        from .arc_agi import grade_arc_agi
+
+        return grade_arc_agi(config["expected"], config["weight"], response)
     if scorer in {"ifeval", "ifbench"}:
         from .instruction_spec import InstructionProfile, InstructionSpec
         from .instructions import grade_source_instructions
