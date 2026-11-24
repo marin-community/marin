@@ -74,8 +74,10 @@ def quiesce_command() -> VerifierCommand:
     """Kill every process outside this exec's own ancestry, as the original root.
 
     The machine's own lifecycle sleeper (``SANDBOX_KEEPER_SLEEP_ARGS``) is
-    spared alongside PID 1: on the local tier it is the sandbox's PID 2 and
-    killing it closes the machine mid-grading.
+    spared alongside PID 1: current shellbox makes the sleeper the sandbox's
+    PID 1 itself, which the PID 1 spare already protects, and the argv spare
+    also protects machines on shellbox revisions where the sleeper was PID 2,
+    whose death closed the machine mid-grading.
     """
     return VerifierCommand(
         argv=(
@@ -162,13 +164,14 @@ SANDBOX_KEEPER_SLEEP_ARGS = ("sleep", "2147483647")
 """The machine keeper's payload argv: shellbox's local sandbox runs
 ``exec sleep 2147483647`` under bubblewrap to hold the machine open.
 
-On the LOCAL tier the sandbox's PID 1 is bwrap itself and this sleeper is PID 2,
-so a quiesce that spares only PID 1 kills the keeper: bwrap exits 137, the
-machine closes, and the attempt dies as ``Machine is closed`` mid-grading
-(facet_v2's 6,122+ unscored attempts, 2026-11-24). Both quiesce variants
-therefore spare exactly this argv. A task that reused the same argv would
-merely survive one quiesce: the machine is torn down right after grading, so
-the residual risk is bounded and tiny.
+Current shellbox makes this sleeper the sandbox's PID 1 itself (bwrap
+``--as-pid-1``), so a quiesce that spares PID 1 already spares the keeper.
+The argv spare still protects machines on shellbox revisions where bwrap held
+the init seat and the sleeper was PID 2: killing it closed the machine
+mid-grading (facet_v2's 6,122+ unscored attempts, 2026-11-24). Both quiesce
+variants therefore spare exactly this argv. A task that reused the same argv
+would merely survive one quiesce: the machine is torn down right after
+grading, so the residual risk is bounded and tiny.
 """
 
 QUIESCE_PROGRAM = (
@@ -384,9 +387,11 @@ for entry in /proc/[0-9]*; do
   line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
   rest=${line##*) }
   case ${rest%% *} in Z*) continue;; esac
-  # The machine keeper's payload (see SANDBOX_KEEPER_SLEEP_ARGS): the local
-  # sandbox runs `exec sleep 2147483647` as the init's child, so killing it
-  # closes the machine mid-grading.
+  # The machine keeper's payload (see SANDBOX_KEEPER_SLEEP_ARGS): current
+  # shellbox runs `exec sleep 2147483647` as the sandbox's PID 1, which the
+  # PID 1 spare already protects, and machines on shellbox revisions where the
+  # sleeper sat below PID 1 are protected by this argv spare. Killing the
+  # sleeper closes the machine mid-grading on those.
   args=$(tr '\\0' '\\n' < "/proc/$victim/cmdline" 2>/dev/null || true)
   if [ "$args" = "$(printf '%s\\n%s' sleep 2147483647)" ]; then
     continue
