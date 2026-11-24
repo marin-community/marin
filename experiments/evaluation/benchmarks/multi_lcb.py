@@ -20,15 +20,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from taskcompendium.convert.answers import source_defect, source_evidence
+from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     CohortOrder,
     CohortPolicy,
-    EvaluationItem,
     EvaluationProtocol,
     Metrics,
     OperationKind,
@@ -48,7 +46,9 @@ from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.benchmarks.livecodebench import (
     DATASET_REVISION,
     EVIDENCE_FIELDS,
+    GRADER_STARTUP_ALLOWANCE,
     RELEASE_V6_FILES,
+    livecodebench_item,
     private_test_cases,
 )
 from experiments.evaluation.benchmarks.multi_lcb_scorers.prompt_enhancer.example_parser import ExampleParser
@@ -81,7 +81,6 @@ ANSWER = "### Answer: (use the provided format with backticks)\n\n"
 SCORER_DEADLINE = 480
 """Seconds the grade script gives one reply, across Multi-LCB's restarts. Curated runs stop grading at 600
 seconds and record a timeout as unscored, so the script's own deadline fires first and scores 0."""
-GRADER_STARTUP_ALLOWANCE = 60
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "multi_lcb_scorers"
@@ -103,6 +102,10 @@ class Language:
     markdown: str
     comment: str
     slug: str
+
+    @property
+    def benchmark(self) -> str:
+        return f"multi-lcb-{self.slug}"
 
 
 CPP = Language("c++", "C++", "cpp", "//", "cpp")
@@ -206,14 +209,7 @@ def convert_multi_lcb(row: RawRow, context: ConversionContext, language: Languag
     task = conversation_task(
         row, events=events, package=package, evidence={field: data[field] for field in EVIDENCE_FIELDS}
     )
-    return task.model_copy(update={"tags": ("eval", "source:multi-lcb", f"benchmark:multi-lcb-{language.slug}", "code")})
-
-
-def multi_lcb_item(task: TaskSpec) -> EvaluationItem:
-    """A chat request scored on the final answer alone."""
-    item = chat_item(task, response_selection="final_only")
-    evidence = source_evidence(task)
-    return item.model_copy(update={"groups": {"difficulty": evidence["difficulty"], "platform": evidence["platform"]}})
+    return task.model_copy(update={"tags": ("eval", "source:multi-lcb", f"benchmark:{language.benchmark}", "code")})
 
 
 def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
@@ -228,7 +224,7 @@ def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(
-                name=f"multi-lcb-{language.slug}",
+                name=language.benchmark,
                 source=HfSource(
                     "livecodebench/code_generation_lite",
                     DATASET_REVISION,
@@ -242,7 +238,7 @@ def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
                 grader=BASIC_GRADER,
             ),
             protocol=EvaluationProtocol(
-                benchmark=f"multi-lcb-{language.slug}",
+                benchmark=language.benchmark,
                 version="2026.11.20",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
@@ -261,7 +257,7 @@ def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
                 # A --limit run takes a fixed uniform sample, mixing AtCoder and LeetCode problems.
                 cohort=CohortPolicy(order=CohortOrder.SHUFFLED),
             ),
-            item_builder=multi_lcb_item,
+            item_builder=livecodebench_item,
             protocol_name="official",
         ),
         pipeline=prepare_evaluation,
