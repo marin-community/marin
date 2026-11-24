@@ -4,6 +4,7 @@ import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import type { ComparisonRow } from '@/types/api'
 import { formatMeasurement, isPercentMetric } from '@/utils/formatting'
 import ModelScoreSymbol from './ModelScoreSymbol.vue'
+import { sharedMetric } from './benchmarkMetric'
 
 const props = defineProps<{
   rows: ComparisonRow[]
@@ -29,12 +30,11 @@ const entries = computed(() => props.rows.map((row) => {
     const value = formatMeasurement(cell.value, percent) + (percent ? '%' : '')
     return [{ index, cell, percent, value, label: `${model} scored ${value} (${cell.metric})` }]
   })
-  const first = scores[0]?.cell
-  const commonMetric = first && scores.every(({ cell }) => cell.metric === first.metric && cell.metric_kind === first.metric_kind)
-  const plot = commonMetric && scores.every(({ percent }) => percent)
+  const metric = sharedMetric(scores.map(({ cell }) => cell))
+  const plot = metric !== null && scores.every(({ percent }) => percent)
   const labels = props.models.map((model, index) => scores.find((score) => score.index === index)?.label ?? `${model} has no recorded score`)
   const description = [`${scores.length} of ${props.models.length} models scored`, ...labels].join('. ')
-  return { ...props.location(row.benchmark), benchmark: row.benchmark, scores, metric: commonMetric ? first.metric : null, plot, description }
+  return { ...props.location(row.benchmark), benchmark: row.benchmark, scores, metric, plot, description }
 }))
 
 const hasPercentPlots = computed(() => entries.value.some(({ plot }) => plot))

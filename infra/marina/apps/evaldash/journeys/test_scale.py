@@ -10,7 +10,7 @@ from playwright.sync_api import expect
 
 
 @pytest.mark.timeout(60)
-def test_large_catalog_keeps_the_benchmark_grid_and_comparison_navigable(journey: Journey, scale_cohort: str) -> None:
+def test_fleet_coverage_pages_large_catalog(journey: Journey, scale_cohort: str) -> None:
     journey.visit(f"/benchmarks/all?cohort={scale_cohort}")
     page = journey.page
     grid = page.get_by_role("table", name="Per-benchmark results", exact=True)
@@ -29,10 +29,12 @@ def test_large_catalog_keeps_the_benchmark_grid_and_comparison_navigable(journey
     page.get_by_role("option", name="scale-benchmark-49", exact=True).click()
     expect(grid.get_by_role("columnheader", name=re.compile(r"^scale-benchmark-49\b"))).to_be_visible()
 
+
+def test_comparison_explores_shared_and_sparse_results_in_large_catalog(journey: Journey, scale_cohort: str) -> None:
+    page = journey.page
     comparison_api_requests: list[str] = []
     page.on("request", lambda request: comparison_api_requests.append(urlsplit(request.url).path))
-    page.get_by_role("link", name="Compare", exact=True).click()
-    expect(page).to_have_url(re.compile(rf"/compare\?cohort={scale_cohort}"))
+    journey.visit(f"/compare?cohort={scale_cohort}")
     picker = page.get_by_role("combobox", name="Add model", exact=True)
     picker.click()
     options = page.get_by_role("listbox", name="Add model", exact=True)
@@ -101,6 +103,7 @@ def test_large_catalog_keeps_the_benchmark_grid_and_comparison_navigable(journey
     journey.sees(re.compile(r"\b59\.9\s*%"))
     page.go_back(wait_until="domcontentloaded")
     expect(benchmark).to_be_visible()
+    expect(page).to_have_url(re.compile(r"[?&]benchmarkSearch=scale-benchmark-49"))
     expect(search).to_have_value("scale-benchmark-49")
     expect(all_recorded).to_have_attribute("aria-pressed", "true")
     assert "/evaldash/api/comparison-models" in comparison_api_requests

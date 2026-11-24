@@ -8,6 +8,8 @@ export const RUN_STATUS = {
   INFRA_FAILED: 'infra_failed',
 } as const
 
+export const MIXED_LAUNCH_STATUS = 'mixed'
+
 export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
 
 export interface RunRow {
@@ -652,7 +654,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: RunStatus | 'mixed' | 'running' | 'step_failed'
+  status: RunStatus | typeof MIXED_LAUNCH_STATUS | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

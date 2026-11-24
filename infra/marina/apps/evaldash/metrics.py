@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
 from functools import cached_property
 from threading import Lock
+from typing import TypedDict
 
 from evalrecords.eval_measurements import (
     MetricRow,
@@ -422,8 +423,18 @@ class _ScoreSelection:
     selection: Selection
 
 
+class CohortOptions(TypedDict):
+    default_cohort: str
+    verified_cohorts: list[str]
+    versions: list[str]
+
+
+class ComparisonModels(CohortOptions):
+    models: list[str]
+
+
 class ScoredRecords:
-    """Reuse score extraction and the most recent selection for one record snapshot."""
+    """Select benchmark scores and read score history for one record snapshot."""
 
     def __init__(self, records: list[EvalRunRecord]) -> None:
         self.eligible = _panel_records(records)
@@ -438,7 +449,7 @@ class ScoredRecords:
         return declared_families(self.eligible)
 
     @cached_property
-    def cohort_options(self) -> dict:
+    def cohort_options(self) -> CohortOptions:
         return _cohort_options(self.eligible)
 
     def select(self, request: SelectionRequest) -> _ScoreSelection:
@@ -476,7 +487,7 @@ def _selected_columns(selected: Selection, request: SelectionRequest, scored: Sc
     return _family_columns(requested, scored.families, selected.cells)
 
 
-def comparison_models(scored: ScoredRecords, request: SelectionRequest) -> dict:
+def comparison_models(scored: ScoredRecords, request: SelectionRequest) -> ComparisonModels:
     """Return the models selectable in Compare together with cohort options."""
     selected = scored.select(request).selection
     complete_only = request.completeness is Completeness.COMPLETE_PANEL
@@ -643,7 +654,7 @@ def build_run_facets(records: list[EvalRunRecord], statuses: Iterable[str]) -> d
     }
 
 
-def _cohort_options(eligible: list[EvalRunRecord]) -> dict:
+def _cohort_options(eligible: list[EvalRunRecord]) -> CohortOptions:
     versions = sorted(set(POLICIES) | {r.version for r in eligible if r.version})
     if any(r.version is None for r in eligible):
         versions.append(UNVERSIONED_COHORT)

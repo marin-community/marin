@@ -4,17 +4,15 @@ import { RouterLink } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import { useApi } from '@/composables/useApi'
-import { useCatalogQuery } from '@/composables/useCatalogQuery'
+import { CATALOG_SEARCH_DELAY, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import type { ModelCatalogPage } from '@/types/api'
 import { formatTimestamp } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT } from '@/utils/panel'
 
-const PAGE_SIZE = 24
-const SEARCH_DELAY = 300
 const numberFormat = new Intl.NumberFormat()
 
-const { queryValue, pushQuery, replaceQuery, offset, changePage, correctOffset } = useCatalogQuery()
+const { queryValue, pushQuery, replaceQuery, offset, changePage, pagination } = useCatalogQuery()
 
 const query = computed(() => queryValue('q'))
 const cohort = computed(() => queryValue('cohort'))
@@ -32,7 +30,7 @@ watch(query, (value) => {
 })
 watch(search, (value, _, onCleanup) => {
   if (value.trim() === query.value) return
-  const timer = window.setTimeout(submitSearch, SEARCH_DELAY)
+  const timer = window.setTimeout(submitSearch, CATALOG_SEARCH_DELAY)
   onCleanup(() => window.clearTimeout(timer))
 })
 
@@ -42,7 +40,6 @@ const catalogPath = computed(() => {
   if (query.value) params.set('q', query.value)
   if (showArchived.value) params.set('include_archived', '1')
   params.set('offset', String(offset.value))
-  params.set('limit', String(PAGE_SIZE))
   return `api/catalog/models?${params}`
 })
 const { data, loading, error, refresh } = useApi<ModelCatalogPage>(() => catalogPath.value)
@@ -51,13 +48,7 @@ watch(catalogPath, () => {
   void refresh()
 }, { immediate: true })
 onViewRefresh(refresh)
-watch(data, correctOffset)
-
-const limit = computed(() => data.value?.limit ?? PAGE_SIZE)
-const hasNext = computed(() => offset.value + limit.value < (data.value?.total ?? 0))
-const showPagination = computed((previous: boolean | undefined) =>
-  offset.value > 0 || (data.value ? hasNext.value : previous ?? false),
-)
+const { limit, hasNext, showPagination } = pagination(data)
 const resultLabel = computed(() => {
   if (!data.value) return error.value ? '' : 'Loading models…'
   if (!data.value.rows.length) return 'No models match.'
@@ -104,7 +95,7 @@ const resultLabel = computed(() => {
             <button
               type="button"
               class="directory-button"
-              :disabled="loading || offset === 0"
+              :disabled="!data || loading || offset === 0"
               @click="changePage(offset - limit)"
             >‹ Previous</button>
             <button
@@ -121,8 +112,8 @@ const resultLabel = computed(() => {
         <p>Couldn’t load models. {{ error }}</p>
         <button type="button" class="directory-button" @click="refresh">Retry</button>
       </div>
-      <table v-else-if="data?.rows.length" class="directory-table" role="table" aria-label="Recorded models" :aria-busy="loading">
-        <thead role="rowgroup">
+      <table v-else-if="data?.rows.length" class="directory-table max-[700px]:block" role="table" aria-label="Recorded models" :aria-busy="loading">
+        <thead class="max-[700px]:sr-only" role="rowgroup">
           <tr role="row">
             <th scope="col" role="columnheader">Model</th>
             <th scope="col" role="columnheader" aria-sort="descending">Latest evaluation</th>
@@ -130,7 +121,7 @@ const resultLabel = computed(() => {
             <th scope="col" role="columnheader">Distinct evals</th>
           </tr>
         </thead>
-        <tbody role="rowgroup">
+        <tbody class="max-[700px]:block" role="rowgroup">
           <tr v-for="row in data.rows" :key="row.model" role="row">
             <th scope="row" role="rowheader" class="model-cell">
               <RouterLink :to="{ name: 'model', params: { model: row.model }, query: { cohort: cohort || undefined } }" :aria-label="row.model">
@@ -329,21 +320,7 @@ h1 {
   font-size: 0.875rem;
 }
 
-@media (max-width: 700px) {
-  .directory-table,
-  .directory-table tbody {
-    display: block;
-  }
-
-  .directory-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    clip-path: inset(50%);
-    overflow: hidden;
-    white-space: nowrap;
-  }
-
+@media (width < 700px) {
   .directory-table tbody tr {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);

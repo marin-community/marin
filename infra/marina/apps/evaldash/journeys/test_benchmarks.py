@@ -28,7 +28,7 @@ def test_benchmark_selection_carries_settings_and_source_intervals_into_comparis
     journey.shoot("benchmark-selection")
     page.get_by_role("link", name="Compare 2 models", exact=True).click()
 
-    journey.sees("All cohorts may mix evaluation settings")
+    expect(page.get_by_role("note", name="Cohort warning", exact=True)).to_be_visible()
     index = page.get_by_role("region", name="Benchmark index", exact=True)
     selected_setting = index.get_by_role("link", name=GSM8K_ZERO_SHOT, exact=True)
     expect(selected_setting).to_be_visible()

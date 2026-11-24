@@ -5,12 +5,9 @@ import RunCatalogTable from '@/components/runs/RunCatalogTable.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
 import { useApi } from '@/composables/useApi'
-import { useCatalogQuery } from '@/composables/useCatalogQuery'
+import { CATALOG_SEARCH_DELAY, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
-import type { CatalogFacets, CatalogPage, LaunchRow, RunRow } from '@/types/api'
-
-const DEFAULT_RESULT_LIMIT = 50
-const SEARCH_DELAY = 300
+import { MIXED_LAUNCH_STATUS, type CatalogFacets, type CatalogPage, type LaunchRow, type RunRow } from '@/types/api'
 
 const FACETS = [
   { key: 'model', label: 'Model', searchable: true },
@@ -23,7 +20,7 @@ const FACETS = [
 
 type View = 'launches' | 'runs'
 
-const { queryValue, pushQuery, replaceQuery, offset, changePage, correctOffset } = useCatalogQuery()
+const { queryValue, pushQuery, replaceQuery, offset, changePage, pagination } = useCatalogQuery()
 
 const group = computed(() => queryValue('group'))
 const view = computed<View>(() => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches')
@@ -55,7 +52,7 @@ function submitSearch() {
 function setSearch(event: Event) {
   search.value = (event.target as HTMLInputElement).value
   window.clearTimeout(searchTimer)
-  searchTimer = window.setTimeout(submitSearch, SEARCH_DELAY)
+  searchTimer = window.setTimeout(submitSearch, CATALOG_SEARCH_DELAY)
 }
 
 const filtersOpen = ref(false)
@@ -70,7 +67,7 @@ const facets = computed(() => FACETS.map((facet) => {
   const value = queryValue(facet.key)
   let options = facetData.value?.run_facets[facet.key] ?? []
   if (facet.key === 'status' && view.value === 'runs') {
-    options = options.filter((status) => status !== 'mixed')
+    options = options.filter((status) => status !== MIXED_LAUNCH_STATUS)
   }
   return { ...facet, value, options: value && !options.includes(value) ? [value, ...options] : options }
 }))
@@ -109,10 +106,6 @@ function launchLocation(groupId: string) {
   }
 }
 
-const requestedLimit = computed(() => {
-  const value = Number(limitQuery.value)
-  return Number.isSafeInteger(value) && value >= 1 ? value : DEFAULT_RESULT_LIMIT
-})
 const filtered = computed(() => query.value || group.value || activeFacets.value.length > 0)
 
 function setLimit(event: Event) {
@@ -129,8 +122,9 @@ const catalogPath = computed(() => {
   const params = new URLSearchParams({
     view: view.value,
     offset: String(offset.value),
-    limit: String(requestedLimit.value),
   })
+  const requestedLimit = Number(limitQuery.value)
+  if (Number.isSafeInteger(requestedLimit) && requestedLimit > 0) params.set('limit', String(requestedLimit))
   if (query.value) params.set('q', query.value)
   if (group.value) params.set('group', group.value)
   for (const { key, value } of activeFacets.value) params.set(key, value)
@@ -146,19 +140,13 @@ onViewRefresh(() => {
   if (filtersOpen.value && !facetsLoading.value) void refreshFacets()
 })
 
-watch(catalog, correctOffset)
-
-const limit = computed(() => catalog.value?.limit ?? requestedLimit.value)
+const { limit, hasNext, showPagination } = pagination(catalog)
 const total = computed(() => catalog.value?.total ?? 0)
 const launchRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is LaunchRow => !('run_id' in row)),
 )
 const runRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is RunRow => 'run_id' in row),
-)
-const canGoForward = computed(() => offset.value + limit.value < total.value)
-const showPagination = computed((previous: boolean | undefined) =>
-  offset.value > 0 || (catalog.value ? canGoForward.value : previous ?? false),
 )
 const countFormat = new Intl.NumberFormat()
 const resultLabel = computed(() => {
@@ -210,10 +198,10 @@ const resultLabel = computed(() => {
         <div class="catalog-summary">
           <p class="result-count" role="status">{{ resultLabel }}</p>
           <nav v-if="showPagination" class="catalog-pagination" aria-label="Result pages">
-            <button type="button" class="catalog-button" :disabled="loading || offset === 0" @click="changePage(offset - limit)">
+            <button type="button" class="catalog-button" :disabled="!catalog || loading || offset === 0" @click="changePage(offset - limit)">
               <span aria-hidden="true">‹</span> Previous
             </button>
-            <button type="button" class="catalog-button" :disabled="loading || !canGoForward" @click="changePage(offset + limit)">
+            <button type="button" class="catalog-button" :disabled="loading || !hasNext" @click="changePage(offset + limit)">
               Next <span aria-hidden="true">›</span>
             </button>
           </nav>
@@ -249,7 +237,7 @@ const resultLabel = computed(() => {
           </template>
           <label class="facet-select">
             Result limit
-            <input :value="limit" type="number" min="1" @change="setLimit" />
+            <input :disabled="!catalog" :value="limit || undefined" type="number" min="1" @change="setLimit" />
           </label>
         </div>
       </section>

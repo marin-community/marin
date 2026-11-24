@@ -9,12 +9,13 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
 from evalrecords.records import EvalRunRecord, RunStatus, record_path
 from marina.db import DatabaseSpec, engine_for
-from marina.journeys import Journey
+from marina.journeys import Kernel
 
 APP = "evaldash"
 SCALE_COHORT = "fixture-scale"
@@ -90,14 +91,14 @@ def _scale_records(base: EvalRunRecord, prefix: str) -> Iterator[EvalRunRecord]:
             )
 
 
-def _reload_catalog(journey: Journey) -> None:
-    response = journey.page.request.post(journey.url("/api/refresh"))
+def _reload_catalog(kernel: Kernel) -> None:
+    response = httpx.post(f"{kernel.origin}/{APP}/api/refresh")
     # The local endpoint reloads its serving snapshot without a scheduled ingestion job.
-    assert response.ok or response.status == 503, response.text()
+    assert response.is_success or response.status_code == 503, response.text
 
 
-@pytest.fixture
-def scale_cohort(journey: Journey, marina_database: DatabaseSpec, seeded_records: str) -> Iterator[str]:
+@pytest.fixture(scope="module")
+def scale_cohort(marina_kernel: Kernel, marina_database: DatabaseSpec, seeded_records: str) -> Iterator[str]:
     prefix = f"{seeded_records}/{SCALE_COHORT}"
     engine = engine_for(marina_database, APP)
     try:
@@ -121,9 +122,9 @@ def scale_cohort(journey: Journey, marina_database: DatabaseSpec, seeded_records
         results_db.reconcile_prefix(
             engine, prefix, [observation.path for observation in observations], observations, now, 0
         )
-        _reload_catalog(journey)
+        _reload_catalog(marina_kernel)
         yield SCALE_COHORT
     finally:
         results_db.configure_prefixes(engine, (seeded_records,))
         engine.dispose()
-        _reload_catalog(journey)
+        _reload_catalog(marina_kernel)

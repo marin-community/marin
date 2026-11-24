@@ -1,5 +1,7 @@
-import { computed } from 'vue'
+import { computed, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+
+export const CATALOG_SEARCH_DELAY = 300
 
 export function useCatalogQuery() {
   const route = useRoute()
@@ -30,12 +32,20 @@ export function useCatalogQuery() {
     void pushQuery({ offset: value > 0 ? String(value) : '' })
   }
 
-  function correctOffset(page: { total: number; limit: number } | null) {
-    if (page && offset.value > 0 && offset.value >= page.total) {
-      const lastOffset = Math.floor(Math.max(0, page.total - 1) / page.limit) * page.limit
-      void replaceQuery({ offset: lastOffset ? String(lastOffset) : '' })
-    }
+  function pagination(page: Ref<{ total: number; limit: number } | null>) {
+    const limit = computed(() => page.value?.limit ?? 0)
+    const hasNext = computed(() => !!page.value && offset.value + limit.value < page.value.total)
+    const showPagination = computed((previous: boolean | undefined) =>
+      offset.value > 0 || (page.value ? hasNext.value : previous ?? false),
+    )
+    watch(page, (result) => {
+      if (result && offset.value > 0 && offset.value >= result.total) {
+        const lastOffset = Math.floor(Math.max(0, result.total - 1) / result.limit) * result.limit
+        void replaceQuery({ offset: lastOffset ? String(lastOffset) : '' })
+      }
+    })
+    return { limit, hasNext, showPagination }
   }
 
-  return { queryValue, pushQuery, replaceQuery, offset, changePage, correctOffset }
+  return { queryValue, location, pushQuery, replaceQuery, offset, changePage, pagination }
 }

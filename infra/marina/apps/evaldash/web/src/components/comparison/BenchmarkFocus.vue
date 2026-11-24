@@ -6,12 +6,11 @@ import { INTERVAL_KIND, type ComparisonRow } from '@/types/api'
 import { formatMeasurement, formatMeasurementInterval, formatTimestamp, isPercentMetric } from '@/utils/formatting'
 import { cellCoverageLabel, scoredItemsLabel, UNVERSIONED_COHORT } from '@/utils/panel'
 import ModelScoreSymbol from './ModelScoreSymbol.vue'
+import { sharedMetric } from './benchmarkMetric'
 
 const props = defineProps<{ row: ComparisonRow; models: string[] }>()
 const cells = computed(() => Object.values(props.row.cells))
-const commonMetric = computed(() => cells.value.every((cell) =>
-  cell.metric === cells.value[0].metric && cell.metric_kind === cells.value[0].metric_kind,
-) ? cells.value[0].metric : null)
+const commonMetric = computed(() => sharedMetric(cells.value))
 const percent = computed(() => cells.value.every(isPercentMetric))
 const fitted = ref(true)
 const range = computed(() => {

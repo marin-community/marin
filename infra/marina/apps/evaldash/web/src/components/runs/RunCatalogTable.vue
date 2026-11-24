@@ -13,8 +13,8 @@ defineProps<{
 </script>
 
 <template>
-  <table class="catalog-table" role="table" aria-label="Evaluation runs">
-    <thead role="rowgroup">
+  <table class="catalog-table max-[790px]:block" role="table" aria-label="Evaluation runs">
+    <thead class="max-[790px]:sr-only" role="rowgroup">
       <tr role="row">
         <th scope="col" role="columnheader">Evaluation / model</th>
         <th class="environment-column" scope="col" role="columnheader">Owner / compute</th>
@@ -23,7 +23,7 @@ defineProps<{
         <th class="action-column" scope="col" role="columnheader">Links</th>
       </tr>
     </thead>
-    <tbody role="rowgroup">
+    <tbody class="max-[790px]:block" role="rowgroup">
       <tr v-for="row in rows" :key="row.run_id" role="row">
         <th class="identity-cell" scope="row" role="rowheader">
           <div class="record-identity">
@@ -206,21 +206,7 @@ tbody tr:focus-within {
   margin-bottom: 0.3rem;
 }
 
-@media (max-width: 790px) {
-  .catalog-table,
-  .catalog-table tbody {
-    display: block;
-  }
-
-  .catalog-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    clip-path: inset(50%);
-    overflow: hidden;
-    white-space: nowrap;
-  }
-
+@media (width < 790px) {
   .catalog-table tbody tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

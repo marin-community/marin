@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
-import type { LaunchRow } from '@/types/api'
+import { MIXED_LAUNCH_STATUS, type LaunchRow } from '@/types/api'
 import { formatTimestamp } from '@/utils/formatting'
 
 const props = defineProps<{
@@ -60,7 +60,7 @@ const dateGroups = computed(() => {
 
 function runCount(row: LaunchRow) {
   const count = numberFormat.format(row.n_evals)
-  if (row.status === 'mixed') return `${numberFormat.format(row.n_succeeded)} of ${count} succeeded`
+  if (row.status === MIXED_LAUNCH_STATUS) return `${numberFormat.format(row.n_succeeded)} of ${count} succeeded`
   return `${count} ${row.n_evals === 1 ? 'run' : 'runs'}`
 }
 </script>

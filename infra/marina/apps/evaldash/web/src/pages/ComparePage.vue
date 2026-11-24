@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import BenchmarkFocus from '@/components/comparison/BenchmarkFocus.vue'
 import BenchmarkOverview from '@/components/comparison/BenchmarkOverview.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
 import { useApi } from '@/composables/useApi'
+import { useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta } from '@/types/api'
@@ -23,7 +24,7 @@ type ComparisonModels = Pick<Meta, 'models' | 'default_cohort' | 'verified_cohor
 type RowScope = 'all' | 'shared'
 
 const route = useRoute()
-const router = useRouter()
+const { location, pushQuery, replaceQuery } = useCatalogQuery()
 
 function param(key: string): string {
   const value = route.query[key]
@@ -32,15 +33,6 @@ function param(key: string): string {
 
 function names(key: string): string[] {
   return [...new Set(param(key).split(',').map((name) => name.trim()).filter(Boolean))]
-}
-
-function comparisonLocation(values: Record<string, string>) {
-  const query = { ...route.query }
-  for (const [key, value] of Object.entries(values)) {
-    if (value) query[key] = value
-    else delete query[key]
-  }
-  return { name: 'compare', query }
 }
 
 const cohort = computed(() => param('cohort') || ALL_COHORTS)
@@ -99,7 +91,7 @@ watch(comparisonPath, (path) => {
   if (path) void refreshComparison()
 })
 watch(() => catalog.value?.default_cohort, (value) => {
-  if (value && !param('cohort')) void router.replace(comparisonLocation({ cohort: value }))
+  if (value && !param('cohort')) void replaceQuery({ cohort: value })
 })
 onViewRefresh(() => {
   void refreshCatalog()
@@ -107,7 +99,7 @@ onViewRefresh(() => {
 })
 
 function updateModels(models: string[]) {
-  void router.replace(comparisonLocation({ models: models.join(','), bpage: '', focus: '' }))
+  void replaceQuery({ models: models.join(','), bpage: '', focus: '' })
 }
 
 function addModel(model: string) {
@@ -130,8 +122,8 @@ const scope = computed<RowScope>(() => {
   if (requested === 'shared' || requested === 'all') return requested
   return sharedRows.value.length ? 'shared' : 'all'
 })
-const query = computed(() => param('bq'))
-const terms = computed(() => query.value.toLowerCase().trim().split(/\s+/).filter(Boolean))
+const benchmarkSearch = computed(() => param('benchmarkSearch'))
+const terms = computed(() => benchmarkSearch.value.toLowerCase().trim().split(/\s+/).filter(Boolean))
 const filteredRows = computed(() => (scope.value === 'shared' ? sharedRows.value : rows.value).filter((row) => {
   const label = row.benchmark.toLowerCase()
   return terms.value.every((term) => label.includes(term))
@@ -145,6 +137,7 @@ const focusedRow = computed(() => focusName.value
   ? rows.value.find((row) => row.benchmark === focusName.value)
   : pageRows.value[0],
 )
+const benchmarkIndex = ref<HTMLElement | null>(null)
 const benchmarkDetail = ref<HTMLElement | null>(null)
 
 function benchmarkLinkId(benchmark: string): string {
@@ -152,29 +145,28 @@ function benchmarkLinkId(benchmark: string): string {
 }
 
 function benchmarkLocation(benchmark: string) {
-  return { id: benchmarkLinkId(benchmark), to: comparisonLocation({ focus: benchmark }) }
+  return { id: benchmarkLinkId(benchmark), to: location({ focus: benchmark }) }
 }
 
 watch(focusName, async (next, previous) => {
   await nextTick()
-  const narrow = window.matchMedia('(max-width: 800px)').matches
   if (next) {
     benchmarkDetail.value?.focus({ preventScroll: true })
-    if (narrow) benchmarkDetail.value?.scrollIntoView({ block: 'start' })
+    if (benchmarkIndex.value?.getClientRects().length === 0) benchmarkDetail.value?.scrollIntoView({ block: 'start' })
     return
   }
-  if (!narrow) return
+  if (benchmarkDetail.value?.getClientRects().length !== 0) return
   const source = document.getElementById(benchmarkLinkId(previous))
   source?.focus({ preventScroll: true })
   source?.scrollIntoView({ block: 'nearest' })
 })
 
 function setScope(show: RowScope) {
-  if (show !== scope.value) void router.push(comparisonLocation({ show, bpage: '' }))
+  if (show !== scope.value) void pushQuery({ show, bpage: '' })
 }
 
 function setPage(next: number) {
-  void router.push(comparisonLocation({ bpage: next > 1 ? String(next) : '' }))
+  void pushQuery({ bpage: next > 1 ? String(next) : '' })
 }
 
 const ranking = computed(() => selected.value
@@ -202,7 +194,7 @@ const ranking = computed(() => selected.value
         >Edit models <span v-if="selected.length">{{ selected.length }}</span></button>
         <label class="cohort-control">
           Cohort
-          <select :value="cohort" @change="router.push(comparisonLocation({ cohort: ($event.target as HTMLSelectElement).value, bpage: '' }))">
+          <select :value="cohort" @change="pushQuery({ cohort: ($event.target as HTMLSelectElement).value, bpage: '' })">
             <option v-for="version in cohortOptions" :key="version" :value="version">{{ cohortLabel(version) }}</option>
           </select>
         </label>
@@ -219,7 +211,7 @@ const ranking = computed(() => selected.value
             v-if="benchmarks.length"
             type="button"
             class="text-link"
-            @click="router.push(comparisonLocation({ benchmarks: '', bpage: '', focus: '' }))"
+            @click="pushQuery({ benchmarks: '', bpage: '', focus: '' })"
           >Clear benchmark scope</button>
         </div>
       </div>
@@ -267,7 +259,7 @@ const ranking = computed(() => selected.value
           </details>
         </div>
       </div>
-      <p v-if="warning" class="selection-warning">{{ warning }}</p>
+      <p v-if="warning" class="selection-warning" role="note" aria-label="Cohort warning">{{ warning }}</p>
     </div>
 
     <div class="comparison-results">
@@ -279,7 +271,7 @@ const ranking = computed(() => selected.value
       <div v-else-if="comparisonPath && !comparison" class="result-state" role="status">Loading benchmark results…</div>
       <template v-else-if="comparison && comparisonPath">
         <div class="benchmark-workspace" :class="{ 'benchmark-open': focusName }" :aria-busy="comparisonLoading">
-          <section class="benchmark-index" aria-label="Benchmark index">
+          <section ref="benchmarkIndex" class="benchmark-index" aria-label="Benchmark index">
             <div class="index-controls">
               <h2>Benchmarks</h2>
               <label class="benchmark-search">
@@ -287,8 +279,8 @@ const ranking = computed(() => selected.value
                 <input
                   type="search"
                   placeholder="Search benchmarks"
-                  :value="query"
-                  @input="router.replace(comparisonLocation({ bq: ($event.target as HTMLInputElement).value, bpage: '', focus: '' }))"
+                  :value="benchmarkSearch"
+                  @input="replaceQuery({ benchmarkSearch: ($event.target as HTMLInputElement).value, bpage: '', focus: '' })"
                 />
               </label>
               <div class="scope-switch" role="group" aria-label="Benchmark coverage">
@@ -324,7 +316,7 @@ const ranking = computed(() => selected.value
           </section>
 
           <div ref="benchmarkDetail" class="benchmark-detail" tabindex="-1">
-            <RouterLink v-if="focusName" :to="comparisonLocation({ focus: '' })" class="back-link">
+            <RouterLink v-if="focusName" :to="location({ focus: '' })" class="back-link">
               <span aria-hidden="true">←</span> Back to benchmarks
             </RouterLink>
             <BenchmarkFocus v-if="focusedRow" :key="focusedRow.benchmark" :row="focusedRow" :models="selected" />

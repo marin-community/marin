@@ -73,11 +73,12 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import playground_reports, review, samples
-from .catalog import CatalogFilters, CatalogPage, RunCatalog
+from .catalog import CatalogFilters, CatalogPage, LaunchRow, ModelCatalogRow, RunCatalog, RunRow
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
     RUN_FACETS,
+    ComparisonModels,
     ScoredRecords,
     build_comparison,
     build_meta,
@@ -365,7 +366,7 @@ def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
     return list(by_id.values())
 
 
-def record_to_row(record: EvalRunRecord) -> dict:
+def record_to_row(record: EvalRunRecord) -> RunRow:
     """Flatten one record to the canonical API run-row shape (ISO ``created_at``, task list, jobs map).
 
     The single definition of that shape, so the run list is identical whichever store produced it.
@@ -497,7 +498,7 @@ class RecordStore:
         version: str | None = None,
         accelerator: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
+    ) -> list[RunRow]:
         filters = CatalogFilters(
             model=model,
             eval_name=eval_name,
@@ -509,11 +510,11 @@ class RecordStore:
         )
         return self.catalog_runs(filters, 0, limit).rows
 
-    def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage:
+    def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[RunRow]:
         records, total = self._snapshot().catalog.run_page(filters, offset, limit)
         return CatalogPage([record_to_row(record) for record in records], total, limit)
 
-    def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage:
+    def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[LaunchRow]:
         launches = self._snapshot().catalog.matching_launches(filters)
         rows = [launch.row() for launch in launches[offset : offset + limit]]
         return CatalogPage(rows, len(launches), limit)
@@ -521,7 +522,9 @@ class RecordStore:
     def catalog_facets(self) -> dict:
         return {"run_facets": self._snapshot().catalog.facets()}
 
-    def catalog_models(self, query: str, cohort: str, *, include_archived: bool, offset: int, limit: int) -> CatalogPage:
+    def catalog_models(
+        self, query: str, cohort: str, *, include_archived: bool, offset: int, limit: int
+    ) -> CatalogPage[ModelCatalogRow]:
         return self._snapshot().catalog.model_page(
             query, cohort, self.archived_models(), include_archived=include_archived, offset=offset, limit=limit
         )
@@ -539,7 +542,7 @@ class RecordStore:
             return build_panel(records, request, frozenset(archived), aggregate)
         return build_panel(snapshot.records, request, frozenset(archived), aggregate, scored=snapshot.scored())
 
-    def comparison_models(self, request: SelectionRequest) -> dict:
+    def comparison_models(self, request: SelectionRequest) -> ComparisonModels:
         return comparison_models(self._snapshot().scored(), request)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:

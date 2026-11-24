@@ -7,16 +7,67 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TypedDict
 
 from evalrecords.eval_stats import CohortMode
 from evalrecords.records import EvalRunRecord, RunStatus
 
 from .metrics import build_run_facets, cohort_selection, display_status, is_archived_model
 
+MIXED_LAUNCH_STATUS = "mixed"
+
+
+class RunSummary(TypedDict):
+    run_id: str
+    eval_name: str
+    status: str
+    created_at: str
+    version: str | None
+
+
+class RunRow(RunSummary):
+    group_id: str
+    user_name: str
+    model_name: str
+    model_location: str
+    mechanism: str
+    backend: str
+    platform: str
+    accelerator: str
+    region: str | None
+    step_status: str | None
+    results_path: str
+    git_sha: str
+    image_digest: str | None
+    error: str | None
+    tasks: list[str]
+    jobs: dict[str, str]
+
+
+class LaunchRow(TypedDict):
+    group_id: str
+    model_name: str
+    version: str | None
+    description: str | None
+    user_name: str
+    accelerator: str
+    created_at: str
+    status: str
+    n_evals: int
+    n_succeeded: int
+
+
+class ModelCatalogRow(TypedDict):
+    model: str
+    archived: bool
+    run_count: int
+    benchmark_count: int
+    latest_run: RunSummary
+
 
 @dataclass(frozen=True)
-class CatalogPage:
-    rows: list[dict]
+class CatalogPage[Row]:
+    rows: list[Row]
     total: int
     limit: int
 
@@ -89,7 +140,7 @@ def _status_rollup(statuses: set[str]) -> str:
         return next(iter(statuses))
     if RunStatus.SUCCEEDED not in statuses and RunStatus.FAILED in statuses:
         return RunStatus.FAILED
-    return "mixed"
+    return MIXED_LAUNCH_STATUS
 
 
 class Launch:
@@ -105,6 +156,7 @@ class Launch:
         )
 
     def scope(self, filters: CatalogFilters) -> Launch | None:
+        """Restrict the launch to the selected model and user, or return None if no member matches."""
         if filters.model is None and filters.user is None:
             return self
         if self._shared_model_and_user:
@@ -125,7 +177,7 @@ class Launch:
             and (not filters.query or any(filters.query in run.search_text for run in self.members))
         )
 
-    def row(self) -> dict:
+    def row(self) -> LaunchRow:
         record = self.newest
         return {
             "group_id": record.group_id,
@@ -151,7 +203,7 @@ class _ModelActivity:
     runs: list[_Run]
     archived: bool
 
-    def row(self) -> dict:
+    def row(self) -> ModelCatalogRow:
         latest = self.runs[0]
         return {
             "model": self.model,
@@ -226,7 +278,7 @@ class RunCatalog:
         include_archived: bool,
         offset: int,
         limit: int,
-    ) -> CatalogPage:
+    ) -> CatalogPage[ModelCatalogRow]:
         mode, version = cohort_selection(cohort)
         matches = []
         for model, runs in self._by_model.items():
