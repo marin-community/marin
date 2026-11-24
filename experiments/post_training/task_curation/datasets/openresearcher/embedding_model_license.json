@@ -1,0 +1,27 @@
+{
+  "source_id": "BAAI/bge-large-en-v1.5",
+  "dataset_id": "BAAI/bge-large-en-v1.5",
+  "revision": "d4aa6901d3a41ba39fb536a557fa166f842b0e09",
+  "resolved_at": "2026-11-24T14:45:00.000000-05:00",
+  "resolver_version": "atlas-license-v2",
+  "evidence": [
+    {
+      "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md",
+      "kind": "model_card",
+      "sha256": "9ffeb4467f293416c1f7642e64ae0bd44778fa182ce1165196e8a0329a34fd80",
+      "license_ids": [
+        "mit"
+      ],
+      "quoted_lines": [
+        "L2603: license: mit",
+        "L3067: ## License",
+        "L3068: FlagEmbedding is licensed under the [MIT License](https://github.com/FlagOpen/FlagEmbedding/blob/master/LICENSE). The released models can be used for commercial purposes free of charge."
+      ],
+      "restrictive_terms": false,
+      "unidentified_third_party_terms": false
+    }
+  ],
+  "bundled_third_party": false,
+  "model_generated_outputs": false,
+  "decisions": []
+}

@@ -154,3 +154,29 @@ retention and admission. BrowseComp and BrowseComp-Plus questions must remain
 outside TRAIN. The released gold answers supply private grading references;
 they do not establish executable source oracles. Use the documented
 [no-oracle retention procedure](../../../../../docs/references/task-curation.md#sources-without-oracle-solutions).
+
+## Hybrid retrieval provider
+
+The versioned `openresearcher-hybrid:v1` provider searches the same approved
+corpus with BM25 plus a dense index, fused by reciprocal rank fusion. The
+dense side embeds every corpus document with the pinned, permissively
+licensed `BAAI/bge-large-en-v1.5` (MIT; receipt in
+`embedding_model_license.json`) at a 512-token truncation, stores raw fp16
+shards in-region, and builds a flat inner-product index whose docid order is
+verified against the corpus shard order. Search encodes each query with the
+same pinned encoder, retrieves 25 BM25 and 25 dense candidates, fuses the two
+lists with `rrf_fuse` (k=60), and returns the top five hits with full
+documents. The tool contract, hit shape, snippet budget and grounding
+contract are unchanged; only the provider version differs.
+
+The `embedding` entrypoint embeds the complete corpus in an Iris GPU job (GPU
+work runs in the pinned dense-embedding venv through `embedding_worker`).
+`build_dense_index` verifies every vector and docid part against the
+embedding manifest and the approved corpus, then seals the flat index.
+`hybrid_index` binds the BM25 index, dense index and embedding receipts into
+one versioned artifact whose state is the `OpenResearcherHybridState`
+contract. `pilot_sample` selects the fixed 300-drop/100-kept pilot sample
+from the sealed v12 decisions, and `hybrid_ground` runs the same sealed
+screen against the hybrid provider for the pilot or the full population,
+reporting recovered and regressed questions against v12.
+
