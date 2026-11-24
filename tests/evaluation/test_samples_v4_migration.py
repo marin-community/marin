@@ -52,9 +52,7 @@ def _stamp_schema_version(results, version: int) -> None:
     set_table_metadata(str(results), ARCHIVE_SAMPLES_TABLE, metadata)
 
 
-def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
-    # A contract change is the one moment the archive holds rows nothing else does. They go to the
-    # 30-day bucket before the drop, so a bad rebuild is recoverable rather than terminal.
+def test_backup_preserves_rows_before_dropping_table(tmp_path):
     results = tmp_path / "run" / "results"
     _archive(results, [_generation("1"), _generation("2")])
     destination = tmp_path / "backup-v3"
@@ -63,18 +61,6 @@ def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
 
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
     assert (destination / "_schema.json").exists()
-    assert list(destination.rglob("*.parquet"))
-
-
-def test_a_preserved_table_still_holds_the_dropped_rows(tmp_path):
-    # The point of the snapshot is the data, not the directory: every row the drop removed has to be
-    # readable from the copy.
-    results = tmp_path / "run" / "results"
-    _archive(results, [_generation("1"), _generation("2")])
-    destination = tmp_path / "backup-v3"
-
-    backup_and_drop_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
-
     preserved = pq.read_table(sorted(destination.rglob("*.parquet")))
     assert sorted(preserved["doc_id"].to_pylist()) == ["1", "2"]
 

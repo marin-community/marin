@@ -942,7 +942,7 @@ class ReadView(_ReadOperations):
         return tuple(sorted(self._snapshot.manifest.tables))
 
     def table_version(self, table: str) -> TableVersion:
-        """Capture the table state for a conditional drop or replacement."""
+        """Capture the exact table state, including physical shard paths."""
         return self._snapshot.manifest.table_version(table)
 
     def table_content_version(self, table: str) -> TableContentVersion:

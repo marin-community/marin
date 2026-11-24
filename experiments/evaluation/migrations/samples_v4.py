@@ -87,7 +87,7 @@ def backup_and_drop_table(reader: ReadView, table: str, destination: str) -> Non
 
 
 def backup_and_drop_samples(reader: ReadView, stored_version: int) -> None:
-    """Snapshot one run's samples table to its 30-day prefix, keyed by the version being replaced."""
+    """Back up and drop a run's samples table under its prior schema version."""
     destination = superseded_samples_prefix(reader.root, stored_version)
     logger.info(
         "replacing %s samples written under schema v%s at v%s, preserved at %s",
