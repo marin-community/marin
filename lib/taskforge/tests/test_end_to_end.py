@@ -2326,15 +2326,22 @@ FORMAT_13_HELD = Path(__file__).parent / "fixtures" / "format13-author-held-root
 """The whole root the format-13 writer published for the held first launch of ``held_after_stamp``."""
 
 
+FORMAT_14_HELD = Path(__file__).parent / "fixtures" / "format14-judge-grade-held-root.json.gz"
+"""The format-14 writer (701237fcb9) graded an exact reference match at judge temperature 0.7, submitted the
+draft, then deferred during validation. Format 15 would return an error at that same author grade."""
+
+
 @pytest.mark.parametrize(
-    "fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12), (FORMAT_13_HELD, 13)]
+    "fixture,found",
+    [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12), (FORMAT_13_HELD, 13), (FORMAT_14_HELD, 14)],
 )
 async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
     """A format-10 root's author calls embedded a reference this writer does not reproduce, a format-11 root's author
     requests were worded otherwise, a format-12 root committed no reviewed visit, and a format-13 root's trials were
-    recorded under another solver clock; the driver refuses each untouched and names the ways on."""
+    recorded under another solver clock. A format-14 author could grade or submit a judge draft this writer refuses.
+    The driver refuses each root untouched and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)

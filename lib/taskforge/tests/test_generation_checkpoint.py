@@ -525,9 +525,9 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
         "awaits": "decision_model",
         "format": JOURNAL_FORMAT,
     }
-    second = probed("resume", tmp_path)  # a cold format-14 root: its paid generations are graded, not bought again
+    second = probed("resume", tmp_path)
     assert (
-        second["format"] == JOURNAL_FORMAT == 14
+        second["format"] == JOURNAL_FORMAT
         and second["exit"] == 0
         and second["terminal"] == "accepted"
         and second["awaits"] is None

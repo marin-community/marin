@@ -511,23 +511,21 @@ def test_disabled_and_script_judges_return_actionable_authored_rejection(script:
         lower_with_settings(arithmetic_task(grader=grader), lowering_settings(policy), {})
 
 
-# Each judge field the author reference omits, and a value an author could still type for it.
-UNSHOWN = {"temperature": 0.7, "chat_template_kwargs": {"enable_thinking": "false"}}
-
-
-async def test_the_author_reference_omits_only_the_judge_fields_the_taskforge_judge_fixes() -> None:
+async def test_author_reference_shows_the_callback_judge_options() -> None:
     shown = json.loads(await author_reference(AuthorReference(False)))["TaskSpec"]["$defs"]["JudgeSpec"]["properties"]
-    assert {"parse_attempts", "context_char_limit"} <= shown.keys()
-    assert {f.name for f in fields(JudgeSpec)} - shown.keys() == UNSHOWN.keys()
+    hidden = {"temperature", "chat_template_kwargs", "request_timeout", "transport_attempts", "transport_budget"}
+    assert shown.keys() == {field.name for field in fields(JudgeSpec)} - hidden
+    assert shown["reasoning_effort"]["enum"] == ["", "low", "medium", "high"]
+    assert set(shown["rubric"]["enum"]) == {"checklist", "labels", "pairwise", "reference"}
 
 
 @pytest.mark.parametrize(
     "judge, refusal",
     [
-        *(
-            (labels(**{name: value}), f"Leave judge {name} unset: the Taskforge judge samples greedily")
-            for name, value in UNSHOWN.items()
-        ),
+        (labels(temperature=None), "Leave judge temperature unset"),
+        (labels(temperature=0.7), "Leave judge temperature unset"),
+        (labels(chat_template_kwargs={"enable_thinking": "false"}), "Leave judge chat_template_kwargs unset"),
+        (labels(reasoning_effort="minimal"), "Leave judge reasoning_effort unset or use one of low, medium, high"),
         (
             JudgeSpec(
                 rubric="answers", references=("12",), prompt_template="{candidate} {references}", exact_gate=False
@@ -545,6 +543,11 @@ def test_a_task_the_taskforge_judge_cannot_grade_is_returned_to_the_author_at_su
     settings = lowering_settings(load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"}))
     (message,) = submit_gate(Submission(task, (control,), ""), settings=settings, factories={})
     assert message.startswith(refusal)
+
+
+def test_http_only_judge_settings_and_explicit_callback_defaults_still_lower() -> None:
+    judge = labels(temperature=0.0, chat_template_kwargs={}, request_timeout=1, transport_attempts=1, transport_budget=1)
+    judged_spec(judge)
 
 
 JUDGE_CAP = 3

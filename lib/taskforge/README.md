@@ -110,7 +110,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 14); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 15); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -137,10 +137,12 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 14` and reports the
-rest. Formats 8 to 13 differ: their rows decode at format 14, so `report` reads them, but the driver refuses
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 15` and reports the
+rest. Formats 8 to 14 differ: their rows decode at format 15, so `report` reads them, but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
-format or a fresh output prefix as the way on. Format 14 records a solver generation still running at
+format or a fresh output prefix as the way on. Format 15 rejects unsupported judge settings during an author's
+`grade` or `submit`. A format-14 author could receive a grade for the same draft and take a different next action.
+Format 14 records a solver generation still running at
 `solver.time_limit` as stopped at the time limit (`time_limit`), which a format-13 reader cannot decode; format 13 recorded it as a generation limit, under another
 solver clock. Format 13 commits reviewed visits (above), which a format-12 root lacks, so its resumed rounds would
 decide again on re-observed evidence. Format 12 words two author requests otherwise: a final revision's request ends
@@ -243,12 +245,15 @@ re-executed on fresh machines, so a resumed author session takes minutes before 
 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone. The author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
 TaskCompendium models at a root's first fresh author session and recorded as a `schema.author_reference` row
 (about 29 KB); every later author session of the root, in this launch or a resumed one, replays that text, so a
-wording-only change in TaskCompendium's schemas does not affect a root that recorded it. The schemas omit the judge spec's
-`temperature` and `chat_template_kwargs`: the Taskforge judge samples greedily and takes no chat template arguments,
-so the submit gate returns a task that sets either to the author, as it does a task whose judge uses the `answers`
-rubric, which samples at the judge's default. `wiring.install` binds
+wording-only change in TaskCompendium's schemas does not affect a root that recorded it. `wiring.install` binds
 this effect; a caller that passes `run_workpiece` its own installer must bind `AuthorReference` to
 `stages.author.author_reference` (or its own executor) to run the stock author stage.
+
+The judge callback requires greedy sampling. The author reference omits `temperature` and `chat_template_kwargs`.
+The `submit` and `grade` tools ask the author to revise a draft that changes either default (0 and `{}`), selects the
+`answers` rubric, or requests an unsupported reasoning effort. The reference also omits VerifyIt's HTTP timeout and
+retry settings. Existing tasks may supply them. Taskforge's provider policy controls the callback transport.
+
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
 its initial sandbox definition; each command or file operation it issues references that row, takes the
 next position in the owner's history, and its outcome references the request. A resumed attempt is
