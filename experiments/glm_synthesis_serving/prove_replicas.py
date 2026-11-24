@@ -62,6 +62,7 @@ class RequestOutcome:
     content_characters: int = 0
     reasoning_characters: int = 0
     request_index: int | None = None
+    previous_attempt: "RequestOutcome | None" = None
 
     @property
     def ok(self) -> bool:
@@ -73,6 +74,9 @@ class StageSummary:
     requests: int
     passed: int
     failures: int
+    attempts: int
+    attempt_failures: int
+    empty_answer_retries: int
     elapsed: float
     rows_per_hour: float
     prompt_tokens_per_second_per_gpu: float
@@ -143,8 +147,8 @@ def ready_targets(endpoints: list[str], wait_timeout: float) -> list[Target]:
     return targets
 
 
-async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict) -> RequestOutcome:
-    """Require HTTP 200, complete SSE, valid JSON content, stop, and token usage."""
+async def request_attempt(client: httpx.AsyncClient, target: Target, body: dict) -> RequestOutcome:
+    """Validate one HTTP attempt without retaining generated text."""
     content = []
     usage = {}
     done = False
@@ -208,6 +212,23 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
         )
 
 
+async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict) -> RequestOutcome:
+    """Retry a completed reasoning-only answer once, retaining its failed attempt."""
+    outcome = await request_attempt(client, target, body)
+    if not (
+        outcome.state is RequestState.INVALID_OUTPUT
+        and outcome.status == 200
+        and outcome.stream_done
+        and outcome.finish_reason == "stop"
+        and outcome.completion_tokens > 0
+        and outcome.reasoning_characters > 0
+        and outcome.content_characters == 0
+    ):
+        return outcome
+    retried = await request_attempt(client, target, body)
+    return replace(retried, previous_attempt=outcome)
+
+
 async def check_models(client: httpx.AsyncClient, targets: list[Target]) -> None:
     for target in targets:
         response = await client.get(target.base_url + "/models", headers={"Authorization": f"Bearer {target.token}"})
@@ -269,11 +290,15 @@ async def sustained_load(
 
 def stage_summary(outcomes: list[RequestOutcome], elapsed: float, replicas: int) -> StageSummary:
     passed = [outcome for outcome in outcomes if outcome.ok]
+    previous_attempts = [outcome.previous_attempt for outcome in outcomes if outcome.previous_attempt is not None]
     gpu_time = elapsed * replicas * pool.GPUS_PER_ENGINE
     return StageSummary(
         len(outcomes),
         len(passed),
         len(outcomes) - len(passed),
+        len(outcomes) + len(previous_attempts),
+        len(outcomes) - len(passed) + sum(not attempt.ok for attempt in previous_attempts),
+        len(previous_attempts),
         elapsed,
         len(passed) * 3600 / elapsed,
         sum(outcome.prompt_tokens for outcome in passed) / gpu_time,
