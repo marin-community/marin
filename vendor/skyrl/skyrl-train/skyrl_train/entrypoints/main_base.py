@@ -57,6 +57,7 @@ mp.set_start_method("spawn", force=True)
 
 config_dir = str(Path(__file__).parent.parent / "config")
 __all__ = ["BasePPOExp", "config_dir"]
+DEFAULT_RUNAI_STREAMER_MEMORY_LIMIT_BYTES = 8 * 1024**3
 
 
 def resolve_entrypoint_node_id(node_ip: str) -> str:
@@ -170,6 +171,10 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_init_kwargs["load_format"] = "runai_streamer"
         model_loader_extra_config = engine_init_kwargs.setdefault("model_loader_extra_config", {})
         model_loader_extra_config.setdefault("distributed", True)
+        # The limit applies to each inference worker; the Mochi recipe uses 8 GiB per worker.
+        model_loader_extra_config.setdefault("memory_limit", DEFAULT_RUNAI_STREAMER_MEMORY_LIMIT_BYTES)
+        if model_loader_extra_config["memory_limit"] == -1:
+            raise ValueError("Streamed policies require a finite model_loader_extra_config.memory_limit")
         engine_init_kwargs[MODEL_METADATA_PATH_KEY] = cfg.trainer.policy.model.path
     if speculative_decoding is not None:
         engine_init_kwargs["speculative_config"] = speculative_decoding.vllm_speculative_config()
