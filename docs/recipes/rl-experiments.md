@@ -337,7 +337,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ### Plan the nightly control refresh
 
-The workflow reads main's head at 04:43 UTC. A manual run accepts one gated preset name. Both
+The workflow is scheduled for 04:43 UTC and resolves main's head at checkout. A manual run accepts one gated preset name. Both
 entry points run on CPU and report which cohorts have a changed revision or, for a preset that
 takes a training set at launch, a changed training-set digest. The workflow serializes runs and
 checks the current head once per run. Each check uses the latest defaults on main when it starts.

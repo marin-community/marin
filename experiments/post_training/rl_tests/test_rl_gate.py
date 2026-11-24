@@ -980,6 +980,12 @@ def test_control_link_scores_shared_evaluation(
             )
             assert report.verdict == "invalid" and report.reason == expected_reason
 
+        with edit_receipt(fresh_roots[1]) as receipt:
+            receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates + 1
+        rejected_link("recorded control update budget differs from its preset revision")
+        with edit_receipt(fresh_roots[1]) as receipt:
+            receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates
+
         baseline = baseline_roots[1]
         with edit_receipt(baseline) as receipt:
             native = deepcopy(receipt["config"])

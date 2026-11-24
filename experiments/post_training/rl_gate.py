@@ -1035,7 +1035,7 @@ def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: 
     return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
 
 
-def _read_link_control(preset: presets.Preset, path: str) -> RunMeasurements:
+def _read_link_control(preset: presets.Preset, path: str, *, revision: str) -> RunMeasurements:
     receipt = read_stored_skyrl_attempt(path)
     if receipt is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
@@ -1043,10 +1043,13 @@ def _read_link_control(preset: presets.Preset, path: str) -> RunMeasurements:
     training = isinstance(preset.recipe.layout.workload, presets.Training)
     if launch.max_steps is None or bool(launch.train_data) != training:
         raise InvalidComparison("recorded control workload differs from the link preset")
+    if revision == preset.revision and launch.max_steps != (preset.updates or 1):
+        raise InvalidComparison("recorded control update budget differs from its preset revision")
     additional = {evaluation.name for evaluation in preset.evaluations[1:]}
     if set(launch.evaluation_data) != additional or bool(launch.validation_data) != bool(preset.evaluations):
         raise InvalidComparison(EVALUATION_PROTOCOL_DIFFERS)
-    return read_measurements(path, preset.with_updates(launch.max_steps), attempt=receipt)
+    effective = preset if revision == preset.revision else preset.with_updates(launch.max_steps)
+    return read_measurements(path, effective, attempt=receipt)
 
 
 def _cohort_held_out_tasks(runs: Sequence[RunMeasurements]) -> str | None:
@@ -1072,7 +1075,7 @@ def _write_control_link(
     invariants, comparisons = [], []
     verdict, effect, reason = Verdict.INVALID, None, None
     try:
-        runs = [_read_link_control(preset, path) for path in run_paths]
+        runs = [_read_link_control(preset, path, revision=current.revision) for path in run_paths]
         metadata = metadata.model_copy(
             update={
                 "attempt_ids": tuple(run.attempt_id for run in runs),
@@ -1081,7 +1084,7 @@ def _write_control_link(
         )
         for candidate in runs:
             _check_control(candidate, current)
-        controls = [_read_link_control(preset, path) for path in control_paths]
+        controls = [_read_link_control(preset, path, revision=previous.revision) for path in control_paths]
         for candidate in controls:
             _check_control(candidate, previous)
         _check_protocols(runs, controls)
