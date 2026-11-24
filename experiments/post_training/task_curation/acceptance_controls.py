@@ -35,7 +35,7 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.image import DockerfileSource
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ArtifactKind, TaskSpec, VerifierArtifact
 from taskcompendium.runtime.docker_build import materialize_docker_build
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
@@ -176,7 +176,27 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
                     )
                 )
                 postmortem = probe.stdout.decode(errors="replace")[-600:]
-                detail = f"{grade.error or grade.detail or ''} | machine: {postmortem}"
+                # Reproduce the grading machinery's own artifact download for the
+                # reward file: a working download with the right bytes means the
+                # loss happens in the submission staging/install, not here.
+                from taskcompendium.runtime.grading import (  # noqa: PLC0415
+                    _download_artifact,
+                )
+
+                local = workdir / "probe-reward.txt"
+                download_ok = await _download_artifact(
+                    task_machine,
+                    VerifierArtifact(
+                        source="/logs/verifier/reward.txt", target="/probe-reward.txt", kind=ArtifactKind.FILE
+                    ),
+                    local,
+                    120.0,
+                )
+                content = local.read_bytes()[:40] if download_ok and local.exists() else b"<not downloaded>"
+                detail = (
+                    f"{grade.error or grade.detail or ''} | machine: {postmortem} | "
+                    f"download_ok={download_ok} content={content!r}"
+                )
                 return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail[:300])
     return ControlOutcome(task.id, expected, grade.reward, "graded", "")
 
