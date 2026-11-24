@@ -163,12 +163,7 @@ def daytona_connection(api_key: str) -> DaytonaConnection:
 
 
 class LazyMachineFactories(Mapping[str, MachineFactory]):
-    """Backend factories built on first lookup.
-
-    The engine looks a factory up only for a task that runs in a machine, so a run whose tasks are all
-    graded in process never constructs one. The local backend needs Linux bubblewrap, which the
-    default verifier machine would otherwise demand even for chat and judge evaluations.
-    """
+    """Build each backend factory on first lookup."""
 
     def __init__(self, builders: Mapping[str, Callable[[], MachineFactory]]):
         self._builders = dict(builders)
@@ -200,7 +195,6 @@ def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | 
             case Backend.DAYTONA:
                 if daytona is None:
                     raise ValueError("Daytona machines require an explicit Daytona connection")
-                # Validate the account now; only the factory waits for a task that uses it.
                 builders[backend] = functools.partial(daytona_machine_factory, config, daytona.client_factory())
             case _:
                 raise ValueError(f"Evaluation workers have no factory for {backend!r}")
