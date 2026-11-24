@@ -79,7 +79,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import (
-    OFFLOAD_CARRY_REMAT_MODE,
+    OFFLOAD_CARRY_REMAT_MODES,
     GrugModelConfig,
     RematMode,
     Transformer,
@@ -271,7 +271,7 @@ def _apply_hero_ep_runtime_defaults(
     processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
-    offload_carry = remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    offload_carry = remat_mode in OFFLOAD_CARRY_REMAT_MODES
     if offload_carry:
         env_defaults["XLA_PYTHON_CLIENT_MEM_FRACTION"] = OFFLOAD_CARRY_MEM_FRACTION
     if processes_per_task > 1:
@@ -286,7 +286,7 @@ def _apply_hero_ep_runtime_defaults(
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
     # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
-    latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    latency_hiding = not ragged or offload_carry
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",

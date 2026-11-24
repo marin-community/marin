@@ -118,8 +118,10 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
+RematMode = Literal["recompute_all", "save_moe", "offload_carry", "offload_carry_recompute_moe"]
 OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
+OFFLOAD_CARRY_RECOMPUTE_MOE_REMAT_MODE: RematMode = "offload_carry_recompute_moe"
+OFFLOAD_CARRY_REMAT_MODES = (OFFLOAD_CARRY_REMAT_MODE, OFFLOAD_CARRY_RECOMPUTE_MOE_REMAT_MODE)
 
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
@@ -365,7 +367,8 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives; "offload_carry"
     recomputes everything but stages the layer-input residual on pinned host, which
-    releases its HBM between forward and backward."""
+    releases its HBM between forward and backward, and saves the routed MoE output.
+    "offload_carry_recompute_moe" also recomputes that output instead of keeping it in HBM."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
     ce_grad_in_forward_token_block_size: int | None = None
@@ -1426,12 +1429,12 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        elif cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+        elif cfg.remat_mode in OFFLOAD_CARRY_REMAT_MODES:
             # XLA stacks each offloaded name's scan residuals into one pinned allocation.
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[MOE_OUTPUT_REMAT_NAME],
+                names_which_can_be_saved=([MOE_OUTPUT_REMAT_NAME] if cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE else []),
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",

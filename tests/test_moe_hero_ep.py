@@ -695,12 +695,13 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
         np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
 
 
-def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+@pytest.mark.parametrize("remat_mode", model.OFFLOAD_CARRY_REMAT_MODES)
+def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch, remat_mode):
     inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
     monkeypatch.setenv("XLA_FLAGS", inherited)
     config = _runtime_env_config(
         moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
-        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+        remat_mode=remat_mode,
     )
 
     with patch.object(train, "dispatch_grug_training_run"):

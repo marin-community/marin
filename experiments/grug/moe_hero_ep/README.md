@@ -58,6 +58,12 @@ to its own artifact output and prints compiled memory analysis before executing 
 Set runtime allocator/NCCL variables on the coordinator; the standard Grug dispatcher forwards
 them to the GPU gang. A successful restore alone does not qualify a memory configuration.
 
+`model.remat_mode: offload_carry_recompute_moe` retains the layer-input host offload but
+recomputes the routed MoE output during backward instead of saving it on device. At the
+262K/CP4 hero shape the saved output spans 18 GiB per GPU across 48 layers; the compiled
+peak reduction can differ because other buffers can overlap it. The default remains
+`offload_carry`. Both modes require the same forced collective-overlap limit of one.
+
 ## Inference export
 
 Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes
