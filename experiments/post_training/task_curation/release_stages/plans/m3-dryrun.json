@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v15",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v16",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
@@ -430,7 +430,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r39-admissions-20261123-v2",
-  "source_revision": "0853be004bfaae75f1c562c190e353f0baa0bbeb",
+  "source_revision": "2e4e9a8044f25eb75a97bd402732f5ee1a17890c",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
