@@ -587,7 +587,7 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
             shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
             # Isolated Python reads paths from its venv rather than the shell environment.
             builder = venv.EnvBuilder(symlinks=True)
-            environment = builder.ensure_directories(path / ".venv")
+            environment = builder.ensure_directories(str(path / ".venv"))
             builder.create_configuration(environment)
             builder.setup_python(environment)
             sources = [path, *sorted(path.glob("lib/*/src")), *site.getsitepackages([sys.prefix, sys.exec_prefix])]
