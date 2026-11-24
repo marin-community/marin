@@ -15,6 +15,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -392,12 +393,16 @@ def main() -> None:
         build_gate_image(pins)
 
     judge_environment = None
+    judge_key = ""
     if arguments.judge_credential:
-        judge = resolve_secret_spec((arguments.judge_credential,))
+        judge_key = resolve_secret_spec((arguments.judge_credential,)).value
+    else:
+        judge_key = os.environ.get("JUDGE_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    if judge_key:
         judge_environment = {
-            "JUDGE_BASE_URL": "https://api.together.ai/v1",
-            "JUDGE_API_KEY": judge.value,
-            "OPENAI_API_KEY": judge.value,
+            "JUDGE_BASE_URL": os.environ.get("JUDGE_BASE_URL", "https://api.together.ai/v1"),
+            "JUDGE_API_KEY": judge_key,
+            "OPENAI_API_KEY": judge_key,
         }
 
     source_rows: dict[tuple[str, int], dict] = {}
