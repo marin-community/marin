@@ -31,7 +31,6 @@ class TableStorageStats:
 
 
 def segment_backlog_alert_rows(cluster: str, tables: Sequence[TableStorageStats]) -> list[dict[str, object]]:
-    """Return one explicit alert value per table."""
     rows: list[dict[str, object]] = []
     for table in sorted(tables, key=lambda table: table.namespace):
         backlogged = table.segment_count >= SEGMENT_BACKLOG_THRESHOLD
