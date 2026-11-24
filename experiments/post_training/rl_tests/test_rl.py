@@ -1330,9 +1330,8 @@ def test_plan_reports_missing_control_pin(selection):
     args = ["--preset", "learning-medium", "--version", "dev", "--plan"]
     result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
     assert result.exit_code == 0, (result.output, result.exception)
-    snapshot = printed_status(result.stdout)
-    assert snapshot["runs"]
-    assert "no control pin for learning-medium" in snapshot["control_pin_error"]
+    assert "\nruns:" in result.stdout
+    assert "\ncontrol_pin_error: no control pin for learning-medium" in result.stdout
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
