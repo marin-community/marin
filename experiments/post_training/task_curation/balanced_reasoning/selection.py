@@ -26,7 +26,6 @@ from experiments.post_training.task_curation.balanced_reasoning.bands import (
 )
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     TaskDifficulty,
-    url_parent,
     url_protocol,
 )
 
@@ -182,7 +181,8 @@ def write_selection(path: str, selected: Iterable[SelectedTask], census: Mapping
         "tasks": [_entry_document(entry) for entry in entries],
     }
     filesystem = fsspec.filesystem(url_protocol(path))
-    filesystem.makedirs(url_parent(path), exist_ok=True)
+    # Split on "/" rather than PurePosixPath: the URL's scheme prefix is not a path segment.
+    filesystem.makedirs(path.rsplit("/", 1)[0], exist_ok=True)
     with filesystem.open(path, "wt") as sink:
         json.dump(document, sink, indent=2, sort_keys=True)
     logger.info("Wrote selection %s with %d tasks (digest %s)", path, len(entries), document["digest"])

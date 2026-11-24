@@ -14,7 +14,6 @@ import json
 import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 import fsspec
 from rigging.filesystem.storage_path import prefix_join
@@ -36,11 +35,6 @@ SOLVER_ALL = "all"
 def url_protocol(url: str) -> str:
     """The fsspec protocol of a storage URL; local paths are ``file``."""
     return url.split("://", 1)[0] if "://" in url else "file"
-
-
-def url_parent(url: str) -> str:
-    """The parent directory of a storage URL."""
-    return str(PurePosixPath(url).parent)
 
 
 @dataclass(frozen=True, slots=True)
