@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from verifyit.spec import Mode
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import SCHEMA_VERSION, SUBSET_LABEL, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import SourceRecipe
 
 NORMALIZATION_STAGE_REVISION = "12"
@@ -88,7 +88,7 @@ def recipe_code_identity(recipe: SourceRecipe) -> dict[str, str]:
 
 def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     """Hash public task semantics, optionally including its private reference."""
-    content = task.model_dump(mode="json", exclude={"id", "source"})
+    content = task.model_dump(mode="json", exclude={"id": True, "source": True, "labels": {SUBSET_LABEL}})
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []
     grader = task.grader

@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from itertools import repeat
 from typing import Protocol
 
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
@@ -25,7 +26,7 @@ from skyrl_train.group_admission import (
     GroupAdmissionStalledError,
     TrainingGroupInvariantError,
 )
-from skyrl_train.grader_reporting import EnvironmentSummary, GraderStats
+from skyrl_train.grader_reporting import GraderStats, GraderSummary
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -290,8 +291,7 @@ class RolloutContentPolicy:
         if self.report_graders:
             metadata = group.prompt["input"].metadata
             grader_stats = GraderStats()
-            key = (metadata.metric_class, metadata.data_source)
-            grader_stats.add(batch, [key] * len(batch["rewards"]))
+            grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
             return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
         facts = RowFacts.from_batch(batch)
@@ -730,7 +730,7 @@ class RolloutBuffer:
             self._changed.notify_all()
             return admission
 
-    def grader_summary(self) -> list[EnvironmentSummary]:
+    def grader_summary(self) -> GraderSummary:
         """Report all completed groups, including groups rejected for training."""
         return self._grader_stats.summary()
 
