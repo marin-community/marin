@@ -304,13 +304,6 @@ ENV PATH="/root/.cargo/bin:$PATH"
 # in the persistent uv cache, speeding up repeated imports across pods.
 ARG PYTHONDONTWRITEBYTECODE=1
 
-ARG IRIS_GIT_HASH=unknown
-ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
-ARG IRIS_PROVENANCE={}
-ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
-ARG IRIS_REVISION_DATE=
-ENV IRIS_REVISION_DATE=${IRIS_REVISION_DATE}
-
 # Nsight Systems CLI, extracted from NVIDIA's deb (the target binary is
 # self-contained; apt-installing it pulls the whole Qt/GUI chain). Arch-aware:
 # `sbsa` on Grace/aarch64, `x86_64` elsewhere. Kept in sync with the version the
@@ -330,5 +323,12 @@ RUN set -eux; \
     rm -f /tmp/nsys.deb; \
     ln -s "$(ls /opt/nsight/opt/nvidia/nsight-systems/${NSYS_VERSION}/target-linux-*/nsys | head -1)" /usr/local/bin/nsys; \
     nsys --version
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
+ARG IRIS_REVISION_DATE=
+ENV IRIS_REVISION_DATE=${IRIS_REVISION_DATE}
 
 WORKDIR /app
