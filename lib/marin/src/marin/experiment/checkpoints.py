@@ -19,7 +19,9 @@ model vocab. Two inputs are resolved here rather than left implicit:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
+from typing import Any
 
 import draccus
 from fray.types import ResourceConfig
@@ -28,6 +30,7 @@ from levanter.main.export_hf_to_lm import ImportHfConfig
 from levanter.main.export_hf_to_lm import main as import_hf_to_levanter
 from levanter.models.lm_model import LmConfig
 
+from marin.execution.fingerprint import default_fields_omitted_from_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
@@ -122,6 +125,29 @@ class HfToLevanterCheckpoint:
     model: LmConfig
 
 
+def _omit_encoded_defaults(config: object, encoded: Any) -> Any:
+    if isinstance(encoded, list) and isinstance(config, list | tuple):
+        return [_omit_encoded_defaults(item, value) for item, value in zip(config, encoded, strict=True)]
+    if not isinstance(encoded, dict):
+        return encoded
+
+    omitted: set[str] = set()
+    values: Mapping[Any, object]
+    if is_dataclass(config) and not isinstance(config, type):
+        omitted = default_fields_omitted_from_fingerprint(config)
+        values = {item.name: getattr(config, item.name) for item in fields(config)}
+    elif isinstance(config, Mapping):
+        values = config
+    else:
+        return encoded
+
+    return {
+        key: _omit_encoded_defaults(values[key], value) if key in values else value
+        for key, value in encoded.items()
+        if key not in omitted
+    }
+
+
 def hf_to_levanter(
     hf_id: str,
     *,
@@ -142,7 +168,7 @@ def hf_to_levanter(
     tokenizer = tokenizer or hf_id
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
-    model_config_json = draccus.encode(model_config)
+    model_config_json = _omit_encoded_defaults(model_config, draccus.encode(model_config))
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:

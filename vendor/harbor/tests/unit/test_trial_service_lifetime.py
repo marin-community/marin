@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 import httpx
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 
 from harbor.agents.base import BaseAgent
 from harbor.agents.factory import AgentFactory
@@ -328,7 +329,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
 
     assert result.verifier_result is None
     assert (
-        error_category(result.exception_info.exception_type)
+        error_category(result.exception_info.exception_type, categories=ERROR_CATEGORIES)
         is ErrorCategory.INFRASTRUCTURE
     )
     assert Job._is_resume_retryable_result(result)
@@ -337,7 +338,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
     native = TrialResult.model_validate_json(victim.paths.result_path.read_text())
     assert native.verifier_result is None
     assert (
-        error_category(native.exception_info.exception_type)
+        error_category(native.exception_info.exception_type, categories=ERROR_CATEGORIES)
         is ErrorCategory.INFRASTRUCTURE
     )
     assert Job._is_resume_retryable_result(native)
@@ -419,7 +420,7 @@ async def test_runtime_failure_and_unconfirmed_teardown_remain_unscored(tmp_path
         assert result.completion is None and stored.completion is None
     else:
         assert result.verifier_result is None and stored.verifier_result is None
-        assert error_category(result.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+        assert error_category(result.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
         assert (
             "TimeoutError" if failure == "collection_deadline" else "RuntimeError"
         ) in result.exception_info.exception_traceback
