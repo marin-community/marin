@@ -26,6 +26,14 @@ Before step 1, ``/tests``, which can hold a reference proof the reply must not s
 the machine's world-writable directories are closed to the candidate's uid. The sandbox itself stops every
 process and frees the disk when the grade ends.
 
+A sandbox that does not run the grader as root, such as Shellbox's local backend, cannot switch uids. There the
+candidate's steps run as the grader's own user, and the grader keeps the same guarantees another way: everything
+in ``/tests`` but ``config.json`` and ``grade.py`` is removed first; every process the candidate starts, and every
+thread of it, is stopped before verification; the reference's object file is kept in memory and written again, with
+the verifier's logs, into directories made after the candidate is gone; and no file outside the scratch directories
+may have changed, by inode, size, mode and change time, which the candidate cannot reset. The loader, the libraries,
+the toolchain and Mathlib all fall under that last check. The details say which isolation the grade used.
+
 The reward on stdout is 0 for anything the proof causes: a failed or crashed compile or export, running
 out of time or space, missing proof data, or a rejection by ``lean-verify``. Any other failure (a broken
 reference or tool, ``lean-verify`` failing or timing out, a malformed verdict, the overall deadline) exits
@@ -34,11 +42,13 @@ can reach one only with proof data that ``lean-verify`` cannot finish checking. 
 JSON.
 """
 
+import ctypes
 import json
 import os
 import re
 import resource
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -71,6 +81,13 @@ on the host, so a fixed uid would let one grade starve another. Two grades on on
 probability 1 in 40,000, which neither can see."""
 SHARED_DIRECTORIES = ("/tmp", "/var/tmp", "/run/lock", "/dev/shm")
 """The machine's world-writable directories, closed to the candidate's uid before any step runs."""
+TESTS_KEPT = frozenset({"config.json", "grade.py"})
+"""What stays in ``/tests`` when the candidate runs as the grader's own user, who can read all of it: the contract,
+already read, and this script. Everything else, such as the source evidence, is removed first."""
+PR_SET_CHILD_SUBREAPER = 36
+SCRATCH = frozenset({"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", str(TESTS), "/app"})
+"""What the filesystem check skips: kernel views, scratch space and the task's own files. The trusted steps read
+nothing there but the directories the grader makes after the candidate is gone."""
 ALLOWED_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 TARGET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_'.!?]*")
 """A target name that is safe to write into the reference check as a Lean string."""
@@ -140,6 +157,15 @@ class Stop(StrEnum):
 
 class GraderFailure(Exception):
     """The grader, not the proof, failed: reported as an infrastructure error."""
+
+
+class Isolation(StrEnum):
+    """What separates the candidate's steps from verification."""
+
+    UID = "uid"
+    """The grader runs as root and the candidate as a random unprivileged uid."""
+    SAME_USER = "same_user"
+    """The grader cannot switch uids, so the candidate runs as the grader's user (see the module docstring)."""
 
 
 @dataclass(frozen=True)
@@ -239,12 +265,108 @@ def candidate_source(contract: Contract, block: str) -> str:
 
 
 def make_step_dir(name: str, uid: int = 0) -> Path:
-    """A fresh directory that only ``uid`` can write."""
+    """A fresh directory that only ``uid`` can write; the grader's own user's when it is not root."""
     path = WORK / name
     path.mkdir(mode=0o700)
-    os.chown(path, uid, uid)
+    if os.geteuid() == 0:
+        os.chown(path, uid, uid)
     path.chmod(0o700)
     return path
+
+
+def clear_tests() -> None:
+    """Remove everything in ``/tests`` but the contract and this script, which a candidate running as the grader's
+    user could otherwise read; fail as the grader if any of it stays."""
+    for entry in TESTS.iterdir():
+        if entry.name in TESTS_KEPT:
+            continue
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        except OSError as error:
+            raise GraderFailure(
+                f"cannot remove {entry} before the candidate runs as the grader's user: {error}"
+            ) from error
+    left = sorted(entry.name for entry in TESTS.iterdir() if entry.name not in TESTS_KEPT)
+    if left:
+        raise GraderFailure(f"{TESTS} still holds {left}")
+
+
+def become_subreaper() -> None:
+    """Adopt every orphaned descendant, so a process the candidate leaves behind stays visible to the grader."""
+    if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise GraderFailure(f"cannot become a child subreaper: errno {ctypes.get_errno()}")
+
+
+def has_live_thread(pid: int) -> bool:
+    """Whether any thread of ``pid`` still runs: a leader that exited shows as a zombie while its other threads go on."""
+    try:
+        tasks = list(Path(f"/proc/{pid}/task").iterdir())
+    except OSError:
+        return False
+    for task in tasks:
+        try:
+            if (task / "stat").read_text().rsplit(")", 1)[1].split()[0] not in ("Z", "X"):
+                return True
+        except (OSError, IndexError):
+            continue
+    return False
+
+
+def descendants() -> list[int]:
+    """The pids of every descendant of this process that still has a live thread, read from ``/proc``."""
+    parents: dict[int, int] = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                parents[int(entry.name)] = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, IndexError, ValueError):
+                continue
+    found, frontier = [], [os.getpid()]
+    while frontier:
+        children = [pid for pid, parent in parents.items() if parent in frontier]
+        found.extend(children)
+        frontier = children
+    return [pid for pid in found if has_live_thread(pid)]
+
+
+def stop_descendants() -> None:
+    """Kill every process the candidate's steps left behind, and fail as the grader if any survives."""
+    for _ in range(50):
+        alive = descendants()
+        if not alive:
+            break
+        for pid in alive:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.05)
+        while True:
+            try:
+                if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                    break
+            except ChildProcessError:
+                break
+    else:
+        raise GraderFailure(f"processes the candidate started keep running: {descendants()[:10]}")
+
+
+def filesystem_state() -> dict[str, tuple[int, int, int, int]]:
+    """Each file and directory outside ``SCRATCH`` with its inode, size, mode and change time; only root can set the
+    change time."""
+    state = {}
+    for directory, names, files in os.walk("/", followlinks=False):
+        names[:] = [name for name in names if os.path.join(directory, name) not in SCRATCH]
+        for name in (directory, *(os.path.join(directory, entry) for entry in (*names, *files))):
+            try:
+                info = os.lstat(name)
+            except OSError:
+                continue
+            state[name] = (info.st_ino, info.st_size, info.st_mode, info.st_ctime_ns)
+    return state
 
 
 def close_grader_files() -> None:
@@ -266,13 +388,17 @@ def close_shared_directories() -> None:
             raise GraderFailure(f"{directory} is still world-writable")
 
 
-# TODO: the candidate's own uid is what separates its compile and export from verification inside one
-# sandbox. Running those steps in their own environment, once task curation can run a post-response step
-# there, would isolate the two halves of grading properly and replace the uid switch.
-def apply_candidate_limits() -> None:
-    """In each of the candidate's steps, still as root: cap files and processes; die first on OOM."""
+# TODO: the candidate's own uid, or the same-user checks where the grader is not root, is what separates its
+# compile and export from verification inside one sandbox. Running those steps in their own environment, once
+# task curation can run a post-response step there, would isolate the two halves of grading properly and
+# replace both.
+def apply_candidate_limits(processes: bool = True) -> None:
+    """In each of the candidate's steps, before it starts: cap files and processes; die first on OOM. The process
+    cap counts every process of the uid on the host, so it applies only to the candidate's own uid; a sandbox that
+    runs the candidate as the grader's user bounds processes itself."""
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE, MAX_FILE))
-    resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
+    if processes:
+        resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     Path("/proc/self/oom_score_adj").write_text("1000")
 
@@ -296,11 +422,12 @@ def has_lean_error(log: Path) -> bool:
 class GraderSteps:
     """Runs the grader's steps against one overall deadline."""
 
-    def __init__(self, start: float, lean: str, lean_path: str, uid: int) -> None:
+    def __init__(self, start: float, lean: str, lean_path: str, uid: int, isolation: Isolation = Isolation.UID) -> None:
         self.start = start
         self.lean = lean
         self.uid = uid
         """The candidate's uid."""
+        self.isolation = isolation
         self.environment = {"PATH": f"{Path(lean).parent}:/usr/bin:/bin", "LEAN_PATH": lean_path}
         """``lean-verify`` runs ``lean`` itself, to find the toolchain's library, so the toolchain is on ``PATH``."""
         self.logs = WORK / "logs"
@@ -332,15 +459,20 @@ class GraderSteps:
         stopped: Stop | None = None
         with log.open("wb") as err, stdout.open("wb") if stdout else err as out:
             try:
+                switch = candidate and self.isolation is Isolation.UID
                 process = subprocess.Popen(
-                    [*as_user(self.uid), *argv] if candidate else argv,
+                    [*as_user(self.uid), *argv] if switch else argv,
                     cwd=cwd,
                     env={**self.environment, "HOME": str(cwd)},
                     stdin=subprocess.DEVNULL,
                     stdout=out,
                     stderr=err,
                     start_new_session=True,
-                    preexec_fn=apply_candidate_limits if candidate else None,
+                    preexec_fn=(
+                        (apply_candidate_limits if switch else lambda: apply_candidate_limits(processes=False))
+                        if candidate
+                        else None
+                    ),
                 )
             except OSError as error:
                 raise GraderFailure(f"cannot start the {step} step: {error}") from error
@@ -351,6 +483,8 @@ class GraderSteps:
                     process.wait()
                     break
                 time.sleep(0.2)
+        if candidate and self.isolation is Isolation.SAME_USER:
+            stop_descendants()
         self.timings[step] = round(time.monotonic() - started, 2)
         return StepResult(None if stopped else process.returncode, stopped, log, stdout)
 
@@ -501,12 +635,27 @@ def verify_candidate(contract: Contract, reference: Path, proof_data: Path, step
 
 
 def grade(contract: Contract, reply: bytes, steps: GraderSteps) -> tuple[float, dict]:
-    """The reward and its details: the reference is checked first, so a broken one never yields a score."""
+    """The reward and its details: the reference is checked first, so a broken one never yields a score.
+
+    When the candidate runs as the grader's own user, it could rewrite any file the grader can, so the filesystem
+    outside ``SCRATCH`` must survive its steps unchanged, and the reference and the verifier's logs go into
+    directories made after it is gone."""
     reference = compile_reference(contract, steps)
+    if steps.isolation is Isolation.SAME_USER:
+        reference_object = reference.read_bytes()
+        before = filesystem_state()
     try:
         proof_data = build_candidate(contract, graded_block(reply), steps)
     except Rejected as rejection:
         return 0.0, rejection.details
+    if steps.isolation is Isolation.SAME_USER:
+        after = filesystem_state()
+        changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+        if changed:
+            raise GraderFailure(f"files changed while the candidate's steps ran: {changed[:5]}")
+        reference = make_step_dir("reference-copy") / OBJECT_FILE
+        reference.write_bytes(reference_object)
+        steps.logs = make_step_dir("logs-trusted")
     return verify_candidate(contract, reference, proof_data, steps)
 
 
@@ -520,18 +669,26 @@ def main() -> None:
         lean_path = (LEAN_ROOT / "lean-path").read_text().strip()
     except OSError as error:
         raise GraderFailure(f"the Lean toolchain is not installed: {error}") from error
-    for tool in (Path(lean), VERIFY_BIN, EXPORT_BIN, SETPRIV):
+    isolation = Isolation.UID if os.geteuid() == 0 else Isolation.SAME_USER
+    tools = (Path(lean), VERIFY_BIN, EXPORT_BIN, *((SETPRIV,) if isolation is Isolation.UID else ()))
+    for tool in tools:
         if not os.access(tool, os.X_OK):
             raise GraderFailure(f"missing grader tool {tool}")
     WORK.mkdir(mode=0o755)
-    close_grader_files()
-    close_shared_directories()
-    steps = GraderSteps(start, lean, lean_path, CANDIDATE_UIDS[secrets.randbelow(len(CANDIDATE_UIDS))])
-    check_candidate_uid(steps)
+    if isolation is Isolation.UID:
+        close_grader_files()
+        close_shared_directories()
+        steps = GraderSteps(start, lean, lean_path, CANDIDATE_UIDS[secrets.randbelow(len(CANDIDATE_UIDS))])
+        check_candidate_uid(steps)
+    else:
+        clear_tests()
+        become_subreaper()
+        steps = GraderSteps(start, lean, lean_path, os.geteuid(), Isolation.SAME_USER)
     reward, details = grade(contract, reply, steps)
     if steps.remaining() <= 0:
         raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline passed before the verdict")
-    print(json.dumps({**details, "seconds": steps.timings}, ensure_ascii=False, default=str), file=sys.stderr)
+    details = {**details, "isolation": str(isolation), "seconds": steps.timings}
+    print(json.dumps(details, ensure_ascii=False, default=str), file=sys.stderr)
     print(reward)
 
 

@@ -47,6 +47,10 @@ LOCAL_GRADER_IMAGE = "local/task-curation-grader:test"
 LEAN_KERNEL_GRADER_IMAGE = "local/task-curation-lean-kernel:test"
 """The Lean grader image for ``LEAN_KERNEL_GRADER_PACKAGES``: build it as above with that environment and this tag.
 Its tests run in this image, since the shared local image lacks its toolchain."""
+LEAN_KERNEL_SAME_USER_IMAGE = "local/task-curation-lean-kernel:test-same-user"
+"""``LEAN_KERNEL_GRADER_IMAGE`` with ``/opt/lean`` and ``/etc`` owned by an unprivileged user, as Shellbox's local
+backend unpacks an image the grader's user owns. Build it from that image with
+``RUN chown -R 65534:65534 /opt/lean /etc``."""
 
 
 @dataclass(frozen=True)
