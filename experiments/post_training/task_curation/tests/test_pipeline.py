@@ -520,7 +520,7 @@ def test_url_download_times_out_when_the_response_body_stalls(tmp_path, monkeypa
     (tmp_path / "rows.jsonl").write_bytes(b"data")
 
     class StalledBody(SimpleHTTPRequestHandler):
-        def copyfile(self, source, outputfile):
+        def copyfile(self, _source, _outputfile):
             release.wait()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(StalledBody, directory=str(tmp_path)))
