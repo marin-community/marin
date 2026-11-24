@@ -440,10 +440,14 @@ def _base_preset_revision(module: str, model: str, preset: str, source_revision:
     program = """
 import sys
 from importlib import import_module
+from pathlib import Path
 from experiments.post_training.rl_presets import ModelPresets
 
 module, model, preset = sys.argv[1:]
-revisions = {value.by_name[preset].revision for value in vars(import_module(module)).values()
+entry = import_module(module)
+if not Path(entry.__file__).resolve().is_relative_to(Path.cwd()):
+    raise ImportError(f"{module} did not load from the main snapshot")
+revisions = {value.by_name[preset].revision for value in vars(entry).values()
              if isinstance(value, ModelPresets) and value.model == model and preset in value.by_name}
 if len(revisions) == 1:
     print(revisions.pop())
@@ -459,6 +463,7 @@ if len(revisions) == 1:
                 "git",
                 "archive",
                 base,
+                "experiments/__init__.py",
                 "experiments/post_training",
                 "experiments/evaluation",
                 "pyproject.toml",
