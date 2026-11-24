@@ -19,6 +19,7 @@ from pathlib import Path
 
 import fsspec
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
 from taskcompendium.models import TaskSpec
 
@@ -259,6 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    # A no-op inside CoreWeave pods (runtime config wins); configures fsspec on a dev box.
+    configure_coreweave_s3()
     args = build_parser().parse_args()
     return args.handler(args)
 
