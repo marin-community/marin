@@ -98,7 +98,7 @@ vllm = [
     "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
     "torchvision==0.29.1 ; sys_platform == 'linux'",
-    "vllm==0.0.0.dev20261118+marin.47a8e415bff1.cu132 ; sys_platform == 'linux'",
+    "vllm==0.0.0.dev20261124+marin.36cef9c0caf3.cu132 ; sys_platform == 'linux'",
 ]
 megatron = [
     "harbor ; sys_platform == 'linux'",
@@ -257,10 +257,10 @@ torchvision = [
     { index = "pytorch-cu132", extra = "vllm" },
 ]
 flashinfer-cubin = { index = "flashinfer", marker = "sys_platform == 'linux'" }
-# The standalone SkyRL lock pins the wheel release from config/external/vllm/gpu.toml.
+# The standalone SkyRL rollout runtime pins the qualified verifier wheel.
 vllm = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261118-47a8e415bff1/vllm-0.0.0.dev20261118%2Bmarin.47a8e415bff1.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261118-47a8e415bff1/vllm-0.0.0.dev20261118%2Bmarin.47a8e415bff1.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-36cef9c0caf3/vllm-0.0.0.dev20261124+marin.36cef9c0caf3.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-36cef9c0caf3/vllm-0.0.0.dev20261124+marin.36cef9c0caf3.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 transformer-engine-torch = [
     { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
