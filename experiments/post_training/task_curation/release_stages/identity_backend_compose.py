@@ -146,7 +146,13 @@ def compose_backend_survey(
 def fetch_target_fingerprints(
     index: dict[str, Any], targets: tuple[str, ...], reader: RegistryReader
 ) -> dict[str, SourceFingerprint]:
-    """Fetch each target's registry identity document and validate its fingerprint."""
+    """Fetch each target's registry identity document and validate its fingerprint.
+
+    Two registry-entry generations exist: the pinned Hugging Face reference
+    (``{repo, revision, path, sha256}``) and the digest-bound storage reference
+    (``{uri, sha256}``) the current registry shards stage. Both are accepted —
+    each pins the identity document's bytes against the entry's digest.
+    """
     sources = index.get("sources")
     if not isinstance(sources, dict):
         raise ValueError("registry index carries no sources mapping")
@@ -155,11 +161,7 @@ def fetch_target_fingerprints(
         entry = sources.get(target)
         if not isinstance(entry, dict):
             raise ValueError(f"registry index holds no entry for target {target!r}")
-        try:
-            reference = RegistryReference.model_validate(entry)
-        except ValidationError as error:
-            raise ValueError(f"registry entry for {target!r} is not a pinned reference: {error}") from error
-        document = reader(reference)
+        document = _registry_document(entry, reader)
         # Registry entries point at full identity surveys; a bare fingerprint map is also accepted.
         rows = document["fingerprints"] if "fingerprints" in document else document
         if not isinstance(rows, dict) or rows.get(target) is None:
@@ -172,6 +174,24 @@ def fetch_target_fingerprints(
             )
         fingerprints[target] = fingerprint
     return fingerprints
+
+
+def _registry_document(entry: dict[str, Any], reader: RegistryReader) -> dict[str, Any]:
+    """Read one registry entry's identity document, digest-verified against the entry."""
+    try:
+        return reader(RegistryReference.model_validate(entry))
+    except ValidationError:
+        pass
+    uri = entry.get("uri")
+    sha256 = entry.get("sha256")
+    if not isinstance(uri, str) or not isinstance(sha256, str) or not uri or not sha256:
+        raise ValueError(
+            f"registry entry is neither a pinned reference nor a digest-bound storage reference: {sorted(entry)}"
+        )
+    payload = StoragePath(uri).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != sha256:
+        raise ValueError(f"registry identity document digest mismatch: {uri}")
+    return json.loads(payload)
 
 
 def compose_identity_survey(
