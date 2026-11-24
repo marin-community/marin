@@ -1086,6 +1086,7 @@ def _start_brokered_inference(
             resources=broker.broker_resources,
             actor_config=ActorConfig(
                 max_concurrency=_BROKER_ACTOR_MAX_CONCURRENCY,
+                max_restarts=0,
                 max_task_retries=0,
                 priority=iris.priority,
             ),

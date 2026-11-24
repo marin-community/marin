@@ -819,6 +819,8 @@ def test_broker_readiness_expires_without_evaluator_iris_polling() -> None:
 @pytest.mark.asyncio
 async def test_proxy_distinguishes_liveness_from_worker_readiness() -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=10)
+    # Existing workers can heartbeat a restarted broker before registering their metadata.
+    broker.heartbeat("worker")
     with InferenceProxy(
         broker=broker,
         model="test",
@@ -1088,8 +1090,10 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp
     class _FakeClient:
         def __init__(self) -> None:
             self.submissions = []
+            self.actor_configs = []
 
         def create_actor_group(self, *args, **kwargs):
+            self.actor_configs.append(kwargs["actor_config"])
             return _FakeActorGroup()
 
         def submit(self, job_request):
@@ -1160,6 +1164,7 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp
     assert metadata["task_count"] == str(instances)
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
+    assert [config.max_restarts for config in client.actor_configs] == [0]
     assert len(client.submissions) == instances
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu"]

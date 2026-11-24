@@ -2905,6 +2905,11 @@ warm-up, retaining both the previous and new receipts under
 `history/<solver>/<sha256>.json`. A replacement must preserve the model and
 revision. GPU workers allow three failure retries and ten preemption
 retries; submit the CPU owner with a positive failure retry budget too.
+The broker keeps its request queue and worker registrations in memory, so its
+actor must not restart independently after preemption. A broker interruption
+instead fails the owner, whose retry rebuilds the pool and publishes a new
+receipt. A heartbeat without a worker registration does not establish readiness.
+Check the models endpoint as well as the Iris job state when diagnosing a pool.
 
 Choose one fresh registry URI for a generation. Launch each self-hosted solver
 root against that same URI, with a unique job name:

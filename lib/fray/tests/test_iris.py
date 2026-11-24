@@ -27,6 +27,7 @@ from fray.iris_backend import (
 )
 from fray.types import (
     ANY_REGION,
+    ActorConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -274,6 +275,16 @@ class TestResourceConfigScale:
     def test_scale_with_mixed_factor_and_kwargs_raises_value_error(self):
         with pytest.raises(ValueError, match="either a single factor"):
             ResourceConfig(cpu=1, ram="4g").scale(2, cpu=3)
+
+
+def test_stateful_actor_can_disable_iris_preemption_restarts():
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="/tester/stateful")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+
+    client.create_actor_group(object, name="stateful", count=1, actor_config=ActorConfig(max_restarts=0))
+
+    assert fake_iris.submit.call_args.kwargs["max_retries_preemption"] == 0
 
 
 class TestImagePlumbing:

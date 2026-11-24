@@ -158,7 +158,10 @@ class InferenceBroker:
             self._request_leases.clear()
 
     def _update_readiness(self) -> InferenceBackendState:
-        ready = any(self._clock() - timestamp < WORKER_LEASE_SECONDS for timestamp in self._worker_heartbeats.values())
+        ready = any(
+            worker_id in self._worker_metadata and self._clock() - timestamp < WORKER_LEASE_SECONDS
+            for worker_id, timestamp in self._worker_heartbeats.items()
+        )
         state = (
             InferenceBackendState.FINISHED
             if self._finished

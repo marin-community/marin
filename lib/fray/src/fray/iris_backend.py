@@ -814,6 +814,8 @@ class FrayIrisClient:
         )
 
         retry_kwargs: dict[str, Any] = {}
+        if actor_config.max_restarts is not None:
+            retry_kwargs["max_retries_preemption"] = actor_config.max_restarts
         if actor_config.max_task_retries is not None:
             retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
             # max_task_failures is a cumulative job-level budget: a job fails once the
