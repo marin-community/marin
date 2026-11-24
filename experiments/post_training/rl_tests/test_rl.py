@@ -1015,8 +1015,6 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
-    # Rewritten module paths must use the new source, even when its size and timestamp match.
-    monkeypatch.setattr(sys, "dont_write_bytecode", True)
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     preset = replace(
         preset,
@@ -1172,6 +1170,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
+        # Same-size rewrites within one timestamp tick must load the new module.
+        Path(importlib.util.cache_from_source(str(path))).unlink(missing_ok=True)
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
         monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))

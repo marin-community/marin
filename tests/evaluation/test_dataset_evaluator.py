@@ -119,12 +119,15 @@ def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, s
 
 
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):
+    model = replace(MODEL, evaluation_request_timeout=21600)
     settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
-    first = runtime_config(MODEL, settings, SESSION)
+    first = runtime_config(model, settings, SESSION)
     assert first.model.context_window == SERVED_CONTEXT
     assert first.max_tokens == SERVED_CONTEXT - 1
+    # Long-context requests must survive both the turn and enclosing attempt deadlines.
+    assert first.limits.attempt_timeout > first.limits.model_turn_timeout >= 21600
     created[0] += 100
-    assert runtime_config(MODEL, settings, SESSION) == first
+    assert runtime_config(model, settings, SESSION) == first
 
 
 @pytest.mark.parametrize(

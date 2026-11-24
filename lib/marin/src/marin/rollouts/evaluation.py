@@ -109,7 +109,7 @@ REUSED_FROM_RUN = "reused_response_from_run"
 # Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.23.1"
 GRADE_RECORD = TypeAdapter(GradeResult)
 
 
@@ -440,16 +440,33 @@ async def generation_turn(
 ) -> ModelTurn:
     """Keep raw channels and wire messages while selecting the source's grading text."""
     if isinstance(operation, ChatGeneration):
-        request = dataclasses.replace(request, messages=tuple(wire_messages(request.messages, operation)))
+        options = dict(request.options)
+        if operation.response_selection == "provider_response":
+            extra = dict(options.get("extra_body", {}))
+            if any(part.get("tools") or part.get("functions") for part in (options, extra)):
+                raise ValueError("Provider-response evaluation does not permit tools")
+            # Explicit null is accepted by vLLM, which rejects an empty tools array.
+            options["tools"] = None
+            options["tool_choice"] = "none"
+            options["extra_body"] = {**extra, "tools": None, "tool_choice": "none"}
+        request = dataclasses.replace(
+            request, messages=tuple(wire_messages(request.messages, operation)), options=options
+        )
     turn = await model(request)
     raw_message = dict(turn.message)
     if reasoning := turn.metadata.get("reasoning"):
         raw_message["reasoning"] = reasoning
     selection = operation.response_selection if isinstance(operation, ChatGeneration) else "combine"
+    if refusal := turn.metadata.get("refusal"):
+        raw_message["refusal"] = refusal
     content = completion_text(raw_message, turn.stop_reason, selection)
     return dataclasses.replace(
         turn,
-        message={**turn.message, "content": content},
+        message=(
+            {"role": "assistant", "content": content}
+            if selection == "provider_response"
+            else {**turn.message, "content": content}
+        ),
         text=content,
         metadata={
             **turn.metadata,

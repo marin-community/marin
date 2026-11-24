@@ -218,7 +218,7 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
         // they present string columns as `Utf8View`. This rule runs in the
         // analyzer, before the optimizer folds that cast into a typed literal, so
         // it has to see through it or synthesize no range at all.
-        Expr::Cast(cast) if is_string_type(&cast.data_type) => utf8_literal(&cast.expr),
+        Expr::Cast(cast) if is_string_type(cast.field.data_type()) => utf8_literal(&cast.expr),
         _ => None,
     }
 }

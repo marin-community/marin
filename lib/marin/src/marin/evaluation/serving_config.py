@@ -19,7 +19,6 @@ from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
@@ -269,9 +268,11 @@ def inference_config_for_model(
     api_model: str | None = None,
     instances: int | None = None,
     broker: BrokerConfig | None = None,
-    request_timeout_seconds: float = EVALUATION_REQUEST_TIMEOUT_SECONDS,
+    request_timeout_seconds: float | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
+    if request_timeout_seconds is None:
+        request_timeout_seconds = model.evaluation_request_timeout
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
