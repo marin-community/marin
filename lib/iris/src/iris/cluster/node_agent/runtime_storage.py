@@ -13,7 +13,8 @@ Only the shim log_path and runsc debug-log destinations change. Setup preserves
 the provider's runtime options, backs up the original file on NVMe, and replaces
 it atomically. New shims read the updated config without a runtime restart;
 existing shims keep their previous log paths. Historical logs require separate
-cleanup.
+cleanup. Newer CoreWeave images ship the file with both log settings commented
+out, so shims log through containerd instead; setup leaves that file untouched.
 """
 
 import hashlib
@@ -59,8 +60,12 @@ def configure(config_path: Path, nvme: Path) -> None:
     # Both paths are host mounts; the init container's root is an overlay filesystem.
     if nvme.stat().st_dev == config_path.parent.stat().st_dev:
         raise ValueError("NVMe must be backed by a different filesystem from the host config directory")
-    log_root = nvme / "iris-runtime/runsc"
     source = config_path.read_text()
+    settings = tomllib.loads(source)
+    if "log_path" not in settings and "debug-log" not in settings["runsc_config"]:
+        logger.info("runsc logging is disabled in %s; skipping runtime log setup", config_path)
+        return
+    log_root = nvme / "iris-runtime/runsc"
     updated = redirected_config(source, log_root)
     log_root.mkdir(parents=True, exist_ok=True)
     if log_root.resolve().stat().st_dev != nvme.stat().st_dev:
