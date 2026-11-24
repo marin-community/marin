@@ -490,6 +490,30 @@ def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, mo
     assert evidence["lineage_exception"]["approved"] is True
 
 
+def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_path, monkeypatch):
+    """The repackager ruling: the folder lineage carries the pass at a repackager pin."""
+    from finestore.rl.licenses import LicenseCheck, LicenseCheckRule, LicenseCheckVerdict
+
+    receipt = lineage_receipt(REVISION, ["train"])
+    registered_lineage(monkeypatch, receipt)
+    failing = LicenseCheck(source_id=receipt.source_id, dataset_id=receipt.dataset_id, revision=receipt.revision,
+                           verdict=LicenseCheckVerdict.FAIL, rule_id=LicenseCheckRule.MISSING,
+                           quote="L1: ---", evidence_url=PREFIX + "README.md")
+    monkeypatch.setattr(license_publication, "check_license", lambda actual, ban=None: failing)
+    lineage = {receipt.source_id: {
+        "source_id": receipt.source_id, "dataset_id": receipt.dataset_id, "revision": receipt.revision,
+        "decisions": [{"kind": "exception", "approved": True,
+                       "rationale": "explicitly accepts the folder's upstream as MIT.",
+                       "evidence_urls": [PREFIX + "endless_v2"]}],
+        "evidence": [],
+    }}
+    evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision,
+                                                     "train", lineage=lineage)
+    assert evidence["verdict"] == "PASS"
+    assert evidence["folder_lineage"]["identifier"] == "MIT"
+    assert evidence["folder_lineage"]["upstream"] == f"{receipt.dataset_id}@{receipt.revision}"
+
+
 def test_check_publication_ignores_a_lineage_exception_at_another_pin(tmp_path, monkeypatch):
     receipt = lineage_receipt(REVISION, ["train"])
     registered = lineage_receipt("e" * 40, ["train"])

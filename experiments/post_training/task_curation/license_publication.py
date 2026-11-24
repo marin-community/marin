@@ -57,6 +57,7 @@ class PreparedPrivateDataset:
     use: str
     folder: Path
     file_hashes: dict[str, str]
+    lineage: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -73,10 +74,11 @@ def prepare_private_dataset(
     license_receipt: LicenseReceipt,
     *,
     use: str,
+    lineage: dict | None = None,
 ) -> PreparedPrivateDataset:
     """Validate the input grant and freeze upload bytes without repository writes."""
     require_publication_license(license_receipt, source_id, license_receipt.dataset_id, license_receipt.revision, use)
-    check_publication(source_id, license_receipt.dataset_id, license_receipt.revision, use)
+    check_publication(source_id, license_receipt.dataset_id, license_receipt.revision, use, lineage=lineage)
     if "README.md" not in files or len(files) != len(set(files)):
         raise ValueError("Private publication needs one card and a unique file inventory")
     if any(Path(name).name != name for name in files):
@@ -85,7 +87,7 @@ def prepare_private_dataset(
     for name in files:
         with (folder / name).open("rb") as stream:
             hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return PreparedPrivateDataset(source_id, repo, use, folder, hashes)
+    return PreparedPrivateDataset(source_id, repo, use, folder, hashes, lineage)
 
 
 def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivateDataset:
@@ -116,7 +118,7 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
             observed = hashlib.file_digest(stream, "sha256").hexdigest()
         if observed != digest:
             raise ValueError(f"Private publication readback changed: {name}")
-    gate = check_publication(prepared.source_id, prepared.repo, commit.oid, prepared.use)
+    gate = check_publication(prepared.source_id, prepared.repo, commit.oid, prepared.use, lineage=prepared.lineage)
     return PublishedPrivateDataset(commit.oid, gate)
 
 
@@ -384,13 +386,19 @@ def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, u
     )
 
 
-def check_publication(source_id: str, dataset_id: str, revision: str, use: str) -> dict:
+def check_publication(
+    source_id: str, dataset_id: str, revision: str, use: str, *, lineage: dict | None = None
+) -> dict:
     """Require the new private pin's own checker result before returning publication evidence.
 
     A card-check escalation stays blocked unless the receipts registry binds this exact
     repo@revision to a user-cleared parent lineage exception covering the publication's
     use; the recorded decision then carries the pass and stays in the evidence. Fail
-    verdicts never clear: a restricted or banned pin fails its own publication.
+    verdicts never clear: a restricted or banned pin fails its own publication — except
+    at a repackager pin whose folder-lineage receipt carries an approved per-folder
+    decision (the repackager-license-follows-upstream ruling): the license follows each
+    included folder's original upstream, so the repackager's own empty card does not
+    fail the publication.
     """
     target = LicenseTarget(
         source_id, dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
@@ -407,5 +415,19 @@ def check_publication(source_id: str, dataset_id: str, revision: str, use: str) 
                 **evidence,
                 "verdict": LicenseCheckVerdict.PASS.value,
                 "lineage_exception": exception.model_dump(mode="json"),
+            }
+    if result.verdict is LicenseCheckVerdict.FAIL and lineage is not None:
+        record = lineage.get(source_id)
+        if record is not None and (record.get("dataset_id"), record.get("revision")) == (dataset_id, revision):
+            identifier = lineage_folder_identifier(record)
+            return {
+                **evidence,
+                "verdict": LicenseCheckVerdict.PASS.value,
+                "folder_lineage": {
+                    "source_id": source_id, "folder": record.get("source_id"),
+                    "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
+                    "identifier": identifier,
+                    "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
+                },
             }
     raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")
