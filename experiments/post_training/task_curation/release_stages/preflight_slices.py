@@ -127,6 +127,13 @@ def slice_root(plan: ReleasePlan) -> str:
     return plan.slice_output_root or f"{plan.release_root}/preflight-slices"
 
 
+def source_slice_root(plan: ReleasePlan, source: str) -> str:
+    """One bounded slice's root, keyed by the slice source so per-source
+    documents cannot collide under the same release prefix."""
+    key = hashlib.sha256(source.encode()).hexdigest()[:16]
+    return f"{slice_root(plan)}/{key}"
+
+
 def _ref_dict(ref: ArtifactRef) -> dict:
     return {"uri": ref.uri, "sha256": ref.sha256}
 
@@ -166,14 +173,14 @@ def _slice_declarations_ref(plan: ReleasePlan) -> ArtifactRef:
 
 
 def _census_inputs_document(plan: ReleasePlan, source: str) -> tuple[str, str]:
-    """Seal the one-source census-inputs document into the slice root."""
+    """Seal the one-source census-inputs document into the source's slice root."""
     document = _declarations_document()
     if source not in document:
         raise ValueError(f"declared source {source!r} is missing from the current declaration set")
     proof = _seal_census_inputs(
         declarations={source: document[source]},
         populations={source: plan.populations[source]},
-        release_root=f"{slice_root(plan)}/census-inputs",
+        release_root=f"{source_slice_root(plan, source)}/census-inputs",
         source_revision=plan.source_revision,
     )
     return proof["uri"], proof["sha256"]
@@ -190,7 +197,7 @@ def _census_measure_receipt(plan: ReleasePlan, source: str) -> ArtifactRef:
         "source_revision": plan.source_revision,
         "results": [measured],
     }
-    return _seal_slice_document(f"{slice_root(plan)}/census-receipt.json", document)
+    return _seal_slice_document(f"{source_slice_root(plan, source)}/census-receipt.json", document)
 
 
 def slice_inputs(node: str, plan: ReleasePlan, selection: SliceSelection) -> dict:
@@ -242,6 +249,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
     """The node's small-slice runner: its real code path on bounded real inputs."""
     root = slice_root(plan)
     source = selection.resolved_source(plan)
+    source_root = source_slice_root(plan, source)
 
     if node == "declarations":
 
@@ -282,7 +290,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     output_root=stage_output_root(plan, "census"),
                     region_prefix=plan.region_prefix,
                     expected_sources=1,
-                    slice_output_root=f"{root}/census",
+                    slice_output_root=f"{source_root}/census",
                 ),
                 dry_run=True,
                 only=source,
@@ -309,7 +317,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     census_receipt=receipt,
                     output_root=stage_output_root(plan, "corpus"),
                     expected_sources=1,
-                    slice_output_root=f"{root}/corpus",
+                    slice_output_root=f"{source_root}/corpus",
                 ),
                 dry_run=True,
                 only=source,
@@ -321,7 +329,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
     if node == "embed":
 
         def run() -> dict:
-            corpus_path = StoragePath(f"{root}/corpus/corpus.json")
+            corpus_path = StoragePath(f"{source_root}/corpus/corpus.json")
             if not corpus_path.exists():
                 raise ValueError(
                     "the embed slice needs the corpus-assembly slice output; run the corpus_assembly preflight first"
@@ -334,7 +342,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     release_id=plan.release_id,
                     source_revision=plan.source_revision,
                     corpus=corpus,
-                    artifact_root=f"{root}/embed",
+                    artifact_root=f"{source_root}/embed",
                     cache_root=plan.embed_cache_root,
                     expected_source_count=1,
                     expected_task_count=tasks,
