@@ -3,11 +3,12 @@
 
 import asyncio
 import gzip
+import json
 import pickle
 import threading
 from collections.abc import Coroutine, Mapping, Sequence
 from concurrent.futures import Future
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,15 +41,17 @@ from taskforge.effects.log import EventLog, Record, decode
 from taskforge.llm.client import ContextExhausted, ModelClient, Progress, Segment
 from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
-from taskforge.model.controls import Candidate
+from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Usage
+from taskforge.model.workpiece import Submission
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
-from taskforge.wiring import build_resources, install
+from taskforge.stages.author import AuthorReference, author_reference
+from taskforge.wiring import build_resources, install, submit_gate
 
 LABELS = {"PASS": 1.0, "FAIL": 0.0}
 TEMPLATE = "Reference: {reference}; candidate: {candidate}"
@@ -506,6 +509,45 @@ def test_disabled_and_script_judges_return_actionable_authored_rejection(script:
     policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": ""})
     with pytest.raises(InvalidTaskSpec, match="host VerifyitGrader" if script else "policy judge.model"):
         lower_with_settings(arithmetic_task(grader=grader), lowering_settings(policy), {})
+
+
+async def test_author_reference_shows_the_callback_judge_options() -> None:
+    shown = json.loads(await author_reference(AuthorReference(False)))["TaskSpec"]["$defs"]["JudgeSpec"]["properties"]
+    hidden = {"temperature", "chat_template_kwargs", "request_timeout", "transport_attempts", "transport_budget"}
+    assert shown.keys() == {field.name for field in fields(JudgeSpec)} - hidden
+    assert shown["reasoning_effort"]["enum"] == ["", "low", "medium", "high"]
+    assert set(shown["rubric"]["enum"]) == {"checklist", "labels", "pairwise", "reference"}
+
+
+@pytest.mark.parametrize(
+    "judge, refusal",
+    [
+        (labels(temperature=None), "Leave judge temperature unset"),
+        (labels(temperature=0.7), "Leave judge temperature unset"),
+        (labels(chat_template_kwargs={"enable_thinking": "false"}), "Leave judge chat_template_kwargs unset"),
+        (labels(reasoning_effort="minimal"), "Leave judge reasoning_effort unset or use one of low, medium, high"),
+        (
+            JudgeSpec(
+                rubric="answers", references=("12",), prompt_template="{candidate} {references}", exact_gate=False
+            ),
+            "The Taskforge judge cannot grade the answers rubric",
+        ),
+    ],
+)
+def test_a_task_the_taskforge_judge_cannot_grade_is_returned_to_the_author_at_submit(
+    judge: JudgeSpec, refusal: str
+) -> None:
+    # Regression: the callback refused these only at grading, after a validation round, without naming the cause.
+    task = arithmetic_task(grader=verifyit_package(judge).grader)
+    control = Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE)
+    settings = lowering_settings(load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"}))
+    (message,) = submit_gate(Submission(task, (control,), ""), settings=settings, factories={})
+    assert message.startswith(refusal)
+
+
+def test_http_only_judge_settings_and_explicit_callback_defaults_still_lower() -> None:
+    judge = labels(temperature=0.0, chat_template_kwargs={}, request_timeout=1, transport_attempts=1, transport_budget=1)
+    judged_spec(judge)
 
 
 JUDGE_CAP = 3
