@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import random
 import time
 
 import numpy as np
@@ -312,8 +313,9 @@ def test_keys_from_outside_the_eval_template_find_a_copy_without_the_template():
 
 @pytest.mark.parametrize("length", [0, 5, 30, 31, 64, 100, 257])
 def test_pieces_hold_every_stretch_up_to_the_overlap_in_one_piece(length):
-    text = "".join(chr(ord("a") + k % 26) for k in range(length))
-    size, overlap = 30, 8
+    rng = random.Random(length)
+    text = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz ") for _ in range(length))
+    size, overlap = 100, 8
     spans, at = [], 0
     for piece in pieces(text, size, overlap):
         assert len(piece) <= size
@@ -327,14 +329,21 @@ def test_pieces_hold_every_stretch_up_to_the_overlap_in_one_piece(length):
 
 def test_a_key_spread_over_a_run_of_spaces_at_a_piece_edge_lies_in_one_piece():
     key = "abcdefghijklmnopqrst"
-    text = "z" * 50 + key[:10] + " " * 12 + key[10:] + "y" * 50
-    assert any(key in text_stream(piece) for piece in pieces(text, size=64, overlap=8))
+    text = "z" * 110 + key[:10] + " " * 12 + key[10:] + "y" * 100
+    assert any(key in text_stream(piece) for piece in pieces(text, size=128, overlap=8))
 
 
 def test_a_key_split_by_escaped_spaces_at_a_piece_edge_lies_in_one_piece():
     key = "abcdefghijklmnopqrst"
     text = "z" * 220 + key[:10] + "\\u0020" * 12 + key[10:] + "y" * 150
     assert key not in text_stream(text) and key in text_stream(json_unescaped(text))
+    assert any(key in text_stream(reading) for piece in pieces(text, size=256, overlap=8) for reading in readings(piece))
+
+
+def test_no_piece_edge_cuts_a_json_escape_inside_a_key():
+    key = "abcdefghijklmnopqrst"
+    text = "z" * 219 + key[:3] + "\\u0020" + key[3:19] + " " * 12 + key[19] + "y" * 150
+    assert key in text_stream(json_unescaped(text))
     assert any(key in text_stream(reading) for piece in pieces(text, size=256, overlap=8) for reading in readings(piece))
 
 

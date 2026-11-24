@@ -73,6 +73,9 @@ BEFORE = 1500
 AFTER = 3000
 # Pieces of a record over MAX_DOC_CHARS overlap by this much, so a key hit and its excerpt lie in one piece.
 PIECE_OVERLAP = 2 * (BEFORE + AFTER)
+# A piece edge moves back by at most this much so that it does not fall inside a JSON escape: at the depth that
+# readings undo, the longest is 7 characters ("\\\\u0020").
+EDGE_SHIFT = 16
 LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
 
 
@@ -464,20 +467,34 @@ def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, w
     """Pieces of *text* of at most *size* characters. Consecutive pieces share at least *overlap* characters, so
     every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until the text
     stream of each of its ``readings`` holds *width* characters, so a key window whose letters are spread over a
-    long run of spaces, punctuation or JSON escapes also lies inside one piece. Each piece starts at least half a
-    piece after the one before."""
-    if size <= 2 * overlap:
-        raise ValueError(f"piece size {size} must exceed twice the overlap {overlap}")
+    long run of spaces, punctuation or JSON escapes also lies inside one piece. No piece edge falls inside a JSON
+    escape. Each piece starts more than *overlap* characters after the one before."""
+    if size <= 2 * overlap + 4 * EDGE_SHIFT:
+        raise ValueError(f"piece size {size} must exceed twice the overlap {overlap} and four edge shifts")
     start = 0
     while True:
-        end = min(start + size, len(text))
+        end = len(text) if start + size >= len(text) else _edge(text, start + size)
         yield text[start:end]
         if end == len(text):
             return
         shared = overlap
-        while min(len(text_stream(r)) for r in readings(text[end - shared : end])) < width and shared < size // 2:
+        while True:
+            start_next = _edge(text, end - shared)
+            if min(len(text_stream(r)) for r in readings(text[start_next:end])) >= width or shared >= size // 2:
+                break
             shared = min(2 * shared, size // 2)
-        start = end - shared
+        start = start_next
+
+
+def _edge(text: str, position: int) -> int:
+    """*position*, moved back before a JSON escape that it would cut: to the start of the last backslash run
+    within ``EDGE_SHIFT`` characters before it."""
+    backslash = text.rfind("\\", max(0, position - EDGE_SHIFT), position)
+    if backslash < 0:
+        return position
+    while backslash > max(0, position - EDGE_SHIFT) and text[backslash - 1] == "\\":
+        backslash -= 1
+    return backslash
 
 
 def long_record_pairs(
