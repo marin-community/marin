@@ -295,7 +295,7 @@ def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsy
     report = json.loads(capsys.readouterr().out)
     band = report["bands"]["easy"]
     assert band["tasks"] == 1 and band["completion_tokens"] == 900
-    assert band["decode_tok_per_s"] == 30.0
+    assert band["wall_tok_per_s"] == 20.0  # 900 completion tokens over 45s of effect wall time
     assert band["solve_rate"] == 1.0
     assert report["resolutions"] == {"solved_shortest": 1}
     assert report["transport"]["retry_markers"] == {"transport_error": 1}

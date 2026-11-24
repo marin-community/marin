@@ -24,6 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
 from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
+from taskforge.effects.log import JsonlSink
 from taskforge.policy import Policy
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band
@@ -212,8 +213,14 @@ def command_publish(args: argparse.Namespace) -> int:
 
 def command_report(args: argparse.Namespace) -> int:
     """The pilot's cost meter: tokens, latency, retries, resolutions and solve rates by band."""
-    filesystem = fsspec.filesystem(url_protocol(args.run_root))
+    protocol = url_protocol(args.run_root)
+    filesystem = fsspec.filesystem(protocol)
     root = f"{args.run_root.rstrip('/')}/tasks"
+
+    def full(path: str) -> str:
+        # Object-store globs return bucket-key paths without the scheme; restore it.
+        return path if protocol == "file" or "://" in path else f"{protocol}://{path}"
+
     bands: dict[str, dict[str, float]] = {}
     resolutions: dict[str, int] = {}
     graceful_forms: dict[str, int] = {}
@@ -231,13 +238,13 @@ def command_report(args: argparse.Namespace) -> int:
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "reasoning_tokens": 0,
-                "decode_seconds": 0.0,
                 "wall_seconds": 0.0,
             },
         )
 
     for attempt_path in sorted(filesystem.glob(f"{root}/*/attempt.json")):
-        with fsspec.open(attempt_path, "rt") as source:
+        attempt_url = full(attempt_path)
+        with fsspec.open(attempt_url, "rt") as source:
             document = json.load(source)
         name = document["band"]
         stats = bucket(name)
@@ -258,35 +265,33 @@ def command_report(args: argparse.Namespace) -> int:
                     graceful_forms.get(attempt["graceful_resolution"], 0) + 1
                 )
 
-        events_path = attempt_path.replace("attempt.json", "events.jsonl")
+        events_url = attempt_url.replace("attempt.json", "events.jsonl")
         try:
-            with fsspec.open(events_path, "rt") as source:
-                for line in source:
-                    record = json.loads(line)
-                    event = record.get("event") or {}
-                    if not str(event.get("type", "")).endswith("Resolved"):
-                        continue
-                    value = (event.get("payload") or {}).get("value")
-                    if not isinstance(value, dict) or "usage" not in value:
-                        continue
-                    completions += 1
-                    retries = value.get("retries") or []
-                    if retries:
-                        completions_with_retries += 1
-                    for marker in retries:
-                        outcome = str(marker).split(":", 1)[0]
-                        retry_markers[outcome] = retry_markers.get(outcome, 0) + 1
-                    usage = value["usage"]
-                    stats["decode_seconds"] += float(value.get("decode_time") or 0.0)
-                    stats["wall_seconds"] += float(value.get("wall_time") or 0.0)
-                    # Usage already counted from attempt.json; the event log adds latency + retries only.
-                    del usage
+            sink = JsonlSink(events_url)
+            content = sink.read_bytes()
         except FileNotFoundError:
             continue
+        for line in content.splitlines():
+            record = json.loads(line)
+            stats["wall_seconds"] += float(record.get("wall_time") or 0.0)
+            event = record.get("event") or {}
+            if not str(event.get("type", "")).endswith("Resolved"):
+                continue
+            value = (event.get("payload") or {}).get("value")
+            if not isinstance(value, dict) or "usage" not in value:
+                continue
+            completions += 1
+            retries = value.get("retries") or []
+            if retries:
+                completions_with_retries += 1
+            for marker in retries:
+                outcome = str(marker).split(":", 1)[0]
+                retry_markers[outcome] = retry_markers.get(outcome, 0) + 1
 
     for name, stats in bands.items():
         tokens = stats["completion_tokens"]
-        stats["decode_tok_per_s"] = round(tokens / stats["decode_seconds"], 1) if stats["decode_seconds"] else 0.0
+        stats["wall_tok_per_s"] = round(tokens / stats["wall_seconds"], 1) if stats["wall_seconds"] else 0.0
+        del stats["decode_seconds"]
         stats["solve_rate"] = (
             round(solve_by_band[name]["solved"] / solve_by_band[name]["tasks"], 3)
             if solve_by_band[name]["tasks"]
