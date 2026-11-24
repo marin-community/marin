@@ -44,6 +44,7 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.task_sources import PreparedTaskCacheSource
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -406,13 +407,15 @@ class BasePPOExp:
 
         terminal_data = list(self.cfg.data.get("terminal_bench_data", []))
         dataset_type = NemotronTaskDataset if terminal_data else SourceTaskDataset
-        terminal_options = {}
+        dataset_options = {}
         if terminal_data:
-            terminal_options = {
+            dataset_options = {
                 "terminal_bench_data": terminal_data,
                 "cache_dir": Path(self.cfg.data.task_cache_dir),
                 "grader_override": HarborTaskSettings.from_config(self.cfg.terminal_bench_config).grader_override(),
             }
+        elif (prepared_cache := self.cfg.get("runtime", {}).get("prepared_task_cache")) is not None:
+            dataset_options["prepared_cache"] = PreparedTaskCacheSource(**prepared_cache)
         return dataset_type(
             datasets=data_files,
             environment_configs=OmegaConf.to_container(self.cfg.environment.task_sessions, resolve=True),
@@ -420,7 +423,7 @@ class BasePPOExp:
             max_prompt_length=self.cfg.trainer.max_prompt_length,
             num_workers=8,
             chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
-            **terminal_options,
+            **dataset_options,
         )
 
     def get_eval_dataset(self, data_files: list[str] | None = None):
@@ -723,6 +726,7 @@ class BasePPOExp:
         # See agent_logs/2026-05-29_skyrl_uvloop_integration_and_robustness_research.md
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
+        started = time.monotonic()
         with self.get_tracker() as tracker:
             trainer = None
             try:
@@ -735,6 +739,12 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+
+        elapsed = time.monotonic() - started
+        logger.info(
+            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
+            elapsed - trainer.evaluation_wall_time,
+        )
 
 
 @ray.remote(num_cpus=1, max_retries=0)

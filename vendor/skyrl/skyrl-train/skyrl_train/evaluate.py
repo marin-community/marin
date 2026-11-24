@@ -247,7 +247,14 @@ def _calculate_eval_metrics(
 
 
 def _evaluation_task_rows(
-    rollouts: _EvaluationRollouts, *, attempt_id: str, step: int, evaluation: str, model: str | None
+    rollouts: _EvaluationRollouts,
+    *,
+    attempt_id: str,
+    step: int,
+    evaluation: str,
+    model: str | None,
+    model_source_identity: str | None,
+    starting_checkpoint_identity: str | None,
 ) -> list[EvaluationTaskRow]:
     batch = rollouts.batch
     count = len(batch["response_ids"])
@@ -308,6 +315,8 @@ def _evaluation_task_rows(
                 error_type=next(iter(errors)) if len(errors) == 1 else "multiple",
                 answers=answers,
                 model=model,
+                model_source_identity=model_source_identity,
+                starting_checkpoint_identity=starting_checkpoint_identity,
             )
         )
     return rows
@@ -324,6 +333,8 @@ def _persist_evaluation(
         rollouts,
         attempt_id=str(cfg.runtime.attempt_id),
         model=cfg.runtime.get("model"),
+        model_source_identity=cfg.runtime.get("model_source_identity"),
+        starting_checkpoint_identity=cfg.runtime.get("starting_checkpoint_identity"),
         step=global_step if global_step is not None else -1,
         evaluation="eval/" if val_set_name is None else f"eval/{val_set_name}/",
     )

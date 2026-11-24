@@ -1774,6 +1774,7 @@ mod tests {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion::physical_plan::metrics::MetricValue;
 
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
@@ -5452,12 +5453,19 @@ mod tests {
                 .to_string()
         }
 
-        /// How many segment files the physical scan for `sql` opens.
-        async fn planned_segment_count(&self, sql: &str) -> usize {
+        /// `sql` planned over this table, with the context that planned it.
+        async fn physical_plan(
+            &self,
+            with_column_bounds: bool,
+            sql: &str,
+        ) -> (
+            datafusion::prelude::SessionContext,
+            Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        ) {
             let ctx = crate::query::make_ctx();
             ctx.register_table(
                 datafusion::common::TableReference::bare("iris.worker"),
-                Arc::new(self.provider(/* with_column_bounds */ true)),
+                Arc::new(self.provider(with_column_bounds)),
             )
             .unwrap();
             let plan = ctx
@@ -5467,12 +5475,17 @@ mod tests {
                 .create_physical_plan()
                 .await
                 .unwrap();
+            (ctx, plan)
+        }
+
+        /// How many segment files the physical scan for `sql` opens.
+        async fn planned_segment_count(&self, sql: &str) -> usize {
+            let (_ctx, plan) = self.physical_plan(/* with_column_bounds */ true, sql).await;
             let mut files = 0;
             plan.apply(|node| {
                 if let Some(config) = node
-                    .as_any()
                     .downcast_ref::<DataSourceExec>()
-                    .and_then(|exec| exec.data_source().as_any().downcast_ref::<FileScanConfig>())
+                    .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
                 {
                     files += config
                         .file_groups
@@ -5505,6 +5518,45 @@ mod tests {
                     "{filter}"
                 );
             }
+        }
+
+        /// The Parquet scan's statistics pruning for `filter`. Segment planning
+        /// gets no column bounds, so every row group reaches the scan and the
+        /// time filter has to prune there.
+        async fn row_group_pruning(&self, filter: &str) -> RowGroupPruning {
+            let sql = format!("SELECT worker_id FROM \"iris.worker\" WHERE {filter}");
+            let (ctx, plan) = self
+                .physical_plan(/* with_column_bounds */ false, &sql)
+                .await;
+            datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx())
+                .await
+                .unwrap();
+            let mut pruning = RowGroupPruning::default();
+            plan.apply(|node| {
+                let scan_metrics = node
+                    .downcast_ref::<DataSourceExec>()
+                    .and_then(|_| node.metrics());
+                for metric in scan_metrics.iter().flat_map(|metrics| metrics.iter()) {
+                    match metric.value() {
+                        MetricValue::Count { name, count }
+                            if name == "predicate_evaluation_errors" =>
+                        {
+                            pruning.predicate_errors += count.value();
+                        }
+                        MetricValue::PruningMetrics {
+                            name,
+                            pruning_metrics,
+                        } if name == "row_groups_pruned_statistics" => {
+                            pruning.pruned += pruning_metrics.pruned();
+                            pruning.checked += pruning_metrics.pruned() + pruning_metrics.matched();
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            pruning
         }
 
         fn cleanup(self) {
@@ -5665,6 +5717,68 @@ mod tests {
                 ("timestamp_ms < 1000", 0),
             ])
             .await;
+        table.cleanup();
+    }
+
+    /// The scan types strings as `Utf8View`, which DataFusion's pruning rewrite
+    /// of a prefix `LIKE` cannot compare with its `Utf8` bounds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn string_filters_run_beside_time_pruning() {
+        let table = TimeBoundedTable::new("column_bounds_like", false).await;
+        table
+            .assert_pruning_keeps_rows(&[
+                ("worker_id LIKE 'w-%'", 3),
+                ("worker_id LIKE 'w-2'", 1),
+                ("worker_id LIKE 'w-%' AND timestamp_ms >= 2000", 2),
+                // The optimizer turns `starts_with` into a prefix `LIKE`.
+                ("starts_with(worker_id, 'w-') AND timestamp_ms >= 2000", 2),
+                (
+                    "(worker_id LIKE 'w-1%' OR worker_id LIKE 'w-3%') AND timestamp_ms >= 2000",
+                    2,
+                ),
+                ("worker_id LIKE 'w-1%' OR timestamp_ms >= 3000", 3),
+            ])
+            .await;
+        table.cleanup();
+    }
+
+    /// Row-group statistics pruning summed over a plan's Parquet scans.
+    #[derive(Debug, Default, PartialEq)]
+    struct RowGroupPruning {
+        predicate_errors: usize,
+        pruned: usize,
+        checked: usize,
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_prefix_like_keeps_row_group_statistics_pruning() {
+        // Before DataFusion 55, statistics pruning compared a `Utf8View` column's
+        // bounds with `Utf8` prefix literals, failed, and then pruned nothing,
+        // the time conjunct included.
+        let table = TimeBoundedTable::new("column_bounds_like_row_groups", false).await;
+        let time_only = table.row_group_pruning("timestamp_ms >= 2000").await;
+        assert_eq!(
+            time_only.predicate_errors, 0,
+            "the time filter alone evaluates cleanly"
+        );
+        assert!(
+            time_only.pruned > 0,
+            "the time filter alone prunes a row group: {time_only:?}"
+        );
+        for filter in [
+            "worker_id LIKE 'w-%' AND timestamp_ms >= 2000",
+            "starts_with(worker_id, 'w-') AND timestamp_ms >= 2000",
+        ] {
+            let pruning = table.row_group_pruning(filter).await;
+            assert_eq!(
+                pruning.predicate_errors, 0,
+                "{filter}: the LIKE failed to evaluate against row-group statistics"
+            );
+            assert_eq!(
+                pruning, time_only,
+                "{filter}: the LIKE changed statistics pruning"
+            );
+        }
         table.cleanup();
     }
 

@@ -99,52 +99,6 @@ def run_on_each_node(node_ids: List[str], fn: Callable, *args, **kwargs):
     return ray.get(refs)
 
 
-def cleanup_old_checkpoints(
-    checkpoint_base_path: str, max_checkpoints: int, protected_steps: set[int] | None = None
-) -> None:
-    """
-    Keep the most recent `max_checkpoints` and protected checkpoints; remove the rest.
-
-    Args:
-        checkpoint_base_path: Base path where checkpoints are stored
-        max_checkpoints: Maximum number of recent checkpoints to keep
-        protected_steps: Additional checkpoint steps retained until external work completes
-    """
-    if max_checkpoints < 0:
-        return
-
-    checkpoint_dirs = list_checkpoint_dirs(checkpoint_base_path)
-
-    if len(checkpoint_dirs) <= max_checkpoints:
-        return
-
-    # Sort by step number (extract number from global_step_N)
-    def extract_step(dirname):
-        try:
-            return int(dirname.split("global_step_")[1])
-        except (IndexError, ValueError):
-            return 0
-
-    checkpoint_dirs.sort(key=extract_step)
-
-    protected_steps = protected_steps or set()
-    recent = set(checkpoint_dirs[-max_checkpoints:]) if max_checkpoints > 0 else set()
-    dirs_to_remove = [
-        directory
-        for directory in checkpoint_dirs
-        if directory not in recent and extract_step(directory) not in protected_steps
-    ]
-
-    for dir_name in dirs_to_remove:
-        full_path = os.path.join(checkpoint_base_path, dir_name)
-        try:
-            io.remove(full_path)
-            step_num = extract_step(dir_name)
-            logger.info(f"Cleaned up old checkpoint: global_step_{step_num} at {full_path}")
-        except Exception as e:
-            logger.warning(f"Failed to remove old checkpoint {full_path}: {e}")
-
-
 def validate_consistency_for_latest_checkpoint(
     root_ckpt_folder: str, ckpt_iteration: int, checkpoint_path: str, latest_checkpoint_file: str, save_interval: int
 ):

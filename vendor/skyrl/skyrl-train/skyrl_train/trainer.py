@@ -98,7 +98,6 @@ from skyrl_train.group_admission import (
     assert_training_groups_eligible,
 )
 from marinskyrl.checkpoint_paths import (
-    BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
     selected_export_checkpoint,
@@ -106,10 +105,15 @@ from marinskyrl.checkpoint_paths import (
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
-from skyrl_train.checkpoint_listing import extract_step_from_path
+from skyrl_train.checkpoint_listing import (
+    ROLLOUT_STATE_FILENAME,
+    best_checkpoint_step,
+    cleanup_old_checkpoints,
+    extract_step_from_path,
+    periodic_checkpoint_steps,
+)
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
-    cleanup_old_checkpoints,
     run_on_each_node,
     get_node_ids,
     validate_consistency_for_latest_checkpoint,
@@ -232,6 +236,9 @@ def batch_summary(plan: BatchPlan) -> BatchSummary:
     )
 
 
+EVALUATION_TIMER_KEY = "eval"
+
+
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -307,6 +314,7 @@ class RayPPOTrainer:
         self.all_metrics = {}
         self.all_timings = {}
         self.all_startup_timings = {}
+        self.evaluation_wall_time = 0.0
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
@@ -576,11 +584,13 @@ class RayPPOTrainer:
         if getattr(self, "_shutdown_complete", False):
             return
         try:
-            await self.context.close()
             await self._drain_checkpoint_upload()
         finally:
-            await self._teardown()
-            self._shutdown_complete = True
+            try:
+                await self.context.close()
+            finally:
+                await self._teardown()
+                self._shutdown_complete = True
 
     @staticmethod
     def _start_exit_watchdog(timeout: int = 120) -> None:
@@ -666,8 +676,7 @@ class RayPPOTrainer:
                 and self.eval_dataset is not None
                 and self._last_evaluated_step != self.global_step
             ):
-                with Timer("eval", self.all_timings):
-                    await self._evaluate_and_log(final_state, commit=True)
+                await self._evaluate_and_log(final_state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=True)
                 self._control.should_evaluate = False
         finally:
             if self.colocate_all:
@@ -735,7 +744,7 @@ class RayPPOTrainer:
         io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
         self._last_saved_step = snapshot.step
         cleanup_started = time.monotonic()
-        self._cleanup_old_checkpoints()
+        self._cleanup_old_checkpoints(snapshot.step)
         cleanup_duration = time.monotonic() - cleanup_started
         return time.monotonic() - snapshot.upload_started_at, cleanup_duration
 
@@ -779,8 +788,7 @@ class RayPPOTrainer:
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
-            with Timer("eval", self.all_timings):
-                await self._evaluate_and_log(state, commit=False)
+            await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)
             self._control.should_evaluate = False
 
         if self._control.should_save_hf_model:
@@ -1640,30 +1648,32 @@ class RayPPOTrainer:
                 {"evaluation_duration_seconds": time.perf_counter() - started},
             )
 
-    async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
-        async with self._evaluation_session() as pool:
-            async with asyncio.TaskGroup() as tasks:
-                native = tasks.create_task(self.eval(evaluation_pool=pool))
-                additional = [
-                    tasks.create_task(
-                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
-                    )
-                    for callback in self.callback_handler.callbacks
-                ]
-            eval_metrics = native.result()
-            for task in additional:
-                eval_metrics.update(task.result())
-        self._control = await self.callback_handler.call_event_async(
-            "on_evaluate", state, self._control, metrics=eval_metrics, trainer=self
-        )
-        self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
-        self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
-        self._last_evaluated_step = self.global_step
+    async def _evaluate_and_log(self, state: TrainerState, timer: Timer, *, commit: bool) -> None:
+        with timer:
+            async with self._evaluation_session() as pool:
+                async with asyncio.TaskGroup() as tasks:
+                    native = tasks.create_task(self.eval(evaluation_pool=pool))
+                    additional = [
+                        tasks.create_task(
+                            self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                        )
+                        for callback in self.callback_handler.callbacks
+                    ]
+                eval_metrics = native.result()
+                for task in additional:
+                    eval_metrics.update(task.result())
+            self._control = await self.callback_handler.call_event_async(
+                "on_evaluate", state, self._control, metrics=eval_metrics, trainer=self
+            )
+            self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
+            self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
+            self._last_evaluated_step = self.global_step
+        self.evaluation_wall_time += timer.duration
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
-        with Timer("eval_before_train") as pretrain_eval_timer:
-            await self._evaluate_and_log(state, commit=self.cfg.trainer.tracker_commit_each_step)
+        pretrain_eval_timer = Timer("eval_before_train")
+        await self._evaluate_and_log(state, pretrain_eval_timer, commit=self.cfg.trainer.tracker_commit_each_step)
         startup_eval = {"startup/eval_before_train": pretrain_eval_timer.duration}
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
@@ -2759,8 +2769,10 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        """Ensure a complete checkpoint is published for the current step."""
         await self._drain_checkpoint_upload()
+        if self._last_saved_step == self.global_step:
+            return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -2802,7 +2814,7 @@ class RayPPOTrainer:
         )
 
         # Serialize rollout data state for publication with the trainer state.
-        rollout_state_path = os.path.join(global_step_folder, "data.pt")
+        rollout_state_path = os.path.join(global_step_folder, ROLLOUT_STATE_FILENAME)
         rollout_state_buffer = stdlib_io.BytesIO()
         torch.save(rollout_state, rollout_state_buffer)
 
@@ -2828,7 +2840,7 @@ class RayPPOTrainer:
             marker_path=latest_checkpoint_file,
         )
 
-    def _cleanup_old_checkpoints(self):
+    def _cleanup_old_checkpoints(self, step: int):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep
         # A negative limit keeps all checkpoints. The payload is a no-op at
         # this value, so skip the per-node Ray lease entirely. Leasing a fresh
@@ -2838,12 +2850,11 @@ class RayPPOTrainer:
             return
 
         protected_steps = protected_hf_export_steps(self.cfg.trainer.ckpt_path)
-        best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
-        if io.exists(best_path):
-            with io.open_file(best_path, "r") as stream:
-                best = json.load(stream)
-            if best["model_format"] == "native":
-                protected_steps.add(best["step"])
+        if best_step := best_checkpoint_step(self.cfg.trainer.ckpt_path):
+            protected_steps.add(best_step)
+        protected_steps.update(
+            periodic_checkpoint_steps(self.cfg.trainer.ckpt_path, self.cfg.trainer.get("checkpoint_keep_every"), step)
+        )
 
         if not self._node_ids:
             self._node_ids = get_node_ids(self.policy_model, self.ref_model)
@@ -2934,7 +2945,7 @@ class RayPPOTrainer:
         # Define paths for different checkpoint components
         policy_ckpt_dir = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY)
         trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
-        rollout_state_path = os.path.join(checkpoint_path, "data.pt")
+        rollout_state_path = os.path.join(checkpoint_path, ROLLOUT_STATE_FILENAME)
 
         # Validate that required checkpoint files exist
         if not io.exists(trainer_state_path):
@@ -2998,6 +3009,8 @@ class RayPPOTrainer:
         logger.info("Successfully loaded policy checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
+        if recovering_own_checkpoint:
+            self._last_saved_step = global_step
         if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0

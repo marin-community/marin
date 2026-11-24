@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training and evaluation task sets from admitted curation artifacts."""
+"""Select training and evaluation task sets from curated and released task files."""
 
 import hashlib
+import io
 import json
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -12,7 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -28,26 +29,30 @@ from finestore.rl.strata import (
     read_selection_manifest,
 )
 from finestore.schema import arrow_schema
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version, validate_path_segment, validate_version
+from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases
 from taskcompendium.evaluation.spec import ChatGeneration, TextGeneration
 from taskcompendium.grader import grader_config
+from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
-    SCHEMA_VERSION,
+    UPGRADABLE_SCHEMA_VERSION,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
+    NoGrader,
     ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_in_process,
     grades_with_judge,
 )
@@ -57,6 +62,7 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -66,6 +72,8 @@ STRUCTURAL_FAMILY = "structural"
 PARQUET_BATCH_ROWS = 256
 # Answers per task in the initializer run that measures panel pass rates.
 PASS_RATE_ATTEMPTS = 8
+MIN_PROBED_TASKS = 50
+MIN_GRADED_SHARE = 0.9
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 SUMMARY_FILENAME = "summary.json"
@@ -87,6 +95,7 @@ HELDOUT_FAMILIES = MappingProxyType(
 )
 AAII_CATEGORIES = MappingProxyType(
     {
+        "agentic": "coding",
         "calendar": "format",
         "competitive_coding": "coding",
         "reasoning_gym": "scientific_reasoning",
@@ -102,14 +111,16 @@ class GraderKind(StrEnum):
     IMAGE = "image"
     REMOTE_JUDGE = "remote_judge"
     IN_PROCESS = "in_process"
+    HARNESS = "harness"
 
 
-LOCAL_GRADERS = (GraderKind.IN_PROCESS, GraderKind.PACKAGE)
+LOCAL_GRADERS = frozenset((GraderKind.IN_PROCESS, GraderKind.PACKAGE))
 
 
 class PanelFormat(StrEnum):
     HISTORICAL = "historical"
     TASK_SPEC = "task_spec"
+    TASK_DIGEST = "task_digest"
     NORMALIZED = "normalized"
     EVALUATION = "evaluation"
 
@@ -121,6 +132,22 @@ class HeldoutSource(BaseModel):
     version: str
     rows: PositiveInt
     format: PanelFormat
+
+
+class ReleaseAdmission(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    uri: str
+    sha256: str
+
+
+class ReleasedSource(HeldoutSource):
+    format: Literal[PanelFormat.TASK_SPEC]
+    family: str
+    sha256: str
+    agentic: bool
+    license: str
+    admission: ReleaseAdmission | None = Field(default=None, exclude_if=lambda admission: admission is None)
 
 
 class SelectionRecipe(BaseModel):
@@ -137,6 +164,22 @@ class SelectionRecipe(BaseModel):
     exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
     seed: int
+    admitted_graders: frozenset[GraderKind] = LOCAL_GRADERS
+    released: tuple[ReleasedSource, ...] = Field(default=(), exclude_if=lambda sources: not sources)
+
+
+def _selection_recipe_fingerprint(recipe: SelectionRecipe) -> dict[str, Any]:
+    """Keep the serialized recipe shape of published local-grader selections."""
+    fields = vars(recipe).copy()
+    if recipe.admitted_graders == LOCAL_GRADERS:
+        fields.pop("admitted_graders")
+    if not recipe.released:
+        fields.pop("released")
+    recipe_type = type(recipe)
+    return {"__repr__": f"{recipe_type.__module__}.{recipe_type.__qualname__}", "vars": fields}
+
+
+register_fingerprint(SelectionRecipe, _selection_recipe_fingerprint)
 
 
 @dataclass(frozen=True)
@@ -244,6 +287,7 @@ class Candidate:
 class SourceCounts:
     input: int = 0
     heldout_overlap: int = 0
+    excluded: int = 0
     duplicate: int = 0
     eligible: int = 0
     selected: int = 0
@@ -267,7 +311,8 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         if not isinstance(converted, NormalizedTask):
             raise ValueError(f"Native structure-closure import failed for {original['id']}: {converted}")
         return converted.task
-    task = TaskSpec.model_validate({**original, "schema_version": SCHEMA_VERSION})
+    # The pinned heldout graders keep the 0.30 shape, so they enter through the 0.30 upgrade.
+    task = TaskSpec.model_validate({**original, "schema_version": UPGRADABLE_SCHEMA_VERSION})
     if document["runtime"]["task_machine"] is not None:
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
@@ -280,9 +325,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
             )
 
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
-        task = task.model_copy(
-            update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
-        )
+        placement = task.grader.placement
+        assert isinstance(placement, GraderMachine)
+        placement = placement.model_copy(update={"environment": grader_environments[dataset]})
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"placement": placement})})
     return task
 
 
@@ -388,7 +434,7 @@ def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState
     )
 
 
-def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
+def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
     root = StoragePath(source.root)
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     if manifest["mode"] not in {CurationMode.SAMPLE, CurationMode.FULL}:
@@ -396,7 +442,80 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
     if manifest["intended_use"] != IntendedUse.TRAIN:
         raise ValueError(f"Selection source is not a training population: {source.source_id}")
     for path in sorted((root / "final" / "*.parquet").glob(), key=str):
-        yield from _parquet_rows(path, TASK_JSON_COLUMN)
+        for row in _parquet_rows(path, TASK_JSON_COLUMN):
+            task_json = row[TASK_JSON_COLUMN]
+            yield TaskSpec.model_validate_json(task_json), task_json
+
+
+def _release_admission_attempts(source: ReleasedSource) -> list[dict[str, Any]]:
+    admission = source.admission
+    if admission is None:
+        raise ValueError(f"Released source requires admission evidence: {source.uri}")
+    contents = StoragePath(admission.uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != admission.sha256:
+        raise ValueError(f"Admission record SHA-256 mismatch: {admission.uri}")
+    attempts = pq.read_table(
+        io.BytesIO(contents), columns=["selection", "task_id", "task_digest", "outcome"]
+    ).to_pylist()
+    selections = {attempt["selection"] for attempt in attempts}
+    if len(selections) != 1 or None in selections:
+        raise ValueError("Admission attempts must name one versioned selection")
+    (identity,) = selections
+    name, _, version = identity.rpartition("@")
+    validate_path_segment("selection name", name)
+    validate_version(version)
+    if is_mutable_version(version):
+        raise ValueError("Admission requires an immutable probe selection")
+    summary = StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX / name / version / SUMMARY_FILENAME
+    recipe = json.loads(summary.read_text())["recipe"]
+    # The digest identifies the released Parquet independently of where it is stored.
+    if not any(pin.get("sha256") == source.sha256 for pin in recipe.get("released", ())):
+        raise ValueError(f"Probe selection {identity} does not pin released source {source.uri}")
+    return attempts
+
+
+def _check_release_admission(
+    source: ReleasedSource, released: set[tuple[str, str]], attempts: list[dict[str, Any]]
+) -> None:
+    observed = set()
+    graded = set()
+    for attempt in attempts:
+        key = (attempt["task_id"], attempt["task_digest"])
+        if key not in released:
+            continue
+        observed.add(key)
+        if attempt["outcome"] == Outcome.GRADED:
+            graded.add(key)
+    if len(observed) < MIN_PROBED_TASKS or len(graded) < MIN_GRADED_SHARE * len(observed):
+        raise ValueError(
+            f"Released source requires at least {MIN_PROBED_TASKS} probed tasks with "
+            f"{MIN_GRADED_SHARE:.0%} graded. Found {len(graded)} of {len(observed)} graded: {source.uri}"
+        )
+
+
+def with_agentic_tag(task: TaskSpec) -> TaskSpec:
+    """Use the agentic tag that selection adds to published rows from an agentic source."""
+    return task if "agentic" in task.tags else task.model_copy(update={"tags": (*task.tags, "agentic")})
+
+
+def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) -> Iterator[tuple[TaskSpec, str]]:
+    contents = StoragePath(source.uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != source.sha256:
+        raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+    parquet = pq.ParquetFile(io.BytesIO(contents))
+    count = parquet.metadata.num_rows
+    if count != source.rows:
+        raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
+    released = set()
+    for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
+        for raw in batch.column(0).to_pylist():
+            task = TaskSpec.model_validate_json(raw)
+            if "agentic" in task.tags and not source.agentic:
+                raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+            published = with_agentic_tag(task) if source.agentic else task
+            released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
+            yield task, published.model_dump_json()
+    _check_release_admission(source, released, attempts)
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
@@ -412,21 +531,25 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
         record = next(_admitted_records(source), None)
         if record is None:
             raise ValueError(f"No admitted grader environment for {source.source_id}")
-        task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
+        task, _ = record
         if not isinstance(task.grader, ScriptGrader) or _grader_kind(task) != GraderKind.PACKAGE:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
-        environments[components[source.source_id]] = task.grader.environment
+        environment = grader_environment(task.grader)
+        assert environment is not None
+        environments[components[source.source_id]] = environment
     return environments
 
 
 def _grader_kind(task: TaskSpec) -> GraderKind:
+    if isinstance(task.grader, NoGrader):
+        return GraderKind.HARNESS
     if grades_with_judge(task.grader):
         return GraderKind.REMOTE_JUDGE
     if grades_in_process(task.grader):
         return GraderKind.IN_PROCESS
-    if not isinstance(task.grader, ScriptGrader | VerifyitGrader) or task.grader.environment is None:
+    environment = grader_environment(task.grader)
+    if environment is None:
         raise ValueError(f"Task has no runnable grader: {task.id}")
-    environment = task.grader.environment
     return (
         GraderKind.PACKAGE
         if environment.packages_lock is not None or environment.package_spec is not None
@@ -455,26 +578,50 @@ def _grader_counts(path: Path) -> dict[str, int]:
 
 
 def write_training(
-    config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
+    config: SelectionConfig,
+    heldout: tuple[TaskSpec, ...],
+    exclusions: tuple[TaskSpec, ...],
+    destination: Path,
+    *,
+    excluded_digests: frozenset[str] = frozenset(),
 ) -> dict[str, SourceCounts]:
-    """Sample admitted local tasks after excluding panel overlaps and duplicates."""
-    excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
+    """Sample admitted training tasks after excluding panel overlaps and duplicates."""
+    heldout_keys = {key for task in heldout for key in _panel_keys(task).exclusion}
+    excluded_keys = {key for task in exclusions for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
-    counts = {source.source_id: SourceCounts() for source in config.sources}
+    releases = {source.uri: source for source in config.recipe.released}
+    attempts = {uri: _release_admission_attempts(source) for uri, source in releases.items()}
+    inputs = (*config.sources, *(SelectionInput(uri, source.family, uri) for uri, source in releases.items()))
+    counts = {source.source_id: SourceCounts() for source in inputs}
+    families = {source.source_id: source.family for source in inputs}
 
     def candidates(sources: tuple[SelectionInput, ...]) -> Iterator[Candidate]:
         seen_ids: set[str] = set()
         seen_contracts: set[str] = set()
         for source in sources:
-            for row in _admitted_records(source):
-                task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
+            release = releases.get(source.source_id)
+            rows = (
+                _released_records(release, attempts[source.source_id])
+                if release is not None
+                else _admitted_records(source)
+            )
+            for task, task_json in rows:
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
-                if _grader_kind(task) not in LOCAL_GRADERS:
-                    raise ValueError(f"Training selection requires local graders: {task.id}")
-                if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
+                grader = _grader_kind(task)
+                if grader not in config.recipe.admitted_graders:
+                    raise ValueError(f"Training selection does not admit {grader} graders: {task.id}")
+                if grader == GraderKind.HARNESS and "harbor" not in task.tags:
+                    raise ValueError(f"Training task with a harness grader requires the harbor tag: {task.id}")
+                exclusion = _panel_keys(task).exclusion
+                if not heldout_keys.isdisjoint(exclusion):
                     source_counts.heldout_overlap += 1
+                    continue
+                if not excluded_keys.isdisjoint(exclusion) or (
+                    excluded_digests and canonical_sha256(json.loads(task_json)) in excluded_digests
+                ):
+                    source_counts.excluded += 1
                     continue
                 contract = deduplication_key(task)
                 if (
@@ -488,14 +635,14 @@ def write_training(
                 seen_ids.add(task.id)
                 seen_contracts.add(contract)
                 source_counts.eligible += 1
-                yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
+                yield Candidate(task.id, task_json, source.source_id, contract)
 
     def selected_records() -> Iterator[dict[str, Any]]:
         groups = (
-            [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in config.sources]
+            [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in inputs]
             if config.recipe.source_limits is not None
             else [
-                (family, limit, tuple(source for source in config.sources if source.family == family))
+                (family, limit, tuple(source for source in inputs if source.family == family))
                 for family, limit in sorted(config.recipe.family_limits.items())
             ]
         )
@@ -510,13 +657,14 @@ def write_training(
                 selected_contracts.add(row.contract)
                 counts[row.source_id].selected += 1
                 task = TaskSpec.model_validate_json(row.task_json)
-                family = next(source.family for source in config.sources if source.source_id == row.source_id)
+                family = families[row.source_id]
                 yield {
                     TASK_SPEC_COLUMN: row.task_json,
                     **TaskStrata(
                         family=family,
                         aai_category=AAII_CATEGORIES.get(family, "untagged"),
                         source=task.source.dataset,
+                        difficulty="unrated" if row.source_id in releases else "untagged",
                         agentic="agentic" in task.tags,
                     ).model_dump(),
                 }
@@ -534,8 +682,17 @@ def prepare(config: SelectionConfig) -> None:
     selection = select_heldout(heldout, config.recipe)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
-        excluded = tuple(task for source in config.exclusions for task in _panel_source_tasks(source, environments))
-        counts = write_training(config, selection.full, excluded, directory / TRAIN_FILENAME)
+        excluded = []
+        digests = set()
+        for source in config.exclusions:
+            tasks = _panel_source_tasks(source, environments)
+            if source.format == PanelFormat.TASK_DIGEST:
+                digests.update(canonical_sha256(task.model_dump(mode="json")) for task in tasks)
+            else:
+                excluded.extend(tasks)
+        counts = write_training(
+            config, selection.full, tuple(excluded), directory / TRAIN_FILENAME, excluded_digests=frozenset(digests)
+        )
         annotations = tuple(_manifest_records(selection.full, {task.id for task in selection.sample}))
         strata = {
             row["task_id"]: TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
@@ -548,15 +705,22 @@ def prepare(config: SelectionConfig) -> None:
             task_records(iter(selection.full), strata), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
 
+        harness_datasets: set[str] = set()
+
         def manifest_rows():
             yield from annotations
             for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                 for value in batch.to_pylist():
                     task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
                     tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
+                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    if row.grader_kind == GraderKind.HARNESS:
+                        harness_datasets.add(task.source.dataset)
+                    yield row.model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
+        recipe_document = config.recipe.model_dump(mode="json")
+        recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
         summary = {
             "selection_strata": (
                 SelectionDefinition(
@@ -567,19 +731,18 @@ def prepare(config: SelectionConfig) -> None:
                     active_files=(TRAIN_FILENAME, VALIDATION_FILENAME),
                 ).model_dump(mode="json")
             ),
-            "recipe": config.recipe.model_dump(mode="json"),
+            "recipe": recipe_document,
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
-            "training_family_counts": {
-                family: sum(counts[source.source_id].selected for source in config.sources if source.family == family)
-                for family in sorted(config.recipe.family_limits)
-            },
+            "training_family_counts": dict(sorted(config.recipe.family_limits.items())),
             "validation_rows": len(selection.sample),
             "full_validation_rows": len(selection.full),
             "validation_family_counts": selection.family_counts,
             "validation_task_ids": [task.id for task in selection.sample],
         }
+        if harness_datasets:
+            summary["harness_graded_datasets"] = sorted(harness_datasets)
         task_files = (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)
         _publish_selection(directory, config.output_path, task_files, summary)
 
@@ -620,14 +783,19 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
-    if not recipe.sources or set(recipe.sources.values()) != recipe.family_limits.keys():
+    if uncategorized := sorted({source.family for source in recipe.released} - AAII_CATEGORIES.keys()):
+        raise ValueError(f"Released families require AAII categories: {', '.join(uncategorized)}")
+    source_families = {**recipe.sources, **{source.uri: source.family for source in recipe.released}}
+    if len(source_families) != len(recipe.sources) + len(recipe.released):
+        raise ValueError("Selection sources must have distinct IDs")
+    if not source_families or set(source_families.values()) != recipe.family_limits.keys():
         raise ValueError("Selection sources must cover exactly the families with quotas")
     if recipe.source_limits is not None:
-        if recipe.source_limits.keys() != recipe.sources.keys():
+        if recipe.source_limits.keys() != source_families.keys():
             raise ValueError("Source quotas must cover exactly the selection sources")
         family_totals: Counter[str] = Counter()
         for source, limit in recipe.source_limits.items():
-            family_totals[recipe.sources[source]] += limit
+            family_totals[source_families[source]] += limit
         if family_totals != recipe.family_limits:
             raise ValueError("Source quotas must sum to each family quota")
     heldout = _pinned_inputs(f"{recipe.name}-heldout", recipe.heldout)

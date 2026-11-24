@@ -6,11 +6,13 @@
 import json
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from statistics import mean
 from typing import Literal, TypedDict
 
 import numpy as np
+from loguru import logger
 from finestore.rl.rl_progress import GRADER_REPORT_FILENAME
 from marinskyrl.resource_locator import join_resource_path
 from rolloutengine.models import RolloutOperation
@@ -114,7 +116,8 @@ class GraderStats:
         for row, result, passed, final in zip(metadata, results, successes, final_rows, strict=True):
             if not final:
                 continue
-            subset_id = row.subset_id or row.data_source or row.metric_class
+            subset_id = row.subset_id
+            assert subset_id is not None, "Reporting metadata must include a resolved subset"
             verified = result is not None and result.status is VerificationStatus.VERIFIED
             passed = passed and verified
             stats = self._subsets.setdefault(subset_id, _SubsetStats())
@@ -192,9 +195,11 @@ def write_grader_report(export_path: str, key: str, sections: Mapping[GraderRepo
     """Update the run report for one evaluation step or training attempt."""
     path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
-        report = json.loads(io.read_bytes(path))
-    except FileNotFoundError:
         report = {"training": {}, "evaluation": {}}
-    for section, value in sections.items():
-        report.setdefault(section, {})[key] = value
-    io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
+        with suppress(FileNotFoundError):
+            report = json.loads(io.read_bytes(path))
+        for section, value in sections.items():
+            report.setdefault(section, {})[key] = value
+        io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
+    except Exception:
+        logger.exception("Failed to update grader report at {} for {}", path, key)

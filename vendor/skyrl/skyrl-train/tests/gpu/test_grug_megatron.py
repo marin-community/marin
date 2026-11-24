@@ -920,6 +920,8 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
         parameter_names = list(checkpoint.keys())
     cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
     cfg.trainer.policy.megatron_config.moe_router_replay = True
+    with open_dict(cfg.generator.engine_init_kwargs):
+        cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
     cfg.trainer.use_sample_packing = True
     cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 3
     cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1

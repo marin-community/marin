@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
+    "taskforge",
     "haliax",
     "iris",
     "fray",
@@ -107,6 +108,7 @@ MARIN_NATIVE_CONFIG_TESTS = {
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
+    "taskforge": "marin-taskforge",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
@@ -131,10 +133,12 @@ UV_EXTRAS: dict[str, list[str]] = {
 }
 
 PYTHON_VERSION = "3.12"
+# `-n auto` counts physical cores, so it starts 2 workers on a 4-vCPU hosted runner.
+# `logical` starts one per vCPU.
 PYTEST_ARGS: tuple[str, ...] = (
     "--durations=5",
     "-n",
-    "auto",
+    "logical",
     "--dist=worksteal",
     "--tb=short",
 )
@@ -169,7 +173,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
+SHARD_COUNT: dict[str, int] = {"levanter": 5, "marin": 6}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -267,6 +271,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "rolloutengine-unit": (
         "lib/rolloutengine/",
+        "lib/finelog/",
         "lib/taskcompendium/",
         "lib/verifyit/",
         "lib/rigging/",
@@ -277,8 +282,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "taskforge-unit": (
         "lib/taskforge/",
-        "experiments/post_training/capability_driven_envs/",
-        "experiments/post_training/glm.py",
+        "experiments/taskforge/",
         "lib/rolloutengine/",
         "lib/zephyr/",
         "lib/fray/",
@@ -287,6 +291,8 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/shellbox/",
         "lib/verifyit/",
         "lib/rigging/",
+        "lib/finelog/",
+        "lib/finestore/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,

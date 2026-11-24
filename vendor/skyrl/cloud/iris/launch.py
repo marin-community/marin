@@ -31,13 +31,22 @@ from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_checkpoint
-from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
+from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_path, selected_export_checkpoint
+from marinskyrl.hf_model import validate_portable_hf_model_files
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
+from skyrl_train.checkpoint_listing import (
+    best_checkpoint_step,
+    cleanup_old_checkpoints,
+    committed_checkpoint_steps,
+    periodic_checkpoint_steps,
+)
+from skyrl_train.hf_export import protected_hf_export_steps
+from skyrl_train.io import io as checkpoint_io
 
 
 @dataclass(frozen=True)
@@ -186,6 +195,31 @@ def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
     )
 
 
+def _retain_terminal_checkpoints(config: DictConfig) -> None:
+    trainer = config.skyrl.trainer
+    if (selection := trainer.get("checkpoint_retention")) is None:
+        return
+    root = str(config.artifacts.checkpoint_root)
+    marker = StoragePath(root) / LATEST_CHECKPOINT_FILE
+    if not marker.exists():
+        return
+    latest = terminal_checkpoint_step(root)
+    best = best_checkpoint_step(root) if selection == "best" else None
+    selected = latest if best is None else best
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest, strict=True)
+    if selected > 0:
+        kept.add(selected)
+    protected = protected_hf_export_steps(root, strict=True)
+    if protected:
+        kept.update(committed_checkpoint_steps(root, latest, strict=True) & protected)
+    if not kept:
+        checkpoint_io.remove(str(marker))
+    elif (newest := max(kept)) != latest:
+        # Publish a retained checkpoint before deleting the former marker target.
+        checkpoint_io.write_bytes_atomic(str(marker), str(newest).encode())
+    cleanup_old_checkpoints(root, 0, kept | protected)
+
+
 def _result(
     config: DictConfig,
     state: LaunchState,
@@ -313,6 +347,11 @@ def execute_launch(
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
     receipt = _write_attempt_receipt(config, result)
     write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))
+    if config.run.mode == RunMode.TRAIN:
+        try:
+            _retain_terminal_checkpoints(config)
+        except Exception:
+            logger.exception(f"Failed to prune checkpoints for {config.run.id}")
     return result
 
 

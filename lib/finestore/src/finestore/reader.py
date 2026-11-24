@@ -32,13 +32,16 @@ from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
     BlobColumns,
     BlobTables,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     KeyRange,
     SealMarker,
     Shard,
     SystemColumns,
+    TableContentVersion,
     TableMetadata,
+    TableVersion,
     parse_uri,
 )
 from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorted_by_key
@@ -919,6 +922,13 @@ class ReadView(_ReadOperations):
         """The HEAD version that selected this view, or ``None`` for an empty archive."""
         return self._snapshot.token
 
+    @property
+    def commit_info(self) -> CommitInfo | None:
+        """Who published this view's commit and why, or ``None`` when that commit recorded neither."""
+        manifest = self._snapshot.manifest
+        info = manifest.commit_info
+        return info if info is not None and info.sequence == manifest.sequence else None
+
     def primary_key(self, table: str) -> tuple[str, ...]:
         return self._meta(table).primary_key
 
@@ -939,10 +949,17 @@ class ReadView(_ReadOperations):
         """Return the table names selected by this view's manifest."""
         return tuple(sorted(self._snapshot.manifest.tables))
 
+    def table_version(self, table: str) -> TableVersion:
+        """Capture the exact table state, including physical shard paths."""
+        return self._snapshot.manifest.table_version(table)
+
+    def table_content_version(self, table: str) -> TableContentVersion:
+        """Capture table contents for a guard that permits compaction."""
+        return self._snapshot.manifest.table_content_version(table)
+
     def schema_version(self, table: str) -> int | None:
-        """Return the table schema version, or ``None`` when it has no active shards."""
-        state = self._snapshot.manifest.tables.get(table)
-        if state is None or not state.shards:
+        """Return the published table schema version, or ``None`` when the table is absent."""
+        if table not in self._snapshot.manifest.tables:
             return None
         return self._meta(table).schema_version
 

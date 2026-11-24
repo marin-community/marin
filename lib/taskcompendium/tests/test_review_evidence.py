@@ -10,8 +10,10 @@ from taskcompendium.models import (
     CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
     ResourceGroups,
     ScriptGrader,
+    ServiceRequirement,
     Source,
     TaskSpec,
 )
@@ -44,11 +46,15 @@ def test_review_bounds_private_and_build_files_without_changing_the_task():
     assert isinstance(task, TaskSpec)
     large = inline_resource("large", b"x" * 100_000)
     build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), large))
-    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=build,
+        services=(ServiceRequirement(name="sidecar", docker_build=build),),
+    )
     task = task.model_copy(
         update={
             "environment_requirements": environment,
-            "grader": ScriptGrader(environment=environment, argv=("true",)),
+            "grader": ScriptGrader(placement=GraderMachine(environment=environment), argv=("true",)),
             "resources": ResourceGroups(verifier=(large,)),
         }
     )
@@ -56,11 +62,11 @@ def test_review_bounds_private_and_build_files_without_changing_the_task():
     payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
     assert "content_base64" not in json.dumps(payload)
     previews = {resource["role"]: resource for resource in payload["resources"] if resource["path"] == "large"}
-    assert previews.keys() == {"verifier", "actor_build", "grader_build"}
+    assert previews.keys() == {"verifier", "actor_build", "actor_build:sidecar", "grader_build", "grader_build:sidecar"}
     for preview in previews.values():
         assert preview["truncated"] and preview["byte_count"] == 100_000
         assert 0 < len(preview["text"]) < preview["byte_count"]
-    assert payload["resource_manifest"]["total_count"] == 5
+    assert payload["resource_manifest"]["total_count"] == 9
     assert task.model_dump_json() == original
 
 

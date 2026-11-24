@@ -2,8 +2,9 @@
 
 This guide adds a non-agentic benchmark to Marin's curated evaluation catalog
 and validates it end to end: unit tests, a local corpus build, a smoke run on a
-small served model, and a comparison with a reference. Agentic benchmarks run
-through Harbor instead; see [Harbor integration](../harbor-integration.md).
+small served model, and a comparison with a reference. Agentic benchmarks are
+Harbor task packages declared in `experiments.evaluation.benchmarks.agentic`; see
+[evaluation tasks](../references/evaluation-tasks.md).
 
 A curated benchmark is an immutable corpus of `TaskSpec` rows plus an
 `EvaluationProtocol`. The protocol fixes the request type, sampling, trials,
@@ -36,7 +37,7 @@ machine with a pinned Python environment.
 | New answer scorer | `lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/`, registered in `scorers/main.py` and `importers/evalchemy/grader.py` |
 | Source pin, population, protocol | `experiments/evaluation/benchmarks/<family>.py`, exposing `benchmarks()` |
 | Catalog registration | `experiments/evaluation/catalog.py` |
-| Non-default selections, judge bindings, suites | `experiments/evaluation/configs/evalchemy.yaml` |
+| Non-default selections, judge bindings, suites | `experiments/evaluation/configs/evaluations.yaml` |
 | Prompt and scorer tests | `lib/taskcompendium/tests/`: `test_checkpoint_harness.py` for likelihood templates, `test_evalchemy_<family>.py` for converters and scorers |
 
 Reuse an existing scorer when its answer format fits. `choices.py` extracts
@@ -235,7 +236,7 @@ Protocol fields that need a deliberate choice:
 
 Register the module in `experiments/evaluation/catalog.py` by adding it to the
 imported families and the tuple in `evaluation_benchmarks()`. The benchmark is
-then available as `--evals <key>`. Add an entry to `configs/evalchemy.yaml`
+then available as `--evals <key>`. Add an entry to `configs/evaluations.yaml`
 only for a non-default selection, such as a judge binding or a bounded smoke
 variant. Add it to a suite only when the suite's owners agree.
 

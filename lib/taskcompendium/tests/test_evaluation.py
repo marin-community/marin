@@ -9,18 +9,30 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
+from shellbox.machine import NetworkPolicy
 from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_items, task_rows
+from taskcompendium.evaluation.corpus import (
+    MANIFEST_FILENAME,
+    PROTOCOL_FILENAME,
+    chat_item,
+    evaluation_cases,
+    evaluation_items,
+    evaluation_protocol,
+    task_rows,
+)
 from taskcompendium.evaluation.selection import select_cases
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     ChatPromptVariant,
     CohortOrder,
     CohortPolicy,
     ContextPolicy,
+    EpisodeInputs,
+    EpisodeLimits,
     EvaluationProtocol,
     LimitStage,
     Metric,
@@ -30,9 +42,11 @@ from taskcompendium.evaluation.spec import (
     Sampling,
     SummaryKind,
     TaskGroup,
+    TerminusAgent,
     TextGeneration,
     TrialPolicy,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
@@ -112,6 +126,25 @@ def test_evaluation_publication_retains_duplicate_source_positions_and_detects_c
     (output / manifest.shards[0].items.path).write_bytes(b"changed after publication")
     with pytest.raises(ValueError, match="changed after publication"):
         list(evaluation_cases(str(output)))
+
+
+def test_published_context_policy_without_overflow_keeps_its_corpus_identity(corpus, tmp_path):
+    source, output, recipe, protocol = corpus
+    protocol = protocol.model_copy(update={"context_policy": ContextPolicy()})
+    publish((source, output, recipe, protocol), tmp_path)
+    legacy_protocol = protocol.model_dump(mode="json")
+    legacy_protocol["context_policy"].pop("overflow", None)
+    legacy_hash = canonical_sha256(legacy_protocol)
+    manifest = json.loads((output / MANIFEST_FILENAME).read_text())
+    manifest["protocol_hash"] = legacy_hash
+    (output / MANIFEST_FILENAME).write_text(json.dumps(manifest))
+    (output / PROTOCOL_FILENAME).write_text(json.dumps(legacy_protocol))
+
+    restored, restored_manifest = evaluation_protocol(str(output))
+
+    assert restored.fingerprint == restored_manifest.protocol_hash == legacy_hash
+    assert len(list(evaluation_cases(str(output)))) == 3
+    assert protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")}).fingerprint != legacy_hash
 
 
 @pytest.mark.parametrize("change", ["rewrite", "reject", "missing"])
@@ -297,6 +330,38 @@ class CharacterTokenizer:
         return self.encode("".join(message["content"] for message in conversation))
 
 
+def test_strict_context_preflight_yields_nothing_before_an_overflow(corpus, tmp_path):
+    source, output, recipe, protocol = corpus
+    (source / "rows.jsonl").write_text(
+        "\n".join(json.dumps({"prompt": text}) for text in ("short", "x" * 1000, "short")) + "\n"
+    )
+    protocol = protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")})
+    publish((source, output, recipe, protocol), tmp_path)
+    decisions = select_cases(
+        str(output),
+        protocol,
+        dataset_id="strict",
+        context_window=100,
+        max_tokens=20,
+        limit=None,
+        tokenizer=CharacterTokenizer(),
+    )
+    with pytest.raises(ValueError, match="cannot fit"):
+        next(decisions)
+    selected = list(
+        select_cases(
+            str(output),
+            protocol,
+            dataset_id="smoke",
+            context_window=100,
+            max_tokens=20,
+            limit=1,
+            tokenizer=CharacterTokenizer(),
+        )
+    )
+    assert sum(decision.case is not None for decision in selected) == 1
+
+
 def publish_cohort(corpus, tmp_path, cohort):
     source, output, recipe, protocol = corpus
     rows = [
@@ -449,3 +514,72 @@ def test_selected_payload_reread_retains_prompt_variant_chosen_before_output_cla
     assert decision.case is not None
     assert decision.case.task.context.events[0].content == "z" * 20
     assert decision.record.max_tokens == 16
+
+
+EPISODE = AgentEpisode(
+    harness=TerminusAgent(),
+    limits=EpisodeLimits(
+        max_turns=None,
+        max_total_tokens=None,
+        model_turn_timeout=600,
+        total_turn_timeout=900,
+        verifier_timeout=300,
+        attempt_timeout=3600,
+    ),
+)
+
+
+def episode_item(task, *, agent_timeout=1800):
+    return chat_item(task).model_copy(
+        update={
+            "operation": EPISODE,
+            "episode": EpisodeInputs(agent_timeout=agent_timeout, cpus=2, memory_mb=4096, network=NetworkPolicy.DENY),
+        }
+    )
+
+
+@pytest.fixture
+def episode_corpus(corpus):
+    source, output, recipe, protocol = corpus
+    return source, output, recipe, protocol.model_copy(update={"operation": OperationKind.AGENT_EPISODE})
+
+
+def test_agent_episode_corpus_round_trips_inputs_and_selects_without_prompt_admission(episode_corpus, tmp_path):
+    publish(episode_corpus, tmp_path, episode_item)
+    root = str(episode_corpus[1])
+    cases = list(evaluation_cases(root))
+    assert [case.item for case in cases] == [episode_item(case.task) for case in cases]
+    assert cases[0].item.operation.limits_for(cases[0].item.episode) == EPISODE.limits.model_copy(
+        update={"total_turn_timeout": 1800}
+    )
+    decisions = list(
+        select_cases(
+            root,
+            episode_corpus[3],
+            dataset_id="episodes",
+            context_window=8,
+            max_tokens=64,
+            limit=None,
+            tokenizer=CharacterTokenizer(),
+        )
+    )
+    assert [(decision.case is not None, decision.record.max_tokens) for decision in decisions] == [(True, 20)] * 3
+
+
+def test_chat_items_serialize_without_episode_inputs(corpus, tmp_path):
+    publish(corpus, tmp_path)
+    case = next(evaluation_cases(str(corpus[1])))
+    assert "episode" not in json.loads(case.item.model_dump_json())
+
+
+@pytest.mark.parametrize(
+    "item_builder",
+    [
+        pytest.param(chat_item, id="missing-episode-inputs"),
+        pytest.param(lambda task: episode_item(task, agent_timeout=3400), id="no-attempt-backstop"),
+    ],
+)
+def test_agent_episode_publication_rejects_invalid_items(episode_corpus, tmp_path, item_builder):
+    with pytest.raises((ValueError, ZephyrWorkerError)):
+        publish(episode_corpus, tmp_path, lambda task: item_builder(task).model_copy(update={"operation": EPISODE}))
+    assert not (episode_corpus[1] / MANIFEST_FILENAME).exists()

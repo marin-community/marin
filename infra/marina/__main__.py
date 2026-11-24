@@ -41,7 +41,9 @@ from marina.host_bindings import (
     AppletHostAccess,
     applet_domains_env,
     applet_host_access,
+    dns_zone_name,
     domain_mapping_name,
+    host_resource_slug,
     normalize_hostname,
 )
 from marina.releases import require_current_main
@@ -67,6 +69,8 @@ READER_GROUP = "eng-all@openathena.ai"
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
+# The Cloudflare zone of Marina's own hosts. Its hosts keep first-label resource names.
+PRIMARY_DNS_ZONE = "oa.dev"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
@@ -148,6 +152,11 @@ def main() -> None:
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
     applet_hosts = applet_host_access(host_list(config, "applet_domains"), host_list(config, "public_applet_domains"))
     applet_domains = applet_domains_env(applet_hosts)
+    dns_zones = config.get_object("dns_zones") or {}
+    if not isinstance(dns_zones, dict) or not all(
+        isinstance(name, str) and isinstance(zone_id, str) for name, zone_id in dns_zones.items()
+    ):
+        raise ValueError("marin-marina:dns_zones must map DNS zone names to Cloudflare zone IDs")
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -393,12 +402,15 @@ def main() -> None:
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
+    # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
+    # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
+    # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
     # server-set metadata, so those fields and the route are ignored on update. The logical name
     # carries the surface, so moving a host between applet_domains and public_applet_domains in
     # one deploy fails with a duplicate mapping instead of silently keeping the old route; move a
-    # host in two deploys: remove, then re-add. Set marin-marina:dns_zone_id to enable.
-    dns_zone_id = config.get("dns_zone_id")
-    if dns_zone_id:
+    # host in two deploys: remove, then re-add. Each host's record goes in the most specific zone
+    # of marin-marina:dns_zones that contains it. Set dns_zones to enable.
+    if dns_zones:
         surfaces = {
             AppletHostAccess.AUTHENTICATED: (SERVICE, service),
             AppletHostAccess.PUBLIC: (PUBLIC_APPLET_SERVICE, public_applet_service),
@@ -412,11 +424,12 @@ def main() -> None:
         }
         for host, access in hosts.items():
             route_name, route_service = surfaces[access]
-            slug = host.split(".")[0]
+            zone_name = dns_zone_name(host, dns_zones)
+            slug = host_resource_slug(host, zone_name, PRIMARY_DNS_ZONE)
             # The public reader's own host predates surface-qualified names; keep its state.
             aliases = [pulumi.Alias(name=f"{slug}-domain")] if host == PUBLIC_APPLET_HOST else None
             gcp.cloudrun.DomainMapping(
-                domain_mapping_name(host, access),
+                domain_mapping_name(slug, access),
                 name=host,
                 location=REGION,
                 metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
@@ -432,7 +445,7 @@ def main() -> None:
             )
             cloudflare.DnsRecord(
                 f"{slug}-dns",
-                zone_id=dns_zone_id,
+                zone_id=dns_zones[zone_name],
                 name=host,
                 type="CNAME",
                 content=CLOUD_RUN_FRONTEND,

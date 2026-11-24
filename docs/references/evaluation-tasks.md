@@ -15,7 +15,7 @@ remain separate work; this path produces no headline score or legacy
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
-| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
+| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, resume, and reuse of stored model responses |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
@@ -54,7 +54,7 @@ sends the largest variant that fits the served context and output budget, so the
 truncation is part of the published corpus and every model receives every item.
 
 Operations distinguish chat generation, raw-text generation, choice likelihood,
-and continuation likelihood. Chat preserves the source conversation without an
+continuation likelihood, and agent episodes. Chat preserves the source conversation without an
 added submission instruction. Likelihood preserves context/continuation token
 boundaries and source normalization. Ordinary protocols limit candidate rows
 before context preflight. Protocols with `LimitStage.ELIGIBLE`, including MRCR
@@ -62,6 +62,62 @@ and GraphWalks, refill after context exclusions until the eligible-row limit is
 met or candidates are exhausted. Both apply limits before trial expansion.
 Context selection records exclusions and token
 budgets; it never silently truncates an oversized chat prompt.
+
+An `AgentEpisode` operation runs a multi-turn harness on a task machine. Its
+`harness` declares the agent: `ShellAgent`, `TerminusAgent`, `MiniSweAgent`, or `PiAgent`
+with Pi's version pin, thinking level, compaction reserve and setup timeout. It also declares
+`EpisodeLimits`: turn and token limits, the model-turn timeout, the agent's
+`total_turn_timeout`, the verifier timeout, and the `attempt_timeout` backstop. `None`
+sets no limit. Agent protocols declare generation sampling, which applies to every
+shell and Terminus request, followed by the model's `agent.agent_kwargs.extra_body`,
+as Harbor's agents send it; Pi sends its own sampling, output limit and thinking
+switch, and the protocol's `max_tokens` becomes Pi's per-reply limit. mini-swe-agent
+likewise sends its own requests, with the protocol's `max_tokens` as its largest reply.
+A Pi run also needs the model's `agent.agent_kwargs.thinking_format`, which says how Pi
+switches the served model's thinking. The model's `agent.agent_kwargs.model_format`,
+`openai` by default or `k2_horizon`, is Harbor's mini-swe-agent history format. Agent protocols declare no context policy: the harness renders its own prompts, so selection admits rows without
+counting prompt tokens. Each agent item also carries `EpisodeInputs` from the source
+task: an optional `agent_timeout` and `verifier_timeout`, which replace the
+protocol's values, a network policy, and optional CPU, memory, storage, and GPU
+requests, which replace the run's task-machine resources. Publication rejects an
+agent item without episode inputs, inputs on any other item, and resolved timeouts
+whose agent and verifier budgets reach the attempt backstop.
+
+`experiments.evaluation.benchmarks.agentic` declares the Harbor datasets. Each pins
+the packages its Harbor policy ran and stages one archive per package, in Harbor
+Hub's layout, from one of three sources: a Hugging Face dataset commit
+(`HarborRepoSource`), a Harbor Hub release by content digest (`HarborHubSource`), or,
+for a Harbor registry dataset, the GitHub archive of the registry's commit, checked
+against its SHA-256 (`HarborArchiveSource`). Each package lowers with
+`taskcompendium.importers.harbor`, and the dataset pins its container images through
+a checked-in lock in `experiments/evaluation/benchmarks/harbor_images/`. The package's
+agent and verifier timeouts, resources and network policy become the item's
+`EpisodeInputs`. The attempt backstop is four hours unless a dataset declares a longer
+one for packages whose agent and verifier timeouts sum past it. Each reply is limited
+to the policy's output limit, Harbor's default of 8,192 tokens when the policy sets
+none, or the run's smaller budget. A package the importer cannot lower is a rejection,
+and a corpus with a rejection does not publish. A dataset's grading rule runs each
+package's `tests/test.sh` by default.
+Packages whose tests call an LLM judge with host credentials instead use a rule from
+`experiments.evaluation.benchmarks.harbor_judges`, which captures the answer file and
+grades it on the host with a judge that sends the script's request; such a dataset
+sets `requires_judge`, and its runs name the rule's judge model in their judge
+identity. FinanceAgent's tools also read `SEC_EDGAR_API_KEY`, `SERPAPI_API_KEY`,
+`MODEL_FOR_TOOLS` and `OPENAI_API_KEY` on the task machine, which its runs supply
+through `task_secrets`. A dataset's `edits` change its packages before lowering;
+FinanceAgent's replace LiteLLM in its image and `retrieve_information` tool with the
+OpenAI SDK. Refresh a lock after changing a dataset's source:
+
+```bash
+uv run python -m experiments.evaluation.benchmarks.agentic lock <lock>
+```
+
+An agent-episode `EvaluationCorpusRecipe` in `experiments.evaluation` declares its
+`AgentEpisode` as `agent`, and publication rejects items that run another operation.
+The launcher plans and records that harness before the corpus is built. Each
+registered harness has a revision in
+`marin.evaluation.task_worker.EPISODE_HARNESS_REVISIONS`; bump it when the harness's
+prompts, parsing, tools or options change.
 
 Use CalVer for authored recipe and protocol revisions. Keep upstream commit
 pins, content hashes, and schema versions in their own fields. A changed
@@ -151,6 +207,29 @@ options. For Grug or Snowball served without a reasoning parser, use
 reasoning. The option is recorded in the run descriptor; changing it requires a
 new result root.
 
+Agent episodes require a `task_machine` in the run configuration. Its `backend`
+selects the Shellbox factory, and its resources are defaults for items that set none.
+The episode's limits replace the run's turn, token, model, agent, verifier, and attempt
+limits; the run still supplies `tool_turn_timeout` and `cleanup_timeout`. Machine
+settings are part of the run identity, so changing the backend requires a new result
+root. The worker builds factories for the `local`, `docker`, and `daytona` backends that
+the task and verifier machines select, and rejects others. Daytona uses the eval
+account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`),
+then passes the key to the Iris worker as `DAYTONA_API_KEY`
+and installs `marin-core`'s `daytona` extra. Harness names resolve through
+`marin.evaluation.task_worker.episode_harnesses`; library callers pass their own
+`harnesses` mapping to `run_evaluation`.
+
+A task machine's variables may read host values through whole-value `${NAME}` or
+`${NAME:-default}` templates. The worker resolves them from its own environment when it creates the machine, so the
+run declares each name it supplies in `task_secrets`; `run_evaluation` rejects a task
+that reads any other name before its first attempt. A curated launch sets
+`run.task_secrets` to ordered secret references for each name, as `judge_api_key`
+does for the judge, and the worker receives the values as Iris secrets.
+`task_driver` reads each declared name with `require_secret` for an Iris worker;
+with `--local`, the names must be set in its environment. The run descriptor records
+the names, never the values.
+
 Omit `--local` to submit a disposable privileged Iris CPU worker. Shellbox's
 bubblewrap backend needs permission to create namespaces; local execution needs
 a host with the same support. Grader machines deny network access unless a
@@ -185,6 +264,53 @@ environment. Source program builders prepare tests and apply the benchmark
 execution timer. A completion receipt distinguishes finished tests from an early
 process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
 
+## Trivial-reply floor
+
+A benchmark's trivial-reply floor is the score its graders give to replies that
+ignore the task. A grader can credit such a reply: one word satisfies
+instruction constraints that only restrict the reply, and `0` matches numeric
+answers of zero. `experiments.evaluation.trivial_replies` passes each reply to
+`run_evaluation` in place of the model, so cohort selection, prompt variants,
+response selection, grading, and grading retries are those of a model run.
+
+| Reply | Text |
+| --- | --- |
+| `empty` | the empty string |
+| `word` | `hello` |
+| `zero` | `0` |
+| `abstain` | `I don't know.` |
+| `echo` | the request's last user message |
+| `json_empty`, `json_word`, `json_abstain`, `json_echo` | the plain reply of that name as a JSON string |
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.trivial_replies \
+  --dataset "$CORPUS_ROOT" \
+  --config run-config.json \
+  --output scratch/trivial-replies
+```
+
+`--config` is the run configuration of the model run to compare with. Its
+tokenizer, context window, token budgets, and source limit select the cohort
+and prompts of that run. The command replaces the model identity with
+`trivial-reply/<reply>` and drops the judge, and writes each reply's archive to
+`<output>/<reply>`, which resumes like any result root. It runs on the host, as
+`task_driver --local` does, so graders that need a machine need Shellbox's
+bubblewrap backend. The driver refuses corpora scored by likelihood and corpora
+graded by a judge.
+
+`--reply` selects replies and repeats; the default is the five plain replies.
+A JSON-value answer format parses the whole reply as one JSON value, so a plain
+reply other than `0` is a malformed submission there, as it is for a model. The
+JSON replies show what the grader gives the same text as a JSON string. A reply
+is not cut at the output budget or at stop sequences, and its attempts record
+zero tokens.
+
+The command prints a Markdown table with each benchmark's primary metric per
+reply, reduced by `benchmark_scores` in `evalrecords.rollout_results`, which
+`score_curated_record` also uses. A pass/fail metric is followed by the trials
+that passed over the trials scored, and any other metric by the trials scored.
+
 ## Published corpus and raw results
 
 | Corpus file | Contract |
@@ -207,8 +333,14 @@ FineStore stores `samples`, `rollouts_v1`, `evaluation_attempts`, and
 `evaluation_selection`, with `evaluation/run.json` and per-attempt evidence
 blobs. The run descriptor binds model and driver identities to corpus/protocol
 snapshots and execution settings. Raw evidence retains named metrics, weights,
-extractions, token likelihoods, and eligibility decisions. Infrastructure
-failures remain unscored; they do not become synthetic zero scores.
+extractions, token likelihoods, eligibility decisions, and each rollout's resolved limits.
+Infrastructure failures remain unscored; they do not become synthetic zero scores.
+
+An episode that reaches its turn, token, length, or agent deadline is graded on what it
+completed. An attempt that fails before the harness starts, such as a failed machine
+build, provider call, or setup command, is an infrastructure failure, as are an expired
+attempt backstop, a terminated machine, and a deadline reached before the first model
+response. Other unexpected errors stop the run after saving their evidence.
 
 Repeat the same command and output root to resume. Request concurrency may change
 without invalidating completed observations; model, source, selection and scoring
@@ -229,6 +361,42 @@ source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at
 `phase="started"` have no terminal result. Exhausted infrastructure
 failures preserve evidence and raise `EvaluationInfrastructureError`.
+
+## Regrade stored model responses
+
+A grader correction publishes a new corpus, which an existing result root
+cannot resume. To grade the model responses that a run already stored on the
+new corpus, pass the run's result root as `--responses-from`:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.task_driver --local \
+  --responses-from scratch/eval-run \
+  --dataset "$NEW_CORPUS_ROOT" \
+  --config run-config.json --endpoint-file endpoint.txt \
+  --output scratch/eval-run-regraded
+```
+
+A generation attempt then takes the latest completed model response that the
+source run stored for the same benchmark, source row, and trial, provided the
+attempt sends the identical request: the same messages and sampling options,
+including the trial seed. The new corpus's response policy selects the graded
+text from the stored channels. Every other attempt asks the endpoint, so the
+command takes `--config` and an endpoint as any run does. The run
+configuration must keep the source run's model identity. Judged tasks call the
+judge again, so judge variation also changes grades.
+
+Raw evidence names the source root, its run identity, and the evidence blob in
+`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
+that reuses its own response after a grading failure does. `evaluation/run.json`
+lists each source in `response_sources` with its root, run identity, and
+`driver_revision`, so a regraded root differs from a fresh run on the same
+corpus without opening the evidence. Only model identity is checked, so the
+recorded revision is how to tell that responses stored under another driver
+revision were graded under the current one. The sources are not part of the
+run identity. A resume keeps the sources already recorded and adds a new one.
+Without `--local`, the run goes to Iris as usual, and the source root must be
+shared object storage as well.
 
 ## Summary semantics
 
@@ -252,7 +420,9 @@ does not divide by the total number of continuation tokens.
 Groups use the declared reduction independently. MRCR's headline is a row mean;
 its cell means are separate summaries, with no equal weighting of cells in the
 headline. NUPA uses ordinary means; task/bucket stratification constructs the
-population and supplies group labels. FinanceBench uses means. SimpleQA and
+population and supplies group labels. FinanceBench uses means. EconEvals uses a
+weighted mean of `win_rate` over judged games, so 0.5 is parity with the
+baseline: the paper's o3-mini, or o3 for the `-o3` variants. SimpleQA and
 SimpleQAMini use classification summaries.
 
 The shared evaluation CLI and checkpoint menus now select these curated corpora.
@@ -299,6 +469,6 @@ coverage or recorded uncertainty.
 
 See [task curation](task-curation.md) for acquisition and publication,
 [running evaluations](../tutorials/run-lm-evals.md) for the shared launcher, and
-[task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
-separate. Historical Evalchemy archives remain readable; reproducing their runs
+[task rollouts](task-rollouts.md) for single-task execution. Harbor policies passed with
+`--harbor-config` run through Harbor; see [Harbor integration](../harbor-integration.md). Historical Evalchemy archives remain readable; reproducing their runs
 requires the recorded checkout.

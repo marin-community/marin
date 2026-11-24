@@ -3,11 +3,10 @@
 
 import pytest
 from verifyit.adapters.skyrl import (
-    grade_aime_candidate,
     grade_aime_extracted,
     grade_grid_candidate,
+    grade_gsm8k_extracted,
     grade_gsm8k_final_line,
-    grade_gsm8k_strict,
     grade_rounded_candidate,
     grade_search_em,
 )
@@ -48,7 +47,7 @@ from verifyit.modes.grade_exact import grade_literal_candidate
     ],
 )
 def test_aime_normalized_answer_exact_rational_equivalence(expected, candidate, reward):
-    verdict = grade_aime_candidate(expected, candidate)
+    verdict = grade_aime_extracted(expected, candidate)
     assert (verdict.reward, verdict.status) == (reward, Status.SCORED)
 
 
@@ -67,22 +66,6 @@ def test_aime_normalized_answer_exact_rational_equivalence(expected, candidate, 
 )
 def test_gsm8k_requires_exact_value_on_standalone_final_line(expected, response, reward):
     verdict = grade_gsm8k_final_line(expected, response)
-    assert (verdict.reward, verdict.status) == (reward, Status.SCORED)
-
-
-@pytest.mark.parametrize(
-    ("expected", "response", "reward"),
-    [
-        ("42", "#### 42\n#### 41", 1.0),
-        ("42", "#### 41\n#### 42", 0.04),
-        ("42", "no marker 42", 0.0),
-        ("1234", "#### 12,34", 1.0),
-        ("42", "#### 42.0", 0.04),
-        ("42", "#### .", 0.04),
-    ],
-)
-def test_gsm8k_strict_retains_first_marker_literal_equality_and_turn_shaping(expected, response, reward):
-    verdict = grade_gsm8k_strict(expected, response, format_score=0.2 / 5)
     assert (verdict.reward, verdict.status) == (reward, Status.SCORED)
 
 
@@ -145,9 +128,9 @@ def test_invalid_grid_reference_is_not_candidate_zero(reference):
 
 
 @pytest.mark.parametrize("expected", [".", "nan", "inf"])
-def test_gsm8k_malformed_reference_cannot_award_literal_or_format_credit(expected):
+def test_gsm8k_malformed_reference_cannot_award_literal_credit(expected):
     with pytest.raises(InvalidTask, match="finite decimal"):
-        grade_gsm8k_strict(expected, f"#### {expected}", format_score=0.04)
+        grade_gsm8k_extracted(expected, expected)
 
 
 @pytest.mark.parametrize(
@@ -170,7 +153,7 @@ def test_gsm8k_malformed_reference_cannot_award_literal_or_format_credit(expecte
 @pytest.mark.parametrize("candidate", ["", "42", "same_reference"])
 def test_aime_invalid_reference_precedes_candidate_scoring(expected, candidate):
     with pytest.raises(InvalidTask, match="one valid exact answer"):
-        grade_aime_candidate(expected, expected if candidate == "same_reference" else candidate)
+        grade_aime_extracted(expected, expected if candidate == "same_reference" else candidate)
 
 
 @pytest.mark.parametrize(
@@ -178,7 +161,7 @@ def test_aime_invalid_reference_precedes_candidate_scoring(expected, candidate):
     [r"\frac{1}{0}", "nan", "inf", "42,43", "43,42", r"\sqrt{\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}}"],
 )
 def test_aime_undefined_or_multiple_candidates_cannot_earn_credit(candidate):
-    assert grade_aime_candidate("42", candidate).reward == 0.0
+    assert grade_aime_extracted("42", candidate).reward == 0.0
 
 
 def test_deep_grid_candidate_is_schema_zero_and_cannot_mask_invalid_reference():

@@ -90,6 +90,16 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
 
 
 @pytest.mark.parametrize(
+    "answer",
+    [r"67.\overline{3}", r"32 \text{ white}, 16 \text{ black}", r"x = \frac\pi 2 = 2", r"1$ + $2"],
+)
+def test_math_partial_reference_is_rejected_during_conversion(answer):
+    converted = math_answer_task(ROW, prompt="Solve.", answer=answer)
+    assert isinstance(converted, ImportRejection)
+    assert (converted.kind, converted.reason) == (DEFECT, "invalid_reference")
+
+
+@pytest.mark.parametrize(
     "task,answer,expected",
     [
         (math_answer_task(ROW, prompt="Half of one?", answer=r"\boxed{\frac{1}{2}}"), r"\boxed{\frac{1}{2}}", 1.0),

@@ -21,7 +21,6 @@
 //! unlinked while referenced, so the scan prunes by the pinned metadata first
 //! and reads selected objects from the cache or backing store.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -40,7 +39,9 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::{
+    PruningPredicate, PruningPredicateBuilder, PruningStatistics,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource_parquet::source::ParquetSource;
@@ -292,14 +293,14 @@ impl NamespaceProvider {
             let mut file = PartitionedFile::new(location, objects.source.version.byte_size);
             file.object_meta.e_tag = objects.source.version.e_tag.clone();
             file.object_meta.version = objects.source.version.provider_version.clone();
-            file.extensions = Some(Arc::new(SegmentFile {
+            file.extensions.insert(SegmentFile {
                 objects: objects.clone(),
                 artifacts: self
                     .segment_artifacts
                     .get(path)
                     .cloned()
                     .unwrap_or_default(),
-            }));
+            });
             groups[index % partitions].push(file);
         }
         let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
@@ -401,7 +402,8 @@ impl NamespaceProvider {
     }
 
     /// A pruning predicate over the segments' integer bounds, or `None` when
-    /// `filters` cannot rule out any segment.
+    /// `filters` cannot rule out any segment. Columns without Int64 bounds have
+    /// no statistics here, so a conjunct over them never rules a segment out.
     fn int_bounds_predicate(
         &self,
         state: &dyn Session,
@@ -412,8 +414,16 @@ impl NamespaceProvider {
         };
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
         let physical = state.create_physical_expr(filter, &df_schema)?;
-        let predicate = PruningPredicate::try_new(physical, Arc::clone(&self.schema))?;
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&self.schema))
+            .try_build(physical)?;
         Ok((!predicate.always_true()).then_some(predicate))
+    }
+
+    fn is_int64_column(&self, name: &str) -> bool {
+        self.schema
+            .field_with_name(name)
+            .is_ok_and(|field| *field.data_type() == DataType::Int64)
     }
 
     /// `path`'s recorded `(min, max)` for the Int64 `column`, if it has one.
@@ -646,8 +656,7 @@ struct SegmentIntStatistics<'a> {
 
 impl SegmentIntStatistics<'_> {
     fn bound(&self, column: &Column, pick: fn((i64, i64)) -> i64) -> Option<ArrayRef> {
-        let field = self.provider.schema.field_with_name(&column.name).ok()?;
-        if *field.data_type() != DataType::Int64 {
+        if !self.provider.is_int64_column(&column.name) {
             return None;
         }
         let values = self.provider.segment_paths.iter().map(|path| {
@@ -676,7 +685,7 @@ impl PruningStatistics for SegmentIntStatistics<'_> {
         None
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         None
     }
 
@@ -687,10 +696,6 @@ impl PruningStatistics for SegmentIntStatistics<'_> {
 
 #[async_trait]
 impl TableProvider for NamespaceProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -1556,12 +1561,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let files: Vec<_> = config
@@ -1575,7 +1578,7 @@ mod tests {
             .location
             .as_ref()
             .ends_with(".fidx.workers.parquet"));
-        assert!(files[0].extensions.is_none());
+        assert!(files[0].extensions.is_empty());
 
         ctx.register_table("workers", Arc::new(provider)).unwrap();
         let batches = ctx
@@ -1811,12 +1814,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let locations: Vec<&str> = config
@@ -1935,12 +1936,10 @@ mod tests {
         .await
         .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let selected: Vec<_> = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
             .file_groups
@@ -1996,12 +1995,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let locations: Vec<&str> = config
@@ -2094,19 +2091,17 @@ mod tests {
             "header coverage should reject the predicate before reading the corrupt payload"
         );
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2193,19 +2188,17 @@ mod tests {
             "the registered policy should reject the predicate before reading legacy postings"
         );
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2425,20 +2418,16 @@ mod tests {
         use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let cfg = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec")
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let mut checked = 0;
         for group in &cfg.file_groups {
             for pf in group.files() {
                 let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .extension::<ParquetAccessPlan>()
                     .expect("trigram access plan attached to the partitioned file");
                 let [RowGroupAccess::Selection(selection)] = ap.inner() else {
                     panic!("expected one row group carrying a row selection: {ap:?}");
@@ -3022,18 +3011,16 @@ mod tests {
                 .await
                 .unwrap();
         let config = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec")
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -3210,16 +3197,15 @@ mod tests {
             .await
             .unwrap();
         // No access-plan extension is attached when there is no contains() filter.
-        let exec = plan.as_any().downcast_ref::<DataSourceExec>().unwrap();
+        let exec = plan.downcast_ref::<DataSourceExec>().unwrap();
         let cfg = exec
             .data_source()
-            .as_any()
             .downcast_ref::<datafusion::datasource::physical_plan::FileScanConfig>()
             .unwrap();
         for group in &cfg.file_groups {
             for pf in group.files() {
                 assert!(
-                    pf.extensions.is_none(),
+                    pf.extensions.is_empty(),
                     "no prune extension on the hot path"
                 );
             }

@@ -245,6 +245,19 @@ def test_reasoning_gym_rejects_confirmed_invalid_tsumego_ground_truth():
     )
 
 
+@pytest.mark.parametrize(
+    "task_name",
+    ["coin_flip", "complex_arithmetic", "game_of_life_halting", "propositional_logic", "puzzle24"],
+)
+def test_reasoning_gym_keeps_tasks_with_repaired_scorers(task_name):
+    path = "ultra_sft_step3200_reasoning_gym"
+    result = convert_row(
+        RECIPES[pipeline_name("rlvr2", path)],
+        {**COMPONENT_ROWS[path], "metadata": {"source_dataset": task_name}},
+    )
+    assert isinstance(result, NormalizedTask)
+
+
 def test_competitive_code_rejects_constructive_problem_without_its_special_judge():
     path = "ultra_sft_step3200_comp_coding"
     result = convert_row(
@@ -348,6 +361,7 @@ def test_subset_label_does_not_hide_duplicates(staged):
     task = task_for("ultra_sft_step3200_comp_coding", staged)
     archived = task.model_copy(update={"labels": {}})
 
+    assert task.labels == {"subset_id": "ultra_sft_step3200_comp_coding"}
     assert deduplication_key(task) == deduplication_key(archived)
 
 
