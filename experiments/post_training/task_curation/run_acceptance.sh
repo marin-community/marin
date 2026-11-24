@@ -43,7 +43,7 @@ PY
 # The sandbox graders run on Daytona through the rollout engine's machine
 # machinery, so the environment carries the shellbox Daytona extra and the
 # rollout engine alongside the taskcompendium pipeline extra.
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] \
+uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline] \
   --with-editable "./lib/shellbox[daytona]" \
   --with-editable ./lib/rolloutengine python -m \
   experiments.post_training.task_curation.acceptance_controls \
