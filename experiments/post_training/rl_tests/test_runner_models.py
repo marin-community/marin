@@ -249,7 +249,7 @@ def test_resume_inherits_the_source_runs_initializer(
         return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
 
     preset = replace(preset, then=collect)
-    table = replace(table, presets=(preset,))
+    table = replace(table, presets=(preset,), control_pins={})
     started = plan(table, preset.name, *start_args)
     assert started.exit_code == 0, (started.output, started.exception)
     (source,) = runs
