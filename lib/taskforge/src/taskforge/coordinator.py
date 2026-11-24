@@ -121,14 +121,12 @@ async def run_workpiece(
     stage = Stage.AUTHOR
     config_digest = digest(config.policy)
     interrupted = False
-    stage_attempts: dict[tuple[Stage, int], int] = {}
+    attempt = 1  # of the executing stage visit; a failed attempt replays the same stage and round
     try:
         async with ctx.scope("workpiece"):
             install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
             while True:
-                key = (stage, wp.round)
-                attempt = stage_attempts.get(key, 1)
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:
@@ -140,10 +138,10 @@ async def run_workpiece(
                     await ctx.emit(Note(cause))
                     if attempt >= STAGE_REPLAY_ATTEMPTS:
                         raise
-                    stage_attempts[key] = attempt + 1  # replay the interrupted stage
+                    attempt += 1  # replay the interrupted stage
                 else:
                     # A completed visit resets the budget, so a same-round re-entry starts with a full one.
-                    stage_attempts.pop(key, None)
+                    attempt = 1
                     previous_round = wp.round
                     wp, following = advance(wp, stage, result, config)
                     if wp.round != previous_round:

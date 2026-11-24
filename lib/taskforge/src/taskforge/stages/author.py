@@ -21,7 +21,6 @@ from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.stages.summary import validation_path
 
 # The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
 # wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
@@ -101,7 +100,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                 )
             )
         writes.extend(
-            (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
+            (workdir / ".validation" / f"{index}.json", VALIDATION_RESULT.dump_json(evidence))
             for index, evidence in enumerate(workpiece.evidence)
         )
         writes.append((workdir / "proposal.json", proposal.encode()))

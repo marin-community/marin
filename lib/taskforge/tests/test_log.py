@@ -206,3 +206,20 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
     before = Path(sink.path).read_bytes()
     await sink.write(loaded[-1:])
     assert Path(sink.path).read_bytes() == before
+
+
+HELD_JOURNAL = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
+COLD_READER = """
+import gzip, sys
+import taskforge.driver
+from taskforge.effects.log import decode
+print(len(decode(gzip.decompress(open(sys.argv[1], "rb").read()))))
+"""
+
+
+async def test_driver_import_decodes_held_journal_in_cold_process() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", COLD_READER, str(HELD_JOURNAL)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["57"]

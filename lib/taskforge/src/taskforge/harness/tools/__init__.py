@@ -19,6 +19,17 @@ from taskforge.lowering import LoweringSettings
 from taskforge.policy import Policy
 
 
+def _named(*tools: Tool[object]) -> Mapping[str, Tool[object]]:
+    return MappingProxyType({tool.schema.name: tool for tool in tools})
+
+
+def adversary_tools(
+    *, task_path: str, policy: Policy, factories: Mapping[str, MachineFactory], settings: LoweringSettings
+) -> Mapping[str, Tool[object]]:
+    shell = ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float))
+    return _named(shell, ReadFileTool(), GradeTool(task_path, factories, settings), FinishTool())
+
+
 def standard_tools(
     *,
     task_path: str,
@@ -28,7 +39,7 @@ def standard_tools(
     settings: LoweringSettings,
     gate: Gate,
 ) -> Mapping[str, Tool[object]]:
-    tools: tuple[Tool[object], ...] = (
+    return _named(
         ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float)),
         ReadFileTool(),
         WriteFileTool(),
@@ -38,16 +49,3 @@ def standard_tools(
         WebSearchTool(),
         WebFetchTool(),
     )
-    return MappingProxyType({tool.schema.name: tool for tool in tools})
-
-
-def adversary_tools(
-    *, task_path: str, policy: Policy, factories: Mapping[str, MachineFactory], settings: LoweringSettings
-) -> Mapping[str, Tool[object]]:
-    tools: tuple[Tool[object], ...] = (
-        ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float)),
-        ReadFileTool(),
-        GradeTool(task_path, factories, settings),
-        FinishTool(),
-    )
-    return MappingProxyType({tool.schema.name: tool for tool in tools})
