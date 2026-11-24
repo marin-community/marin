@@ -20,7 +20,7 @@ from click.testing import CliRunner
 from marina.applets import AppletManifest, AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
-from marina.db import UrlDatabase, grant_read
+from marina.db import UrlDatabase, grant_read_on_connection
 from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
@@ -559,7 +559,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
         connection.execute(text("CREATE SCHEMA shared_read"))
         connection.execute(text("CREATE TABLE shared_read.values (value INTEGER)"))
         connection.execute(text("INSERT INTO shared_read.values VALUES (17)"))
-    grant_read(store.engine, "shared_read", APPLET_READER_ROLE)
+        grant_read_on_connection(connection, "shared_read", APPLET_READER_ROLE)
     shared = client.post(
         f"/a/{applet_id}/query",
         json={"sql": "SELECT value FROM shared_read.values", "parameters": {}},
