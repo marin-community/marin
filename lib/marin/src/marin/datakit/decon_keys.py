@@ -73,8 +73,7 @@ BEFORE = 1500
 AFTER = 3000
 # Pieces of a record over MAX_DOC_CHARS overlap by this much, so a key hit and its excerpt lie in one piece.
 PIECE_OVERLAP = 2 * (BEFORE + AFTER)
-# A piece edge moves back by at most this much so that it does not fall inside a JSON escape: at the depth that
-# readings undo, the longest is 7 characters ("\\\\u0020").
+# A piece edge moves back by at most this much so that it does not cut a LaTeX command or an escape.
 EDGE_SHIFT = 16
 LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
 
@@ -465,10 +464,11 @@ def excerpt(
 
 def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, width: int = WINDOW) -> Iterator[str]:
     """Pieces of *text* of at most *size* characters. Consecutive pieces share at least *overlap* characters, so
-    every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until the text
-    stream of each of its ``readings`` holds *width* characters, so a key window whose letters are spread over a
-    long run of spaces, punctuation or JSON escapes also lies inside one piece. No piece edge falls inside a JSON
-    escape. Each piece starts more than *overlap* characters after the one before."""
+    every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until its text
+    stream holds *width* characters, so a key window whose letters are spread over a long run of spaces or
+    punctuation also lies inside one piece. A piece edge does not cut a backslash sequence of up to
+    ``EDGE_SHIFT`` characters (a LaTeX command or escape). Each piece starts more than *overlap* characters after
+    the one before. Escapes are read before cutting (``long_record_pairs``), so a piece is scanned as it is."""
     if size <= 2 * overlap + 4 * EDGE_SHIFT:
         raise ValueError(f"piece size {size} must exceed twice the overlap {overlap} and four edge shifts")
     start = 0
@@ -480,15 +480,15 @@ def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, w
         shared = overlap
         while True:
             start_next = _edge(text, end - shared)
-            if min(len(text_stream(r)) for r in readings(text[start_next:end])) >= width or shared >= size // 2:
+            if len(text_stream(text[start_next:end])) >= width or shared >= size // 2:
                 break
             shared = min(2 * shared, size // 2)
         start = start_next
 
 
 def _edge(text: str, position: int) -> int:
-    """*position*, moved back before a JSON escape that it would cut: to the start of the last backslash run
-    within ``EDGE_SHIFT`` characters before it."""
+    """*position*, moved back before a LaTeX command or escape that it would cut: to the start of the last
+    backslash run within ``EDGE_SHIFT`` characters before it."""
     backslash = text.rfind("\\", max(0, position - EDGE_SHIFT), position)
     if backslash < 0:
         return position
@@ -506,22 +506,28 @@ def long_record_pairs(
     size: int = MAX_DOC_CHARS,
     overlap: int = PIECE_OVERLAP,
 ) -> list[dict]:
-    """``record_pairs`` over the ``pieces`` of a long record: one pair per item, the one with the longest excerpt
-    (a hit near a piece's edge has its context cut there and whole in the next piece), and ``record_chars`` of the
-    whole record."""
+    """``record_pairs`` for a long record: each of its ``readings`` (JSON escapes read on the whole record, as for a
+    short record) is cut into ``pieces``, and each piece is scanned as that reading. One pair per item, the one with
+    the longest excerpt (a hit near a piece's edge has its context cut there and whole in the next piece)."""
     found: dict[str, dict] = {}
-    for piece in pieces(text, size, overlap, width):
-        for pair in record_pairs(record_id, piece, table, locators, width):
-            best = found.get(pair["item"])
-            if best is None or len(pair["right"]) > len(best["right"]):
-                found[pair["item"]] = pair | {"record_chars": len(text)}
+    for reading in readings(text):
+        for piece in pieces(reading, size, overlap, width):
+            for pair in _pairs(record_id, [Reading(piece, width)], len(text), table, locators):
+                best = found.get(pair["item"])
+                if best is None or len(pair["right"]) > len(best["right"]):
+                    found[pair["item"]] = pair
     return list(found.values())
 
 
 def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
     """One pair per item whose key-1 window a reading of *text* holds; an item keyed by several streams
     takes the first locator row found."""
-    readings_of = record_readings(text, width)
+    return _pairs(record_id, record_readings(text, width), len(text), table, locators)
+
+
+def _pairs(
+    record_id: str, readings_of: list[Reading], record_chars: int, table: KeyTable, locators: pa.Table
+) -> list[dict]:
     found = table.found(np.concatenate([reading.hashes for reading in readings_of]))
     pairs: dict[str, dict] = {}
     for row in table.items_of(found):
@@ -537,7 +543,7 @@ def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table,
             "kind": located["kind"],
             "eval": located["eval"],
             "right": right,
-            "record_chars": len(text),
+            "record_chars": record_chars,
             "located": at >= 0,
         }
     return list(pairs.values())

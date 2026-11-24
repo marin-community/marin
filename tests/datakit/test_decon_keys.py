@@ -337,14 +337,17 @@ def test_a_key_split_by_escaped_spaces_at_a_piece_edge_lies_in_one_piece():
     key = "abcdefghijklmnopqrst"
     text = "z" * 220 + key[:10] + "\\u0020" * 12 + key[10:] + "y" * 150
     assert key not in text_stream(text) and key in text_stream(json_unescaped(text))
-    assert any(key in text_stream(reading) for piece in pieces(text, size=256, overlap=8) for reading in readings(piece))
+    assert any(key in text_stream(piece) for reading in readings(text) for piece in pieces(reading, size=256, overlap=8))
 
 
 def test_no_piece_edge_cuts_a_json_escape_inside_a_key():
     key = "abcdefghijklmnopqrst"
-    text = "z" * 219 + key[:3] + "\\u0020" + key[3:19] + " " * 12 + key[19] + "y" * 150
-    assert key in text_stream(json_unescaped(text))
-    assert any(key in text_stream(reading) for piece in pieces(text, size=256, overlap=8) for reading in readings(piece))
+    for escape in ("\\u0020", "\\u005c\\u0075\\u0030\\u0030\\u0032\\u0030"):  # a space, and a space escaped twice
+        text = "z" * 219 + key[:3] + escape + key[3:19] + " " * 12 + key[19] + "y" * 150
+        assert any(key in text_stream(reading) for reading in readings(text))
+        assert any(
+            key in text_stream(piece) for reading in readings(text) for piece in pieces(reading, size=256, overlap=8)
+        )
 
 
 def test_a_long_record_keeps_the_whole_excerpt_of_a_hit_near_a_piece_edge():
