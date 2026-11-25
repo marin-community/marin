@@ -18,7 +18,7 @@ from rolloutengine.models import (
     RolloutOperation,
     TraceMode,
 )
-from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits, rollout_spec
+from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits, rollout_spec, shell_call
 from shellbox.machine import (
     ExecSetupFailed,
     ExitReason,
@@ -111,21 +111,12 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     assert engine.run_ids == ["arithmetic:4:2"]
 
 
-def shell_turn(call_id: str, command: str) -> dict[str, object]:
-    call = {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": "shell", "arguments": json.dumps({"command": command})},
-    }
-    return {"role": "assistant", "content": None, "tool_calls": [call]}
-
-
 async def test_interrupted_rollout_records_its_last_calls_before_the_restart(tmp_path: Path) -> None:
     earlier = [
         message
         for index in range(INTERRUPTED_CALLS)
         for message in (
-            shell_turn(f"ls-{index}", "ls"),
+            shell_call("ls", call_id=f"ls-{index}"),
             {"role": "tool", "tool_call_id": f"ls-{index}", "content": '{"exit_code": 0}'},
         )
     ]
@@ -133,9 +124,9 @@ async def test_interrupted_rollout_records_its_last_calls_before_the_restart(tmp
     messages = (
         {"role": "user", "content": "Fix the bug"},
         *earlier,
-        shell_turn("fetch", download),
+        shell_call(download, call_id="fetch"),
         {"role": "tool", "tool_call_id": "fetch", "content": '{"exit_code": null, "reason": "timed_out"}'},
-        shell_turn("test", "pytest -q"),
+        shell_call("pytest -q", call_id="test"),
     )
     conversation = ConversationRecord(messages, (), (), (), None)
     interrupted = RolloutInterrupted(Rollout("click:0:0", (conversation,), "interrupted"), RolloutOperation.ADVANCE)
@@ -152,7 +143,7 @@ async def test_interrupted_rollout_records_its_last_calls_before_the_restart(tmp
 
     [record] = [record.event for record in await sink.read() if isinstance(record.event, InterruptedRollout)]
     assert record.run_id == "click:0:0" and record.operation is RolloutOperation.ADVANCE
-    assert record.failure.startswith("Restart: Rollout interrupted during advance: MachineTerminated: Machine is closed")
+    assert record.decision == "Restart" and "Machine is closed" in record.failure
     assert record.omitted_calls == 2
     assert len(record.calls) == INTERRUPTED_CALLS
     *_, fetch, last = record.calls

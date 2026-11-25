@@ -54,7 +54,8 @@ from taskforge.lowering import (
     requirements,
 )
 from taskforge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
-from taskforge.policy import GRADER_BASE_IMAGE, load_policy, resolution_lines
+from taskforge.policy import GRADER_BASE_IMAGE, OFFLINE_NOTE, load_policy, resolution_lines
+from taskforge.policy.defaults import DEFAULT_POLICY
 from taskforge.resources.env import ReadFile
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, shellsim_factory
 from taskforge.wiring import submit_gate
@@ -201,8 +202,8 @@ class IdleMachine(Machine):
 
 
 async def test_offline_solver_machine_skips_the_pip_index_and_the_solver_is_told() -> None:
-    policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
-    note = policy.prompt("solver.offline").template
+    policy = DEFAULT_POLICY
+    note = policy.prompt(OFFLINE_NOTE).template
     context = ConversationInput(
         events=(TextMessage(role="system", content="Be brief."), TextMessage(role="user", content="What is 6+6?"))
     )
@@ -230,7 +231,7 @@ async def test_offline_solver_machine_skips_the_pip_index_and_the_solver_is_told
 
 @pytest.mark.parametrize("network,image", [(NetworkPolicy.ALLOW, GRADER_BASE_IMAGE), (NetworkPolicy.DENY, None)])
 def test_task_machines_with_network_or_without_pip_are_unchanged(network: NetworkPolicy, image: str | None) -> None:
-    settings = lowering_settings(load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults"))
+    settings = lowering_settings(DEFAULT_POLICY)
     settings = replace(settings, task_machine=replace(settings.task_machine, network=network))
     task = arithmetic_task(environment_requirements=requirements(image=image, env={"PIP_INDEX_URL": "file:///x"}))
     backend = Backend.GVISOR if image else Backend.SHELLSIM
