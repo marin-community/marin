@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -371,7 +370,9 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
         lease.release()
 
 
-def publish_assembly_snapshot(root: str, snapshot_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
+def publish_assembly_snapshot(
+    root: str, snapshot_id: str, sources: Iterable[RlDataSource], *, assembly_commit: str
+) -> CatalogSnapshot:
     """Publish the current declarations as a catalog release: the assembly publication path.
 
     The user ruling of 2026-11-18: the served catalog must reflect the current assembly,
@@ -380,8 +381,9 @@ def publish_assembly_snapshot(root: str, snapshot_id: str, sources: Iterable[RlD
     triple matches the current pin; every non-matching measurement stays behind with the old
     pin (the serving projections mark it stale with its last-computed revision) and never
     presents as current. New sources publish without carried measurements. The publication
-    records its own receipt: the assembly commit, the source count and the declaration
-    digest. refresh_catalog keeps refusing silent pin changes; this path is the explicit one.
+    records its own receipt: the caller's assembly commit (the landed revision it built
+    from), the source count and the declaration digest. refresh_catalog keeps refusing
+    silent pin changes; this path is the explicit one.
     """
     declarations = {}
     for source in sources:
@@ -462,11 +464,7 @@ def publish_assembly_snapshot(root: str, snapshot_id: str, sources: Iterable[RlD
             ).encode()
             receipt = {
                 "snapshot_id": snapshot_id,
-                "assembly_commit": (
-                    subprocess.run(
-                        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-                    ).stdout.strip()
-                ),
+                "assembly_commit": assembly_commit,
                 "source_count": len(rows),
                 "declaration_digest": hashlib.sha256(digest_input).hexdigest(),
                 "carried_measurements": carried,

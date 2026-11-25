@@ -247,7 +247,7 @@ def run_snapshot_publication(
                 f" {inputs.prior_snapshot_id!r}"
             )
         publish = publish if publish is not None else publish_assembly_snapshot
-        result = publish(inputs.catalog_root, inputs.snapshot_id, all_sources().values())
+        result = publish(inputs.catalog_root, inputs.snapshot_id, all_sources().values(), assembly_commit=revision)
         if CurationCatalog(inputs.catalog_root).current().snapshot_id != inputs.snapshot_id:
             raise ValueError(f"catalog pointer did not move to {inputs.snapshot_id!r}")
         final = {

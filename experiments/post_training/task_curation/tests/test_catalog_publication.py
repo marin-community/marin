@@ -709,17 +709,18 @@ def test_assembly_publication_publishes_a_repinned_source_and_marks_the_old_meas
     unchanged = number_source(tmp_path / "input", "second")
     record_attempt(root, unchanged, "second", "2026-10-16T12:00:00Z", "key-c")
     publish_catalog(root, "second", [unchanged])
-    publish_assembly_snapshot(root, "assembly-20261118", [repinned, unchanged])
+    publish_assembly_snapshot(root, "assembly-20261118", [repinned, unchanged], assembly_commit="a" * 40)
     rows = selected_sources(root)
     assert rows[source.info.id].declaration.dataset_revision == "b" * 40
     assert rows[source.info.id].assessment_key is None
     assert "Pin changed" in (rows[source.info.id].reason or "")
     receipt = json.loads((pathlib.Path(root) / "receipts" / "assembly-20261118.json").read_text())
     assert receipt["stale_pins"] == 1 and receipt["carried_measurements"] == 1
+    assert receipt["assembly_commit"] == "a" * 40  # the caller's landed revision, not the cwd's git
     # The stale measurement stays behind at its recorded pin and the projections mark it stale.
 
     # A source whose triple did not change carries its measurement forward as current.
-    publish_assembly_snapshot(root, "assembly-20261118-b", [repinned, unchanged])
+    publish_assembly_snapshot(root, "assembly-20261118-b", [repinned, unchanged], assembly_commit="a" * 40)
     rows = selected_sources(root)
     assert rows[unchanged.info.id].assessment_key == "key-c"
     assert rows[source.info.id].assessment_key is None
