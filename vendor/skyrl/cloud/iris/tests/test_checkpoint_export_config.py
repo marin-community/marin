@@ -267,6 +267,33 @@ def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> N
         selected_export_checkpoint(str(tmp_path), "best", 20)
 
 
+def test_final_export_uses_latest_committed_state_even_when_best_is_earlier(tmp_path, monkeypatch):
+    checkpoints = tmp_path / "checkpoints"
+    for step in (15, 20):
+        checkpoint = checkpoints / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"committed")
+    (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("20")
+    (checkpoints / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    document = raw_launch_config()
+    document["artifacts"].update(checkpoint_root=str(checkpoints), export_root=str(tmp_path / "exports"))
+    document["iris"]["priority"] = "production"
+    document["skyrl"]["trainer"]["hf_export_checkpoint"] = "best"
+    source = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(document), source)
+    submissions = []
+    monkeypatch.setattr(export_hf_checkpoint, "submit_requested_export", lambda spec, command: submissions.append(spec))
+    export_hf_checkpoint.export_final_policy(source)
+    spec, = submissions
+    assert spec.request.step == 20
+    assert spec.request.checkpoint_path == str(checkpoints / "global_step_20")
+    derived = load_launch_config(Path(spec.launch_config_path))
+    assert derived.skyrl.checkpoint_export.step == 20
+    assert derived.iris.priority == "production"
+    assert derived.skyrl.trainer.policy.megatron_config == load_launch_config(source).skyrl.trainer.policy.megatron_config
+    assert read_hf_export_request(str(checkpoints / "global_step_15")) is None
+
+
 @pytest.mark.parametrize("mode", ["export", "dry-run", "missing", "initializer"])
 def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_path, monkeypatch, capsys, mode):
     checkpoints, exports = tmp_path / "checkpoints", tmp_path / "exports"

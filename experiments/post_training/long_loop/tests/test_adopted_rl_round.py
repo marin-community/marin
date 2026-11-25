@@ -14,11 +14,13 @@ import yaml
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
 from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_payload
+from marin.rl.skyrl import SkyRLRun
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.execution_policy import RL_TRAINING_BUDGET
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService, run_with_retrieval
+from experiments.post_training.long_loop.rl_terminal_evaluation import FinalPolicy, ReusedEvaluation, run_distinct_final
 from experiments.post_training.long_loop.round_runner import (
     DRAFTS,
     adopted_rl_evaluation,
@@ -95,6 +97,48 @@ def test_adopted_rl_exports_selected_policy_before_frozen_evaluation(local_round
     assert run.serving_profile.role_plan.num_nodes * run.serving_profile.role_plan.gpus_per_node == 16
     assert run.serving_profile.execution.target_cluster == "cw-us-east-08a"
     assert run.evaluation.record().policy_reference.revision == "2026.11.23-together"
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_final_evaluation_reuses_best_job_when_checkpoint_is_identical(local_round, tmp_path):
+    spec = dataclasses.replace(
+        local_round,
+        evaluation="frozen-micro210",
+        evaluation_profile="mochi-gb200-cw-us-east-08a",
+        evaluation_checkpoints="best_and_final",
+        rl=dataclasses.replace(local_round.rl, export_hf=True),
+    )
+    training = adopted_round_rl(spec)
+    terminal = adopted_rl_evaluation(spec, training)
+    stages = graph_handles([terminal])
+    exported = next(step for step in stages if step.artifact_type is FinalPolicy)
+    best = next(step for step in stages if step.name.endswith("/micro210"))
+    assert exported.deps[0] == training
+    assert exported.deps[1].deps == (best,)
+    final = next(step for step in stages if step.name.endswith("/micro210-final"))
+    context = StepContext.for_run(str(tmp_path / "final"), str(tmp_path), deps=final.deps)
+    context._loaded[id(exported)] = FinalPolicy(
+        uri="s3://marin-us-east-08a/model/policy",
+        step=7,
+        tokenizer_uri="tokenizer",
+        tokenizer_revision="pinned",
+        same_as_best=True,
+    )
+    result = SkyRLRun(
+        hf_model_uri=None,
+        global_step=None,
+        tokenizer_uri=None,
+        tokenizer_revision=None,
+        checkpoint_root="unused",
+        draft_checkpoint_root=None,
+        terminal_manifest_uri="best/terminal.json",
+        iris_job_id="/user/best-evaluation",
+    )
+    context._loaded[id(best)] = result
+    config = final.build_config(context)
+    assert isinstance(config, ReusedEvaluation)
+    assert run_distinct_final(config) == result
+    assert json.loads((tmp_path / "final" / "evaluation-reuse.json").read_text())["job_id"] == result.iris_job_id
 
 
 @pytest.fixture

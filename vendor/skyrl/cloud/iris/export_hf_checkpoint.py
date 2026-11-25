@@ -49,6 +49,7 @@ from rigging.config_discovery import find_project_root, resolve_cluster_config
 from rigging.filesystem.cluster_config import get_bucket_location
 from rigging.timing import Duration
 
+from cloud.iris.artifacts import terminal_checkpoint_step
 from cloud.iris.launch_config import FinalizationMode, RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
@@ -262,6 +263,7 @@ def argument_parser() -> argparse.ArgumentParser:
         help="the complete resolved launch document for the training run",
     )
     ap.add_argument("--recover-best", action="store_true", help="export the best checkpoint using only --launch-config")
+    ap.add_argument("--recover-final", action="store_true", help="export the final checkpoint using only --launch-config")
     ap.add_argument("--model_path", help="base model path, as at training time")
     ap.add_argument("--model-source-uri", help="object-store model source for a task-local --model_path")
     ap.add_argument("--model-source-identity", help="immutable identity for --model-source-uri")
@@ -530,8 +532,6 @@ def export_terminal_policy(
     dry_run: bool = False,
 ) -> None:
     """Derive and run the terminal policy export from one training launch document."""
-    from cloud.iris.artifacts import terminal_checkpoint_step  # noqa: PLC0415 - artifact IO belongs to execution
-
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
     selected = selected_export_checkpoint(
@@ -568,9 +568,31 @@ def export_terminal_policy(
     submit_requested_export(resolved_spec, command)
 
 
+def export_final_policy(training_config_path: Path, *, dry_run: bool = False) -> None:
+    """Export the committed final native state using the original training geometry."""
+    training_config = load_launch_config(training_config_path)
+    checkpoint_root = str(training_config.artifacts.checkpoint_root)
+    step = terminal_checkpoint_step(checkpoint_root)
+    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
+    if not (StoragePath(checkpoint_path) / TRAINER_STATE_FILENAME).exists():
+        raise ValueError(f"Final native checkpoint is not committed: {checkpoint_path}")
+    request = _read_hf_export_request(checkpoint_path) or _training_export_request(training_config, step)
+    spec = _with_checkpoint_export_config(training_config_path, _export_job_spec(training_config, request))
+    command = build_command(spec)
+    if dry_run:
+        _print_export_command(spec, command)
+        return
+    submit_requested_export(spec, command)
+
+
 def main() -> None:
     parser = argument_parser()
     args = parser.parse_args()
+    if args.recover_best and args.recover_final:
+        parser.error("--recover-best and --recover-final are mutually exclusive")
+    if args.recover_final:
+        export_final_policy(Path(args.launch_config), dry_run=args.dry_run)
+        return
     if args.recover_best:
         export_terminal_policy(Path(args.launch_config), recover_best=True, dry_run=args.dry_run)
         return

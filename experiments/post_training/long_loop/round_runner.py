@@ -108,6 +108,7 @@ from experiments.post_training.long_loop.openresearcher_service import (
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.rl import curriculum_validation_callbacks
+from experiments.post_training.long_loop.rl_terminal_evaluation import best_and_final_evaluations
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.sft_epoch import MixtureEpochs, SftStopping, bind_sft_stopping
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
@@ -284,6 +285,7 @@ class AdoptedRlRound:
     rl: RoundRl
     evaluation: str | None = None
     evaluation_profile: str | None = None
+    evaluation_checkpoints: str = "best"
 
 
 @dataclass(frozen=True)
@@ -767,13 +769,19 @@ def adopted_rl_evaluation(spec: AdoptedRlRound, training: ArtifactStep) -> Artif
     """Evaluate the RL-selected HF export through the frozen Micro210 pipeline."""
     if spec.evaluation != "frozen-micro210" or spec.evaluation_profile is None or not spec.rl.export_hf:
         raise ValueError("An adopted RL evaluation requires frozen-micro210, a serving profile and HF export")
-    return micro210_artifact_step(
+    profile = registered_serving_profile(ServingProfileName(spec.evaluation_profile))
+    best = micro210_artifact_step(
         SkyRLPolicyModel(training),
         name=f"{spec.name}/micro210",
         version=spec.version,
-        serving_profile=registered_serving_profile(ServingProfileName(spec.evaluation_profile)),
+        serving_profile=profile,
         model_manifest_filename=MODEL_MANIFEST_FILENAME,
     )
+    if spec.evaluation_checkpoints == "best_and_final":
+        return best_and_final_evaluations(training, best, serving_profile=profile)
+    if spec.evaluation_checkpoints != "best":
+        raise ValueError("Unknown adopted RL evaluation checkpoint selection")
+    return best
 
 
 def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:

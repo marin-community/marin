@@ -1180,6 +1180,15 @@ in permanent storage. The graph waits for the selected HF export before
 evaluating it. The initial model receives a vocabulary check before RL; the
 future selected model receives its own CPU gate after export.
 
+Set `evaluation_checkpoints: best_and_final` to evaluate the best policy first,
+then the final native state if it differs. Identical checkpoints reuse the best
+evaluation receipt. Final export derives its geometry and production placement
+from the original training launch. Each evaluation commits before its separate
+preservation stage copies the temporary trial evidence to permanent regional
+storage, so a copy retry does not rerun the evaluation. `coverage-ready.json`
+records scored coverage, pass@1, per-benchmark counts and a zero-score ledger;
+the #10197 seal still requires agent trace review and at least 90% valid trials.
+
 The command validates without submitting. Normal runs use the canonical 12-hour learning
 clock that starts after the first optimizer update and starts again after process
 recovery. The separate GPU-job limit is 48 hours. `rl.max_steps` is an absolute
