@@ -21,8 +21,9 @@ uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11
 uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
 ```
 
-- `launch` submits a candidate's evaluations. Re-running the same launch skips runs that
-  succeeded and reruns ones that failed.
+- `launch` submits a candidate's evaluations. Re-running the same launch skips runs whose record
+  succeeded and reruns ones that failed, so a run that succeeded but is invalid (for example, another
+  server window) is not rerun; `status` says so for each such run.
 - `status` shows each evaluation's full and smoke run: valid, invalid, or not run. A ⚠ marks a run
   whose replies often hit their output cap or whose attempts often went unscored.
 - `verify` checks any run against the policy and names each field that differs.

@@ -280,16 +280,20 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
     Warnings flag results far outside expectations without making a run invalid.
     """
     policy = POLICIES[version]
-    candidates = {candidate.model.location: candidate for candidate in policy.candidates}
     configure_coreweave_s3()
     invalid = False
     for run_id in run_ids:
         record = find_record(run_id)
-        candidate = candidates.get(record.model.location)
-        if candidate is None or record.evaluation.curated is None:
+        # Records launched outside the policy carry ad-hoc model names, so match the location and use the
+        # name only to tell apart candidates that share one.
+        matches = [candidate for candidate in policy.candidates if candidate.model.location == record.model.location]
+        if len(matches) > 1:
+            matches = [candidate for candidate in matches if candidate.name == record.model.name]
+        if len(matches) != 1 or record.evaluation.curated is None:
             raise click.ClickException(
-                f"{run_id}: {record.model.location} / {record.evaluation.name} is not a curated {version} run"
+                f"{run_id}: {record.model.location} / {record.evaluation.name} is not one curated {version} run"
             )
+        (candidate,) = matches
         try:
             (expected,) = expected_runs(
                 policy,

@@ -1,18 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 
 import pytest
-from evalrecords.records import RunStatus, TaskCoverage, read_record, record_path
+from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record, record_path
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
 from marin.evaluation.runner import _record
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
+from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY, QWEN
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunEvidence,
     RunState,
     expected_runs,
+    run_evidence,
     run_problems,
     run_warnings,
 )
@@ -72,7 +79,16 @@ def test_a_run_whose_outcome_falls_short_is_invalid(tmp_path, status, evidence):
     run = _expected(None)["aime24"]
     record = _write(tmp_path, run, status)
     state, problems = run_problems(record, None if evidence is None else _evidence(run, **evidence), run)
-    assert state is RunState.INVALID and len(problems) == 1
+    assert state is RunState.INVALID
+    # A succeeded record keeps its step marked done, so the problem says a relaunch will not rerun it.
+    assert any("relaunch skips" in problem for problem in problems) is (status is RunStatus.SUCCEEDED)
+
+
+def test_a_succeeded_run_without_an_archive_is_invalid(tmp_path):
+    run = _expected(None)["aime24"]
+    state, problems = run_problems(_write(tmp_path, run), None, run)
+    assert state is RunState.INVALID
+    assert any(RUN_OBJECT in problem for problem in problems)
 
 
 def test_a_smoke_run_need_not_attempt_every_item(tmp_path):
@@ -107,3 +123,71 @@ def test_runs_far_outside_expectations_are_flagged_but_stay_valid(tmp_path, evid
     evidence = _evidence(run, **evidence)
     assert run_problems(_write(tmp_path, run), evidence, run) == (RunState.VALID, ())
     assert bool(run_warnings(evidence)) is flagged
+
+
+def _archive(path, caps_and_tokens: list[tuple[int, int]]) -> None:
+    """Write a single-turn run archive whose items have the given output caps and reply lengths."""
+    protocol = selection_dataset(
+        _expected(None)["aime24"].evaluation.identity.eval_ref.curated.selection, PromptFormat.CHAT
+    ).protocol
+    with DataStore.open(str(path)) as store:
+        store.table(
+            ATTEMPTS_TABLE,
+            schema=arrow_schema(Attempt),
+            primary_key=("dataset", "source_row", "trial", "retry", "phase"),
+            schema_version=1,
+        )
+        store.table(
+            SELECTIONS_TABLE, schema=arrow_schema(Selection), primary_key=("dataset", "source_row"), schema_version=1
+        )
+        with store.transaction() as transaction:
+            for index, (cap, tokens) in enumerate(caps_and_tokens):
+                row = f"row:{index}"
+                transaction.table(SELECTIONS_TABLE).add(
+                    Selection(
+                        dataset="d",
+                        source_row=row,
+                        source_ordinal=index,
+                        status=SelectionStatus.SELECTED,
+                        reason=None,
+                        rank=index,
+                        context_window=1000,
+                        max_tokens=cap,
+                        prompt_tokens=None,
+                        reference_tokens=None,
+                    ).model_dump(mode="json")
+                )
+                transaction.table(ATTEMPTS_TABLE).add(
+                    Attempt(
+                        dataset="d",
+                        task_id=f"t{index}",
+                        source_row=row,
+                        trial=0,
+                        retry=0,
+                        phase=AttemptPhase.FINISHED,
+                        seed=None,
+                        outcome="graded",
+                        error=None,
+                        result_blob=None,
+                        prompt_tokens=10,
+                        completion_tokens=tokens,
+                    ).model_dump(mode="json")
+                )
+            run = {
+                "config": {"model": {"context_window": 1000}},
+                "datasets": [{"dataset": "d", "protocol": protocol.model_dump(mode="json")}],
+            }
+            transaction.write_object(RUN_OBJECT, json.dumps(run).encode())
+
+
+def test_a_reply_counts_as_capped_against_its_own_items_cap(tmp_path):
+    # The evaluator shrinks a long prompt's cap, so 300 tokens fills the second item's cap but not the first's.
+    _archive(tmp_path / "results", [(1000, 300), (300, 300), (1000, 999)])
+    record = _write(tmp_path, _expected(None)["aime24"])
+    evidence = run_evidence(record.model_copy(update={"results_path": str(tmp_path / "results")}), {})
+    assert (evidence.replies, evidence.capped) == (3, 1)
+
+
+def test_an_archive_without_its_run_object_gives_no_evidence(tmp_path):
+    record = _write(tmp_path, _expected(None)["aime24"])
+    assert run_evidence(record.model_copy(update={"results_path": str(tmp_path / "missing")}), {}) is None

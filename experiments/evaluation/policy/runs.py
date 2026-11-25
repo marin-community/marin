@@ -14,6 +14,7 @@ from evalrecords.rollout_results import score_curated_record, terminal_attempts
 from finestore.reader import ReadView
 from iris.rpc import job_pb2
 from marin.evaluation.runner import Evaluation, EvaluationBatch
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
 from experiments.evaluation.launch import (
@@ -111,23 +112,30 @@ class RunEvidence:
     capped: int
 
 
-def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence:
-    """Read a succeeded run's archive to summarize its context window and terminal replies."""
+def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence | None:
+    """Read a succeeded run's archive, or None if it has no run object.
+
+    A single-turn reply counts as capped when it used the whole output cap the evaluator gave its item.
+    """
     reader = ReadView(record.results_path)
     payload = reader.read_blob(RUN_OBJECT)
-    assert payload is not None, f"{record.results_path} has no {RUN_OBJECT}"
+    if payload is None:
+        return None
     run = json.loads(payload)
-    budget = run["config"]["max_tokens"]
-    caps = {}
-    for entry in run["datasets"]:
-        protocol = EvaluationProtocol.model_validate(entry["protocol"])
-        if protocol.operation in _SINGLE_TURN:
-            assert protocol.sampling is not None
-            caps[entry["dataset"]] = min(budget, protocol.sampling.max_tokens or budget)
+    single_turn = {
+        entry["dataset"]
+        for entry in run["datasets"]
+        if EvaluationProtocol.model_validate(entry["protocol"]).operation in _SINGLE_TURN
+    }
+    caps = {
+        (row["dataset"], row["source_row"]): row["max_tokens"]
+        for row in reader.iter_rows(SELECTIONS_TABLE)
+        if row["status"] == "selected" and row["dataset"] in single_turn and row["max_tokens"] is not None
+    }
     tokens = [
-        (row["completion_tokens"], caps[row["dataset"]])
+        (row["completion_tokens"], caps[key])
         for row in terminal_attempts(reader).values()
-        if row["dataset"] in caps and row["completion_tokens"] is not None
+        if (key := (row["dataset"], row["source_row"])) in caps and row["completion_tokens"] is not None
     ]
     return RunEvidence(
         coverage=coverage,
@@ -169,6 +177,8 @@ def run_problems(
         faults.append(f"version {record.version!r}, not {batch.version!r}")
     if record.status is not RunStatus.SUCCEEDED:
         faults.append(f"{record.status.value}: {record.error}")
+    elif evidence is None:
+        faults.append(f"its archive has no {RUN_OBJECT}")
     if evidence is not None:
         if evidence.window != batch.model.serve.max_model_len:
             faults.append(f"server window {evidence.window}, policy gives {batch.model.serve.max_model_len}")
@@ -182,6 +192,8 @@ def run_problems(
                 for task, coverage in sorted(evidence.coverage.items())
                 if coverage.n_attempted != coverage.n_benchmark
             )
+    if faults and not drift and record.status is RunStatus.SUCCEEDED and record.version == batch.version:
+        faults.append("a relaunch skips this run, since its record succeeded")
     if faults or (drift and record.provenance.git_sha == batch.provenance.git_sha):
         return RunState.INVALID, (*faults, *drift)
     return (RunState.STALE if drift else RunState.VALID), tuple(drift)
@@ -195,7 +207,8 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun) -> RunCheck:
     scored = score_curated_record(record)
     evidence = run_evidence(record, scored.coverage)
     state, problems = run_problems(record, evidence, expected)
-    return RunCheck(record=scored, state=state, problems=problems, warnings=run_warnings(evidence))
+    warnings = () if evidence is None else run_warnings(evidence)
+    return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 
 
 def find_record(run_id: str) -> EvalRunRecord:
