@@ -323,6 +323,11 @@ selection's Parquet and manifest bytes, the loaded fast tokenizer and template, 
 and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
 A cache miss runs the original selection validation before publishing prepared rows.
 
+When freezing single-turn TaskSpec cohorts, hash the complete native harness request, including
+answer-format instructions and tool schemas. The shell harness appends instructions to
+`TaskSpec.context.events`; assistant-prefix tasks use their continuation and whitespace rules.
+Compare a live saved prompt's token IDs with its frozen hash before counting the evaluation.
+
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
 finishes its own uploads using the same SDK deadline. These waits can take up to
