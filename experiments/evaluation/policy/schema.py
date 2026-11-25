@@ -56,8 +56,8 @@ class PolicyEvaluation:
     num_fewshot: int | None = None
     prompt_format: PromptFormat | None = None
     context: int | None = None
-    """The input window to request; None requests the policy's. A protocol window replaces it, and the
-    candidate's window and any agent input limit cap it."""
+    """The input window to request; None requests the policy's ``default_context``. A protocol window replaces
+    it, and the candidate's window and any agent input limit cap it."""
     max_output: int | None = None
     """None leaves output limited only by the context and the benchmark protocol."""
     seed: int | None = None
@@ -71,7 +71,7 @@ class PolicyEvaluation:
 
     def __post_init__(self) -> None:
         if self.judge is not None and self.judge not in JUDGES:
-            raise ValueError(f"{self.name}: no judge {self.judge!r}; known: {sorted(JUDGES)}")
+            raise ValueError(f"{self.benchmark}: no judge {self.judge!r}; known: {sorted(JUDGES)}")
 
     @property
     def selection(self) -> EvaluationSelection:
@@ -121,11 +121,11 @@ class PolicyOverride:
 class EvalPolicy:
     """One version of the eval policy. Every evaluation runs for every candidate unless excluded.
 
-    ``context`` is the input window an evaluation requests unless it sets its own.
+    ``default_context`` is the input window an evaluation requests unless it sets its own.
     """
 
     version: str
-    context: int
+    default_context: int
     candidates: tuple[PolicyCandidate, ...]
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()

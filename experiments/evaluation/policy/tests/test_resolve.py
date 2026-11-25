@@ -32,7 +32,7 @@ SMALL_LONG = PolicyOverride(
 def _policy(*evaluations: PolicyEvaluation, **exceptions) -> EvalPolicy:
     return EvalPolicy(
         version="test",
-        context=CONTEXT,
+        default_context=CONTEXT,
         candidates=(LARGE, SMALL),
         in_distribution=evaluations or (PLAIN, SEEDED, LONG),
         **exceptions,
@@ -62,7 +62,7 @@ def test_an_agent_runs_at_the_smallest_of_its_limit_the_request_and_the_served_w
     # The worker gives an agent the smaller of its input limit and the served window.
     agent = PolicyEvaluation("ds-1000", protocol="terminus-2")
     tiny = PolicyCandidate(model=ModelConfig(name="tiny", location="org/tiny", revision=REVISION), max_context=16_384)
-    policy = EvalPolicy(version="test", context=CONTEXT, candidates=(LARGE, tiny), in_distribution=(agent,))
+    policy = EvalPolicy(version="test", default_context=CONTEXT, candidates=(LARGE, tiny), in_distribution=(agent,))
     assert _settings(resolve(policy, tiny)) == {"ds-1000-terminus-2": (16_384, None, None)}
     assert _settings(resolve(policy, LARGE)) == {"ds-1000-terminus-2": (32_768, None, None)}
 
@@ -83,7 +83,7 @@ def test_a_candidate_served_below_a_protocol_window_must_be_excluded():
     windowed, agent = PolicyEvaluation("mrcr", protocol="65k"), PolicyEvaluation(
         "swebench-verified", protocol="mini-swe-agent"
     )
-    policy = EvalPolicy(version="test", context=CONTEXT, candidates=(served,), in_distribution=(windowed, agent))
+    policy = EvalPolicy(version="test", default_context=CONTEXT, candidates=(served,), in_distribution=(windowed, agent))
     with pytest.raises(ValueError, match="served on mrcr-65k"):
         resolve(policy, served)
 

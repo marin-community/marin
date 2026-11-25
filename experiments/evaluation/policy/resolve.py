@@ -53,7 +53,7 @@ def _context(
 ) -> int:
     """The context an evaluation runs with.
 
-    The candidate's override, else the evaluation's context, else the policy's, is requested. A protocol window
+    The candidate's override, else the evaluation's context, else the policy's default, is requested. A protocol window
     is the one its items were built for, so a run uses exactly it, and a candidate served below it must be
     excluded. Otherwise the run gets the smallest of the request, the window the candidate is served at and any
     agent input limit, as the worker gives an agent.
@@ -70,7 +70,7 @@ def _context(
         if requested is not None and requested != window:
             raise ValueError(f"{name}: context {requested} is not the benchmark's window {window}")
         return window
-    limits = [served, policy.context if requested is None else requested]
+    limits = [served, policy.default_context if requested is None else requested]
     if variant.agent is not None and variant.agent.max_input_tokens is not None:
         limits.append(variant.agent.max_input_tokens)
     return min(limits)
