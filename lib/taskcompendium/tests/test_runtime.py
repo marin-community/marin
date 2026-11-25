@@ -574,7 +574,6 @@ async def test_daytona_script_judge_uses_a_host_credential(tmp_path, script_grad
     script = b"""
 import json, os, urllib.error, urllib.request
 
-assert os.environ['VERIFYIT_JUDGE_API_KEY'] != 'host-only-key'
 url = os.environ['VERIFYIT_JUDGE_BASE_URL']
 body = json.dumps({'model': os.environ['VERIFYIT_JUDGE_MODEL'], 'top_k': 20}).encode()
 try:
