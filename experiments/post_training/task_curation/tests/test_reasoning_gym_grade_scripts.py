@@ -27,8 +27,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from verifyit.grade import InvalidTask
-
 script_path, config_path, answer_path = map(Path, sys.argv[1:4])
 bad_reference = sys.argv[4] == "bad_reference"
 bad_reply = sys.argv[5]
@@ -46,7 +44,8 @@ real_score = grader.score_reasoning_gym_answer
 def score(dataset, entry, candidate):
     if candidate == bad_reply:
         if failure == "invalid_task":
-            raise InvalidTask("reasoning-gym entry requires an example answer")
+            entry["metadata"].pop("example_answer", None)
+            return real_score(dataset, entry, candidate)
         raise RuntimeError("scorer could not parse candidate")
     if bad_reference and candidate == entry["answer"]:
         return 0.0
@@ -76,17 +75,17 @@ def contract_for(script: Path, task: str) -> dict:
 
 @pytest.mark.parametrize("script", SCRIPT_PATHS, ids=("generated", "nemotron_ultra"))
 @pytest.mark.parametrize(
-    ("task", "candidate", "bad_reference", "failure", "expected"),
+    ("task", "candidate", "bad_reference", "failure", "expected_reward", "expected_error"),
     [
-        ("prime_factorization", PROSE, False, "runtime_error", 0.0),
-        ("prime_factorization", "reference", False, "runtime_error", 1.0),
-        ("prime_factorization", PROSE, True, "runtime_error", None),
-        ("propositional_logic", PROSE, False, "invalid_task", None),
+        ("prime_factorization", PROSE, False, "runtime_error", 0.0, None),
+        ("prime_factorization", "reference", False, "runtime_error", 1.0, None),
+        ("prime_factorization", PROSE, True, "runtime_error", None, "ValueError"),
+        ("propositional_logic", PROSE, False, "invalid_task", None, "InvalidTask"),
     ],
     ids=("unparseable_candidate", "valid_answer", "broken_reference", "invalid_task_with_null_answer"),
 )
 def test_reasoning_gym_grade_script_scores_or_reports_task_errors(
-    script, task, candidate, bad_reference, failure, expected, tmp_path
+    script, task, candidate, bad_reference, failure, expected_reward, expected_error, tmp_path
 ):
     contract = contract_for(script, task)
     entry = contract.get("entry", contract)
@@ -112,9 +111,10 @@ def test_reasoning_gym_grade_script_scores_or_reports_task_errors(
         env={**os.environ, "PYTHONHASHSEED": "0"},
         check=False,
     )
-    if expected is None:
+    if expected_error is not None:
         assert result.returncode != 0 and not result.stdout.strip(), result.stderr
+        assert expected_error in result.stderr
     else:
         output = result.stdout.strip().splitlines()
         assert result.returncode == 0 and len(output) == 1, result.stderr
-        assert float(output[0]) == expected
+        assert float(output[0]) == expected_reward

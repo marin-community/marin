@@ -66,6 +66,7 @@ def main() -> None:
             reference = entry["answer"]
             if reference is not None and not score_reasoning_gym_answer(generation["task"], entry, reference) > 0:
                 raise ValueError("Reasoning Gym reference answer does not score") from error
+            print(f"Reasoning Gym candidate scorer raised {type(error).__name__}", file=sys.stderr)
             reward = 0.0
     print(reward)
 
