@@ -236,6 +236,43 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
+async def test_malformed_model_tool_arguments_score_zero_without_cancelling_other_attempts(
+    tmp_path, published_corpora, run_config
+):
+    async def model(request):
+        prompt = request.messages[-1]["content"]
+        if prompt == "colors/0" and request.options["seed"] == 7:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"cmd": "oops'}}
+                ],
+            }
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation((published_corpora[0],), output, run_config, model, machine_factories={})
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert len(finished) == 4
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 3}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert failed["retry"] == 0
+    raw = json.loads(reader.read_blob(failed["result_blob"]))
+    assert raw["grade"]["reward"] == 0
+    samples = list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert Counter(row["grading"]["score"] for row in samples) == {0.0: 1, 1.0: 3}
+    assert (
+        raw["conversations"][0]["steps"][0]["turn"]["message"]["tool_calls"][0]["function"]["arguments"]
+        == '{"cmd": "oops'
+    )
+
+
+@pytest.mark.asyncio
 async def test_attempts_larger_than_the_store_s_batch_limit_are_saved(
     tmp_path, published_corpora, run_config, monkeypatch
 ):

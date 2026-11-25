@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack
 from dataclasses import replace
 from typing import Any
 
+from pydantic import ValidationError
 from shellbox.machine import Machine, MachineFactory, MachineSpec
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
@@ -80,7 +81,11 @@ async def _grade_rollout(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason)
+    try:
+        conversation = chat_conversation(list(messages))
+    except ValidationError as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"Invalid model conversation: {error}")
+    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     placement = grader.placement
