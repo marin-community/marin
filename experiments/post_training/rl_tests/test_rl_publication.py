@@ -106,19 +106,20 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         tokenizer_revision=preset.model.tokenizer_revision,
         iris_job_id="/tests/initializer",
     )
-    inputs = RunInputs(
-        preset_name=name,
-        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
-        + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
-        tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
-        init=recipe.stored_initializer(recipe.published_model("weights@2026.11.10", preset=preset), preset=preset),
-    )
     native_table = table
     if case == "native-no-evaluation":
         without_evaluation = replace(preset, evaluations=(), checkpoints="none", checkpoint_every=None, export="none")
         native_table = replace(
             table, presets=tuple(without_evaluation if row.name == name else row for row in table.presets)
         )
+    inputs = run_inputs(
+        name,
+        preset=native_table.by_name[name],
+        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
+        + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
+        tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
+        init=recipe.stored_initializer(recipe.published_model("weights@2026.11.10", preset=preset), preset=preset),
+    )
     source = recorded_runs(
         name,
         "tests/stored-progress",
