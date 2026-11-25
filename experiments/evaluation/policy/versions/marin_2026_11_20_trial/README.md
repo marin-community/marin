@@ -6,7 +6,7 @@ that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) throu
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
 both as TaskSpec entries of the [benchmark catalog](../../../catalog.py); the agentic ones are the
 campaign's curated protocols in [`benchmarks/agentic.py`](../../../benchmarks/agentic.py), which pin
-the same Harbor packages, agents and limits. [`policy.yaml`](policy.yaml) declares it; the
+the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; the
 [policy README](../../README.md) explains the schema and the `policy` command.
 
 ## Candidates
