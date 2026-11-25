@@ -5,6 +5,13 @@ November 25, 2026 (UTC).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
+The branch now registers the checkpoint replica-reducer cache with JAX's
+backend-cache cleanup, fixing a separately reproduced restore-time mesh and
+client ownership leak. A fresh-process CPU checkpoint regression fails without
+the registration and passes with it; all 82 checkpoint and TensorStore tests
+pass. GPU evidence below covers the earlier `634a4baa9c` source. This fix has no
+GPU qualification and does not explain R8's failure before restoration.
+
 At runtime source `634a4baa9c`, the production observer-OFF one-H100 tiny
 Snowball run passed all 24 independent terminal checks with the deterministic
 compiler profile. Its genuine Ray `HostWorker` completed two finite updates;

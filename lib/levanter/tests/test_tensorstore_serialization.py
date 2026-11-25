@@ -3,6 +3,9 @@
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
@@ -555,6 +558,50 @@ def test_every_replica_writes_a_disjoint_slice_covering_the_array():
 
 def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
     run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+@pytest.mark.multidevice
+def test_replicated_checkpoint_restore_releases_backend_owners(tmp_path):
+    # Backend destruction needs a fresh interpreter without other tests' live arrays.
+    script = """
+import gc
+import sys
+import weakref
+
+import jax
+import numpy as np
+from jax.extend.backend import clear_backends
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from levanter.checkpoint import load_checkpoint, save_checkpoint
+
+def roundtrip():
+    mesh = Mesh(np.asarray(jax.local_devices(), dtype=object), ('replica',))
+    sharding = NamedSharding(mesh, PartitionSpec())
+    # Preserve negative zero, a NaN payload and a subnormal through replica reduction.
+    bits = np.array([0x80000000, 0x7FC00001, 0x00000001, 0x3F800000], dtype=np.uint32)
+    with jax.set_mesh(mesh):
+        source = {'weights': jax.device_put(bits.view(np.float32), sharding)}
+        save_checkpoint(source, 1, sys.argv[1])
+        restored = load_checkpoint(source, sys.argv[1], mesh=mesh)
+        jax.block_until_ready(restored)
+        np.testing.assert_array_equal(np.asarray(restored['weights']).view(np.uint32), bits)
+    return weakref.ref(mesh), weakref.ref(jax.local_devices()[0].client)
+
+mesh, client = roundtrip()
+jax.clear_caches()
+clear_backends()
+gc.collect()
+assert mesh() is None, 'Restored checkpoint retained its mesh after backend cleanup'
+assert client() is None, 'Restored checkpoint retained its client after backend cleanup'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "checkpoint")],
+        env={**os.environ, "JAX_PLATFORMS": "cpu", "XLA_FLAGS": "--xla_force_host_platform_device_count=2"},
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_replica_aware_restore_reads_each_shard_once():

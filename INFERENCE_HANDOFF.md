@@ -20,6 +20,14 @@ generation, and the matched 25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
 
+Checkpoint restoration exposed a separate ownership leak: the cached replica
+reducer retained its mesh and backend client after cleanup. It now registers
+with JAX's backend-cache cleanup. A fresh-process CPU regression checks an exact
+replicated checkpoint round trip, including signed zero, a NaN payload and a
+subnormal, then verifies that cleanup releases the mesh and client. The 82
+checkpoint and TensorStore tests pass. This fix has no GPU qualification and
+does not explain R8's first shutdown failure, which occurred before restoration.
+
 | Gate | Integrated path |
 | --- | --- |
 | Paged inference | Snowball initializes KV pages and runs prefill and decode with GPU and TPU implementations. Tests cover mixed requests, compact short-window KV, and reuse of retained prompt pages. |

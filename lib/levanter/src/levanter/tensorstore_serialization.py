@@ -28,6 +28,7 @@ import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
 from jax.experimental.array_serialization import tensorstore_impl as ts_impl
+from jax.extend.backend import register_backend_cache
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
@@ -1039,6 +1040,10 @@ def _restore_replica_axis(value: jax.Array) -> jax.Array:
 @lru_cache(maxsize=16)
 def _replica_reducer(staging_sharding: NamedSharding, target_sharding: Sharding):
     return jax.jit(_restore_replica_axis, in_shardings=staging_sharding, out_shardings=target_sharding)
+
+
+# Both the cache keys and the jitted function retain the shardings' backend clients.
+register_backend_cache(_replica_reducer, __name__ + "._replica_reducer")
 
 
 def _finish_leaf(plan: _LeafReadPlan, staged: jax.Array) -> jax.Array:
