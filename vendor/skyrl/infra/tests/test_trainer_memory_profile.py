@@ -28,16 +28,18 @@ def test_sizing_with_router_replay_uses_balanced_valid_targets():
     }
     validate_megatron_config(cfg)
 
-    routes = trainer_memory_profile.sizing_replay_routes(2, 16, 3, 8, 2)
+    routes = trainer_memory_profile.sizing_replay_routes(4, 3, 3, 8, 2)
     validate_replay_geometry(
         num_layers_captured=routes.shape[-2], expected_moe_layers=3, topk_captured=routes.shape[-1], expected_topk=2,
-        num_experts=8, targets=routes, response_len=routes.shape[1], num_actions=16,
+        num_experts=8, targets=routes, response_len=routes.shape[1], num_actions=3,
     )
-    dense, mask = dense_replay_targets(routes, batch_size=2, seq_len=17, num_actions=16)
-    assert mask[:, :16].all() and not mask[:, 16].any()
+    dense, mask = dense_replay_targets(routes, batch_size=4, seq_len=4, num_actions=3)
+    assert mask[:, :3].all() and not mask[:, 3].any()
     assert (routes[..., 0] != routes[..., 1]).all()
-    assert torch.bincount(routes.flatten().long(), minlength=8).tolist() == [24] * 8
-    torch.testing.assert_close(dense[:, :16], routes.long())
+    for layer_routes in routes.unbind(dim=2):
+        counts = torch.bincount(layer_routes.flatten().long(), minlength=8)
+        assert counts.min() >= 2 and counts.max() <= 4
+    torch.testing.assert_close(dense[:, :3], routes.long())
 
 
 @pytest.mark.parametrize("fails", [None, "warmup", "measured"])

@@ -24,6 +24,7 @@ def test_chunked_statistics_cp_gather_preserves_values_and_local_gradients(megat
         nonlocal channel
         if not source.is_contiguous():
             raise ValueError("Collective input must be contiguous")
+        torch.testing.assert_close(source, all_statistics[list(indices[rank]), channel].unsqueeze(0))
         for peer, destination in enumerate(destinations):
             destination.copy_(all_statistics[list(indices[peer]), channel].unsqueeze(0))
         channel += 1
