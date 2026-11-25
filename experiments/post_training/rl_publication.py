@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -22,7 +22,6 @@ from finestore.rl.rl_progress import (
     AttemptSummary,
     Comparison,
     ComparisonRole,
-    ControlReplicate,
     GateResult,
     GraderReport,
 )
@@ -35,7 +34,6 @@ from finestore.rl.run_records import (
     write_attempt,
 )
 from marin.execution.artifact import read_record
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
@@ -125,7 +123,6 @@ class _TerminalMeasurements:
     optimizer_steps: int | None = None
     elapsed_seconds: float | None = None
     elapsed_excluding_eval_seconds: float | None = None
-    evaluation_task_set: str | None = None
 
 
 def _terminal_measurements(
@@ -148,14 +145,12 @@ def _terminal_measurements(
     invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
-    evaluation_task_set = None
     has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
         callback.type == "evaluation" for callback in launch.callbacks or ()
     )
     if has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
         status = evaluation_status(run_output, preset, attempt, launch, inputs=inputs)
         evaluations = list(status.evaluations)
-        evaluation_task_set = status.evaluation_task_set
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
         if status.evaluation_error is not None:
             evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
@@ -182,9 +177,7 @@ def _terminal_measurements(
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
         evidence.append("Training time excluding evaluation is unknown for this checkpoint lineage.")
-    return _TerminalMeasurements(
-        failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval, evaluation_task_set
-    )
+    return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
 
 
 def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[str]) -> GraderReport | None:
@@ -220,23 +213,19 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
-        control_commit=report.control.commit,
-        control_version=report.control.version,
     )
 
 
-def _evaluation_identities(launch: RecordedLaunch, evidence: list[str]) -> tuple[str | None, str | None]:
-    """Return the stored evaluation sources and the evaluation protocol digest."""
+def _evaluation_data_identity(launch: RecordedLaunch, evidence: list[str]) -> str | None:
     sources = [*launch.validation_data, *(source for group in launch.evaluation_data.values() for source in group)]
     if not sources:
-        return None, None
-    data = "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
+        return None
     try:
-        protocols = {name: evaluation_protocol(launch, name) for name in ("", *launch.evaluation_data)}
+        for name in launch.evaluation_data:
+            evaluation_protocol(launch, name)
     except InvalidComparison:
         evidence.append("The stored evaluation protocol is unavailable.")
-        return data, None
-    return data, fingerprint_hash(canonical_json(protocols))
+    return "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
 
 
 def build_record(
@@ -248,7 +237,7 @@ def build_record(
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     gate_failure: bool = False,
-    control: ControlReplicate | None = None,
+    pinned_commit: str | None = None,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
@@ -270,12 +259,12 @@ def build_record(
     base_commit = index.base_commit if index is not None else None
     if (
         base_commit is None
-        and control is not None
+        and pinned_commit is not None
         and provenance.get("branch") == "main"
         and provenance.get("dirty") is False
-        and provenance.get("base_commit") == control.commit
+        and provenance.get("base_commit") == pinned_commit
     ):
-        base_commit = control.commit
+        base_commit = pinned_commit
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
@@ -293,7 +282,7 @@ def build_record(
     if index is not None and index.base_preset_version is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
-    evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
+    evaluation_data = _evaluation_data_identity(launch, evidence)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
@@ -302,14 +291,10 @@ def build_record(
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=True if control or inputs.control else index.is_control if index is not None else None,
+        is_control=True if pinned_commit is not None else index.is_control if index is not None else None,
         base_commit=base_commit,
         base_preset_version=index.base_preset_version if index is not None else None,
-        control=control or inputs.control,
-        control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
-        evaluation_task_set=measured.evaluation_task_set,
-        evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else provenance.get("branch"),
         commit=index.source_revision if index is not None else provenance.get("base_commit"),
@@ -509,7 +494,7 @@ def publish_runs(
     evidence: CoordinatorEvidence | None = None,
     interrupted: bool = False,
     gate_required: bool = False,
-    controls: Mapping[str, ControlReplicate] | None = None,
+    pinned_commit: str | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     result = PublicationOutcome()
@@ -567,7 +552,7 @@ def publish_runs(
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     gate_failure=missing_gate,
-                    control=controls.get(path) if controls is not None else None,
+                    pinned_commit=pinned_commit,
                 )
                 if issue is not None:
                     record = record.model_copy(
@@ -597,18 +582,13 @@ def publish_controls(
     except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
-    controls = {
-        gate.control_path(preset, pin, index, table=table): ControlReplicate(
-            commit=pin.commit, version=pin.version, replicate=index
-        )
-        for index in range(pin.replicates)
-    }
+    outputs = tuple(gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates))
     result = publish_runs(
-        tuple(controls),
+        outputs,
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,
-        controls=controls,
+        pinned_commit=pin.commit,
     )
     if result.unserved_records:
         result.retry = "Repeat the control publication command."

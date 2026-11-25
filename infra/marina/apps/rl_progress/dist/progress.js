@@ -1,7 +1,7 @@
 const SVG = 'http://www.w3.org/2000/svg';
 const score = (value) => `${(100 * value).toFixed(1)}%`;
 const time = (run) => Date.parse(run.completed_at ?? run.started_at ?? run.run_date);
-const isMainControl = (run) => (run.is_control || run.control != null)
+const isMainControl = (run) => run.is_control === true
   && run.branch === 'main' && run.dirty === false && run.base_commit != null && run.commit === run.base_commit && run.status === 'succeeded';
 
 function metrics(run) {

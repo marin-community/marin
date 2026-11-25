@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, AttemptSummary, Invariant, Verdict
+from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -239,7 +239,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["grader_report"] is None
 
 
-def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(preset_table, recorded_runs):
+def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset_table, recorded_runs):
     preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
     table = preset_table(preset)
     built = runner.build_experiment(preset, table=table)
@@ -252,26 +252,13 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
         evaluations=(replace(preset.evaluations[0], name="renamed_eval", every=preset.checkpoint_every),),
     )
     write_json(Path(recipe.selection_artifact(newer.held_out_tasks).path()) / "summary.json", selection_summary(40))
-    report = gate.GateReport(
-        preset=preset.name,
-        verdict=Verdict.INVALID,
-        effect=None,
-        reason="Insufficient overlap",
-        run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
-        control=gate.ControlMetadata(commit="abcd1234", version="1234abcd", replicates=2),
-        invariants=(Invariant(name=f"eval_lite/{SHARED_TASKS_INVARIANT}", value=9, limit=18, holds=False),),
-        comparisons=(),
-        gaps=(),
-    )
-    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt, report=report)
+    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt)
     assert row.status == "succeeded" and row.failed_facts == []
     native = recorded_launch(attempt)
     (selection,) = native.validation_data
     expected_source = f"{selection.identity}/{selection.relative_path}"
     assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
-    assert row.evaluation_task_set == baseline.evaluation_task_set
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
-    assert row.gate_result is not None and not row.gate_result.invariants[0].holds
     assert {
         item.evaluation_score.step for item in row.evaluations if item.evaluation_score and item.evaluation_score.final
     } == {preset.updates}
@@ -290,8 +277,6 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     rewritten = item.model_copy(update={"answers": [unanswered, *item.answers[1:]]})
     replace_evaluations(source, [*outputs[:index], rewritten, *outputs[index + 1 :]])
     fewer_answers = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert fewer_answers.evaluation_task_set == baseline.evaluation_task_set
-    assert fewer_answers.evaluation_protocol_identity == baseline.evaluation_protocol_identity
     assert family_identity(fewer_answers) != family_identity(baseline)
 
     changed = [
@@ -304,8 +289,6 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     ]
     replace_evaluations(source, changed)
     differently_grouped = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert differently_grouped.evaluation_task_set == baseline.evaluation_task_set
-    assert differently_grouped.evaluation_protocol_identity == baseline.evaluation_protocol_identity
     assert family_identity(differently_grouped) != family_identity(baseline)
 
     source_path = Path(selection.uri) / selection.relative_path
@@ -315,16 +298,12 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     samples[0]["task_spec"] = json.dumps(task)
     pq.write_table(pa.Table.from_pylist(samples), source_path)
     changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert changed_tasks.evaluation_task_set != baseline.evaluation_task_set
     assert family_identity(changed_tasks) != family_identity(differently_grouped)
-    assert changed_tasks.evaluation_protocol_identity == baseline.evaluation_protocol_identity
 
     altered_config = copy.deepcopy(attempt.native.config)
     altered_config["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.314
     altered = attempt.model_copy(update={"config": altered_config})
     changed_protocol = publication.build_record(str(source), preset, table=table, attempt=altered)
-    assert changed_protocol.evaluation_task_set == changed_tasks.evaluation_task_set
-    assert changed_protocol.evaluation_protocol_identity != changed_tasks.evaluation_protocol_identity
     assert family_identity(changed_protocol) != family_identity(changed_tasks)
 
 
@@ -511,8 +490,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
-        "control_commit": pin.commit,
-        "control_version": pin.version,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
@@ -739,8 +716,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         if row["attempt_id"].startswith("pinned-")
     ]
     assert len(served_controls) == pin.replicates
-    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
-    assert all(row["control"]["commit"] == pin.commit for row in served_controls)
+    assert all(row["is_control"] for row in served_controls)
     [main_control] = [row for row in served_controls if row.get("base_commit") is not None]
     assert (main_control["branch"], main_control["base_commit"], main_control["commit"]) == (
         "main",

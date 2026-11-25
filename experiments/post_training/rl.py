@@ -25,11 +25,11 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 import click
 import yaml
-from finestore.rl.rl_progress import ControlReplicate, Verdict
+from finestore.rl.rl_progress import Verdict
 from finestore.rl.run_records import AttemptRecord, RunIndexIdentity
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
@@ -307,11 +307,7 @@ def build_experiment(
             resume_step=resume.step if resume is not None else None,
         )
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
-        recorded_inputs = inputs
-        if control:
-            member = ControlReplicate(commit=cast(str, provenance.base_commit), version=run.version, replicate=replicate)
-            recorded_inputs = inputs.model_copy(update={"control": member})
-        runs.append(replace(run, run=partial(_run_rl, inputs=recorded_inputs, issue=issue, forward_env=forward_env)))
+        runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
     gate = (
         rl_gate.gate_step(preset, tuple(runs), inputs=inputs, table=table)
         if preset.gated and not control and (not plan_only or preset.control_preset in table.control_pins)

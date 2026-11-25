@@ -163,12 +163,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         }
 
     controls = [
-        attempt(f"control-{i}", i + 1, raw, comparable=identity)
-        | {
-            "evaluation_data_identity": f"panel@selection-v{i}",
-            "evaluation_task_set": "tasks-a" if i < 2 else "tasks-b",
-            "evaluation_protocol_identity": "grader-a" if i < 3 else "grader-b",
-        }
+        attempt(f"control-{i}", i + 1, raw, comparable=identity) | {"evaluation_data_identity": f"panel@selection-v{i}"}
         for i, (raw, identity) in enumerate(
             ((0.5, "tasks-a/grader-a"), (0.4, "tasks-a/grader-a"), (0.7, "tasks-b/grader-a"), (0.75, "tasks-b/grader-b"))
         )

@@ -336,10 +336,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
 def validation_family(task: TaskSpec) -> str:
     if task.source.dataset == STRUCTURE_CLOSURE_DATASET:
         return STRUCTURAL_FAMILY
-    dataset = _grader_contract(task)["dataset"]
-    if dataset not in HELDOUT_FAMILIES:
-        raise ValueError(f"Held-out task {task.id} has an unknown grader dataset: {dataset}")
-    return HELDOUT_FAMILIES[dataset]
+    return HELDOUT_FAMILIES[_grader_contract(task)["dataset"]]
 
 
 def _stratified_sample(

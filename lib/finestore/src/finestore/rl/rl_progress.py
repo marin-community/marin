@@ -9,11 +9,6 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
-SHARED_TASKS_INVARIANT = "shared_tasks"
-SHARED_TASK_FRACTION_INVARIANT = "shared_task_fraction"
-EVALUATION_PROTOCOL_DIFFERS = "evaluation protocol differs"
-GROUP_COMPARISON_INVARIANTS = frozenset({SHARED_TASKS_INVARIANT, SHARED_TASK_FRACTION_INVARIANT})
-
 GRADER_REPORTS_DIR = "grader_reports"
 GRADER_REPORT_FILENAME = "grader_report.json"
 
@@ -99,8 +94,6 @@ class GateResult(BaseModel):
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
-    control_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    control_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GradingLatency(TypedDict):
@@ -143,12 +136,6 @@ class GraderReport(BaseModel):
     evaluation_duration_seconds: dict[str, FiniteFloat] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
-class ControlReplicate(BaseModel, frozen=True):
-    commit: Identity
-    version: Identity
-    replicate: Count
-
-
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
     run_id: Identity
@@ -160,13 +147,8 @@ class AttemptSummary(BaseModel):
     preset_version: Identity | None = None
     base_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    control: ControlReplicate | None = None
-    control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaluation_task_set: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     is_control: bool | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaldash_run_ids: tuple[Identity, ...] | None = Field(default=None, exclude=True)
     user: Identity | None = None
     branch: str | None = None
     commit: Identity | None = None
@@ -221,13 +203,7 @@ class AttemptSummary(BaseModel):
                 dict.fromkeys(
                     [
                         *self.failed_facts,
-                        *(
-                            fact.name
-                            for fact in gate.invariants
-                            if not fact.holds
-                            and fact.replicate == replicate
-                            and fact.name.rpartition("/")[2] not in GROUP_COMPARISON_INVARIANTS
-                        ),
+                        *(fact.name for fact in gate.invariants if not fact.holds and fact.replicate == replicate),
                     ]
                 )
             )
