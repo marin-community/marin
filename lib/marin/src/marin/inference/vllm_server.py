@@ -73,9 +73,10 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# The Marin fork's wheel does not bundle the RunAI loader, so fork installs pin it. Upstream installs use
-# the vllm[runai] extra, which pins a streamer compatible with that vLLM release.
-_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+# Pin the RunAI loader for both CUDA variants: the Marin fork's wheel does not bundle it, and the upstream
+# vllm[runai] extra only sets a floor (>=0.17.1 for vLLM 0.34), which would let new streamer releases in unreviewed.
+_FORK_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+_UPSTREAM_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.17.3"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
 _NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
@@ -254,6 +255,7 @@ class _CudaVllmInstall:
     torch_backend: str
     toolchain_version: str
     torch_install_args: tuple[str, ...]
+    runai_streamer_requirement: str
     executable: str
     executable_args: tuple[str, ...] = ()
 
@@ -300,6 +302,7 @@ class IsolatedCudaVllm:
                     "--index-strategy",
                     "unsafe-best-match",
                 ),
+                runai_streamer_requirement=_FORK_RUNAI_STREAMER_REQUIREMENT,
                 executable="python",
                 executable_args=(
                     "-c",
@@ -320,14 +323,14 @@ class IsolatedCudaVllm:
                 else self.nightly.cuda_toolchain_version
             ),
             torch_install_args=(*index_args, "--torch-backend", torch_backend),
+            runai_streamer_requirement=_UPSTREAM_RUNAI_STREAMER_REQUIREMENT,
             executable="vllm",
         )
 
     def command(self) -> list[str]:
         install = self._install()
-        command = ["uvx", "--from", install.requirement]
+        command = ["uvx", "--from", install.requirement, "--with", install.runai_streamer_requirement]
         if self.source is VllmType.MARIN_FORK:
-            command.extend(("--with", _RUNAI_STREAMER_REQUIREMENT))
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
             command.extend(("--with", f"torch=={self.release.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:

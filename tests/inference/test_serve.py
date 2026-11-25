@@ -578,6 +578,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc_and_flashinfer_kernels(
         "nvidia-nvvm==13.0.88",
     }
     assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
+    # The vllm[runai] extra only sets a floor, so the streamer must be pinned exactly.
+    assert any(requirement.startswith("runai-model-streamer[s3]==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
