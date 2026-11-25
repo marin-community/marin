@@ -3,10 +3,10 @@
 
 """Self-test of a freshly built AMD ROCm training environment on one GPU node.
 
-Checks, in order: the RCCL that JAX loads is the venv's 2.30.7 and not a system ROCm copy; the local device count;
-an exact all-reduce over every local GPU; a jax_triton kernel on every GPU (the trainer's ragged_dot is Triton);
-and a small jitted training step whose loss falls. With --anp-plugin, RCCL is pointed at the Pensando ANP net
-plugin and the test confirms RCCL loaded it.
+Checks, in order: the local device count; an exact all-reduce over every local GPU; that the RCCL JAX loaded is the
+venv's 2.30.7 and not a system ROCm copy; with --anp-plugin, that RCCL loaded the Pensando ANP net plugin; a
+jax_triton kernel on every GPU (the trainer's ragged_dot is Triton); and a small jitted training step whose loss
+falls.
 
 Run it through selftest.sh, which sets the library path and RCCL logging before Python starts:
     experiments/amd/rocm_env/selftest.sh $PREFIX/venv/bin/python --expect-devices 8

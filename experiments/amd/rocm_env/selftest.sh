@@ -16,6 +16,7 @@ done
 work=$(mktemp -d)
 LD_LIBRARY_PATH=$(echo "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep -v '^/opt/rocm' | paste -sd: - || true)
 if [ -n "$ANP_PLUGIN" ]; then
+  [ -r "$ANP_PLUGIN" ] || { echo "ANP plugin $ANP_PLUGIN not found on $(hostname)" >&2; exit 1; }
   mkdir "$work/anp"
   ln -s "$ANP_PLUGIN" "$work/anp/librccl-anp.so"
   LD_LIBRARY_PATH=$work/anp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}

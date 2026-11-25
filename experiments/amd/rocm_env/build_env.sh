@@ -120,7 +120,7 @@ log "wrote $PREFIX/manifest"
 if [ -e /dev/kfd ]; then
   log "self-test"
   SELFTEST_ARGS=(--expect-devices "$EXPECT_DEVICES")
-  [ -r "${ANP_PLUGIN:-}" ] && SELFTEST_ARGS+=(--anp-plugin "$ANP_PLUGIN")
+  [ -n "$ANP_PLUGIN" ] && SELFTEST_ARGS+=(--anp-plugin "$ANP_PLUGIN")
   "$PREFIX/marin/experiments/amd/rocm_env/selftest.sh" "$PY" "${SELFTEST_ARGS[@]}"
 else
   log "no /dev/kfd on $(hostname); run the self-test on a GPU node:"
