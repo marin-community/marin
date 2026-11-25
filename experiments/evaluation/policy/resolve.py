@@ -39,7 +39,7 @@ class ResolvedPolicyEvaluation:
 
 
 def benchmark_window(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -> int | None:
-    """The input window the benchmark enforces on any server: its agent's input limit, else its protocol's window."""
+    """Return the benchmark's agent input limit or protocol window, if declared."""
     dataset = selection_dataset(evaluation.selection, prompt_format(candidate.model))
     if dataset.agent is not None:
         return dataset.agent.max_input_tokens
@@ -51,8 +51,7 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
 
     Excluded evaluations are left out. Each setting comes from the candidate's override, else the
     evaluation. An unset context is the benchmark's window if it declares one, else the policy's; a
-    context that differs from the benchmark's window is rejected. A context larger than the candidate's
-    window needs an override.
+    context that differs from the benchmark's window is rejected.
     """
     if candidate not in policy.candidates:
         raise ValueError(f"{candidate.name} is not a candidate in policy {policy.version}")

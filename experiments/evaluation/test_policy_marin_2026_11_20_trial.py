@@ -16,7 +16,6 @@ CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda 
 
 
 def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
-    """The window the worker enforces: an agent's input limit, else the protocol's window, else the server's."""
     model = item.candidate.model
     selection = item.evaluation.selection
     model_format = prompt_format(model)
