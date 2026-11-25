@@ -31,6 +31,8 @@ from experiments.post_training.task_curation.source import RlDataSource
 VERSION = "2026.11.25"
 ABSTENTIONBENCH_REVISION = "693e80c53a7f6aa19db815561b7dc2b3412a02a7"
 ABSTENTIONBENCH_POPULATION = 35855
+# Same cap as simpleqa-verified-thinking. The reference instead stops reasoning at 4,000 tokens and forces an answer.
+THINKING_MAX_TOKENS = 16384
 
 
 def abstentionbench_source(*, thinking: bool) -> RlDataSource[EvaluationCorpusRecipe]:
@@ -45,7 +47,8 @@ def abstentionbench_source(*, thinking: bool) -> RlDataSource[EvaluationCorpusRe
             temperature=0.8,
             top_p=0.95,
             top_k=None,
-            max_tokens=None,
+            # A reply still reasoning at the cap has no final answer, so the judge sees an empty reply.
+            max_tokens=THINKING_MAX_TOKENS if thinking else None,
             stop=(),
             chat_template_kwargs={"enable_thinking": thinking},
         ),
