@@ -58,25 +58,22 @@ def test_an_unset_context_is_the_benchmarks_window_and_a_different_one_is_reject
         resolve(_policy(replace(windowed, context=30_000)), LARGE)
 
 
-def test_an_override_may_run_an_agent_below_its_input_limit():
+def test_an_agent_runs_at_the_smallest_of_its_limit_the_request_and_the_served_window():
     # The worker gives an agent the smaller of its input limit and the served window.
     agent = PolicyEvaluation("ds-1000", protocol="terminus-2")
     tiny = PolicyCandidate(model=ModelConfig(name="tiny", location="org/tiny", revision=REVISION), max_context=16_384)
     policy = EvalPolicy(version="test", context=CONTEXT, candidates=(LARGE, tiny), in_distribution=(agent,))
-    with pytest.raises(ValueError, match="tiny on ds-1000"):
-        resolve(policy, tiny)
+    assert _settings(resolve(policy, tiny)) == {"ds-1000-terminus-2": (16_384, None, None)}
+    assert _settings(resolve(policy, LARGE)) == {"ds-1000-terminus-2": (32_768, None, None)}
 
-    smaller = PolicyOverride(candidate=tiny, evaluation=agent, context=16_384, reason="its window")
-    assert _settings(resolve(replace(policy, overrides=(smaller,)), tiny)) == {
-        "ds-1000-terminus-2": (16_384, None, None)
+    smaller = PolicyOverride(candidate=LARGE, evaluation=agent, context=20_000, reason="less room")
+    assert _settings(resolve(replace(policy, overrides=(smaller,)), LARGE)) == {
+        "ds-1000-terminus-2": (20_000, None, None)
     }
-    above = PolicyOverride(candidate=LARGE, evaluation=agent, context=40_000, reason="more room")
-    with pytest.raises(ValueError, match="large on ds-1000"):
-        resolve(replace(policy, overrides=(above,)), LARGE)
 
 
-def test_a_candidate_served_below_a_declared_window_must_be_excluded_or_overridden():
-    # A benchmark that declares its window runs on the candidate's served window, here 32,768 of a native 200,000.
+def test_a_candidate_served_below_a_protocol_window_must_be_excluded():
+    # The candidate is served at 32,768 of a native 200,000; MRCR-65k's items need 65,472.
     served = PolicyCandidate(
         model=ModelConfig(
             name="served", location="org/served", revision=REVISION, serve=ServeConfig(max_model_len=32_768)
@@ -100,17 +97,16 @@ def test_an_agent_without_an_input_limit_runs_at_the_policy_context():
     }
 
 
-def test_context_beyond_the_candidate_window_needs_an_override():
-    with pytest.raises(ValueError, match="small on gpqa-diamond"):
-        resolve(_policy(), SMALL)
-    with pytest.raises(ValueError, match="small on gpqa-diamond"):
-        resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
-
-    assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL)) == {
+def test_a_candidate_runs_at_most_at_its_window_and_overrides_still_apply():
+    assert _settings(resolve(_policy(), SMALL)) == {
         "aime24": (50_000, None, None),
         "math500": (50_000, None, 7),
-        "gpqa-diamond": (60_000, 10_000, None),
+        "gpqa-diamond": (60_000, 30_000, None),
     }
+    assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL))["gpqa-diamond"] == (60_000, 10_000, None)
+    # An override's output limit must still fit the context it leaves.
+    with pytest.raises(ValueError, match="small on gpqa-diamond"):
+        resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
 
 
 def test_exceptions_apply_only_to_the_named_candidate():

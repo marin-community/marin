@@ -56,7 +56,8 @@ class PolicyEvaluation:
     num_fewshot: int | None = None
     prompt_format: PromptFormat | None = None
     context: int | None = None
-    """The input window; None means the benchmark's own window if it declares one, else the policy's context."""
+    """The input window to request; None requests the policy's. A protocol window replaces it, and the
+    candidate's window and any agent input limit cap it."""
     max_output: int | None = None
     """None leaves output limited only by the context and the benchmark protocol."""
     seed: int | None = None
@@ -116,7 +117,7 @@ class PolicyOverride:
 class EvalPolicy:
     """One version of the eval policy. Every evaluation runs for every candidate unless excluded.
 
-    ``context`` is the input window of evaluations whose benchmark declares none.
+    ``context`` is the input window an evaluation requests unless it sets its own.
     """
 
     version: str

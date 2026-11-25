@@ -5,13 +5,13 @@
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from enum import StrEnum
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -36,11 +36,6 @@ class ResolvedPolicyEvaluation:
         return selection.model_copy(update={"run": run})
 
     def __post_init__(self) -> None:
-        if self.context > self.candidate.max_context:
-            raise ValueError(
-                f"{self.candidate.name} on {self.evaluation.name}: context {self.context} is larger than "
-                f"the candidate's window {self.candidate.max_context}; add an override"
-            )
         if self.max_output is not None and self.max_output >= self.context:
             raise ValueError(
                 f"{self.candidate.name} on {self.evaluation.name}: output limit {self.max_output} does not fit "
@@ -48,57 +43,33 @@ class ResolvedPolicyEvaluation:
             )
 
 
-class WindowKind(StrEnum):
-    """How a benchmark's declared window constrains a run's context."""
-
-    PROTOCOL = "protocol"
-    """The window its items were built for; a run uses exactly this window."""
-    AGENT_LIMIT = "agent_limit"
-    """An agent's input limit; the agent gets the smaller of it and the served window, so a run may use less."""
-
-
-@dataclass(frozen=True)
-class BenchmarkWindow:
-    """A window a benchmark declares: its protocol's window, or its agent's input limit."""
-
-    tokens: int
-    kind: WindowKind
-
-
-def benchmark_window(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -> BenchmarkWindow | None:
-    """Return the benchmark's agent input limit or protocol window, if declared."""
-    dataset = selection_dataset(evaluation.selection, prompt_format(candidate.model))
-    if dataset.agent is not None and dataset.agent.max_input_tokens is not None:
-        return BenchmarkWindow(tokens=dataset.agent.max_input_tokens, kind=WindowKind.AGENT_LIMIT)
-    if dataset.protocol.context_window is not None:
-        return BenchmarkWindow(tokens=dataset.protocol.context_window, kind=WindowKind.PROTOCOL)
-    return None
+def catalog_variant(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -> EvaluationCorpusRecipe:
+    """The catalog variant the candidate runs: the evaluation's, in the candidate's chat or completion format."""
+    return selection_dataset(evaluation.selection, prompt_format(candidate.model))
 
 
 def _context(policy: EvalPolicy, candidate: PolicyCandidate, evaluation: PolicyEvaluation, context: int | None) -> int:
-    """The context an evaluation runs with: ``context`` if set, else its benchmark's window, else the policy's.
+    """The context an evaluation runs with.
 
-    A benchmark that declares a window runs on the candidate's served window, or for an agent run below its
-    input limit on a server of its context, so the candidate must be served at least that large.
+    A protocol window is the one its items were built for, so a run uses exactly it, and a candidate served
+    below it must be excluded. Otherwise the run gets the smallest of the window the candidate is served at,
+    the requested context (else the policy's) and any agent input limit, as the worker gives an agent.
     """
-    window = benchmark_window(evaluation, candidate)
-    if window is None:
-        return policy.context if context is None else context
-    name = f"{candidate.name} on {evaluation.name}"
+    variant = catalog_variant(evaluation, candidate)
     served = min(candidate.max_context, candidate.model.serve.max_model_len or candidate.max_context)
-    if window.kind is WindowKind.PROTOCOL and window.tokens > served:
-        raise ValueError(
-            f"{name}: the benchmark's window {window.tokens} is larger than the served window {served}; exclude it"
-        )
-    if context is None:
-        context = window.tokens
-    elif window.kind is WindowKind.PROTOCOL and context != window.tokens:
-        raise ValueError(f"{name}: context {context} is not the benchmark's window {window.tokens}")
-    elif context > window.tokens:
-        raise ValueError(f"{name}: context {context} is above the agent input limit {window.tokens}")
-    if context > served:
-        raise ValueError(f"{name}: context {context} is larger than the served window {served}; add an override")
-    return context
+    name = f"{candidate.name} on {evaluation.name}"
+    if (window := variant.protocol.context_window) is not None:
+        if window > served:
+            raise ValueError(
+                f"{name}: the benchmark's window {window} is larger than the served window {served}; exclude it"
+            )
+        if context is not None and context != window:
+            raise ValueError(f"{name}: context {context} is not the benchmark's window {window}")
+        return window
+    limits = [served, policy.context if context is None else context]
+    if variant.agent is not None and variant.agent.max_input_tokens is not None:
+        limits.append(variant.agent.max_input_tokens)
+    return min(limits)
 
 
 def resolve(
@@ -107,11 +78,9 @@ def resolve(
     """Return every evaluation the candidate runs under the policy.
 
     ``evaluations`` limits it to those names, whose constraints alone are checked. Excluded evaluations
-    are left out. Each setting comes from the candidate's override, else the
-    evaluation. An unset context is the benchmark's window if it declares one, else the policy's. A
-    context may be below an agent's input limit but must equal a protocol window, so a candidate whose
-    window cannot hold a protocol window has to be excluded from that benchmark. A candidate with no
-    matching exclusions or overrides uses every policy evaluation.
+    are left out. Each setting comes from the candidate's override, else the evaluation; the context is
+    then fitted to the benchmark and the candidate (``_context``). A candidate with no matching
+    exclusions or overrides uses every policy evaluation.
     """
     excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
     overrides = {item.evaluation.name: item for item in policy.overrides if item.candidate == candidate}

@@ -7,14 +7,13 @@ from collections.abc import Collection
 from dataclasses import dataclass, replace
 
 from marin.evaluation.hardware import default_platform
-from marin.evaluation.model_config import ModelConfig, prompt_format
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import native_context_window, resolved_serve_config
 
-from experiments.evaluation.curated import pinned_model, resolve_selection, runs_agent, selection_dataset
+from experiments.evaluation.curated import pinned_model
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, benchmark_window, resolve
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
-from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -31,28 +30,24 @@ class ServerGroup:
     evaluations: tuple[ResolvedPolicyEvaluation, ...]
 
 
-def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe:
-    """The catalog dataset, with its protocol, that the evaluation runs as for the candidate."""
-    return selection_dataset(item.evaluation.selection, prompt_format(item.candidate.model))
-
-
 def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
     """Choose a server window for a resolved evaluation.
 
-    A benchmark that runs at its own window requests ``served``, the candidate's window after the checkpoint
-    clamps it. An agent run below its input limit, and a benchmark with no window of its own, request a
-    server at the evaluation's context, which the agent's input then fills.
+    A run at the window its benchmark declares, a protocol window or an agent's full input limit, requests
+    ``served``, the candidate's window after the checkpoint clamps it. Any other run requests a server at its
+    context, which an agent's input then fills.
     """
-    own = benchmark_window(item.evaluation, item.candidate)
+    variant = catalog_variant(item.evaluation, item.candidate)
+    declared = variant.protocol.context_window
+    if declared is None and variant.agent is not None:
+        declared = variant.agent.max_input_tokens
+    if declared is None:
+        return item.context
     # resolve checked the catalog's window; ``served`` is what the checkpoint actually allows, which can be less.
-    if own is None or item.context < own.tokens:
-        window = item.context
-        if own is not None and (served is None or served < window):
-            raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {window}")
-        return window
-    if served is None or served < own.tokens:
-        raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {own.tokens}")
-    return served
+    needed = min(item.context, declared)
+    if served is None or served < needed:
+        raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {needed}")
+    return item.context if item.context < declared else served
 
 
 def _judge_key(item: ResolvedPolicyEvaluation) -> tuple[str, ...] | None:
@@ -78,7 +73,7 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | Non
     """
     groups: dict[tuple[int, bool], list[ResolvedPolicyEvaluation]] = {}
     for item in items:
-        agentic = runs_agent(resolve_selection(item.evaluation.selection, prompt_format(item.candidate.model)))
+        agentic = catalog_variant(item.evaluation, item.candidate).agent is not None
         groups.setdefault((_server_window(item, served), agentic), []).append(item)
     return tuple(
         ServerGroup(window=window, agentic=agentic, evaluations=tuple(part))
