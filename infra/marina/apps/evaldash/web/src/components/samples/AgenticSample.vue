@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { apiGet } from '@/composables/useApi'
 import type { ArtifactResponse, SampleRow, Trajectory } from '@/types/api'
 import { isSotopiaSummary, type SotopiaSummary as SotopiaSummaryData } from '@/utils/sotopia'
+import { skyrlTurnsToTrajectory } from '@/utils/skyrlTrajectory'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import SotopiaSummary from '@/components/samples/SotopiaSummary.vue'
 import TrajectoryViewer from '@/components/samples/TrajectoryViewer.vue'
@@ -40,7 +41,9 @@ async function load(runId: string, uri: string | null) {
     else if (typeof parsed === 'object' && parsed !== null && 'steps' in parsed && Array.isArray(parsed.steps)) {
       trajectory.value = parsed as Trajectory
     } else {
-      throw new Error('Unsupported sample artifact format.')
+      const turns = skyrlTurnsToTrajectory(parsed)
+      if (turns === null) throw new Error('Unsupported sample artifact format.')
+      trajectory.value = turns
     }
   } catch (e) {
     if (currentGeneration !== generation) return

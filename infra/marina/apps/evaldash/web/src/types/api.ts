@@ -504,6 +504,8 @@ export interface TrajectoryStep {
   tool_calls?: TrajectoryToolCall[]
   observation?: TrajectoryObservation | null
   metrics?: Record<string, number>
+  /** String outcome facts a step carries where a metric would be numeric: stop reason, verification. */
+  annotations?: Record<string, string>
 }
 
 export interface TrajectoryAgent {
