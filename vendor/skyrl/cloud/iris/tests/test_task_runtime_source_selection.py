@@ -122,7 +122,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def _run_head_script(args: SimpleNamespace, script: str, monkeypatch) -> int:
+def _run_head_script(args: SimpleNamespace, script: str, monkeypatch, *, trainer_timing_uri: str | None = None) -> int:
     def launch(_config_path, environment):
         # run_head starts the liveness clock when launch returns. Hold the return until the
         # child interpreter has started so its startup time, which is unbounded on a loaded
@@ -145,7 +145,25 @@ def _run_head_script(args: SimpleNamespace, script: str, monkeypatch) -> int:
         return process
 
     monkeypatch.setattr(task_runtime, "launch_training_driver", launch)
-    return task_runtime.run_head(args, Path("/tmp/unused-launch-config.yaml"))
+    return task_runtime.run_head(
+        args, Path("/tmp/unused-launch-config.yaml"), trainer_timing_uri=trainer_timing_uri
+    )
+
+
+def test_head_persists_completed_trainer_timing(tmp_path, monkeypatch) -> None:
+    _isolate_head_runtime(tmp_path, monkeypatch)
+    timing = tmp_path / "trainer_timing.json"
+    output = (
+        "(skyrl_entrypoint pid=124) \x1b[36mskyrl_train.entrypoints.main_base\x1b[0m:"
+        "\x1b[36m_run\x1b[0m:703 - \x1b[32mTraining run completed: "
+        "elapsed_excluding_eval_seconds=203.125\x1b[0m"
+    )
+    script = f"print({output!r})\nprint('task output: Training run completed: elapsed_excluding_eval_seconds=999.000')"
+
+    exit_code = _run_head_script(_runtime_args(tmp_path), script, monkeypatch, trainer_timing_uri=str(timing))
+
+    assert exit_code == 0
+    assert json.loads(timing.read_text()) == {"elapsed_excluding_eval_seconds": 203.125}
 
 
 def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monkeypatch) -> None:

@@ -124,10 +124,22 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
+
+
+def _judge_identity(config: ModelConfigRef | None) -> dict | None:
+    return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
 def _evaluation_identity(evaluation: EvalRef) -> dict:
@@ -538,9 +550,7 @@ def build_evaluation_batch(
                     else {}
                 ),
                 "judge": (
-                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
-                    else None
+                    _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
                 "policy": spec.version,
             },
@@ -622,7 +632,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
             record
@@ -630,7 +640,9 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            and _judge_identity(
+                record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
+            )
             == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),

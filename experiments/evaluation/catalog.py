@@ -33,6 +33,7 @@ from experiments.evaluation.benchmarks import (
     multichallenge,
     multiple_choice,
     nupa,
+    pdbthink,
     physics_verified,
     question_answering,
     reasoning,
@@ -83,6 +84,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             nupa,
             agentic,
             supergpqa,
+            pdbthink,
             physics_verified,
             arc_agi,
         )

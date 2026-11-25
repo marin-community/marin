@@ -131,6 +131,7 @@ from skyrl_train.evaluation_profiles import (
     evaluation_profile_config,
 )
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
+from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
 from skyrl_train.callbacks.builtin import DefaultCallbackHandler, RefModelUpdateCallback
@@ -1629,6 +1630,7 @@ class RayPPOTrainer:
 
     @asynccontextmanager
     async def _evaluation_session(self):
+        started = time.perf_counter()
         try:
             with Timer("eval_drain", self.all_timings if self.global_step else None):
                 await self.context.pause_and_drain()
@@ -1640,6 +1642,12 @@ class RayPPOTrainer:
                 yield pool
         finally:
             self.context.resume()
+        if self.cfg.trainer.get("dump_grader_report", False):
+            write_grader_report(
+                str(self.cfg.trainer.grader_report_dir),
+                str(self.global_step),
+                {"evaluation_duration_seconds": time.perf_counter() - started},
+            )
 
     async def _evaluate_and_log(self, state: TrainerState, timer: Timer, *, commit: bool) -> None:
         with timer:

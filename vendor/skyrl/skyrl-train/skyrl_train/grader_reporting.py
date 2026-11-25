@@ -166,6 +166,7 @@ class GraderReportSections(TypedDict, total=False):
     training_tasks: list[TaskSummary]
     evaluation: list[SubsetSummary]
     evaluation_tasks: list[TaskSummary]
+    evaluation_duration_seconds: float
 
 
 def write_grader_report(report_dir: str, key: str, sections: GraderReportSections) -> None:

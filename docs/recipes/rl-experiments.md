@@ -222,7 +222,8 @@ The report also records success and coverage by task ID. Success rates use
 verified responses and are null when no verdict is available.
 Open **Grader stats** from the published attempt's details to see coverage,
 failure counts and grading latency. Expand **Individual tasks** for task results.
-Exported evaluation responses include `task_id` and `subset_id`.
+Exported evaluation responses include `task_id` and `subset_id`. The trainer logs reporting errors
+and continues, so an attempt may have a partial or missing report.
 
 The launcher publishes every prepared attempt and its terminal result using the caller's Marina
 login. The index groups attempts by `<model>-<preset>-<user>-<config hash>` from the gate's composed
