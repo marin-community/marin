@@ -12,7 +12,7 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -565,11 +565,10 @@ def test_row_groups_use_arrow_buffer_bytes(monkeypatch, explicit_schema, archive
 
 def test_full_read_of_overlapping_shards_holds_a_few_row_groups_per_shard(monkeypatch, archive_root):
     # Every shard spans the whole key range, so the ordered read keeps all of them open together.
-    # Shrink the row groups and merge batches so each shard has about 30 groups.
+    # Shrink the row groups, read-ahead and merge slices so each shard has about 30 groups.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
-    monkeypatch.setattr(
-        reader_module, "_MERGE_SCAN_PROFILE", replace(reader_module._MERGE_SCAN_PROFILE, batch_bytes=16 * 1024)
-    )
+    monkeypatch.setattr(reader_module, "_ROW_GROUP_PREFETCH_BYTES", 64 * 1024)
+    monkeypatch.setattr(reader_module, "_MERGE_BATCH_BYTES", 16 * 1024)
     shards, rows_per_shard, payload_bytes = 8, 2_000, 1_000
     rng = random.Random(0)
     with DataStore.open(archive_root, writer_id="w", flush_interval=3600) as store:

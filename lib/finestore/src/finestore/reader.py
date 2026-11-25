@@ -11,9 +11,9 @@ import itertools
 import json
 import threading
 import time
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
 from typing import BinaryIO, ClassVar, Protocol, TypeVar, cast
@@ -49,7 +49,12 @@ from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorte
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
 _READ_CACHE_BYTES = 64 * 1024 * 1024
+# An ordered read slices each decoded row group into tables of about this many bytes.
 _MERGE_BATCH_BYTES = 1024 * 1024
+# A shard reads row groups ahead up to this many decoded bytes: one full-width 4 MB group, or many
+# groups of a narrow projection, whose small reads would otherwise wait on each other.
+_ROW_GROUP_PREFETCH_BYTES = 4 * 1024 * 1024
+_ROW_GROUP_PREFETCH_WORKERS = 32
 
 
 @dataclass
@@ -87,32 +92,26 @@ _BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", un
 
 
 class _ShardHandler(FSSpecHandler):
-    """Open manifest shards without the existence check Arrow's handler issues first.
+    """Open manifest shards for Arrow reads, which fetch their own coalesced byte ranges.
 
-    Every shard in a snapshot is immutable and already published, so the HEAD request
-    Arrow would send before each open is wasted on object storage.
+    Every shard in a snapshot is immutable and already published, so the HEAD request Arrow
+    would send before each open is wasted on object storage. ``sizes`` holds the manifest's
+    shard sizes; with them, neither Arrow nor fsspec asks the store for a size. Files open
+    without fsspec's read-ahead (50 MiB on S3), which would fetch bytes that no read asked for.
     """
 
-    def open_input_file(self, path: str) -> pa.PythonFile:
-        return pa.PythonFile(self.fs.open(path, mode="rb"), mode="r")
-
-
-class _NoReadAheadHandler(FSSpecHandler):
-    def open_input_file(self, path: str) -> pa.PythonFile:
-        # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
-        # read-ahead, which can fetch unrelated inline blobs after a small read.
-        return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
-
-
-class _BoundedReadAheadHandler(FSSpecHandler):
-    def __init__(self, fs: AbstractFileSystem, block_size: int) -> None:
+    def __init__(self, fs: AbstractFileSystem, sizes: Mapping[str, int]) -> None:
         super().__init__(fs)
-        self._block_size = block_size
+        self._sizes = sizes
+
+    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+        if not all(path in self._sizes for path in paths):
+            return super().get_file_info(paths)
+        return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
 
     def open_input_file(self, path: str) -> pa.PythonFile:
-        return pa.PythonFile(
-            self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
-        )
+        handle = self.fs.open(path, mode="rb", cache_type="none", size=self._sizes.get(path))
+        return pa.PythonFile(handle, mode="r")
 
 
 class _ReadRangeCache:
@@ -124,32 +123,48 @@ class _ReadRangeCache:
         self._bytes = 0
         self._ranges: dict[str, dict[tuple[int, int], bytes]] = {shard.path: {} for shard in shards}
         self._entries: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
-        self._file_locks = {path: threading.Lock() for path in self._ranges}
+        # Fetches under way, so readers of one range share a request while other ranges load concurrently.
+        self._fetching: dict[tuple[str, int, int], Future[bytes]] = {}
         self._lock = threading.Lock()
 
     def read(self, path: str, start: int, end: int) -> bytes:
-        # Serialize misses for the same file while allowing different shards to load concurrently.
-        with self._file_locks[path]:
+        key = (path, start, end)
+        with self._lock:
+            for (cached_start, cached_end), data in self._ranges[path].items():
+                if cached_start <= start and end <= cached_end:
+                    self._entries.move_to_end((path, cached_start, cached_end))
+                    return data[start - cached_start : end - cached_start]
+            fetching = self._fetching.get(key)
+            if fetching is None:
+                self._fetching[key] = Future()
+        if fetching is not None:
+            return fetching.result()
+        try:
+            data = self._fetch(path, start, end)
+        except BaseException as exc:
             with self._lock:
-                for (cached_start, cached_end), data in self._ranges[path].items():
-                    if cached_start <= start and end <= cached_end:
-                        self._entries.move_to_end((path, cached_start, cached_end))
-                        return data[start - cached_start : end - cached_start]
-            data = cast(bytes, self._filesystem.cat_file(path, start=start, end=end))
-            if len(data) != end - start:
-                raise ValueError(f"shard {path!r}: read {len(data)} of {end - start} bytes at {start}")
-            # Oversized caller reads remain transient and do not evict the working set.
-            if len(data) > self._capacity:
-                return data
-            with self._lock:
-                while self._bytes + len(data) > self._capacity:
-                    (old_path, old_start, old_end), old = self._entries.popitem(last=False)
-                    del self._ranges[old_path][old_start, old_end]
-                    self._bytes -= len(old)
-                self._entries[path, start, end] = data
-                self._ranges[path][start, end] = data
-                self._bytes += len(data)
+                self._fetching.pop(key).set_exception(exc)
+            raise
+        with self._lock:
+            self._fetching.pop(key).set_result(data)
+        return data
+
+    def _fetch(self, path: str, start: int, end: int) -> bytes:
+        data = cast(bytes, self._filesystem.cat_file(path, start=start, end=end))
+        if len(data) != end - start:
+            raise ValueError(f"shard {path!r}: read {len(data)} of {end - start} bytes at {start}")
+        # Oversized caller reads remain transient and do not evict the working set.
+        if len(data) > self._capacity:
             return data
+        with self._lock:
+            while self._bytes + len(data) > self._capacity:
+                (old_path, old_start, old_end), old = self._entries.popitem(last=False)
+                del self._ranges[old_path][old_start, old_end]
+                self._bytes -= len(old)
+            self._entries[path, start, end] = data
+            self._ranges[path][start, end] = data
+            self._bytes += len(data)
+        return data
 
 
 class _CachedReadFile(AbstractBufferedFile):
@@ -188,18 +203,10 @@ class _ScanProfile:
     batch_readahead: int
     fragment_readahead: int
     pre_buffer: bool = True
-    # When set, a batch also stays near this many uncompressed bytes of the columns read.
-    batch_bytes: int | None = None
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
-# A full-table read holds a batch of every shard. A batch is sized in bytes because one larger than
-# a row group makes the Parquet reader decode the shard's next groups as well.
-_MERGE_SCAN_PROFILE = _ScanProfile(
-    batch_rows=16_384, batch_readahead=1, fragment_readahead=1, batch_bytes=_MERGE_BATCH_BYTES
-)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
-_BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
 
 
@@ -438,74 +445,52 @@ def _partition_filter(
     return pushdown, after_deduplication
 
 
-def iter_shard_batches(
-    shard: _ReadableShard,
-    unified: pa.Schema,
-    pa_fs: PyFileSystem,
-    columns: list[str] | None = None,
-    where: Sequence[FilterClause] | None = None,
-    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Generator[pa.RecordBatch, None, None]:
-    """Yield shard batches with resolved commit and generation coordinates."""
-    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    fragment = next(dataset.get_fragments())
-    assert isinstance(fragment, pds.ParquetFileFragment)
-    batch_rows = scan_profile.batch_rows
-    if scan_profile.batch_bytes is not None:
-        fragment.ensure_complete_metadata()
-        assert fragment.metadata is not None
-        batch_rows = _rows_within(fragment.metadata, columns, scan_profile.batch_bytes, batch_rows)
-    with fragment.scanner(
-        schema=unified,
-        columns=columns,
-        filter=_build_filter(where),
-        use_threads=False,
-        batch_size=batch_rows,
-        batch_readahead=scan_profile.batch_readahead,
-        fragment_readahead=scan_profile.fragment_readahead,
-        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
-    ).to_reader() as batches:
-        for batch in batches:
-            yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
-
-
-def _rows_within(metadata: pq.FileMetaData, columns: Sequence[str] | None, max_bytes: int, max_rows: int) -> int:
-    """Rows that hold about ``max_bytes`` of the given columns, by the footer's uncompressed sizes."""
-    wanted = None if columns is None else set(columns)
-    total = 0
-    for index in range(metadata.num_row_groups):
-        group = metadata.row_group(index)
-        for column in range(group.num_columns):
-            chunk = group.column(column)
-            if wanted is None or chunk.path_in_schema.split(".")[0] in wanted:
-                total += chunk.total_uncompressed_size
-    if not total:
-        return max_rows
-    return max(1, min(max_rows, max_bytes * metadata.num_rows // total))
-
-
 def iter_shard_row_groups(
     shard: _ReadableShard,
     unified: pa.Schema,
     pa_fs: PyFileSystem,
+    prefetch: Executor,
+    *,
+    columns: Sequence[str] | None = None,
+    where: Sequence[FilterClause] | None = None,
 ) -> Generator[pa.Table, None, None]:
-    """Yield one resolved Arrow table per Parquet row group."""
+    """Yield one resolved Arrow table per Parquet row group whose statistics may match ``where``.
+
+    Later groups are read on ``prefetch`` while the caller holds the current one, up to
+    ``_ROW_GROUP_PREFETCH_BYTES`` judged by the size of the last group read.
+    """
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
     fragment = next(dataset.get_fragments())
     assert isinstance(fragment, pds.ParquetFileFragment)
-    fragment.ensure_complete_metadata()
-    assert fragment.metadata is not None
-    for index in range(fragment.metadata.num_row_groups):
-        row_group = fragment.subset(row_group_ids=[index])
-        group = row_group.scanner(
+    condition = _build_filter(where)
+
+    def read(group: pds.ParquetFileFragment) -> pa.Table:
+        return group.scanner(
             schema=unified,
+            columns=columns,
+            filter=condition,
             use_threads=False,
-            batch_readahead=1,
-            fragment_readahead=1,
-            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=True),
         ).to_table()
-        if group.num_rows:
-            yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
+
+    groups = iter(fragment.split_by_row_group(condition, schema=unified))
+    pending: deque[Future[pa.Table]] = deque()
+
+    def fill(depth: int) -> None:
+        while len(pending) < depth and (group := next(groups, None)) is not None:
+            pending.append(prefetch.submit(read, group))
+
+    try:
+        fill(1)
+        while pending:
+            rows = pending.popleft().result()
+            # Submit the next reads before handing these rows over, so they overlap the caller.
+            fill(max(1, _ROW_GROUP_PREFETCH_BYTES // max(rows.nbytes, 1)))
+            if rows.num_rows:
+                yield _resolved_version_columns(rows, shard.commit_sequence, shard.generation)
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
@@ -523,17 +508,21 @@ def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation
     return cast(_ArrowRows, result)
 
 
-def _sorted_shard_run(
-    shard: _ReadableShard,
-    plan: _ReadPlan,
-    scan_profile: _ScanProfile,
-) -> Generator[pa.Table, None, None]:
-    """Yield one shard's matching rows in primary-key order, a batch at a time when the shard is sorted."""
-    with closing(
-        iter_shard_batches(shard, plan.schema, plan.filesystem, plan.columns, plan.pushdown_where, scan_profile)
-    ) as batches:
-        tables = (pa.Table.from_batches([batch]) for batch in batches)
+def _sorted_shard_run(shard: _ReadableShard, plan: _ReadPlan, prefetch: Executor) -> Generator[pa.Table, None, None]:
+    """Yield one shard's matching rows in primary-key order, a slice at a time when the shard is sorted."""
+    groups = iter_shard_row_groups(
+        shard, plan.schema, plan.filesystem, prefetch, columns=plan.columns, where=plan.pushdown_where
+    )
+    with closing(groups):
+        tables = (piece for group in groups for piece in _byte_slices(group, _MERGE_BATCH_BYTES))
         yield from tables if shard.primary_key_sorted else sorted_by_key(tables, plan.primary_key)
+
+
+def _byte_slices(rows: pa.Table, max_bytes: int) -> Iterator[pa.Table]:
+    """Split rows into zero-copy slices of about ``max_bytes`` each."""
+    step = max(1, rows.num_rows * max_bytes // max(rows.nbytes, 1))
+    for start in range(0, rows.num_rows, step):
+        yield rows.slice(start, step)
 
 
 def _read_plan(
@@ -671,10 +660,13 @@ class _ReadOperations:
     def list_shards(self, table: str) -> Sequence[_ReadableShard]:
         raise NotImplementedError
 
+    def _shard_sizes(self, table: str) -> Mapping[str, int]:
+        """Known byte sizes of the table's shard files, keyed by path."""
+        return {}
+
     def _filesystem(self, table: str) -> PyFileSystem:
         fs, _ = factory.url_to_fs(self.root)
-        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
-        return PyFileSystem(handler)
+        return PyFileSystem(_ShardHandler(fs, self._shard_sizes(table)))
 
     def _read_plan(
         self,
@@ -712,7 +704,6 @@ class _ReadOperations:
             table,
             columns=columns,
             where=where,
-            scan_profile=_MERGE_SCAN_PROFILE,
         )
 
     def _iter_rows(
@@ -721,13 +712,14 @@ class _ReadOperations:
         *,
         columns: Sequence[str] | None,
         where: list[tuple[str, str, object]] | None,
-        scan_profile: _ScanProfile,
     ) -> Generator[dict, None, None]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
         with ExitStack() as stack:
-            runs = [stack.enter_context(closing(_sorted_shard_run(shard, plan, scan_profile))) for shard in plan.shards]
+            workers = min(len(plan.shards), _ROW_GROUP_PREFETCH_WORKERS)
+            prefetch = stack.enter_context(ThreadPoolExecutor(max_workers=workers))
+            runs = [stack.enter_context(closing(_sorted_shard_run(shard, plan, prefetch))) for shard in plan.shards]
             for rows in merge_sorted_runs(runs, plan.primary_key):
                 if self._history_floor:
                     rows = rows.filter(pc.greater(rows[SystemColumns.COMMIT], self._history_floor))
@@ -891,7 +883,6 @@ class _ReadOperations:
                             BlobTables.PARTS,
                             columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
                             where=[(BlobColumns.NAME, "in", list(chunked))],
-                            scan_profile=_BLOB_PART_SCAN_PROFILE,
                         )
                     ) as part_rows:
                         for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
@@ -945,7 +936,6 @@ class _ReadOperations:
                 BlobTables.PARTS,
                 columns=[BlobColumns.PART, BlobColumns.DATA],
                 where=[(BlobColumns.NAME, "==", descriptor.name)],
-                scan_profile=_BLOB_PART_SCAN_PROFILE,
             )
         ) as part_rows:
             yield from _validated_blob_parts(descriptor, part_rows)
@@ -976,6 +966,9 @@ class ReadView(_ReadOperations):
         self._read_filesystem: PyFileSystem | None = None
         self._cache_bytes = cache_bytes
         self._filesystem_lock = threading.Lock()
+
+    def _shard_sizes(self, table: str) -> Mapping[str, int]:
+        return {shard.path: shard.size_bytes for shard in self.list_shards(table)}
 
     def _filesystem(self, table: str) -> PyFileSystem:
         if not self._cache_bytes:

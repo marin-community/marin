@@ -26,8 +26,8 @@ _COMPRESSION_LEVEL = 0
 # Arrow data. A row group is the unit a reader prunes on: with a filter it reads only the groups whose
 # footer statistics can match, so a large flush that wrote one giant group would defeat the pruning.
 # Bounding the group keeps a ``name ==`` blob lookup or a ``task ==`` sample scan reading a fraction of
-# a big shard. A full-table read holds every shard open and the Parquet reader holds a few row groups
-# of each, so the byte cap also bounds that read's memory per shard.
+# a big shard. A full-table read or a compaction holds every shard open, with up to two decoded row
+# groups of each, so the byte cap also bounds their memory per shard.
 ROW_GROUP_ROWS = 16_384
 ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
 BLOB_PART_ROW_GROUP_ROWS = 1
