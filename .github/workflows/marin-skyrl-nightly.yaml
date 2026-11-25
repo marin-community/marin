@@ -30,12 +30,12 @@ on:
         default: ""
 
 concurrency:
-  group: ${{ inputs.controls && github.ref_name != 'main' && format('marin-rl-controls-{0}', github.ref) || 'marin-nightly' }}
+  group: ${{ (inputs.controls || inputs.model || inputs.preset) && github.ref_name != 'main' && format('marin-rl-controls-{0}', github.ref) || 'marin-nightly' }}
   cancel-in-progress: false
 
 jobs:
   gpu-gate:
-    if: ${{ !inputs.controls }}
+    if: ${{ !(inputs.controls || inputs.model || inputs.preset) }}
     name: ${{ matrix.lane }}
     strategy:
       fail-fast: false
@@ -175,7 +175,7 @@ jobs:
           if-no-files-found: ignore
 
   rl-controls:
-    if: github.event_name == 'schedule' || inputs.controls
+    if: github.event_name == 'schedule' || inputs.controls || inputs.model || inputs.preset
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
