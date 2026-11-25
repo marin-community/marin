@@ -180,6 +180,8 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
         assert config.model.tokenizer_revision == PINS[solver].revision
         assert config.iris.priority == priority_band_value("interactive")
         assert config.iris.worker_resources.regions == ["us-central2"]
+        assert config.iris.worker_resources.device.variant == "v4-64"
+        assert config.iris.worker_resources.replicas == 8
         assert config.iris.max_retries_failure > 0 and config.iris.max_retries_preemption > 0
         assert shape.tensor_parallel * shape.data_parallel * shape.attention_data_parallel == shape.chips
         model = tpu.tpu_model(solver, "gs://marin-us-central2/fixture")
@@ -194,7 +196,7 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
             assert "--no-enable-prefix-caching" in model.serve.vllm_extra_args
             assert model.serve.max_model_len == 65536
             arguments = list(config.engine.extra_args)
-            assert int(arguments[arguments.index("--num-gpu-blocks-override") + 1]) == 16384
+            assert int(arguments[arguments.index("--num-gpu-blocks-override") + 1]) == 16384 * shape.data_parallel
         assert not any("eager" in argument for argument in config.engine.extra_args)
     # Snowball's 20 Q / 5 KV heads cannot be split across TP8 or TP16.
     assert tpu.SHAPES[Solver.SNOWBALL].tensor_parallel == 1
@@ -422,7 +424,7 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
         try:
             yield SimpleNamespace(
                 ready_direct_session=lambda: SimpleNamespace(
-                    effective_serving=EffectiveServing(8, 1, 1, 2, 65536),
+                    effective_serving=EffectiveServing(8, 4, 1, 8, 65536),
                     model=SimpleNamespace(endpoint=SimpleNamespace(base_url=endpoint)),
                 ),
                 endpoint_name="slice-fixture",
@@ -485,7 +487,7 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
     monkeypatch.setattr(tpu, "publish_pool_receipt", publish_then_exit)
     with pytest.raises(EndOwner):
         tpu.run_tpu_pool(solver, str(tmp_path), 1)
-    assert sweeps == [8, 32, 128]
+    assert sweeps == [8, 32, 128, 512]
     assert lifecycle == (
         ["slice_enter", "register", "slice_exit"]
         if registry_failure
@@ -559,4 +561,4 @@ def test_full_solver_rollout_replaces_only_its_qualified_pilot(monkeypatch):
         "/benfeuer/atlas-difficulty-engines-small-v4-old-pilot",
     ]
     assert commands[1][commands[1].index("--solver") + 1] == "small"
-    assert commands[1][commands[1].index("--replicas") + 1] == "8"
+    assert commands[1][commands[1].index("--replicas") + 1] == "2"

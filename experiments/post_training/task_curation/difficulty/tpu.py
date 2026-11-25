@@ -70,9 +70,11 @@ class TpuShape:
 
 
 SHAPES = {
-    Solver.SMALL: TpuShape("v4-16", 8, 8, 1, 8),
-    Solver.LARGE: TpuShape("v4-32", 16, 16, 1, 8),
-    Solver.SNOWBALL: TpuShape("v4-32", 16, 1, 1, 4, attention_data_parallel=16),
+    # Match standing reserved workers so INTERACTIVE can preempt BATCH.
+    # SPMD data axes bundle copies without changing each copy's sharding.
+    Solver.SMALL: TpuShape("v4-64", 32, 8, 4, 2),
+    Solver.LARGE: TpuShape("v4-64", 32, 16, 2, 4),
+    Solver.SNOWBALL: TpuShape("v4-64", 32, 1, 2, 2, attention_data_parallel=16),
 }
 
 
@@ -106,20 +108,20 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
     shape = SHAPES[solver]
     if not weights.startswith("gs://marin-us-central2/"):
         raise ValueError("TPU weights must be staged in us-central2")
-    extra = ("--enable-auto-tool-choice",)
+    extra = ("--enable-auto-tool-choice", "--api-server-count", "1")
     if solver == Solver.LARGE:
         # Prefix checkpoints retain a GDN state for every cache block and do
         # not fit the frozen context on this slice. The pinned TPU backend's
         # compact mode retains one state per active request instead.
         # Share the logical block count with the engine driver, not only the
-        # workers' compact allocator. 16,384 attention blocks + 33 recurrent
-        # slots use 52.72 GiB, below the pilot's 66.55 GiB cache budget.
+        # workers' compact allocator. Per copy, 16,384 attention blocks + 33
+        # recurrent slots use 52.72 GiB, below the measured 66.55 GiB budget.
         extra += (
             "--no-enable-prefix-caching",
             "--mamba-cache-mode",
             "none",
             "--num-gpu-blocks-override",
-            "16384",
+            str(16384 * shape.data_parallel),
         )
     else:
         extra += ("--enable-prefix-caching",)
@@ -128,8 +130,6 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
         # KV heads local while the backend's EXPERT axis shards the MoE weights.
         extra += (
             "--enable-expert-parallel",
-            "--api-server-count",
-            "1",
             "--additional-config",
             json.dumps(
                 {
@@ -264,7 +264,7 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
                 context_probe = long_context_probe(solver, endpoint, root)
                 sweep = [
                     asyncio.run(warm_throughput(endpoint, SOLVER_MODELS[solver], shape.chips, concurrency=n))
-                    for n in (8, 32, 128)
+                    for n in sorted({8, 32, 128, 128 * shape.data_parallel})
                 ]
                 for measurement in sweep:
                     measurement["output_tokens_per_second_per_chip"] = measurement.pop(

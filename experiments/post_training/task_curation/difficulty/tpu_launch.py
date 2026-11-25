@@ -149,7 +149,7 @@ def validate_pilot(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> No
 def await_pilot_teardown(
     root: str, timeout_seconds: float = 600, *, solvers: tuple[Solver, ...] = tuple(SHAPES)
 ) -> None:
-    """Do not overlap the 40-chip pilots with the 256-chip full allocation."""
+    """Release selected pilot chips before expanding toward the 256-chip allocation."""
     children = []
     for solver in solvers:
         receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
