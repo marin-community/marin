@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ import pytest
 
 import levanter.model_cache as model_cache
 from levanter.model_cache import (
+    CacheMode,
     DEFAULT_COMPLETE_MARKER,
     cache_hf_model,
     cache_to_prefix,
@@ -313,6 +315,62 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
     assert json.loads(Path(second, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": commit}
 
 
+def test_resolve_refills_snapshot_before_lifecycle_deletion(tmp_path, monkeypatch):
+    commit = "a" * 40
+    model = f"org/model@{commit}"
+    contents = {"config.json": b"config", "model.safetensors": b"weights"}
+    cache_path = tmp_path / "model"
+
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, _prefix: str(cache_path))
+    monkeypatch.setattr(
+        model_cache,
+        "list_repo_tree",
+        lambda *_args, **_kwargs: [_repo_file(path, data) for path, data in contents.items()],
+    )
+
+    def download(_model_id, filename, *, revision=None, local_dir=None):
+        assert revision == commit
+        path = Path(local_dir, filename)
+        path.write_bytes(contents[filename])
+        return str(path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", download)
+    assert resolve_cached_model_path(model, cache_ttl_days=14, cache_prefix="models") == str(cache_path)
+
+    age = datetime.now(UTC) - timedelta(days=14)
+    marker = cache_path / DEFAULT_COMPLETE_MARKER
+    shard = cache_path / "model.safetensors"
+    os.utime(marker, (age.timestamp(), age.timestamp()))
+    os.utime(shard, (age.timestamp(), age.timestamp()))
+    (cache_path / "config.json").unlink()
+
+    assert resolve_cached_model_path(model, cache_ttl_days=14, cache_prefix="models") == str(cache_path)
+    assert (cache_path / "config.json").read_bytes() == contents["config.json"]
+    assert shard.read_bytes() == contents["model.safetensors"]
+    assert datetime.fromtimestamp(shard.stat().st_mtime, UTC) > age + timedelta(days=1)
+    assert datetime.fromtimestamp(marker.stat().st_mtime, UTC) > age + timedelta(days=1)
+
+
+def test_resolve_read_only_ignores_stale_snapshot(tmp_path, monkeypatch):
+    model = f"org/model@{'a' * 40}"
+    cache_path = tmp_path / "model"
+    cache_path.mkdir()
+    marker = cache_path / DEFAULT_COMPLETE_MARKER
+    marker.write_text("{}")
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, _prefix: str(cache_path))
+
+    assert resolve_cached_model_path(
+        model, cache_ttl_days=14, cache_prefix="models", cache_mode=CacheMode.READ_ONLY
+    ) == str(cache_path)
+
+    age = datetime.now(UTC) - timedelta(days=14)
+    os.utime(marker, (age.timestamp(), age.timestamp()))
+    assert (
+        resolve_cached_model_path(model, cache_ttl_days=14, cache_prefix="models", cache_mode=CacheMode.READ_ONLY)
+        == model
+    )
+
+
 def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
     """Two refs that a lossy slug would collide (``org/model_a`` vs ``org/model@a``) must mirror
     to different cache dirs, so a hit on one never loads the other's snapshot."""
@@ -329,7 +387,7 @@ def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
         lambda model_id, *, revision=None, token=None: SimpleNamespace(sha=revisions[(model_id, revision)]),
     )
 
-    def fake_cache(cache_path, repo, *, revision=None, complete_marker):
+    def fake_cache(cache_path, repo, *, revision=None, complete_marker, fresh_after):
         mirrored[cache_path] = (repo, revision)
         return cache_path
 
