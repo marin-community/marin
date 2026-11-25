@@ -16,9 +16,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from finestore.rl.difficulty import SampleTask, Solver
+from fray.iris_backend import convert_constraints
 from iris.cli.job import run as iris_run_command
 from iris.client.client import NamespacedEndpointRegistry
-from iris.cluster.types import EndpointAccess, Namespace, TaskAttempt
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp, evaluate_constraint, merge_constraints
+from iris.cluster.types import EndpointAccess, JobName, Namespace, TaskAttempt
 from iris.rpc.proto_display import priority_band_value
 from marin.inference.config import EffectiveServing, ObjectStoreLoadMode, VllmCompilationCacheMode, VllmLauncherType
 from rigging.filesystem.storage_path import StoragePath
@@ -393,8 +396,9 @@ def test_full_allocation_waits_for_cancelled_pilot_tasks_to_release_chips(tmp_pa
 
 
 @pytest.mark.parametrize("registry_failure", [False, True])
+@pytest.mark.parametrize("excluded_tpu_names", [(), ("failed-slice",)])
 def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
-    tmp_path, monkeypatch, review_server, registry_failure
+    tmp_path, monkeypatch, review_server, registry_failure, excluded_tpu_names
 ):
     """Run the whole owner, including its real HTTP router and publication boundary."""
     solver = Solver.SMALL
@@ -420,6 +424,14 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
 
     @contextmanager
     def remote(config):
+        info = get_job_info()
+        child_constraints = merge_constraints(info.constraints, convert_constraints(config.iris.worker_resources))
+        exclusions = [Constraint.from_proto(c.to_proto()) for c in child_constraints if c.key == "tpu-name"]
+        assert len(exclusions) == len(excluded_tpu_names)
+        for constraint in exclusions:
+            assert constraint.op == ConstraintOp.NE and not constraint.is_soft
+            assert not evaluate_constraint(AttributeValue("failed-slice"), constraint)
+            assert evaluate_constraint(AttributeValue("healthy-slice"), constraint)
         lifecycle.append("slice_enter")
         try:
             yield SimpleNamespace(
@@ -475,7 +487,6 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
     monkeypatch.setattr(tpu, "probe_endpoint", lambda *args: {"qualified": True})
     monkeypatch.setattr(tpu, "long_context_probe", lambda *args: {"prompt_tokens": 49009})
     monkeypatch.setattr(tpu, "warm_throughput", warm)
-    monkeypatch.setattr(tpu, "get_job_info", lambda: SimpleNamespace(advertise_host="127.0.0.1"))
     monkeypatch.setattr(
         tpu,
         "iris_ctx",
@@ -485,8 +496,16 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
         ),
     )
     monkeypatch.setattr(tpu, "publish_pool_receipt", publish_then_exit)
-    with pytest.raises(EndOwner):
-        tpu.run_tpu_pool(solver, str(tmp_path), 1)
+    original_info = get_job_info()
+    owner = JobInfo(task_id=JobName.from_wire("/benfeuer/pool-owner/0"), advertise_host="127.0.0.1")
+    set_job_info(owner)
+    try:
+        with pytest.raises(EndOwner):
+            tpu.run_tpu_pool(solver, str(tmp_path), 1, excluded_tpu_names=excluded_tpu_names)
+        assert get_job_info() is owner
+        assert owner.constraints == []
+    finally:
+        set_job_info(original_info)
     assert sweeps == [8, 32, 128, 512]
     assert lifecycle == (
         ["slice_enter", "register", "slice_exit"]
@@ -495,8 +514,32 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
     )
     (qualification,) = (tmp_path / "qualification/small").glob("*.json")
     archived = json.loads(qualification.read_text())
+    assert archived["excluded_tpu_names"] == list(excluded_tpu_names)
     assert archived["replicas"][0]["warm_throughput"]["output_tokens_per_second_per_chip"] == 32
     assert (tmp_path / "pools/small.json").exists() is not registry_failure
+
+
+def test_full_rollout_preserves_pilot_hardware_exclusions(tmp_path):
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    (pools / "large.json").write_text(
+        json.dumps(
+            {
+                "platform": "tpu",
+                "chip_count": 32,
+                "excluded_tpu_names": ["failed-slice"],
+                "replicas": [{"warm_throughput": {"output_tokens_per_second": 1}}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match=r"retain.*exclusions"):
+        tpu_launch.validate_pilot(str(tmp_path), (Solver.LARGE,))
+    tpu_launch.validate_pilot(str(tmp_path), (Solver.LARGE,), excluded_tpu_names=("failed-slice",))
+    (command,) = tpu_launch.commands_for_phase(
+        "full", "root", "generation", "seal", "sha", "judge", Solver.LARGE, ("failed-slice",)
+    )
+    assert command[command.index("--exclude-tpu-name") + 1] == "failed-slice"
+    assert command[command.index("--replicas") + 1] == "4"
 
 
 def test_pilot_teardown_uses_receipt_owners_across_generations_and_rejects_foreign_jobs(tmp_path):
@@ -542,7 +585,7 @@ def test_full_solver_rollout_replaces_only_its_qualified_pilot(monkeypatch):
     )
     monkeypatch.setattr(tpu_launch, "validate_gate", lambda path: None)
     monkeypatch.setattr(tpu_launch, "validate_staging", lambda root, solvers: calls.append(("stage", solvers)))
-    monkeypatch.setattr(tpu_launch, "validate_pilot", lambda root, solvers: calls.append(("qualify", solvers)))
+    monkeypatch.setattr(tpu_launch, "validate_pilot", lambda root, solvers, **kwargs: calls.append(("qualify", solvers)))
     monkeypatch.setattr(
         tpu_launch, "pilot_owners", lambda root, solvers: ["/benfeuer/atlas-difficulty-engines-small-v4-old-pilot"]
     )

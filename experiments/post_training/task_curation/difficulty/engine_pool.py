@@ -225,9 +225,12 @@ def main() -> None:
     parser.add_argument("--registry", required=True)
     parser.add_argument("--tpu-root")
     parser.add_argument("--replicas", type=int, default=1)
+    parser.add_argument("--exclude-tpu-name", action="append", default=[])
     args = parser.parse_args()
+    if args.exclude_tpu_name and args.tpu_root is None:
+        parser.error("--exclude-tpu-name requires a TPU pool")
     if args.tpu_root is not None:
-        run_tpu_pool(args.solver, args.tpu_root, args.replicas)
+        run_tpu_pool(args.solver, args.tpu_root, args.replicas, excluded_tpu_names=tuple(args.exclude_tpu_name))
     elif args.solver == Solver.HOSTED:
         run_provider_warm(args.registry)
     else:

@@ -61,6 +61,7 @@ def commands_for_phase(
     sha: str,
     qualification: str,
     solver_only: Solver | None = None,
+    excluded_tpu_names: tuple[str, ...] = (),
 ) -> list[list[str]]:
     commands = []
     module = "experiments.post_training.task_curation.difficulty.tpu"
@@ -98,6 +99,7 @@ def commands_for_phase(
                 f"atlas-difficulty-engines-{solver.value}-v4-{generation}-{phase}", cpu="2", memory="4GB"
             )
             command[command.index("--timeout") + 1] = "0"
+            exclusions = [word for name in sorted(set(excluded_tpu_names)) for word in ("--exclude-tpu-name", name)]
             commands.append(
                 [
                     *command,
@@ -113,6 +115,7 @@ def commands_for_phase(
                     root,
                     "--replicas",
                     str(count),
+                    *exclusions,
                 ]
             )
     else:
@@ -135,9 +138,13 @@ def validate_staging(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> 
         raise ValueError("Regional frozen task inputs are not ready")
 
 
-def validate_pilot(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> None:
+def validate_pilot(
+    root: str, solvers: tuple[Solver, ...] = tuple(SHAPES), *, excluded_tpu_names: tuple[str, ...] = ()
+) -> None:
     for solver in solvers:
         receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
+        if not set(receipt.get("excluded_tpu_names", ())).issubset(excluded_tpu_names):
+            raise ValueError("Full rollout must retain the qualified pilot's TPU exclusions")
         if receipt["platform"] != "tpu" or receipt["chip_count"] != SHAPES[solver].chips:
             raise ValueError("Every solver needs one qualified pilot slice before the full allocation")
         if any(replica["warm_throughput"]["output_tokens_per_second"] <= 0 for replica in receipt["replicas"]):
@@ -217,7 +224,10 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--handover-from", help="Existing controller parent to drain without canceling its children")
     parser.add_argument("--solver", type=Solver, choices=tuple(SHAPES))
+    parser.add_argument("--exclude-tpu-name", action="append", default=[])
     args = parser.parse_args()
+    if args.exclude_tpu_name and args.phase not in {"pilot", "full"}:
+        parser.error("--exclude-tpu-name applies only to TPU serving rollout")
     if args.handover_from is not None and args.phase != "controller":
         parser.error("--handover-from applies only to controller rollout")
     if args.solver is not None and args.phase not in {"pilot", "full"}:
@@ -227,7 +237,11 @@ def main() -> None:
     if args.phase != "stage":
         validate_staging(root, (args.solver,) if args.solver is not None else tuple(SHAPES))
     if args.phase == "full":
-        validate_pilot(root, (args.solver,) if args.solver is not None else tuple(SHAPES))
+        validate_pilot(
+            root,
+            (args.solver,) if args.solver is not None else tuple(SHAPES),
+            excluded_tpu_names=tuple(args.exclude_tpu_name),
+        )
     if args.phase == "controller":
         if args.dry_run:
             print(json.dumps({"ledger": root + "/ledger", "serving_pool": root + "/pools", "budget": None}))
@@ -253,6 +267,7 @@ def main() -> None:
         args.sealed_sha256,
         args.judge_qualification,
         args.solver,
+        tuple(args.exclude_tpu_name),
     )
     print(json.dumps({"phase": args.phase, "root": root, "commands": commands}, indent=2), flush=True)
     if args.dry_run:

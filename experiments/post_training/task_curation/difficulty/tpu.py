@@ -21,7 +21,8 @@ from pathlib import Path
 import httpx
 from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import get_job_info, set_job_info
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import EndpointAccess
 from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -237,7 +238,7 @@ def long_context_probe(solver: Solver, endpoint: str, root: str) -> dict:
     }
 
 
-def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
+def run_tpu_pool(solver: Solver, root: str, replicas: int, *, excluded_tpu_names: tuple[str, ...] = ()) -> None:
     """Own direct slice sessions; publish only a completely qualified generation."""
     regional_worker()
     configure_coreweave_s3()
@@ -253,7 +254,23 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
     stop = threading.Event()
 
     def replica(index: int) -> None:
+        original_info = get_job_info()
         try:
+            if excluded_tpu_names:
+                if original_info is None:
+                    raise ValueError("TPU placement exclusions require an Iris owner context")
+                set_job_info(
+                    replace(
+                        original_info,
+                        constraints=[
+                            *original_info.constraints,
+                            *(
+                                Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=name)
+                                for name in sorted(set(excluded_tpu_names))
+                            ),
+                        ],
+                    )
+                )
             with remote_inference(config) as session:
                 ready = session.ready_direct_session()
                 effective = ready.effective_serving
@@ -307,6 +324,9 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
             events.put(("failed", error))
             stop.set()
             raise
+        finally:
+            if excluded_tpu_names:
+                set_job_info(original_info)
 
     with ThreadPoolExecutor(max_workers=replicas) as workers:
         futures = [workers.submit(contextvars.copy_context().run, replica, index) for index in range(replicas)]
@@ -335,6 +355,7 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
                 "serving_stack": tomllib.loads(Path("config/external/vllm/tpu.toml").read_text()),
                 "compilation_cache": config.engine.compilation_cache,
                 "ready_at": datetime.now(UTC).isoformat(),
+                "excluded_tpu_names": sorted(set(excluded_tpu_names)),
             }
             # Retain expensive qualification measurements even if publication fails.
             immutable_json(StoragePath(root) / "qualification" / solver.value / (digest(receipt) + ".json"), receipt)
