@@ -69,8 +69,8 @@ uv run python -m experiments.post_training.mochi_rl \
 
 The one-rack presets use the pinned two-layer DSpark draft with four proposals when
 the resolved initializer matches step 400407. Selecting a different task mix with
-`--tasks` keeps that inference default. Custom `SkyRLSpec` launchers define their own inference recipe.
-Three-rack Mochi presets use plain decoding.
+`--tasks` keeps that default. Three-rack presets use plain decoding pending
+measurements with their 262k context and FlashInfer serving configuration.
 
 Use `--init NAME@VERSION`
 to start from another published model or select an SFT preset with `--sft`.

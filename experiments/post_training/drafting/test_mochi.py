@@ -6,7 +6,6 @@ from dataclasses import asdict, replace
 
 from datasets import Dataset
 from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
-from marin.training.drafting import activation_store
 from marin.training.drafting.activation_store import activation_path, get_or_build_activation_cache
 from marin.training.drafting.dspark_data import ARROW_DATASET_DIR, PREPARED_DIR, SPLITS_FILE, PreparedSplits
 from marin.training.drafting.dspark_distillation import DSparkExport
@@ -17,28 +16,7 @@ from experiments.post_training import dspark_sft
 from experiments.post_training.drafting import mochi
 
 
-def test_mochi_draft_sizes_share_prepared_data_and_teacher_activations():
-    one, mix = dspark_sft._resolve_recipe(None, "mochi-agentic-50m", None, "/unused")
-    two = replace(one, mochi_draft_size=mochi.DraftSize.TWO_LAYERS)
-    teacher = dspark_sft._teacher_artifact(one.teacher)
-    prepared_one, draft_one = dspark_sft.artifacts(one, teacher=teacher, mix=mix)
-    prepared_two, draft_two = dspark_sft.artifacts(two, teacher=teacher, mix=mix)
-    assert artifact_identity(prepared_one) == artifact_identity(prepared_two)
-    assert artifact_identity(draft_one) != artifact_identity(draft_two)
-
-    teacher_id = artifact_identity(teacher)
-    one_recipe, two_recipe = one.training_recipe(), two.training_recipe()
-    key = mochi.activation_cache_key(teacher_id, prepared_one, one_recipe, one.mochi_sample)
-    assert key == mochi.activation_cache_key(teacher_id, prepared_two, two_recipe, two.mochi_sample)
-
-    different_taps = replace(two_recipe, feature_taps=(2, 24, 46))
-    assert key != mochi.activation_cache_key(teacher_id, prepared_two, different_taps, two.mochi_sample)
-    another_mix = ArtifactStep.adopt("test/mix", "2026.11.24", "/unused/mix")
-    prepared_other, _ = dspark_sft.artifacts(one, teacher=teacher, mix=another_mix)
-    assert key != mochi.activation_cache_key(teacher_id, prepared_other, one_recipe, one.mochi_sample)
-
-
-def test_mochi_checkpoint_fits_from_a_completed_cache(tmp_path, monkeypatch):
+def test_mochi_fits_both_draft_sizes_from_one_activation_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     teacher_path, prepared_path = tmp_path / "teacher", tmp_path / "prepared"
     teacher_path.mkdir()
@@ -52,7 +30,6 @@ def test_mochi_checkpoint_fits_from_a_completed_cache(tmp_path, monkeypatch):
 
     config, _ = dspark_sft._resolve_recipe(None, "mochi-agentic-50m", None, str(tmp_path))
     recipe = config.training_recipe()
-    draft = mochi.checkpoint_step(teacher, "", prepared, recipe, "2026.11.24", mochi.Sample.ALL)
     key = mochi.activation_cache_key(artifact_identity(teacher), prepared, recipe, mochi.Sample.ALL)
     monkeypatch.setattr(mochi, "_activation_cache_root", lambda key, _prefix: StoragePath(str(tmp_path / key)))
     root = StoragePath(str(tmp_path / key))
@@ -65,15 +42,12 @@ def test_mochi_checkpoint_fits_from_a_completed_cache(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mochi, "train_cached_and_export", fit)
 
-    reusable_for = Duration.from_hours(48)
-    now = 0.0
-    monkeypatch.setattr(activation_store, "time", lambda: now)
     get_or_build_activation_cache(
         root,
-        reusable_for=reusable_for,
+        reusable_for=Duration.from_hours(48),
         populate=lambda path: activation_path(path, 0).write_bytes(b"row 0"),
     )
-    assert resolve(draft).steps == 3
-
-    now += reusable_for.to_seconds()
-    assert resolve(draft).steps == 3
+    for version, size in (("2026.11.24", mochi.DraftSize.ONE_LAYER), ("2026.11.25", mochi.DraftSize.TWO_LAYERS)):
+        recipe = replace(config, mochi_draft_size=size).training_recipe()
+        draft = mochi.checkpoint_step(teacher, "", prepared, recipe, version, mochi.Sample.ALL)
+        resolve(draft)

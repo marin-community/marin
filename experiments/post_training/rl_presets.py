@@ -433,7 +433,7 @@ class Preset:
     data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
-    default_speculative_decoding: sections.SpeculativeDecoding | None = None
+    speculative_decoding_model: sections.SpeculatorModel | None = None
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str

@@ -45,13 +45,9 @@ _MODEL = ArtifactHfModel(
     relative_path="",
 )
 
-_DSPARK = sections.SpeculativeDecoding(
-    method="dspark",
-    model=sections.SpeculatorModel(
-        source_uri="s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/ablation-interleaved-two-layer/2026.11.25-skyrl",
-        source_identity="sha256:e163ef4fb50cbdfd578f1d26a27adf35b7c22e5a597a8da63b4591a2190aa468",
-    ),
-    num_speculative_tokens=4,
+_DSPARK = sections.SpeculatorModel(
+    source_uri="s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/ablation-interleaved-two-layer/2026.11.25-skyrl",
+    source_identity="sha256:e163ef4fb50cbdfd578f1d26a27adf35b7c22e5a597a8da63b4591a2190aa468",
 )
 
 _ONE_RACK_PLAN = SkyRLRolePlan(
@@ -227,7 +223,7 @@ _TRAIN_LONG = Preset(
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
     model=_MODEL,
-    default_speculative_decoding=_DSPARK,
+    speculative_decoding_model=_DSPARK,
     held_out_tasks="eval-lite@2026.11.17.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
@@ -241,7 +237,7 @@ _TRAIN_LONG_3RACK = replace(
     _TRAIN_LONG,
     name="train-long-3rack",
     recipe=replace(_TRAIN_LONG.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
-    default_speculative_decoding=None,
+    speculative_decoding_model=None,
 )
 _TRAIN_MEDIUM = replace(
     _TRAIN_LONG.with_updates(2),

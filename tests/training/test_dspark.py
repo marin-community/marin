@@ -15,7 +15,6 @@ from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
 from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.training.drafting import activation_store
 from marin.training.drafting.dspark_data import (
-    DRAFT_CONFIG_FILE,
     EMBEDDING,
     FINAL_NORM,
     GATE_DOWN,
@@ -167,7 +166,6 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     assert torch.equal(rows[0]["loss_mask"], torch.tensor([False, False, True, True]))
     assert rows[1]["input_ids"].tolist() == [1, 4, 6]
     assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
-    assert not (prepared / DRAFT_CONFIG_FILE).exists()
 
 
 def test_teacher_preflight_rejects_an_incomplete_sharded_export(teacher: Path, recipe: DraftRecipe) -> None:

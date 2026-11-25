@@ -45,20 +45,9 @@ def test_healthy_follower_outlives_rendezvous_deadline(monkeypatch):
         iris_vllm.wait_for_iris_vllm_shutdown(launch, died)
     assert not coordinator.followers_stopped((1,))
 
-    with iris_vllm.iris_vllm_followers(replace(launch, task_index=0)):
-        coordinator.follower_stopped(1)
-    assert coordinator.state() is iris_vllm._GangState.STOPPING
 
-
-def test_coordinator_latches_shutdown_and_tracks_stopped_followers():
+def test_coordinator_waits_for_all_followers_to_stop():
     coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
-
-    assert not coordinator.followers_stopped((1, 2))
-
-    coordinator.request_shutdown()
-    coordinator.request_shutdown()
-    assert coordinator.state() is iris_vllm._GangState.STOPPING
-
     coordinator.follower_stopped(1)
     assert not coordinator.followers_stopped((1, 2))
     coordinator.follower_stopped(2)
@@ -76,7 +65,8 @@ def test_follower_uses_the_leaders_startup_decision(monkeypatch, start):
         if start:
             iris_vllm.start_iris_vllm_followers(leader)
         else:
-            coordinator.request_shutdown()
+            with iris_vllm.iris_vllm_followers(leader):
+                coordinator.follower_stopped(1)
 
     monkeypatch.setattr("time.sleep", publish_startup_decision)
     assert iris_vllm.wait_for_iris_vllm_start(follower) is start
@@ -101,7 +91,8 @@ def test_leader_failure_leaves_follower_running_for_iris_retry(monkeypatch):
         with iris_vllm.iris_vllm_followers(launch):
             raise RuntimeError("leader failed")
 
-    assert coordinator.state() is iris_vllm._GangState.WAITING
+    monkeypatch.setattr("time.sleep", lambda _: iris_vllm.start_iris_vllm_followers(launch))
+    assert iris_vllm.wait_for_iris_vllm_start(replace(launch, task_index=1))
 
 
 @pytest.mark.parametrize(
