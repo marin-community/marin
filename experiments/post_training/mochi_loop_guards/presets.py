@@ -29,7 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.5"
+RUN_VERSION = "2026.11.25.6"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -57,6 +57,7 @@ PANEL_MAX_INPUT_TOKENS = 32_768
 PANEL_MAX_REPLY_TOKENS = 8_192
 PANEL_MODEL_TURN_TIMEOUT = 600
 PANEL_ATTEMPT_TIMEOUT = 8 * 60 * 60
+PANEL_DAYTONA_TTL_MINUTES = PANEL_ATTEMPT_TIMEOUT // 60
 TERMINUS_CONTEXT = ContextBudget(
     request_window_tokens=PANEL_MAX_INPUT_TOKENS,
     max_new_tokens_per_turn=PANEL_MAX_REPLY_TOKENS,
@@ -131,7 +132,12 @@ EXPORT_LAYOUT = replace(
 PANEL_ENVIRONMENT = RecipePatch(
     environment=sections.Environment(
         task_sessions={
-            "daytona": {"api_key_env": "DAYTONA_EVAL_API_KEY", "eval_api_key_env": "DAYTONA_EVAL_API_KEY"},
+            "daytona": {
+                "api_key_env": "DAYTONA_EVAL_API_KEY",
+                "eval_api_key_env": "DAYTONA_EVAL_API_KEY",
+                "ttl_minutes": PANEL_DAYTONA_TTL_MINUTES,
+                "eval_ttl_minutes": PANEL_DAYTONA_TTL_MINUTES,
+            },
             "agent_harnesses": {
                 "pi": {
                     "version": "0.87.0",
