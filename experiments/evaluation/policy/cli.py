@@ -227,7 +227,7 @@ def _print_launch(policy: EvalPolicy, plan: _LaunchPlan) -> None:
 
 
 def _target_options(command: Callable) -> Callable:
-    """The options naming which models a command runs: policy candidates, or one model outside them."""
+    """The options naming policy candidates or one supplied model."""
     options = (
         click.option("--candidate", "candidate_names", multiple=True, help="A candidate; repeat for several."),
         click.option("--all-candidates", is_flag=True, help="Every candidate of the policy."),
@@ -253,7 +253,7 @@ def _targets(
     model_key: str | None,
     model_config: Path | None,
 ) -> tuple[PolicyCandidate, ...] | None:
-    """The candidates a command runs: named ones, every one, or a model outside the policy; None if none chosen."""
+    """The candidates a command runs: named ones, every one, or a supplied model; None if none chosen."""
     if model_key is not None and model_config is not None:
         raise click.UsageError("--model and --model-config are mutually exclusive")
     model_given = model_key is not None or model_config is not None

@@ -27,7 +27,7 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
 | --- | --- |
 | `--candidate NAME`, repeatable | the named candidates |
 | `--all-candidates` | every candidate (the default for `status`) |
-| `--model KEY` or `--model-config FILE` | a model outside the policy, such as a training checkpoint, on every evaluation; its window is its `serve.max_model_len`, else its checkpoint's |
+| `--model KEY` or `--model-config FILE` | a supplied model, such as a training checkpoint, evaluated against the policy; its window is its `serve.max_model_len`, else its checkpoint's |
 
 - `launch` resolves every model's launch before submitting any job. It leaves out evaluations whose
   record already succeeded, and starts no server for a group with none left; the dry run lists them.
