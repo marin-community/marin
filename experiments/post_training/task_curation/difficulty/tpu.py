@@ -114,15 +114,17 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
         # Prefix checkpoints retain a GDN state for every cache block and do
         # not fit the frozen context on this slice. The pinned TPU backend's
         # compact mode retains one state per active request instead.
-        # Share the logical block count with the engine driver, not only the
-        # workers' compact allocator. Per copy, 16,384 attention blocks + 33
-        # recurrent slots use 52.72 GiB, below the measured 66.55 GiB budget.
+        # Retain runtime headroom after the TP16/DP2 pilot core-halted during
+        # its throughput sweep on two different physical slices. The cause
+        # remains unknown. Per copy, 8,192 attention blocks and nine recurrent
+        # slots use 25.29 GiB of the measured 66.55 GiB cache budget.
+        # The driver and workers must use the same logical block count.
         extra += (
             "--no-enable-prefix-caching",
             "--mamba-cache-mode",
             "none",
             "--num-gpu-blocks-override",
-            str(16384 * shape.data_parallel),
+            str(8192 * shape.data_parallel),
         )
     else:
         extra += ("--enable-prefix-caching",)
@@ -158,8 +160,8 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
             max_model_len=73728 if solver == Solver.SNOWBALL else 65536,
             # The TPU DP scheduler interprets these limits per attention shard.
             # Keep the compiled global envelope at 16k tokens / 128 sequences.
-            max_num_batched_tokens=16384 // shape.attention_data_parallel,
-            max_num_seqs=(32 if solver == Solver.LARGE else 128) // shape.attention_data_parallel,
+            max_num_batched_tokens=(8192 if solver == Solver.LARGE else 16384) // shape.attention_data_parallel,
+            max_num_seqs=(8 if solver == Solver.LARGE else 128) // shape.attention_data_parallel,
             gpu_memory_utilization=0.90,
             tool_call_parser=(
                 "hermes" if solver == Solver.SNOWBALL else "qwen3_coder" if solver == Solver.SMALL else "qwen3_xml"
