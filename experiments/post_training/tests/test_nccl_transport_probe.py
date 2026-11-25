@@ -22,6 +22,7 @@ from experiments.post_training.nccl_transport_probe import (
     all_to_all_element_count,
     collect_worker,
     gate_endpoint_name,
+    gate_variant_verdict,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
@@ -78,7 +79,7 @@ def test_parse_nccl_census_ignores_intra_node_p2p():
 
 
 def test_gate_verdict_fails_closed_on_sockets_and_failures():
-    """The gate requires positive InfiniBand evidence from a multi-node job."""
+    """Require positive interconnect evidence from a multi-node job."""
     assert gate_verdict(True, [["NET/IB/0/GDRDMA"]]) == "pass"
     assert gate_verdict(True, [[]]) == "missing_transport_evidence"
     assert gate_verdict(True, [["NET/Other/0"]]) == "unexpected_transport"
@@ -86,6 +87,16 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
+
+    census = parse_nccl_census(["NCCL INFO NVLS comm 0x1234 headRank -1 nHeads 32 nvlsRanks 60 buffSize 1048576"])
+    ranks = [{"nvls_rank_counts": census.nvls_rank_counts, "transports": []} for _ in range(4)]
+    result = {"pass": True, "world_size": 60, "ranks": ranks}
+    assert gate_variant_verdict(result) == "pass"
+    assert gate_variant_verdict(result | {"pass": False}) == "collective_failed"
+    ranks[0]["transports"] = ["NET/Socket/0"]
+    assert gate_variant_verdict(result) == "socket_transport"
+    ranks[0].update(transports=[], nvls_rank_counts=[4])
+    assert gate_variant_verdict(result) == "missing_transport_evidence"
 
 
 def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
