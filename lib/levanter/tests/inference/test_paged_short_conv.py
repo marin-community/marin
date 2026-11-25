@@ -107,6 +107,7 @@ def test_paged_short_conv_clone_diverges_without_corrupting_parent(prefix_length
     inputs, info, positions = _packed_batch([child_tail], [[0, 2]], [0], 4, [0])
     fresh_expected = short_conv_reference(weight, child_tail[None, ...])[0]
     reused_output, _ = jax.jit(paged_short_conv)(weight, inputs, cache, info, positions)
-    reset_output, _ = jax.jit(paged_short_conv)(weight, inputs, cache.reset(), info, positions)
     np.testing.assert_allclose(reused_output.array[:2], fresh_expected)
+    inputs, info, positions = _packed_batch([child_tail], [[0, 2]], [prefix_length], 4, [0])
+    reset_output, _ = jax.jit(paged_short_conv)(weight, inputs, cache.reset(), info, positions)
     np.testing.assert_allclose(reset_output.array[:2], fresh_expected)
