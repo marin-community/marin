@@ -511,7 +511,7 @@ def run_batch(args: argparse.Namespace) -> None:
     options = worker_limits(args.local_root)
     # Pulled actor images go to the node's NVMe scratch, never the container's
     # memory-backed root: a cached image also survives later pods on the node.
-    options.setdefault("image_cache", LOCAL_IMAGE_CACHE)
+    options.setdefault("image_cache", str(args.local_root.parent / "image-cache") if campaign else LOCAL_IMAGE_CACHE)
     if args.registry_auth_secret is not None:
         authfile = args.local_root / "registry-auth.json"
         authfile.write_text(require_secret(args.registry_auth_secret))
