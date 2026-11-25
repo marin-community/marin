@@ -24,6 +24,7 @@ from finestore.rl.curation import (
     OversightLevel,
     SourceOrigin,
     SourceQualityResult,
+    TaskFormat,
     WithinSourceDedupEvidence,
 )
 from finestore.rl.status_taxonomy import DataRestriction
@@ -310,6 +311,30 @@ def retained_receipt(frozen_population):
         retained_dedup=dedup,
     )
     return with_consumer_receipt(source), receipt
+
+
+def test_retained_format_census_covers_the_published_pin_and_preserves_the_input_format(retained_receipt):
+    source, receipt = retained_receipt
+    source = replace(source, info=replace(source.info, task_format=TaskFormat.MARINSKYRL))
+    assert bind_retained_release(source, receipt).info.task_format is TaskFormat.MARINSKYRL
+
+    publication = receipt.publication
+    census = {
+        "release": publication.release.model_dump(),
+        "counts": {"taskspec": publication.verified_retained_tasks},
+        "evidence": {"uri": "s3://fixture/format-census.json", "sha256": "a" * 64},
+    }
+    document = {**receipt.model_dump(), "format_census": census}
+    bound = bind_retained_release(source, RetainedReleaseReceipt.model_validate(document))
+    assert bound.info.task_format is TaskFormat.TASKSPEC
+    assert source.info.task_format is TaskFormat.MARINSKYRL
+
+    for mismatch in (
+        {"release": {"repo": "other/data", "revision": "b" * 40, "url": "https://example.org/other"}},
+        {"counts": {"taskspec": publication.verified_retained_tasks - 1}},
+    ):
+        with pytest.raises(ValueError, match="format census must cover"):
+            RetainedReleaseReceipt.model_validate({**document, "format_census": {**census, **mismatch}})
 
 
 def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(retained_receipt):

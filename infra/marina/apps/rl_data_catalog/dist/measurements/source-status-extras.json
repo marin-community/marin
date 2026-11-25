@@ -1128,23 +1128,6 @@
   },
   "pending": [
     {
-      "id": "Nvidia:Nemotron-RL-litmus-bench-v0.2/train",
-      "display_name": "Nvidia \u00b7 Nemotron-RL-litmus-bench-v0.2/train",
-      "status": "Pending",
-      "origin": "Nvidia",
-      "upstream_dataset": "Nemotron-RL-litmus-bench-v0.2",
-      "upstream_url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-litmus-bench-v0.2/tree/c180425444ebcc6db8dafdb897e51a94927df62a",
-      "notes": "Each question retains its upstream license (CC BY-SA 4.0 or OpenMDW 1.1).",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "use": "train",
-      "method_tags": [
-        "RL"
-      ],
-      "reasons": []
-    },
-    {
       "id": "Nvidia:Nemotron-RL-litmus-bench-v0.2/validation",
       "display_name": "Nvidia \u00b7 Nemotron-RL-litmus-bench-v0.2/validation",
       "status": "Pending",

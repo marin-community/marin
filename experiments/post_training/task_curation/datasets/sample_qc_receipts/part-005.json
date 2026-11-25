@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "acb9cd27dd8adedc5e042e8057702d9173baa015",
+  "path": "experiments/post_training/task_curation/datasets/litmus_12304_qualification_v1/sample.json",
+  "sha256": "b13d39b0dfebbcf7511bc7f93af522a882aad938a156a45b6068644e47899e71"
+}

@@ -212,7 +212,7 @@ R41_PENDING_SOURCE_IDS = (
 )
 
 PENDING_MEASUREMENT_SOURCES = (
-    *litmus.sources(),
+    *(source for source in litmus.sources() if source.info.subset == "validation"),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
@@ -271,6 +271,7 @@ PENDING_MEASUREMENT_SOURCES = (
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     sources = [
+        *(source for source in litmus.sources() if source.info.subset == "train"),
         *litecoder.sources(),
         *terminalworld.sources(),
         *mcp_atlas_easy.sources(),

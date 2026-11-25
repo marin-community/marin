@@ -19,6 +19,7 @@ from finestore.rl.curation import (
     NoOracleExecutabilityPolicy,
     NoOracleStaticRetentionEvidence,
     PipelineReference,
+    TaskFormat,
     WithinSourceDedupEvidence,
 )
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -114,6 +115,16 @@ class StaticRetentionBinding(BaseModel):
         return self
 
 
+class RetainedFormatCensus(BaseModel):
+    """Payload shapes measured on every published row at an immutable release pin."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    release: DatasetRelease
+    counts: dict[TaskFormat, int]
+    evidence: ContentEvidenceReference
+
+
 class RetainedReleaseReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -124,11 +135,18 @@ class RetainedReleaseReceipt(BaseModel):
     original_pipeline: PipelineReference
     original_info: SourceInfo
     retained_dedup: WithinSourceDedupEvidence
+    format_census: RetainedFormatCensus | None = None
     static_retention: StaticRetentionBinding | None = None
 
     @model_validator(mode="after")
     def _exact_retained_pin(self) -> "RetainedReleaseReceipt":
         publication = self.publication
+        if self.format_census is not None and (
+            self.format_census.release != publication.release
+            or publication.verified_retained_tasks <= 0
+            or self.format_census.counts != {TaskFormat.TASKSPEC: publication.verified_retained_tasks}
+        ):
+            raise ValueError("Retained TaskSpec format census must cover every row at the publication pin")
         if self.source_id != publication.source_id or self.actor.source_id != self.source_id:
             raise ValueError("Retention lineage contains another source")
         if self.grading.source_id != self.source_id or self.grading.input != self.actor.input:
@@ -324,6 +342,7 @@ def _retained_population(
     info = replace(
         info,
         current_release=publication.release,
+        task_format=TaskFormat.TASKSPEC if receipt.format_census is not None else info.task_format,
         upstream_url=info.upstream_url or dataset.url,
         inherited_admission=inherited_admission,
         dataset=config.dataset,
