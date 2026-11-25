@@ -68,7 +68,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -158,22 +158,10 @@ class InferenceResponse:
     model_version: int = 0
     policy_id: str | None = None
 
-    @property
-    def openai_finish_reason(self) -> Literal["stop", "length"]:
-        return "stop" if self.finish_reason == FinishReason.STOP else "length"
-
-
-def _mark_aborted_choice[Choice: CompletionChoice | ChatCompletionChoice](
-    choice: Choice, reason: FinishReason
-) -> Choice:
-    if reason == FinishReason.ABORT:
-        return choice.model_copy(update={"finish_reason": "abort"})
-    return choice
-
 
 class PauseGenerationRequest(BaseModel):
-    mode: str
-    clear_cache: bool
+    mode: Literal["abort"]
+    clear_cache: Literal[True]
 
 
 class AbortRequest(BaseModel):
@@ -969,14 +957,13 @@ async def _create_completion(
                         )
 
                 choices.append(
-                    CompletionChoice(
+                    CompletionChoice.model_construct(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason=generation.openai_finish_reason,
+                        finish_reason=format_finish_reason(generation.finish_reason),
                         logprobs=logprobs,
                     )
                 )
-                choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -1119,14 +1106,13 @@ def _format_chat_completion(
             logprobs = ChoiceLogprobs(content=content_logprobs)
 
         choices.append(
-            ChatCompletionChoice(
+            ChatCompletionChoice.model_construct(
                 index=i,
                 message=ChatCompletionMessage(role="assistant", content=generation.text),
-                finish_reason=generation.openai_finish_reason,
+                finish_reason=format_finish_reason(generation.finish_reason),
                 logprobs=logprobs,
             )
         )
-        choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
         total_completion_tokens += generation.completion_tokens
 
     response = ChatCompletion(
@@ -1369,7 +1355,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
     for choice, output in enumerate(outputs):
         metadata: dict[str, int | str] = {
             "completion_tokens": output.completion_tokens,
-            "finish_reason": output.finish_reason.name.lower(),
+            "finish_reason": format_finish_reason(output.finish_reason),
             "model_version": output.model_version,
         }
         if output.policy_id is not None:
@@ -1447,9 +1433,7 @@ class InferenceServer:
             return _health_check()
 
         @app.post("/pause_generation")
-        async def pause_generation(request: PauseGenerationRequest):
-            if request.mode != "abort" or not request.clear_cache:
-                raise HTTPException(status_code=400, detail="Native serving requires mode=abort and clear_cache=true")
+        async def pause_generation(_request: PauseGenerationRequest):
             await asyncio.to_thread(inference_context.pause_generation)
             return CONTROL_SUCCESS
 

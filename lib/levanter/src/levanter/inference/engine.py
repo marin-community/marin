@@ -25,6 +25,7 @@ from haliax.partitioning import ResourceMapping
 from jax.sharding import NamedSharding, PartitionSpec
 
 import levanter.tracker
+from levanter.compat.hf_generation_config import stop_token_ids
 from levanter.inference.jit_scheduler import (
     DecodeState,
     FinishReason,
@@ -1196,7 +1197,9 @@ class InferenceEngine:
             )
         decode_state = DecodeState.init(
             table,
-            eos_token_id=tokenizer.eos_token_id if tokenizer is not None else None,
+            generation_stop_ids=(
+                tuple(stop_token_ids(tokenizer, tokenizer.chat_template)) if tokenizer is not None else ()
+            ),
             max_stop_seqs=config.max_stop_seqs,
             max_stop_tokens=config.max_stop_tokens,
             max_queued_tokens=config.max_queued_tokens,
