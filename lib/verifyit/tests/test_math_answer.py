@@ -255,23 +255,12 @@ def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_typ
         (r"4^{\text{th}} \text{ minute}", "4", "5"),
         (r"9.9 \, \text{s}^{-1}", "9.9", "10.9"),
         (r"15\mbox{ cm}^{ 2 }", "15", "16"),
-    ],
-)
-def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(reference, candidate, wrong_candidate):
-    spec = MathSpec(expected=reference)
-    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
-    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
-
-
-@pytest.mark.parametrize(
-    "reference, candidate, wrong_candidate",
-    [
         (r"0.33 \, \text{m/s}^2", "0.33", "1.33"),
         (r"1200 \, \text{kg/m}^3", "1200", "1201"),
         (r"\frac{39}{5}\mathrm{~}^{2}", "39/5", "40/5"),
     ],
 )
-def test_math_nonletter_unit_groups_with_bare_powers_grade_numeric_value(reference, candidate, wrong_candidate):
+def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(reference, candidate, wrong_candidate):
     spec = MathSpec(expected=reference)
     assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
     assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
