@@ -6,10 +6,11 @@
 import argparse
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from uuid import uuid4
 
 import pyarrow.parquet as pq
+from iris.rpc import job_pb2
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -134,6 +135,7 @@ def main() -> None:
     parser.add_argument("--queue-sha256", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--review-cache", required=True)
+    parser.add_argument("--priority", choices=("interactive", "batch"), default="interactive")
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -144,10 +146,20 @@ def main() -> None:
     if not panels or len({row.source_id for row in panels}) != len(panels):
         raise ValueError("Sample queue requires distinct source populations")
     spec = local_reviewer(SAMPLE_REVIEWER_VERSION)
-    if spec.cache_revision != SAMPLE_REVIEWER_SHAS[SAMPLE_REVIEWER_VERSION]:
-        raise ValueError("SAMPLE QC requires the pinned default reviewer profile for new campaigns (V4)")
     endpoint = spec.endpoint
     assert isinstance(endpoint, PinnedLocalJudgeEndpoint)
+    endpoint = replace(
+        endpoint,
+        local=replace(
+            endpoint.local,
+            priority=(
+                job_pb2.PRIORITY_BAND_INTERACTIVE if args.priority == "interactive" else job_pb2.PRIORITY_BAND_BATCH
+            ),
+        ),
+    )
+    spec = replace(spec, endpoint=endpoint)
+    if spec.cache_revision != SAMPLE_REVIEWER_SHAS[SAMPLE_REVIEWER_VERSION]:
+        raise ValueError("SAMPLE QC requires the pinned default reviewer profile for new campaigns (V4)")
     LOGGER.info("Reviewer: %s", json.dumps(spec.identity, sort_keys=True))
     LOGGER.info("Queue: %d sources, %d sampled tasks", len(panels), sum(p.sample_size for p in panels))
     if not args.run:
