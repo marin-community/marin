@@ -62,7 +62,6 @@ class TaskforgeConfig:
     band: BandRules
     budget: Budget
     transitions: Transitions
-    initial_stage: Stage = Stage.AUTHOR
     workspace: WorkspaceHydration = WorkspaceHydration()
 
     def __post_init__(self) -> None:

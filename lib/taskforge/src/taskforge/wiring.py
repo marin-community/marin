@@ -23,7 +23,7 @@ from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 
 from taskforge.arms import transitions
 from taskforge.config import TaskforgeConfig
@@ -147,14 +147,14 @@ class Environments(EnvFactory):
         object.__setattr__(self, "factories", MappingProxyType(dict(self.factories)))
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> Env:
+    async def create(self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()) -> Env:
         requirements = host_requirements(requirements)
         runtime = machine_runtime(self.settings.task_machine, requirements)
         factory = self.factories[machine_backend(requirements).value]
         cleanup = self.settings.limits.cleanup_timeout
         if cleanup is None:
             raise ValueError("Environment cleanup timeout must be explicit")
-        return await ShellboxEnvFactory(factory, runtime, cleanup, logging.info).create(requirements)
+        return await ShellboxEnvFactory(factory, runtime, cleanup, logging.info).create(requirements, resources)
 
 
 async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:

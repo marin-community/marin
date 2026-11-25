@@ -38,10 +38,32 @@ Both arms run the same stages; they differ in one transition table.
   result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
   as in S.
 
-On every author entry, including revision rounds, the workspace holds the proposal, the previous
+On every author entry, including revision rounds, the workspace holds the proposal (if there is one), the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
 its own files, such as reference data, with `TaskforgeConfig.workspace` (a `WorkspaceHydration`; the
 default adds none). Only the author sees them; a file reaches solvers or graders only through the task.
+
+## Repairing tasks from another source
+
+A workpiece starts from a proposal or from an existing `TaskSpec` written elsewhere (the conversion
+into a `TaskSpec` happens outside Taskforge). A source task has no proposal. Its controls come
+from the source when it supplies them, and otherwise it has none. It starts at **validate** rather
+than author, so its first round measures the task and any supplied controls as the source wrote them. A task whose
+controls meet their expected grades and whose solver pass rate is in the band is accepted without
+an author session. Review otherwise decides as for any task, and a source task without controls
+always gets *modify*, since controls are how review checks the grader. On *modify*, a new author session opens with the
+`author.repair` prompt and the review findings. The workspace is seeded with the task, its
+resources and the validation evidence; there is no `proposal.json`. Later rounds run as in the
+chosen arm, with the same band and solver trials as generation. The modify after the first
+review isn't charged against `budget.max_modify_rounds`, so a source task gets as many author
+sessions as a proposal, and when it asks for missing controls it also reports the measured solve rate.
+
+`workpiece.json` keeps the task as its source delivered it in `source`, beside the latest
+`submission`. The driver sets policy `source.task_id` and `source.task_source` from the source
+task, and lowering refuses a revision that changes either, since they join the task to its source:
+the author's `submit` reports it in the same session. A relaunch whose input file no longer matches
+the published workpiece, or whose published events have no workpiece, fails without publishing,
+rather than resuming another version's event stream; use a new `--output` for a re-converted input.
 
 ## Running on the cluster
 
@@ -71,6 +93,12 @@ command line; the driver reads them from Iris secret files.
   proposals, ranked; wave 1 is ranks 0–31). Each entry points at a proposal JSON whose header
   carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
+- **Source tasks**: a `*.task.json` file holding a `TaskSpec` JSON object, in place of a proposal
+  file. Its controls go beside it in `<name>.controls.json`, a JSON list of `Control` values in the
+  format the author writes `controls.json`; the file is optional, and a candidate file on a task
+  without a machine fails the input. `--inputs` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
+  keeps its file name, without the suffix, as its output identity, and the proposal filters
+  (`proposals.environments`, `proposals.verifications`) do not apply to it.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
   `src/taskforge/policy/defaults/policy.json`, stored on S3. The pilots use
   `{"adversary.roster": ["adversary"]}` because the default roster is empty.
@@ -88,7 +116,7 @@ ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
 uv run --frozen fsutil cp policy.json $ROOT/policy.json
 for arm in S T; do
   uv run --frozen experiments/taskforge/run_taskforge.py \
-    --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
+    --inputs s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
     --ranks "$(seq -s, 0 31 | sed 's/,$//')" --arm $arm \
     --output $ROOT/$arm --policy $ROOT/policy.json \
     --job-prefix forge-pilot-<date>-$(echo $arm | tr A-Z a-z) \
@@ -96,7 +124,7 @@ for arm in S T; do
 done
 ```
 
-Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
+Each input maps to `int(sha256(str(input_key)), 16) % 4096`; drivers process their
 half-open `--bucket-range a:b` in manifest order. The launcher splits buckets evenly
 across `--drivers N`; `--driver-range a:b` launches only those driver indices. To replace
 drivers 24–31 of a 32-driver fleet with 16 drivers, cancel them, then launch with
@@ -175,7 +203,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
   whose context window or output budget runs out before it reports is `exhausted`: the task can
   still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
-- **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
+- **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `sandbox.source_images`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`.
@@ -190,8 +218,30 @@ payloads (they are in the workdir).
 
 Lowering accepts three task environments: none (the solver answers in the conversation),
 ShellSim, and the one pinned python container (`GRADER_BASE_IMAGE`). Any other image is refused
-at the author's `validate`/`submit` with a message naming the fix. The author and adversary
-always work in the pinned container with the task's resources hydrated.
+at the author's `validate`/`submit` with a message naming the fix. The author works in
+the pinned container, and the adversary in the task's own machine when it has one, with the task's
+resources hydrated.
+
+A task from another source usually brings its own containers: a SWE-rebench task names the
+image that holds its repository and tests, and often a separate grader image. The driver admits
+exactly those images: it sets `sandbox.source_images` to the source task's own task and grader
+images before the workpiece runs, and Iris runs them like any other container, with no container
+nested inside another. A policy overlay may not set that key or the `source.task_*` keys. Lowering then refuses any other task
+or grader image for that task, the pinned image included unless the source used it, so a revision
+can't move the task onto another image. The images must
+already be built and pinned; Taskforge doesn't build images. The author of a task whose image is a
+source image works in that task's environment, setup commands and working directory included,
+instead of `author.image`, with the task's files installed before its setup runs, so it sees what
+the solver and grader see. Its system prompt describes that machine and tells it to keep the source
+images, also when it falls back to `author.image`. A generated task has no source images, so
+nothing changes for generation runs.
+
+A task environment whose own setup commands fail is evidence about the task, not a machine fault to
+retry. Validation records each such trial and control as an invalid task, so review returns it to
+the author with the failing command and its output, without a solve rate, since those trials
+measured nothing. The author of a source task whose environment
+won't start works in `author.image` instead, with the task's files hydrated, and its conversation
+says why.
 
 ## Running locally
 
