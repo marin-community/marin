@@ -81,7 +81,17 @@ def _seal(release_root: str, name: str, value: dict) -> ArtifactRef:
 
 
 def verify_repo_state(repo_root: Path, inputs: SnapshotPublicationInputs) -> str:
-    """The publishing checkout must be clean and contain the plan's pinned revision."""
+    """The publishing checkout must be clean and contain the plan's pinned revision.
+
+    In the in-region bundle mode the submitter attests the workspace (the guard's
+    landing-log check carries the landed attestation) and the git checks cannot run.
+    """
+    from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — avoids the guard/snapshot cycle at module load
+        attested_revision,
+    )
+
+    if attested_revision() is not None:
+        return attested_revision()
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()

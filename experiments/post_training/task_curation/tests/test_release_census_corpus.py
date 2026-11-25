@@ -199,6 +199,18 @@ def test_sizing_curves_scale_from_population():
     assert (anchor.cpu, anchor.memory_gb, anchor.disk_gb, anchor.timeout_s) == (16, 64, 200, 14_400)
     small = sizing.census_sizing(100)
     assert small.cpu == 16 and small.disk_gb == 50 and small.timeout_s == 3_600
+
+
+def test_corpus_sizing_carries_prepare_workers():
+    """The corpus prepare workers scale from the measured per-release run."""
+    anchor = sizing.corpus_sizing(sizing._ANCHOR_TASKS)
+    assert anchor.workers == 4
+    assert (anchor.cpu, anchor.memory_gb) == (16, 64)
+    small = sizing.corpus_sizing(1_000)
+    assert small.workers == 2
+    huge = sizing.corpus_sizing(sizing._ANCHOR_TASKS * 10)
+    assert huge.workers == 8
+    assert huge.memory_gb > anchor.memory_gb
     embed = sizing.embedding_sizing(sizing._ANCHOR_TASKS)
     assert (embed.cpu, embed.memory_gb, embed.workers) == (64, 256, 16)
     compose = sizing.curriculum_compose_sizing(sizing._ANCHOR_COMPOSE_TASKS)

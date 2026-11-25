@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from experiments.post_training.task_curation.release_stages import guard
 from experiments.post_training.task_curation.release_stages import snapshot_publication as sp
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 
@@ -73,6 +74,14 @@ def test_verify_repo_state_refuses_dirty_checkout_and_wrong_revision(tmp_path):
     (repo / "file.txt").write_text("dirty\n")
     with pytest.raises(ValueError, match="dirty"):
         sp.verify_repo_state(repo, inputs)
+
+
+def test_verify_repo_state_attests_in_the_bundle_mode(tmp_path, monkeypatch):
+    """The git-less Iris bundle returns the submitter-attested revision."""
+    (tmp_path / "not-a-git-repo").mkdir()
+    monkeypatch.setenv(guard.ATTESTED_REVISION_ENV, "b" * 40)
+    inputs = _inputs(tmp_path, source_revision="b" * 40)
+    assert sp.verify_repo_state(tmp_path / "not-a-git-repo", inputs) == "b" * 40
 
 
 def test_verify_survey_alignment_refuses_mismatch(tmp_path):

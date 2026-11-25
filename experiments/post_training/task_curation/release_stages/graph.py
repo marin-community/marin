@@ -152,6 +152,7 @@ from experiments.post_training.task_curation.release_stages.paced_query import (
 from experiments.post_training.task_curation.release_stages.sizing import (
     StageResources,
     census_sizing,
+    corpus_sizing,
     embedding_sizing,
 )
 
@@ -1293,6 +1294,7 @@ def _corpus_assembly_step(
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["corpus_assembly"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count")
+    sizing = corpus_sizing(plan.expected_population_tasks)
 
     def build_inputs(ctx: StepContext) -> dict:
         inputs_doc = ctx.resolved(census_inputs)
@@ -1304,6 +1306,7 @@ def _corpus_assembly_step(
             "output_root": stage_output_root(plan, "corpus"),
             "expected_sources": plan.expected_source_count,
             "slice_output_root": plan.slice_output_root or None,
+            "workers": sizing.workers,
         }
 
     return _stage_step(
@@ -1314,7 +1317,7 @@ def _corpus_assembly_step(
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=corpus_assembly_stage.CorpusAssemblyInputs,
-        resources=lambda: _resources_config(census_sizing(plan.expected_population_tasks)),
+        resources=lambda: _resources_config(sizing),
     )
 
 

@@ -8,7 +8,7 @@ stage carries its own stale default (the previous per-release workers hardcoded
 workers=4 and a fixed batch size regardless of population).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,29 @@ def census_sizing(total_tasks: int) -> StageResources:
         disk_gb=_clamp(round(200 * share), 50, 1000),
         timeout_s=_clamp(round(14_400 * share), 3_600, 43_200),
     )
+
+
+# Measured on the per-release corpus-assembly runs (2026-11-21..23): 4 prepare
+# workers over the anchor population.
+_ANCHOR_PREPARE_WORKERS = 4
+_MIN_PREPARE_WORKERS = 2
+_MAX_PREPARE_WORKERS = 8
+
+
+def corpus_sizing(total_tasks: int) -> StageResources:
+    """Scale the corpus-assembly job with the measured population's task count.
+
+    The corpus streams each frozen population's specs once (the census resource
+    shape), and its prepare workers scale from the measured per-release run
+    (4 workers over the anchor population).
+    """
+    sizing = census_sizing(total_tasks)
+    workers = _clamp(
+        round(_ANCHOR_PREPARE_WORKERS * total_tasks / _ANCHOR_TASKS),
+        _MIN_PREPARE_WORKERS,
+        _MAX_PREPARE_WORKERS,
+    )
+    return replace(sizing, workers=workers)
 
 
 def embedding_sizing(total_tasks: int) -> StageResources:
