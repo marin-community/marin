@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native PyMethods2Test tasks bound to their sealed census pin and rule-C graders.
+"""Native PyMethods2Test tasks bound to their sealed census pin, prepared images and rule-C graders.
 
 The folder's 4,990 raw validated rows are complete native Harbor packages sharing
-three pristine Apptainer environment bundles. Conversion keeps the original
-package bytes (the environment stays its declared Dockerfile build) and binds
-the SHARED grader and ``RootDeliveryContract`` at conversion: the intake census
+three pristine Apptainer environment bundles. Conversion keeps the original package
+bytes, binds each task's environment to its class's digest-pinned prepared image (the
+3 declared Dockerfile classes built once in region; coordinator GO 2026-11-25), and
+binds the SHARED grader and ``RootDeliveryContract`` at conversion: the intake census
 reports no contract-less rows, so later stages consume byte-exact task digests.
 """
 
@@ -32,8 +33,9 @@ from experiments.post_training.task_curation.datasets.native_harbor import nativ
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
-VERSION = "2026.11.25.1"
+VERSION = "2026.11.25.2"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.24.1"
+IMAGES_PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1"
 DATASET = "FWeindel/validated-tasks"
 TASK_REVISION = "317659ac88c8b706d318020c5fc3813a931fb6ec"
 FOLDER = "pymethods2test_v1"
@@ -42,16 +44,21 @@ CENSUS = ContentEvidenceReference(
     uri=PREFIX + "/pymethods2test-intake-census-v1/census.json",
     sha256="574937d678632ded04ebe284995771436f1682a0fc938b93bad43e5fc09ff781",
 )
+IMAGES = ContentEvidenceReference(
+    uri=IMAGES_PREFIX + "/pymethods2test-prepared-images-v1/manifest-v2.json",
+    sha256="729065e3c0ee32b3def3756ce35a72fb4bfe035991eb977c456b34cc3a8def8b",
+)
 
 NOTES = (
     "The complete raw validated-task population at the repackager pin (intake census "
     f"{CENSUS.sha256[:16]}: 4,990 rows, every row stages 1,2,3,4 passed, 0 duplicates). Every row is a "
-    "complete native Harbor package; conversion keeps the original package bytes and Dockerfile build "
-    "and binds the SHARED grader and RootDeliveryContract at conversion (rule C 2026-11-24), so the "
-    "population enters later stages with no contract-less row. The upstream license and lineage scan "
-    "is HELD: the recorded CANDIDATES P1 basis (license PASS on the original upstream) does not resolve "
-    "to a checkable receipt, and the revision-history scan awaits the user ruling on license-less early "
-    "revisions. No publication or admission claim."
+    "complete native Harbor package; conversion keeps the original package bytes, binds the SHARED grader "
+    "and RootDeliveryContract at conversion (rule C 2026-11-24), and binds each task's environment to its "
+    "class's digest-pinned prepared image (coordinator GO 2026-11-25: the 3 declared Dockerfile classes "
+    "built once in region through the taskforge image builder and pinned by manifest digest; the census "
+    f"marked every task unbuilt_image until this pin; images manifest {IMAGES.sha256[:16]}). The license "
+    "scan PASSED under the coordinator's 2026-11-25 ruling (open-thoughts/TaskTrove @94688470 declares "
+    "apache-2.0 at the pin and all revisions; receipt bound). No publication or admission claim."
 )
 
 RUBRIC = """
@@ -78,13 +85,37 @@ A passing oracle shows test compatibility, not specification coverage; cite a co
 """
 
 
+def prepared_images() -> dict[str, dict]:
+    """The sealed class→pinned-image manifest, keyed by the task's environment digest."""
+    manifest = pinned_json(IMAGES.uri, IMAGES.sha256)
+    classes = manifest["image_classes"]
+    if manifest.get("task_coverage") != COUNT or sorted(classes) != sorted({e for e in classes}):
+        raise ValueError("PyMethods2Test prepared-image manifest covers a different population")
+    images = {}
+    for environment_sha256, record in classes.items():
+        image = record["image"]
+        if not image.startswith("envreg.") or "@sha256:" not in image:
+            raise ValueError(f"Prepared image is not a digest-pinned task-registry reference: {image}")
+        if record["readback"]["digest_readback"] is not True or record["readback"]["architecture"] != "amd64":
+            raise ValueError(f"Prepared image lacks its digest readback: {image}")
+        images[environment_sha256] = {
+            "image": image,
+            "dockerfile_sha256": record["dockerfile_sha256"],
+            "tasks": record["tasks"],
+        }
+    if sum(item["tasks"] for item in images.values()) != COUNT:
+        raise ValueError("PyMethods2Test prepared-image manifest covers a different task count")
+    return images
+
+
 def read_pymethods_rows(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     """Yield every raw validated task of the folder in upstream order, pin-verified.
 
     The staged Parquet must equal the sealed intake census's byte digest, and every
     row's content hash must agree with its ``ot.images.v1`` environment binding: one
-    pristine bundle identity per task, carried through conversion as provenance.
+    pristine bundle identity per task, resolved to its digest-pinned prepared image.
     """
+    images = prepared_images()
     census = pinned_json(CENSUS.uri, CENSUS.sha256)
     if (census["source_id"], census["folder"], census["tasks"], census["distinct_paths"]) != (
         f"{DATASET.replace('/', ':', 1)}/{FOLDER}",
@@ -129,6 +160,7 @@ def read_pymethods_rows(path: StoragePath, _context: ConversionContext) -> Itera
                         "runtime": provenance["runtime"],
                         "bundle_prefix": bundle["prefix"],
                     },
+                    "pymethods_image": images[environment["environment_sha256"]],
                 }
     if len(seen) != COUNT or set(metadata["tasks"]) != seen:
         raise ValueError("PyMethods2Test conversion did not visit the complete native population")
@@ -141,16 +173,22 @@ def decode_pymethods(row: dict, context: ConversionContext) -> dict:
         raise ValueError("PyMethods2Test native archive carries links")
     if set(data["file_metadata"]) != set(data["files"]):
         raise ValueError("PyMethods2Test native file metadata is incomplete")
-    return {**data, "pymethods_environment": row["pymethods_environment"]}
+    return {
+        **data,
+        "pymethods_environment": row["pymethods_environment"],
+        "pymethods_image": row["pymethods_image"],
+    }
 
 
 def convert_pymethods(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
-    """Keep the native package bytes and bind the SHARED grader and contract (rule C).
+    """Keep the native package bytes and bind the pinned image, SHARED grader and contract.
 
-    The environment stays the package's declared Dockerfile build (no image is
-    substituted). The grader restores the pinned private ``tests/`` files after the
-    actor stops, runs the package's original ``test.sh``, and reads its own reward
-    file; the contract records every delivered verifier file's mode and digest.
+    The environment is the task's own declared Dockerfile build, executed once and pinned
+    by manifest digest (coordinator GO 2026-11-25: the prepared-image route) — the task's
+    docker_image is its class's digest-pinned build, docker_build is dropped, and every
+    other byte stays unchanged. The grader restores the pinned private ``tests/`` files
+    after the actor stops, runs the package's original ``test.sh``, and reads its own
+    reward file; the contract records every delivered verifier file's mode and digest.
     """
     task = native_task(row, context)
     if isinstance(task, ImportRejection):
@@ -162,8 +200,8 @@ def convert_pymethods(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         raise ValueError("PyMethods2Test native package does not declare its shared verifier deadline")
     if config.get("agent", {}).get("user") is not None or config.get("agent", {}).get("timeout_sec") is None:
         raise ValueError("PyMethods2Test native actor identity or deadline declaration changed")
-    if task.environment_requirements.docker_image is not None or task.environment_requirements.docker_build is None:
-        raise ValueError("PyMethods2Test environment is its Dockerfile build, not an image pin")
+    image = row.data["pymethods_image"]
+    environment = task.environment_requirements.model_copy(update={"docker_image": image["image"], "docker_build": None})
     private = tuple(
         item.model_copy(update={"path": name.removeprefix("tests/")})
         for name, item in resources.items()
@@ -181,9 +219,9 @@ def convert_pymethods(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         ),
         env=verifier.get("env", {}),
     )
-    environment = task.environment_requirements
     return task.model_copy(
         update={
+            "environment_requirements": environment,
             "verifier_execution_requirements": task.execution_requirements,
             "resources": ResourceGroups(
                 all=task.resources.all,
@@ -212,6 +250,8 @@ def convert_pymethods(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
                 "pymethods2test_environment_sha256": row.data["pymethods_environment"]["environment_sha256"],
                 "pymethods2test_environment_bundle": row.data["pymethods_environment"]["bundle"],
                 "pymethods2test_environment_runtime": row.data["pymethods_environment"]["runtime"],
+                "pymethods2test_prepared_image": image["image"],
+                "pymethods2test_images_manifest_sha256": IMAGES.sha256,
             },
         }
     )
@@ -232,8 +272,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="unit-test-gen",
                 task_format=TaskFormat.TASKSPEC,
                 build_path=(
-                    "Original native Harbor package bytes with the original Dockerfile build; "
-                    "the SHARED grader and RootDeliveryContract bind at conversion (rule C)"
+                    "Original native Harbor package bytes with each environment bound to its class's "
+                    "digest-pinned prepared image; the SHARED grader and RootDeliveryContract bind at "
+                    "conversion (rule C)"
                 ),
                 tags=("pymethods2test", "language:python", "root-delivery"),
                 notes=NOTES,

@@ -79,6 +79,11 @@ def native_row(workdir=None, verifier_overrides=None, environment_limits=None):
             "runtime": "apptainer",
             "bundle_prefix": "pymethods2test_v1/cached_images/bundles-v1/" + "b" * 64,
         },
+        "pymethods_image": {
+            "image": "envreg.208261-marin-gpu.coreweave.app/capability-infra/atlas-pymethods2test@sha256:" + "d" * 64,
+            "dockerfile_sha256": "e" * 64,
+            "tasks": 4990,
+        },
     }
 
 
@@ -99,10 +104,11 @@ def test_native_converter_binds_grader_and_contract_and_keeps_the_dockerfile_bui
     files = native_files()
     assert task.context.events[0].content == files["instruction.md"].decode()
     requirements = task.environment_requirements
-    assert requirements.docker_image is None
-    assert requirements.docker_build is not None
-    build_files = {item.path: resource_bytes(item) for item in requirements.docker_build.files}
-    assert build_files == {"Dockerfile": files["environment/Dockerfile"]}
+    assert (
+        requirements.docker_image
+        == "envreg.208261-marin-gpu.coreweave.app/capability-infra/atlas-pymethods2test@sha256:" + "d" * 64
+    )
+    assert requirements.docker_build is None
     assert requirements.working_directory is None
     assert requirements.setup_commands == ()
     assert task.execution_requirements is None
@@ -133,6 +139,7 @@ def test_native_converter_binds_grader_and_contract_and_keeps_the_dockerfile_bui
     assert task.grader.collect[0].argv[:2] == ("bash", "-c")
     assert task.labels["pymethods2test_environment_bundle"] == "b" * 64
     assert task.labels["pymethods2test_environment_sha256"] == "c" * 64
+    assert task.labels["pymethods2test_prepared_image"].endswith("sha256:" + "d" * 64)
     assert task.labels["native_archive_sha256"] == "a" * 64
     assert TaskSpec.model_validate_json(task.model_dump_json()) == task
 
@@ -177,6 +184,7 @@ def archive_row():
         "path": "pymethods2test-0000",
         "task_binary": buffer.getvalue(),
         "pymethods_environment": native_row()["pymethods_environment"],
+        "pymethods_image": native_row()["pymethods_image"],
     }
 
 
