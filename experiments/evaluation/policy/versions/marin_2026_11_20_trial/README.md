@@ -9,24 +9,6 @@ campaign's curated protocols in [`benchmarks/agentic.py`](../../../benchmarks/ag
 the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; the
 [policy README](../../README.md) explains the schema and the `policy` command.
 
-## Running
-
-```bash
-uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
-  --candidate qwen3.6-35b-a3b --priority batch [--limit 20] [--dry-run]
-uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
-uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
-```
-
-- `launch` submits a candidate's evaluations. Re-running the same launch skips runs whose record
-  succeeded and reruns ones that failed, so a run that succeeded but is invalid (for example, another
-  server window) is not rerun; `status` says so for each such run.
-- `status` shows each evaluation's full and smoke run: valid, invalid, or not run. A ⚠ marks a run
-  whose replies often hit their output cap or whose attempts often went unscored.
-- `verify` checks any run against the policy and names each field that differs.
-
-All three need CoreWeave credentials.
-
 ## Candidates
 
 | Candidate | Revision | Served window | Native window |

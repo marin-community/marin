@@ -51,3 +51,21 @@ uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11
 Evaluations share a server when they need the same window. Agent and single-turn evaluations never
 share one, nor do evaluations whose judges need different keys. A full run (no `--limit`) launches
 only from a clean checkout at HEAD, so its records name the commit that ran.
+
+A run's ID comes from the policy version and the run's inputs, so launching again finds the same
+paths: it skips runs whose record succeeded and reruns ones that failed. A run that succeeded but is
+invalid (for example, another server window) is therefore not rerun; `status` says so for each such
+run.
+
+Check the runs a launch from this checkout would make, or any runs by ID:
+
+```bash
+uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
+uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
+```
+
+`status` shows each evaluation's full and smoke run: valid, invalid, or not run. A ⚠ marks a run
+whose replies often hit their output cap or whose attempts often went unscored. `verify` checks any
+run against the policy and names each field that differs. A full run must decide every item: it may
+leave out items its protocol excludes, such as ones too long for its window, but not items it never
+inspected. `launch`, `status` and `verify` need CoreWeave credentials.
