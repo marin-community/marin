@@ -8,8 +8,8 @@ A document is a sequence of tagged tuples: ("heading", level, text),
 ("details", summary, inner blocks).
 """
 
-from collections.abc import Sequence
 import html
+from collections.abc import Sequence
 
 
 def to_markdown(blocks: Sequence[Sequence]) -> str:

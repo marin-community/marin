@@ -172,10 +172,6 @@ def _numeric_metrics(value: Any) -> dict[str, float]:
     return {name: metric for name, metric in value.items() if isinstance(metric, (int, float))}
 
 
-def _is_record(value: Any) -> bool:
-    return isinstance(value, Mapping)
-
-
 def is_eval_dump_row(value: Any) -> bool:
     """The eval-dump trial row shape: `uid` plus a raw `output_response` string."""
     return (
@@ -187,7 +183,7 @@ def is_eval_dump_row(value: Any) -> bool:
 
 def is_turn_record(value: Any) -> bool:
     """The SkyRL schema_v7 turn-record shape: `schema_version` 7 with a nested `response`."""
-    return isinstance(value, Mapping) and value.get("schema_version") == 7 and _is_record(value.get("response"))
+    return isinstance(value, Mapping) and value.get("schema_version") == 7 and isinstance(value.get("response"), Mapping)
 
 
 def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
@@ -282,7 +278,7 @@ def _verification_fields(turn: Turn) -> list[tuple[str, str]]:
 
 
 def _thinking_blocks(text: str, *, include_answer: bool) -> list[Block]:
-    """Render an assistant text as a Thinking details block plus its answer paragraphs."""
+    """Render an assistant text as a Thinking details block and, when requested, its answer paragraphs."""
     thinking, answer = _split_thinking(text)
     blocks: list[Block] = []
     if thinking:
@@ -304,10 +300,7 @@ def _turn_blocks(messages: Sequence[Message], *, truncate: int) -> list[Block]:
         if not text and not calls:
             continue
         if role == "tool":
-            name = message.get("name") if isinstance(message.get("name"), str) else ""
-            call_id = message.get("tool_call_id") if isinstance(message.get("tool_call_id"), str) else ""
-            blocks.append(("heading", 3, f"tool — {name or call_id or 'result'}"))
-            blocks.append(("code", _clip(text, truncate), "text"))
+            blocks.extend(_tool_result_blocks(message, text, truncate=truncate))
             continue
         blocks.append(("heading", 3, role))
         reasoning = message.get("reasoning")
@@ -321,6 +314,16 @@ def _turn_blocks(messages: Sequence[Message], *, truncate: int) -> list[Block]:
             blocks.append(("paragraph", f"**Tool call: `{call.name}`**"))
             blocks.append(("code", json.dumps(call.arguments, indent=2), "json"))
     return blocks
+
+
+def _tool_result_blocks(message: Message, text: str, *, truncate: int) -> list[Block]:
+    """Render one tool-result message as a heading plus its truncated output."""
+    name = message.get("name") if isinstance(message.get("name"), str) else ""
+    call_id = message.get("tool_call_id") if isinstance(message.get("tool_call_id"), str) else ""
+    return [
+        ("heading", 3, f"tool — {name or call_id or 'result'}"),
+        ("code", _clip(text, truncate), "text"),
+    ]
 
 
 def _raw_response_blocks(turn: Turn) -> list[Block]:

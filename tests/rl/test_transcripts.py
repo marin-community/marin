@@ -55,7 +55,6 @@ EVAL_DUMP_ROW = {
     "verification": {"status": "verified", "reason": None, "score": 1.0, "passed": True},
 }
 
-# The same shape with the writer's null `messages` (evidence messages absent).
 EVAL_DUMP_ROW_NULL_MESSAGES = {
     **EVAL_DUMP_ROW,
     "uid": "13",
@@ -238,8 +237,10 @@ def test_same_instance_at_different_repetition_renders_separately() -> None:
 
 def test_jsonl_text_and_non_record_input() -> None:
     line = json.dumps(SCHEMA_V7_RECORD)
-    documents = list(render_documents(line + "\n"))
-    assert len(documents) == 1
+    ((slug, blocks),) = list(render_documents(line + "\n"))
+    text = to_markdown(blocks)
+    assert slug == "eval-None-0--399-r0"
+    assert "Question: 40 pupils; half like blue." in text and "### assistant" in text
     with pytest.raises(ValueError):
         list(render_documents({"schema_version": 6, "response": {}}))
 
