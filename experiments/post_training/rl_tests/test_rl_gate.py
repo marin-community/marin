@@ -625,11 +625,21 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
         assert result.returncode == 7
         assert "build child ready" in result.stderr
     else:
-        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2"):
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2") as error:
             run_skyrl_cpu(command, timeout=2)
+        assert b"build child ready" in error.value.stderr
     with lock.open("r+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
     assert monotonic() < deadline, "native failure waited for the build child to finish"
+
+
+@pytest.mark.timeout(15)
+def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
+    marker = tmp_path / "cancellation"
+    worker = Path(__file__).with_name("native_build_child.py")
+    with pytest.raises(KeyboardInterrupt):
+        run_skyrl_cpu([sys.executable, "-I", str(worker), "interrupt", str(marker)], stream_stderr=True)
+    assert marker.read_text() == "cancelled"
 
 
 @pytest.mark.parametrize(
@@ -806,6 +816,10 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert report["reason"].endswith("Read native schema defaults returned no output")
                 if diagnostic == "invalid-json":
                     assert report["reason"].endswith("Read native schema defaults returned invalid JSON")
+                if diagnostic == "oserror":
+                    assert report["reason"].endswith("native composer executable missing")
+                if diagnostic == "empty-stderr":
+                    assert report["reason"].endswith("exited with status 1")
                 if diagnostic == "bootstrap":
                     assert "Prepare SkyRL CPU environment" in report["reason"]
                     assert "timed out after 300 s" in report["reason"]

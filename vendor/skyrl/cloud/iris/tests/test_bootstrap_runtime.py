@@ -9,7 +9,6 @@ import pytest
 
 from cloud.iris.tests.bootstrap_runtime_fixtures import FIXTURES, fake_frozen_runtime
 
-
 REPOSITORY_ROOT = Path(__file__).parents[3]
 BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "cloud" / "iris" / "bootstrap_runtime.sh"
 RUNTIME_FILE = "runtime.env"
@@ -143,13 +142,22 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
     binary, libraries, linker, path = activation.stdout.splitlines()
     assert binary == str(ninja)
     assert path == f"{environment / 'bin'}{os.pathsep}{process_environment['PATH']}"
-    assert libraries.split(os.pathsep)[-1] == process_environment["LD_LIBRARY_PATH"]
-    assert linker.split(os.pathsep)[-1] == process_environment["LIBRARY_PATH"]
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    assert libraries.split(os.pathsep) == [
+        str(site_packages / "nvidia/cu13/lib"),
+        process_environment["LD_LIBRARY_PATH"],
+    ]
+    assert linker.split(os.pathsep) == [str(environment / "lib"), process_environment["LIBRARY_PATH"]]
     runtime_file = environment / RUNTIME_FILE
-    runtime_file.write_bytes(runtime_file.read_bytes()[:-1])
+    complete = runtime_file.read_bytes()
+    runtime_file.write_bytes(complete[:-1])
     failed = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
     assert failed.returncode != 0
     assert "Unterminated SkyRL runtime assignment" in failed.stderr
+    runtime_file.write_bytes(complete.split(b"\0", 1)[0] + b"\0")
+    partial = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert partial.returncode != 0
+    assert "Incomplete SkyRL runtime assignments" in partial.stderr
 
 
 def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> None:

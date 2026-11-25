@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import hashlib
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -17,7 +20,7 @@ from omegaconf import OmegaConf
 from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.rl_config_translation import RL_CONFIG_TASK_DIR
+from cloud.iris.rl_config_translation import RL_CONFIG_PAYLOAD_ENV, RL_CONFIG_TASK_DIR
 from cloud.iris.tests.bootstrap_runtime_fixtures import fake_frozen_runtime
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
@@ -164,21 +167,29 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     launcher.mkdir(parents=True)
     source = Path(__file__).parents[1]
     stub = Path(__file__).with_name("node_command_fixture.py")
-    for name in ("node_entrypoint.sh", "load_runtime_environment.sh"):
+    for name in (
+        "node_entrypoint.sh",
+        "load_runtime_environment.sh",
+        "bootstrap_runtime.sh",
+        "runtime_checks.py",
+        "setup_task_runtime.sh",
+    ):
         (launcher / name).symlink_to(source / name)
+    for relative in (".uv-version", ".python-version", "marinskyrl/environment_contract.py"):
+        target = skyrl / relative
+        target.parent.mkdir(exist_ok=True)
+        target.symlink_to(source.parents[1] / relative)
     (launcher / "task_runtime.py").symlink_to(stub)
     probe = app / "experiments/post_training/nccl_transport_probe.py"
     probe.parent.mkdir(parents=True)
     probe.symlink_to(stub)
     runtime, process_env = fake_frozen_runtime(tmp_path)
-    writer = source.parents[1] / "marinskyrl" / "environment_contract.py"
-    runtime_file = runtime / ".iris-runtime-env"
-    subprocess.run(
-        [runtime / "bin/python", "-I", writer, "write-task-runtime", runtime_file,
-         "megatron-export" if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT else "megatron", skyrl],
-        env=process_env, check=True, timeout=15,
-    )
     process_env["IRIS_VENV"] = str(runtime)
+    (setup,) = request.environment.setup_scripts
+    setup_argv = shlex.split(setup.replace(MARINSKYRL_TASK_ROOT, str(skyrl), 1))
+    expected_profile = "megatron-export" if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT else "megatron"
+    assert setup_argv[-1] == expected_profile
+    subprocess.run(setup_argv, env=process_env, check=True, timeout=30)
     argv = [
         arg.replace(MARINSKYRL_TASK_ROOT, str(skyrl), 1) if arg.endswith("/node_entrypoint.sh") else arg
         for arg in request.entrypoint.run_command.argv
@@ -199,9 +210,11 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert transport["argv"][:4] == ["--mode", "gate", "--gate-coverage", "all-gpus"]
     assert transport["argv"][4:6] == ["--gate-report-prefix", f"{config.ray.rendezvous_dir}/interconnect-gate"]
     assert ("--pynccl-init" in transport["argv"]) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
-    flag, config_path = controller["argv"]
-    assert flag == "--config"
-    assert Path(config_path).parent == Path(RL_CONFIG_TASK_DIR)
+    flag, config_path, prepared = controller["argv"]
+    assert flag == "--config" and prepared == "--environment-prepared"
+    payload = base64.b64decode(request.environment.env_vars[RL_CONFIG_PAYLOAD_ENV])
+    digest = hashlib.sha256(payload).hexdigest()[:16]
+    assert Path(config_path) == Path(RL_CONFIG_TASK_DIR) / f"{digest}.yaml"
     if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT:
         failed = subprocess.run(
             argv, env=process_env | {"EXIT_TRANSPORT_FIXTURE": "1"}, capture_output=True, text=True, timeout=15

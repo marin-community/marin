@@ -3,10 +3,13 @@
 
 import json
 import sys
+from pathlib import Path
 
-from cloud.iris import launch
+from cloud.iris import launch, launch_config
+from cloud.iris.config_cli import verify_checkout
 
-args = launch.create_parser().parse_args(sys.argv[1:])
+verify_checkout(Path(sys.argv[1]), launch, launch_config)
+args = launch.create_parser().parse_args(sys.argv[2:])
 config = launch.load_launch_config(args.config)
 print(
     json.dumps(

@@ -97,8 +97,8 @@ def parse_requirement(text: str) -> Requirement:
 def with_objectives(candidate: RunMeasurements, preset: presets.Preset) -> RunMeasurements:
     values = dict(candidate.values)
     for metric in preset.objectives:
-        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
-            gain = values.get(metric.key.removesuffix("_per_gpu_hour"))
+        if metric.source is not None:
+            gain = values.get(metric.source)
             if gain is not None and candidate.gpu_hours:
                 values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)
@@ -726,7 +726,7 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
         if not output:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
         try:
-            return json.loads(output.splitlines()[-1])
+            return json.loads(output)
         except ValueError as error:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
@@ -786,7 +786,12 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 @lru_cache(maxsize=16)
 def _schema_defaults(checkout: Path, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout)
+    defaults = _native_config(
+        "Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout
+    )
+    if not isinstance(defaults, dict):
+        raise InvalidComparison(f"{_NATIVE_ERROR}: schema defaults must be an object")
+    return defaults
 
 
 def _check_control_config(

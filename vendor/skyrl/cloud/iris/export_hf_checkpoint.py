@@ -65,6 +65,7 @@ from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
+    ExportFailed,
     HFExportRequest,
     HFExportStatus,
     HFUploadMode,
@@ -72,12 +73,6 @@ from skyrl_train.hf_export_schema import (
 )
 from skyrl_train.hf_publisher import publish_verified_hf_export
 from skyrl_train.io import io
-
-
-class ExportFailed(RuntimeError):
-    def __init__(self, message: str, *, exit_code: int = 1):
-        super().__init__(message)
-        self.exit_code = exit_code
 
 
 def _read_hf_export_request(checkpoint_path: str) -> HFExportRequest | None:
@@ -477,11 +472,7 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
         if request.hf_hub_repo_id is not None:
             _run_hub_upload(spec)
     except BaseException as error:
-        exit_code = 1
-        if isinstance(error, subprocess.CalledProcessError):
-            exit_code = error.returncode
-        elif isinstance(error, ExportFailed):
-            exit_code = error.exit_code
+        exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
         if isinstance(error, ConnectError):
             raise ExportFailed(f"Could not connect to Iris for checkpoint export at step {request.step}") from error

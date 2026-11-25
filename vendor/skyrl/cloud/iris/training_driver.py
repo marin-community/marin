@@ -202,7 +202,7 @@ class LocalRLRunner:
         )
         os.environ["POLICY_NUM_NODES"] = str(self.config.num_nodes)
 
-        os.environ["VLLM_USE_V1"] = "1"
+        os.environ.setdefault("VLLM_USE_V1", "1")
 
         wandb_dir = os.path.join(self.config.experiments_dir, "wandb")
         os.makedirs(wandb_dir, exist_ok=True)
@@ -234,15 +234,6 @@ class LocalRLRunner:
         )
 
         python_exe = str(self.rl_env_path / "bin" / "python") if self.rl_env_path else sys.executable
-        config_path = Path(tempfile.gettempdir()) / "marinskyrl" / "skyrl-launch.yaml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        OmegaConf.save(launch_config, config_path, resolve=True)
-        cmd = [python_exe, "-m", "cloud.iris.skyrl_entrypoint", "--config", str(config_path)]
-
-        print("\nRunning SkyRL:")
-        print(f"  Entrypoint: {launch_config.runtime.entrypoint}")
-        print(f"  Config: {config_path}")
-
         skyrl_home = os.environ.get("SKYRL_HOME")
         cwd = None
         if skyrl_home:
@@ -251,12 +242,14 @@ class LocalRLRunner:
                 cwd = candidate
                 print(f"  Working dir: {cwd}")
 
-        print(f"\nCommand: {' '.join(cmd[:3])} [... {len(cmd) - 3} more args]")
-        sys.stdout.flush()
-
-        proc = subprocess.Popen(cmd, cwd=cwd)
-        self._processes.append(proc)
-        returncode = proc.wait()
+        with tempfile.TemporaryDirectory(prefix="skyrl-launch-") as directory:
+            config_path = Path(directory) / "launch.yaml"
+            OmegaConf.save(launch_config, config_path, resolve=True)
+            cmd = [python_exe, "-m", "cloud.iris.skyrl_entrypoint", "--config", str(config_path)]
+            print(f"Running SkyRL {launch_config.runtime.entrypoint} with {config_path}", flush=True)
+            proc = subprocess.Popen(cmd, cwd=cwd)
+            self._processes.append(proc)
+            returncode = proc.wait()
         outcome, receipt = write_process_outcome(
             "skyrl-entrypoint",
             returncode,

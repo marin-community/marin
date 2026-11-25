@@ -357,9 +357,11 @@ class Metric:
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
 
+    source: str | None = None
+
     def __post_init__(self) -> None:
-        if self.window is WindowStatistic.GAIN_PER_GPU_HOUR and not self.key.endswith("_per_gpu_hour"):
-            raise ValueError("A gain-per-GPU-hour metric key must end in _per_gpu_hour")
+        if (self.window is WindowStatistic.GAIN_PER_GPU_HOUR) != bool(self.source):
+            raise ValueError("Gain-per-GPU-hour metrics require an explicit source key")
 
 
 @dataclass(frozen=True)
