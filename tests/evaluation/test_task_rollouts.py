@@ -179,7 +179,6 @@ def published_corpora(tmp_path):
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=3,
                 )
                 output = tmp_path / (benchmark + "-published")
                 publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(output))
@@ -508,7 +507,6 @@ def mixed_corpora(tmp_path):
                     ),
                     primary_metric=names[0],
                     summary=SummaryKind.MEAN,
-                    expected_population=len(documents),
                     likelihood_metrics=likelihoods,
                 )
                 output = tmp_path / (benchmark + "-mixed-corpus")
@@ -569,7 +567,6 @@ def publish_policy_corpus(tmp_path, rows, converter=convert_mixed_row):
         metrics=tuple(Metric(name=name, kind=MetricKind.BINARY, higher_is_better=True) for name in names),
         primary_metric=names[0],
         summary=SummaryKind.MEAN,
-        expected_population=len(rows),
     )
     output = str(tmp_path / "corpus")
     client = LocalClient()
@@ -1273,7 +1270,6 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=len(questions),
     )
     output = tmp_path / "episodes-published"
     client = LocalClient()
@@ -1561,7 +1557,6 @@ def publish_colors_corpus(tmp_path, name, *, converter=convert, questions=COLORS
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=len(questions),
     )
     output = tmp_path / (name + "-corpus")
     client = LocalClient()
