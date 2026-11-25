@@ -719,9 +719,12 @@ def test_submission_exit_codes_and_publication_retries(
         ]
     )
     source = sources[0] if sources else None
-    for index, root in enumerate(sources):
-        native = read_attempt(str(root / "exports"), f"native-{index}")
-        write_attempt(str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73))
+    if case != "child":
+        for index, root in enumerate(sources):
+            native = read_attempt(str(root / "exports"), f"native-{index}")
+            write_attempt(
+                str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73)
+            )
     if case == "data-short":
         receipt = json.loads((source / "terminal.json").read_text())
         descriptor = receipt["config"]["inputs"]["validation_data"][0]
@@ -895,7 +898,8 @@ def test_submission_exit_codes_and_publication_retries(
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
-        assert len(published) == 1
+        assert len(published) == 1 and published[0]["issue"] == 73
+        assert snowball.rl_publication.lineage_issue(str(source / "exports")) == 73
         report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()
         assert gate.GateReport.raw_load(report.path()).verdict == "pass"
@@ -1238,31 +1242,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     native_calls = []
 
     def native(command, *, env_vars=None):
-        inspection = run_native_test(
-            "cloud.iris.tests.native_inspect_launch", command[command.index("marinskyrl") + 1 :]
-        )
-        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
-            ["HF_TEST_KEY"],
-            "3TB",
-            "tests/python-tokenizer",
-        )
-        prepared = read_attempt(inspection["export"], inspection["attempt"])
+        request_path = Path(command[command.index("--config") + 1])
+        request = yaml.safe_load(request_path.read_text())
+        export_root = request["artifacts"]["export_root"]
+        prepared = read_attempt(export_root, request["run"]["attempt_id"])
         assert prepared is not None and prepared.index is not None
-        assert prepared.index.model == table.model and prepared.index.preset == preset.name
-        assert prepared.issue is None
-        assert snowball.rl_publication.lineage_issue(inspection["export"]) == 73
-        native_calls.append(command)
+        assert prepared.result is None
         shutil.copytree(staged, source, dirs_exist_ok=True)
+        write_attempt(export_root, prepared)
         stored = json.loads((source / "terminal.json").read_text())
-        stored["config"]["run"]["model"] = inspection["model"]
-        write_receipt(source, stored)
-        write_attempt(
-            inspection["export"],
-            AttemptRecord(
-                run_id=stored["config"]["run"]["id"],
-                attempt_id=stored["config"]["run"]["attempt_id"],
-            ),
-        )
         response = stored["result"]
         response["model"] = dict(
             policy_export_uri=str(source / "policy"),
@@ -1272,7 +1260,43 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             checkpoint_root=str(source / "checkpoints"),
             terminal_manifest_uri=str(source / "terminal.json"),
         )
-        return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+        response_path = tmp_path / "native-response.json"
+        _json(response_path, response)
+        inspection = run_native_test(
+            "cloud.iris.tests.native_inspect_launch",
+            ["--record-response", str(response_path), *command[command.index("marinskyrl") + 1 :]],
+        )
+        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
+            ["HF_TEST_KEY"],
+            "3TB",
+            "tests/python-tokenizer",
+        )
+        completed = read_attempt(inspection["export"], inspection["attempt"])
+        assert completed is not None and completed.index is not None
+        assert completed.result is not None and completed.result.state == "succeeded"
+        assert completed.index.model == table.model and completed.index.preset == preset.name
+        assert completed.issue is None
+        assert snowball.rl_publication.lineage_issue(inspection["export"]) == 73
+        native_calls.append(command)
+        # The fixture supplies metrics and startup writes that normally come from the trainer.
+        receipt = inspection["receipt"]
+        write_receipt(source, receipt)
+        write_attempt(
+            inspection["export"],
+            AttemptRecord(
+                run_id=completed.run_id,
+                attempt_id=completed.attempt_id,
+                started_at=receipt["result"]["started_at"],
+                metrics_started_at=receipt["result"]["started_at"],
+                evaluation_storage_version=1,
+            ),
+        )
+        metrics = read_skyrl_metrics(str(source), earlier.attempt_id)
+        for row in metrics.values():
+            row["attempt_id"] = completed.attempt_id
+        append_metrics(source, metrics)
+        copy_evaluations(source, earlier.attempt_id, completed.attempt_id)
+        return subprocess.CompletedProcess(command, 0, json.dumps(receipt["result"]), "")
 
     monkeypatch.setattr(skyrl_api, "_run_launcher", native)
     published = []
@@ -1293,7 +1317,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "trainer.max_steps=3",
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
-    mode, coordinator_module = "valid", "first_model_entry"
+    default_module = model_entry_fixture.__spec__.name
+    mode, coordinator_module = "valid", default_module
     entries = {}
 
     def invoke_entry(name, patch):
@@ -1301,7 +1326,18 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
-        assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
+        command = kwargs["entrypoint"].command
+        assert command == ["python", "-m", coordinator_module, *arguments]
+        if coordinator_module == default_module and mode == "valid" and not native_calls:
+            opened = subprocess.run(
+                [sys.executable, *command[1:3], "--help"],
+                cwd=recipe.REPO_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=True,
+            )
+            assert "--preset" in opened.stdout and "--wait" in opened.stdout
         environment = kwargs["environment"].env_vars
         if mode != "overlapping-environment-mismatch":
             assert environment["HF_TEST_KEY"] == "test-initializer-credential"
@@ -1348,7 +1384,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     @click.command()
     def entry():
         with monkeypatch.context() as driver:
-            raise click.exceptions.Exit(invoke_entry("first_model_entry", driver))
+            raise click.exceptions.Exit(invoke_entry(default_module, driver))
 
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
@@ -1359,8 +1395,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             return CliRunner().invoke(command, args)
 
     for override in (None, "second_model_entry"):
-        coordinator_module = override or "first_model_entry"
-        module("first_model_entry", entry_module=override)
+        coordinator_module = override or default_module
+        module(default_module, entry_module=override)
         if override is not None:
             module(override)
         result = invoke_with_preflight_stub(entry)
@@ -1379,7 +1415,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     ):
         coordinator_module = "second_model_entry"
         module(
-            "first_model_entry",
+            default_module,
             entry_module=coordinator_module,
             forward_env=("WANDB_API_KEY",) if mode == "overlapping-environment-mismatch" else ("HF_TEST_KEY",),
             policy_forward=("WANDB_API_KEY",) if mode == "dependency-environment-mismatch" else None,
@@ -1397,13 +1433,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         )
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
-    mode, coordinator_module = "failed-following", "first_model_entry"
+    mode, coordinator_module = "failed-following", default_module
     module(coordinator_module, following=True)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output
 
-    evaluations = read_evaluations(str(source / "exports"), attempt_id="recorded-attempt", evaluation="eval/")
+    completed_id = published[-1].attempt_id
+    assert completed_id != earlier.attempt_id
+    evaluations = read_evaluations(str(source / "exports"), attempt_id=completed_id, evaluation="eval/")
     replace_evaluations(
         source,
         [
@@ -1420,7 +1458,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     with edit_receipt(source) as receipt:
         receipt["result"]["model"] = None
     step = built.runs[0]
-    write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
+    write_skyrl_run_record(
+        source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None, attempt_id=completed_id
+    )
     planning_args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--set", "trainer.max_steps=3"]
     result = invoke_with_preflight_stub(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
@@ -1433,7 +1473,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
-    mode, coordinator_module = "valid", "first_model_entry"
+    default_module = model_entry_fixture.__spec__.name
+    mode, coordinator_module = "valid", default_module
     module(coordinator_module)
     resumed = invoke_with_preflight_stub(entry)
     assert resumed.exit_code == 1 and len(native_calls) == 1, (resumed.output, resumed.exception)
@@ -1459,8 +1500,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     }
     assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
 
-    mode, coordinator_module = "failed-native", "first_model_entry"
-    module("first_model_entry")
+    mode, coordinator_module = "failed-native", default_module
+    module(default_module)
     with edit_receipt(source) as receipt:
         receipt["result"]["state"] = "failed"
     result = invoke_with_preflight_stub(entry)

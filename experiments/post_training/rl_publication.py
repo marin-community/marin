@@ -249,9 +249,7 @@ def build_record(
         source_revision=(
             f"base={index.source_revision} tree={index.tree_hash or 'Unknown'}"
             if index is not None
-            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}"
-            if provenance
-            else "Unknown"
+            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
         data_identity="; ".join(source.identity for source in launch.train_data) or None,
         initializer_identity=launch.model_identity,

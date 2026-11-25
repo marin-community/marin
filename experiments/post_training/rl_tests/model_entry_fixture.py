@@ -57,3 +57,7 @@ def main(config: dict, argv: list[str]) -> int:
         forward_env=tuple(config["forward_env"]),
         entry_module=config["entry_module"],
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(rl.main(snowball_rl.SNOWBALL))
