@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 from omegaconf import DictConfig
+from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import R3Transport, reference_model_required
 from skyrl_train.config.placement_geometry import num_rollout_gpus, validate_colocated_engine_geometry
@@ -44,6 +45,16 @@ def validate_megatron_config(cfg: DictConfig):
     policy = cfg.trainer.policy
     projection_chunk = policy.megatron_config.get("output_projection_chunk_size")
     profile = policy.megatron_config.get("memory_profile", {})
+    # The wrapper rejects FTPO/top-K batches only once training runs; reject the plan here so a
+    # launch fails before GPU allocation. The synthetic sizing batch also never exercises the
+    # teacher workload, so a passing profile would not cover a real top-K step.
+    if projection_chunk is not None or profile.get("enabled", False):
+        plan = compile_distillation_plan_from_config(cfg)
+        topk_distillation = plan is not None and plan.objective is not DistillationObjectiveKind.SAMPLED_REVERSE_KL
+        if topk_distillation and projection_chunk is not None:
+            raise ValueError("output_projection_chunk_size currently supports PPO without top-K distillation")
+        if topk_distillation and profile.get("enabled", False):
+            raise ValueError("Trainer sizing does not exercise the top-K distillation teacher workload")
     if projection_chunk is not None:
         if policy.megatron_config.tensor_model_parallel_size != 1:
             raise ValueError("output_projection_chunk_size requires TP1")
