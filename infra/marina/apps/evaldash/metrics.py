@@ -400,6 +400,19 @@ def _missing_cells(
     return missing
 
 
+def _selection_measurements(
+    records: list[EvalRunRecord], request: SelectionRequest, eligible: list[EvalRunRecord]
+) -> tuple[list[EvalRunRecord], list[Measurement]]:
+    """Keep cross-cohort protocol references while applying the selected cohort's policy rule."""
+    source = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
+    measurements = [
+        measurement
+        for measurement in dashboard_measurements(source)
+        if request.cohort_version is None or measurement.version == request.cohort_version
+    ]
+    return source, measurements
+
+
 def build_panel(
     records: list[EvalRunRecord],
     request: SelectionRequest,
@@ -419,12 +432,7 @@ def build_panel(
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurement_records = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
-    measurements = [
-        measurement
-        for measurement in dashboard_measurements(measurement_records)
-        if request.cohort_version is None or measurement.version == request.cohort_version
-    ]
+    measurement_records, measurements = _selection_measurements(records, request, eligible)
     protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
     selection = select(
@@ -507,12 +515,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurement_records = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
-    measurements = [
-        measurement
-        for measurement in dashboard_measurements(measurement_records)
-        if request.cohort_version is None or measurement.version == request.cohort_version
-    ]
+    _, measurements = _selection_measurements(records, request, eligible)
     selection = select(
         measurements,
         replace(request, completeness=Completeness.ANY),

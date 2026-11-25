@@ -9,7 +9,7 @@ import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
-from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
 from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
@@ -798,7 +798,7 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
 def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
-        record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+        record = _record(name, "math500", SEPTEMBER_24_VERSION, created_at, 0.5)
         model_config = _model_config(
             name=name, location="org/model", chat_template_kwargs={"enable_thinking": config_thinking}
         )
@@ -808,7 +808,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
                 "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
                 "evaluation": record.evaluation.model_copy(
                     update={
-                        "source_digest": POLICY_SOURCE_DIGESTS["eval-policy-2026-09-24-verified"]["math500"],
+                        "source_digest": POLICY_SOURCE_DIGESTS[SEPTEMBER_24_VERSION]["math500"],
                         "tasks": (EvalTaskRef(name="MATH500", num_fewshot=0, generation=True),),
                         "evalchemy": EvalchemyRef(
                             apply_chat_template=True,
@@ -838,7 +838,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
         }
     )
     records = [first, second, invalid, other_invalid, previous_cohort, smoke]
-    request = panel_request(cohort="eval-policy-2026-09-24-verified", model_query="same-name")
+    request = panel_request(cohort=SEPTEMBER_24_VERSION, model_query="same-name")
     panel = build_panel(records, request)
 
     assert len(panel["rows"]) == 1
@@ -852,7 +852,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
 
 
 def test_policy_violations_only_exclude_runs_in_a_named_cohort():
-    policy = "eval-policy-2026-09-24-verified"
+    policy = SEPTEMBER_24_VERSION
     prior = [_record(model, "math500", "v1", "2026-09-24T00:00:00+00:00", 0.4) for model in ("a", "b")]
     violating = [_record(model, "math500", policy, "2026-09-25T00:00:00+00:00", 0.6) for model in ("a", "b")]
     records = prior + violating
