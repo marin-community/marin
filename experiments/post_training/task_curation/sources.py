@@ -152,6 +152,11 @@ PENDING_MEASUREMENT_SOURCES = (
     *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
     *facet_terminal.sources(),
     *endless.cohort_source(),
+    *(
+        source
+        for source in campaign_releases.sources()
+        if source.info.id == "TaskTrove:tasktrove-competitive-coding-rebuilt-v1"
+    ),
 )
 
 
