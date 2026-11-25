@@ -1,5 +1,5 @@
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from math import fsum
 from typing import Dict, List
@@ -28,6 +28,17 @@ from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.metric_reduction import MetricReduction, LocalReduction
+
+
+def nonzero_advantage_tokens_by_group(batch: TrainingInputBatch, uids: Sequence[str]) -> Counter[str]:
+    """Count final nonzero advantages where the policy loss mask is active."""
+    advantages = batch["advantages"][: len(uids)]
+    loss_mask = batch["loss_mask"][: len(uids)]
+    row_counts = torch.count_nonzero(advantages.ne(0) & loss_mask.bool(), dim=-1).tolist()
+    counts: Counter[str] = Counter()
+    for uid, count in zip(uids, row_counts, strict=True):
+        counts[uid] += count
+    return counts
 
 
 def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:

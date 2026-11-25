@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -99,6 +100,16 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
     rejected = next(row for row in receipts.values() if row["disposition"] == "fully_masked")
     assert rejected["feedback_batch"] is None and rejected["verified_missing"] == 2
     assert all(row["generated_tokens"] == row["sample_count"] == 2 for row in receipts.values())
+    rollout_context.record_sampling_training(
+        rollout_context.RolloutBatchMetadata(admission.batch_id, tuple(admission.admitted), {}), Counter({"1": 0})
+    )
+    trained = [fields for name, fields in events if name == "sampling_group_trained"]
+    assert trained == [{"group_uid": "1", "training_step": 2, "nonzero_advantage_tokens": 0}]
+    assert [
+        receipt["disposition"]
+        for receipt in receipts.values()
+        if receipt["group_uid"] == trained[0]["group_uid"] and receipt["feedback_batch"] == trained[0]["training_step"]
+    ] == ["consumed"]
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):

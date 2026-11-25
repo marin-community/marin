@@ -116,6 +116,7 @@ class RolloutBatchMetadata:
     batch_id: int
     groups: tuple[AdmittedRollout, ...]
     metrics: dict[str, float]
+    sampling_receipts_enabled: bool = False
 
 
 def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) -> PromptOrder:
@@ -166,6 +167,7 @@ def record_sampling_result(outcome: GroupDisposition) -> None:
         "sampling_group_result",
         {
             "lease_id": result.lease_id,
+            "group_uid": outcome.uid,
             "committed_unix_ns": result.committed_unix_ns,
             "feedback_batch": result.feedback_batch,
             "disposition": outcome.disposition,
@@ -180,6 +182,19 @@ def record_sampling_result(outcome: GroupDisposition) -> None:
             "verified_max": max(scores, default=None),
         },
     )
+
+
+def record_sampling_training(batch: RolloutBatchMetadata, nonzero_advantage_tokens: collections.Counter[str]) -> None:
+    """Emit one optimizer-input receipt for each selected group, including groups with zero signal."""
+    for group in batch.groups:
+        record_event(
+            "sampling_group_trained",
+            {
+                "group_uid": group.uid,
+                "training_step": batch.batch_id,
+                "nonzero_advantage_tokens": nonzero_advantage_tokens[group.uid],
+            },
+        )
 
 
 class TrainingContext:
@@ -426,6 +441,7 @@ class TrainingContext:
                     self._policy_step,
                     tuple(groups),
                     {**admission.selection.metrics, **sampling_metrics},
+                    sampling_receipts_enabled=self._adaptive_order is not None,
                 )
 
     async def state_dict(self) -> TrainingContextState:
@@ -526,6 +542,7 @@ class TrainingContext:
                         "sampling_group_assigned",
                         {
                             "lease_id": lease.lease_id,
+                            "group_uid": prompt["uid"],
                             "assigned_unix_ns": time.time_ns(),
                             "policy_step": lease.policy_step,
                             "target_batch": lease.batch_id,

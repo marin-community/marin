@@ -78,7 +78,13 @@ from omegaconf import DictConfig
 from pathlib import Path
 import time
 from skyrl_train.batch_assembly import BatchPlan, assemble_rank_slice, forward_input, install_plan_advantages
-from skyrl_train.batch_metrics import advantage_metrics, forward_metrics, install_correction, token_staleness_metrics
+from skyrl_train.batch_metrics import (
+    advantage_metrics,
+    forward_metrics,
+    install_correction,
+    nonzero_advantage_tokens_by_group,
+    token_staleness_metrics,
+)
 from skyrl_train.rollouts.payloads import RolloutReader
 from skyrl_train.utils.advantage_estimators import apply_loop_advantages, drop_advantage_inputs
 from skyrl_train.metric_reduction import WorldReduction
@@ -916,10 +922,16 @@ class PolicyWorkerBase(Worker):
         output.metadata = {"batch_metrics": metrics}
         return output
 
-    def train_loaded(self, batch_id: int) -> TrainingOutputBatch:
+    def train_loaded(self, batch_id: int, *, sampling_receipts_enabled: bool) -> TrainingOutputBatch:
         plan, batch = self._loaded_batch
         assert plan.global_step == batch_id
-        return self.ppo_train(batch)
+        output = self.ppo_train(batch)
+        if sampling_receipts_enabled and self.mesh_rank.is_collection_dp_rank():
+            rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+            output.metadata["nonzero_advantage_tokens"] = nonzero_advantage_tokens_by_group(
+                batch, plan.uids[rows.start : rows.stop]
+            )
+        return output
 
     def unload_batch(self, batch_id: int) -> None:
         if self._loaded_batch is not None and self._loaded_batch[0].global_step == batch_id:

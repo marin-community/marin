@@ -23,14 +23,19 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
 from skyrl_train.config.utils import model_expert_count
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 
 import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
-from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
+from skyrl_train.rollouts.context import (
+    RolloutBatchMetadata,
+    TrainingContext,
+    TrainingContextState,
+    record_sampling_training,
+)
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
     TrajectoryBatch,
@@ -167,6 +172,7 @@ from skyrl_train.batch_metrics import (
     install_correction,
     advantage_metrics,
     forward_metrics,
+    nonzero_advantage_tokens_by_group,
     reward_metrics,
     rollout_metrics,
     rollout_staleness_metrics,
@@ -1492,7 +1498,11 @@ class RayPPOTrainer:
         )
 
         async with self._training_window(step_wall):
-            status = await self._run_training(training_input, step_wall=step_wall)
+            status = await self._run_training(
+                training_input,
+                step_wall=step_wall,
+                sampling_batch=metadata if metadata.sampling_receipts_enabled else None,
+            )
         summary = BatchSummary(
             consumed_work(training_input),
             training_input.metadata["consumed_stop_metrics"],
@@ -1557,7 +1567,12 @@ class RayPPOTrainer:
                     outputs = await asyncio.to_thread(
                         collect_actor_results,
                         policy.actor_infos,
-                        policy.async_run_ray_method("pass_through", "train_loaded", plan.global_step),
+                        policy.async_run_ray_method(
+                            "pass_through",
+                            "train_loaded",
+                            plan.global_step,
+                            sampling_receipts_enabled=metadata.sampling_receipts_enabled,
+                        ),
                         operation="policy training",
                     )
                 status = outputs[0].metadata["train_status"]
@@ -1567,6 +1582,12 @@ class RayPPOTrainer:
             await context.wait(
                 asyncio.gather(*policy.async_run_ray_method("pass_through", "unload_batch", plan.global_step))
             )
+        if metadata.sampling_receipts_enabled and status["policy_update_steps"] > 0:
+            counts: Counter[str] = Counter()
+            for actor, output in zip(policy.actor_infos, outputs, strict=True):
+                if actor.rank.is_collection_dp_rank():
+                    counts.update(output.metadata["nonzero_advantage_tokens"])
+            record_sampling_training(metadata, counts)
         summary = batch_summary(plan)
         self._current_step_rewards = (
             [float(value) for group in plan.facts for value in group.scalar_values]
@@ -1690,7 +1711,13 @@ class RayPPOTrainer:
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
-    async def _run_training(self, training_input: TrainingInputBatch, *, step_wall: StepWallTime | None = None):
+    async def _run_training(
+        self,
+        training_input: TrainingInputBatch,
+        *,
+        step_wall: StepWallTime | None = None,
+        sampling_batch: RolloutBatchMetadata | None = None,
+    ):
         if (
             "ftpo_chosen_mask" in training_input
             and not training_input["loss_mask"].any()
@@ -1720,6 +1747,9 @@ class RayPPOTrainer:
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
+        if sampling_batch is not None:
+            real_rows = training_input.batch_size - training_input.metadata["pad_size"]
+            sampling_uids = training_input.metadata["uids"][:real_rows]
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
@@ -1734,6 +1764,8 @@ class RayPPOTrainer:
             step_wall.start("policy_training")
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_policy, training_input)
+        if sampling_batch is not None and status["policy_update_steps"] > 0:
+            record_sampling_training(sampling_batch, nonzero_advantage_tokens_by_group(training_input, sampling_uids))
         self._policy_version_step = self.global_step
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
