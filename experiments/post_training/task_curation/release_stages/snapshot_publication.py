@@ -165,12 +165,20 @@ def verify_survey_alignment(inputs: SnapshotPublicationInputs, current: dict[str
 
 
 def seal_contracts(inputs: SnapshotPublicationInputs) -> ArtifactRef:
-    """Seal the admitted sources' derived-contract receipts against the census bindings."""
+    """Seal every target's derived-contract receipt against its census binding.
+
+    The census covers the whole declared population; each target must appear in it
+    and hold a registered receipt, or the stage refuses.
+    """
     census = _read_ref(inputs.census_receipt)
     declarations = {result["declaration"]["id"]: result["declaration"] for result in census["results"]}
-    if set(declarations) != set(inputs.targets):
-        raise ValueError(f"census declarations and targets disagree: {sorted(set(declarations) ^ set(inputs.targets))}")
+    uncensused = sorted(set(inputs.targets) - set(declarations))
+    if uncensused:
+        raise ValueError(f"targets missing from the census: {uncensused}")
     receipts = derived_contract_receipts()
+    unregistered = sorted(set(inputs.targets) - set(receipts))
+    if unregistered:
+        raise ValueError(f"targets without a derived-contract receipt: {unregistered}")
     rows = []
     for source_id in inputs.targets:
         receipt = receipts[source_id]

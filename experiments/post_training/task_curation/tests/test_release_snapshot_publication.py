@@ -107,14 +107,21 @@ def test_verify_survey_alignment_refuses_mismatch(tmp_path):
         sp.verify_survey_alignment(inputs, {"Test:One": {}, "Test:Two": {}})
 
 
-def test_seal_contracts_refuses_target_disagreement(tmp_path, monkeypatch):
-    census_path = tmp_path / "census.json"
-    census_path.write_text(json.dumps({"results": [{"declaration": {"id": "Test:One"}}]}))
-    census = ArtifactRef(uri=str(census_path), sha256=hashlib.sha256(census_path.read_bytes()).hexdigest())
-    inputs = _inputs(tmp_path, refs={"census_receipt": census})
-    monkeypatch.setattr(sp, "derived_contract_receipts", lambda: {})
-    with pytest.raises(ValueError, match="targets disagree"):
-        sp.seal_contracts(inputs)
+def test_seal_contracts_refuses_uncensused_or_unregistered_targets(tmp_path, monkeypatch):
+    """The census covers the whole population; every target needs a census row and a receipt."""
+    one_only = _write_json(tmp_path, "census-one.json", {"results": [{"declaration": {"id": "Test:One"}}]})
+    monkeypatch.setattr(sp, "derived_contract_receipts", lambda: {"Test:One": object(), "Test:Two": object()})
+    with pytest.raises(ValueError, match=r"targets missing from the census: \['Test:Two'\]"):
+        sp.seal_contracts(_inputs(tmp_path, refs={"census_receipt": one_only}))
+
+    population = _write_json(
+        tmp_path,
+        "census-population.json",
+        {"results": [{"declaration": {"id": source}} for source in ("Test:One", "Test:Two", "Test:Other")]},
+    )
+    monkeypatch.setattr(sp, "derived_contract_receipts", lambda: {"Test:One": object()})
+    with pytest.raises(ValueError, match=r"targets without a derived-contract receipt: \['Test:Two'\]"):
+        sp.seal_contracts(_inputs(tmp_path, refs={"census_receipt": population}))
 
 
 def test_seal_contracts_verifies_actor_binding_and_seals(tmp_path, monkeypatch):
@@ -125,6 +132,7 @@ def test_seal_contracts_verifies_actor_binding_and_seals(tmp_path, monkeypatch):
             "results": [
                 {"declaration": {"id": "Test:One", "actor_census_input": {"x": 1, "measured_tasks": 5}}},
                 {"declaration": {"id": "Test:Two", "actor_census_input": {"x": 2, "measured_tasks": 5}}},
+                {"declaration": {"id": "Test:Other", "actor_census_input": {"x": 3, "measured_tasks": 7}}},
             ]
         },
     )
