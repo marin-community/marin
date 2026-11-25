@@ -7,7 +7,7 @@
 set -uo pipefail
 cd /Users/benfeuer/Documents/marin-worktrees/atlas-ci-green
 
-REV=95680efffce7938deea6b7495a6bd0f7b62fef4f
+REV=86478373a21a30c73e1be85f52ff461c6e5f8af2
 
 set +x
 source /Users/benfeuer/Documents/secrets.env

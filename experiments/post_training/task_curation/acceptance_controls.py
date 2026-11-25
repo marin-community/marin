@@ -129,6 +129,22 @@ def _docker_build_source(task: TaskSpec, workdir: Path) -> DockerfileSource | No
     return materialize_docker_build(build, workdir / "build-context")
 
 
+KEEPALIVE_SECONDS = 240.0
+
+
+async def _keepalive(machine) -> None:
+    """Renew the task machine's sandbox activity while the grading machine builds."""
+    from shellbox.machine import Command  # noqa: PLC0415
+
+    while True:
+        await asyncio.sleep(KEEPALIVE_SECONDS)
+        try:
+            await machine.run(Command(("true",), timeout=60.0))
+        except Exception as error:
+            logging.info("acceptance keepalive stopped: %s", str(error)[:120])
+            return
+
+
 async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
     """The negative control: the recorded bug state, graded by the converted grader."""
     import os  # noqa: PLC0415
@@ -162,10 +178,17 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
             )
             if task_machine is None:
                 return ControlOutcome(task.id, expected, None, "infra_error", "the task machine did not start")
-            grading_spec = _machine_spec(task.grader.environment, runtime, build_source)
-            grade = await grade_empty_in_sandbox(
-                task, factory, grading_spec, timeout=task.grader.timeout, task_machine=task_machine
-            )
+            # Daytona auto-stops a sandbox after 15 idle minutes and deletes it,
+            # and the grading machine's build runs while this one idles — keep
+            # the task machine's renewal alive until the grading returns.
+            keepalive = asyncio.create_task(_keepalive(task_machine))
+            try:
+                grading_spec = _machine_spec(task.grader.environment, runtime, build_source)
+                grade = await grade_empty_in_sandbox(
+                    task, factory, grading_spec, timeout=task.grader.timeout, task_machine=task_machine
+                )
+            finally:
+                keepalive.cancel()
             if grade.status is not Outcome.GRADED:
                 # The on-machine post-mortem: the harness's own exit code, the
                 # log directory state, and the artifact-download probe result,
