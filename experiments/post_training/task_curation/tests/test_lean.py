@@ -12,7 +12,7 @@ import pytest
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
-from experiments.post_training.task_curation.datasets.lean import proofs
+from experiments.post_training.task_curation.datasets.lean import numina, proofs
 from experiments.post_training.task_curation.datasets.lean.check_statements import (
     RECORDED,
     REPLIES,
@@ -37,9 +37,13 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     FIXED_REPLY_LABEL,
     PASSING_PROOFS,
     PROOFS_FILE,
+    REJECTED_FLAGS,
     REPLY_CHECKS,
+    STATEMENT_FLAG_LABEL,
+    STATEMENT_FLAGS,
     UNCOMPILABLE,
     ReplyOutcome,
+    StatementFlag,
     human_proof,
     is_human_proof_row,
 )
@@ -356,6 +360,27 @@ def test_the_pinned_reply_checks_cover_every_task_once_with_the_current_replies_
     keys = [*REPLY_CHECKS["contradictory"], *(key for keys in REPLY_CHECKS["fixed_reply"].values() for key in keys)]
     assert len(keys) == len(set(keys))
     assert set(keys) == PASSING_PROOFS
+
+
+@pytest.mark.parametrize("flag", sorted(REJECTED_FLAGS))
+def test_a_statement_the_judges_find_vacuous_or_giving_the_answer_away_is_left_out(flag, tmp_path, monkeypatch):
+    row = with_passing_proof(monkeypatch, numina_row())
+    monkeypatch.setattr(numina, "STATEMENT_FLAGS", {numina_proof_key(row): flag})
+    rejection = convert_row(NUMINA, row, inputs=prime_inputs(tmp_path))
+    assert isinstance(rejection, ImportRejection)
+    assert rejection.reason == f"judged_{flag}"
+
+
+@pytest.mark.parametrize("flag", [StatementFlag.WEAKER, StatementFlag.DIFFERENT])
+def test_a_statement_the_judges_find_weaker_or_different_keeps_their_verdict_as_a_label(flag, tmp_path, monkeypatch):
+    row = with_passing_proof(monkeypatch, numina_row())
+    monkeypatch.setattr(numina, "STATEMENT_FLAGS", {numina_proof_key(row): flag})
+    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    assert task.labels == {FIXED_REPLY_LABEL: "not_proved", STATEMENT_FLAG_LABEL: flag}
+
+
+def test_the_pinned_statement_flags_name_tasks_of_the_recipe():
+    assert set(STATEMENT_FLAGS) <= PASSING_PROOFS
 
 
 @pytest.mark.parametrize(

@@ -25,7 +25,10 @@ A task is also left out when its hypotheses contradict each other: ``CONTRADICTI
 the conclusion, proves it, so any reply that derives ``False`` scores. Every other task carries the label
 ``lean.fixed_reply``, which says whether ``FIXED_REPLY``, one constant reply that tries fifteen tactics,
 proves it, so that a selection can drop or downweight the tasks a constant reply already solves. Both
-come from ``numina_replies.json``; curation never runs Lean.
+come from ``numina_replies.json``; curation never runs Lean. Two LLM judges' flags in
+``numina_statement_flags.json`` leave out the tasks whose statement they found vacuous or whose answer a
+hypothesis gives away, and label ``lean.statement_flag`` the tasks whose statement they found weaker than
+the problem or different from it.
 """
 
 import gzip
@@ -155,6 +158,38 @@ FIXED_REPLY_OUTCOMES = {
 """``FIXED_REPLY``'s outcome on every task outside ``CONTRADICTORY``."""
 FIXED_REPLY_LABEL = "lean.fixed_reply"
 """The task label that carries ``FIXED_REPLY_OUTCOMES``."""
+
+
+class StatementFlag(StrEnum):
+    """How two LLM judges found a statement unfaithful to its problem."""
+
+    VACUOUS = "vacuous"
+    """The hypotheses cannot hold, or admit a degenerate case that makes the claim easy."""
+    GIVEN_AWAY = "given_away"
+    """A hypothesis states the answer or the key step."""
+    WEAKER = "weaker"
+    """The claim is true and not trivial but weaker than the problem's: a bound that is not shown to be
+    attained, one direction of an equivalence, or existence without uniqueness."""
+    DIFFERENT = "different"
+    """The claim differs from the problem's."""
+
+
+STATEMENT_FLAGS_FILE = Path(__file__).resolve().parent / "numina_statement_flags.json"
+STATEMENT_FLAGS = {
+    key: StatementFlag(flag)
+    for flag, keys in json.loads(STATEMENT_FLAGS_FILE.read_text())["flags"].items()
+    for key in keys
+}
+"""Tasks whose statement two LLM judges, each reading the problem and the statement, both found unfaithful,
+sorted into ``StatementFlag`` by a third pass, by ``proof_key``. The list comes from
+https://github.com/marin-community/marin/issues/10842#issuecomment-7139831462."""
+REJECTED_FLAGS = {
+    StatementFlag.VACUOUS: "Two LLM judges found that the hypotheses cannot hold or admit a degenerate case",
+    StatementFlag.GIVEN_AWAY: "Two LLM judges found that a hypothesis states the answer or the key step",
+}
+"""Flags whose tasks are left out, with the rejection detail: a reply can score without solving the problem."""
+STATEMENT_FLAG_LABEL = "lean.statement_flag"
+"""The task label that carries the other ``STATEMENT_FLAGS``."""
 HELD_OUT_SOURCES = frozenset({"math_test"})
 """NuminaMath-LEAN sources taken from a test split Marin evaluates on: MATH's test split holds MATH-500."""
 
@@ -257,9 +292,15 @@ def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | Import
         return source_defect(
             "contradictory_hypotheses", "The hypotheses prove False, so a reply that ignores the conclusion scores"
         )
+    flag = STATEMENT_FLAGS.get(row_key)
+    if flag in REJECTED_FLAGS:
+        return source_defect(f"judged_{flag}", REJECTED_FLAGS[flag])
     evidence = {key: data[key] for key in ("uuid", "source", "problem_type", "question_type", "exam") if key in data}
     task = proof_task(row, context, contract, data["problem"], {**evidence, "proof": data["formal_ground_truth"]})
-    return task.model_copy(update={"labels": {FIXED_REPLY_LABEL: FIXED_REPLY_OUTCOMES[row_key].value}})
+    labels = {FIXED_REPLY_LABEL: FIXED_REPLY_OUTCOMES[row_key].value}
+    if flag is not None:
+        labels[STATEMENT_FLAG_LABEL] = flag.value
+    return task.model_copy(update={"labels": labels})
 
 
 def human_proof(task: TaskSpec) -> Reply:
