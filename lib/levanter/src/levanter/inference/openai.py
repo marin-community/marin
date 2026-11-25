@@ -18,17 +18,21 @@ import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
+from pydantic import BaseModel, Field
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
@@ -64,7 +68,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -80,6 +84,9 @@ from levanter.tokenizers import HfMarinTokenizer, MarinTokenizer
 from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
+
+POLICY_MISMATCH = "The requested policy is no longer active"
+CONTROL_SUCCESS = {"status": "ok"}
 
 
 DEFAULT_MODEL_NAME = "levanter"
@@ -126,6 +133,7 @@ class InferenceRequest:
     stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
+    abort_event: threading.Event = field(default_factory=threading.Event)
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
@@ -142,6 +150,7 @@ class InferenceResponse:
     tokens: List[int]
     prompt_tokens: int
     completion_tokens: int
+    finish_reason: FinishReason
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -149,9 +158,30 @@ class InferenceResponse:
     model_version: int = 0
     policy_id: str | None = None
 
+    @property
+    def openai_finish_reason(self) -> Literal["stop", "length"]:
+        return "stop" if self.finish_reason == FinishReason.STOP else "length"
+
+
+def _mark_aborted_choice[Choice: CompletionChoice | ChatCompletionChoice](
+    choice: Choice, reason: FinishReason
+) -> Choice:
+    if reason == FinishReason.ABORT:
+        return choice.model_copy(update={"finish_reason": "abort"})
+    return choice
+
+
+class PauseGenerationRequest(BaseModel):
+    mode: str
+    clear_cache: bool
+
+
+class AbortRequest(BaseModel):
+    request_ids: list[str] = Field(min_length=1)
+
 
 class PolicyMismatchError(ValueError):
-    """A generate request was queued for a different immutable policy."""
+    """The requested policy ID differs from the active policy ID."""
 
 
 class InferenceBatch(list):
@@ -211,12 +241,16 @@ class InferenceContext:
         self.model_lock = threading.Lock()
         self._publication_lock = threading.Lock()
         self._publication_pending = threading.Event()
+        self._paused = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
         self._published_policy_ids = {self._policy_id} if self._policy_id is not None else set()
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
+        self._requests_lock = threading.Lock()
+        self._http_requests: dict[str, threading.Event] = {}
+        self._queued_requests: dict[str, InferenceRequest] = {}
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -239,6 +273,28 @@ class InferenceContext:
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
+
+    def pause_generation(self) -> None:
+        """Abort outstanding generation and wait for the serving cache to clear."""
+        with self._publication_lock:
+            with self._requests_lock:
+                self._paused.set()
+                for request in self._queued_requests.values():
+                    request.abort_event.set()
+                    self._abort_queued_request(request)
+                self._queued_requests.clear()
+            with (
+                self.model_lock,
+                hax.partitioning.set_mesh(self.mesh),
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+                self.engine.reset()
+                jax.block_until_ready(self.engine.gen_state)
+
+    def resume_generation(self) -> None:
+        """Reopen admission after any in-flight pause or publication completes."""
+        with self._publication_lock, self._requests_lock:
+            self._paused.clear()
 
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
@@ -272,10 +328,11 @@ class InferenceContext:
                                 axis_resources=self.config.trainer.compute_axis_mapping,
                             )
                     self.model, self.engine = model, engine
-                    self._model_version += 1
-                    self._policy_id = policy_id
-                    if policy_id is not None:
-                        self._published_policy_ids.add(policy_id)
+                    with self._requests_lock:
+                        self._model_version += 1
+                        self._policy_id = policy_id
+                        if policy_id is not None:
+                            self._published_policy_ids.add(policy_id)
                     return self._model_version
             finally:
                 self._publication_pending.clear()
@@ -292,34 +349,107 @@ class InferenceContext:
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
         *,
+        abort_event: threading.Event | None = None,
         return_route_captures: bool = False,
         expected_policy_id: str | None = None,
         on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
-        request_id = f"req_{self._next_request_id}"
-        self._next_request_id += 1
+        with self._requests_lock:
+            request_id = f"req_{self._next_request_id}"
+            self._next_request_id += 1
 
-        request = InferenceRequest(
-            request_id=request_id,
-            prompt_tokens=prompt_tokens,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop_tokens=stop_tokens,
-            seed=seed,
-            future=future,
-            n_generations=n_generations,
-            echo_logprobs_top_k=echo_logprobs_top_k,
-            return_route_captures=return_route_captures,
-            expected_policy_id=expected_policy_id,
-            on_tokens=on_tokens,
+            request = InferenceRequest(
+                request_id=request_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop_tokens=stop_tokens,
+                seed=seed,
+                future=future,
+                abort_event=abort_event if abort_event is not None else threading.Event(),
+                n_generations=n_generations,
+                echo_logprobs_top_k=echo_logprobs_top_k,
+                return_route_captures=return_route_captures,
+                expected_policy_id=expected_policy_id,
+                on_tokens=on_tokens,
+            )
+            if self._paused.is_set() or request.abort_event.is_set():
+                self._abort_queued_request(request)
+            else:
+                self._queued_requests[request_id] = request
+                self.request_queue.put(request)
+            return request_id
+
+    def _register_http_request(self, request: HttpRequest) -> tuple[str, threading.Event]:
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        event = threading.Event()
+        with self._requests_lock:
+            if request_id in self._http_requests:
+                raise HTTPException(status_code=409, detail="Request ID is already active")
+            self._http_requests[request_id] = event
+        return request_id, event
+
+    def _unregister_http_request(self, request_id: str, event: threading.Event) -> None:
+        with self._requests_lock:
+            if self._http_requests.get(request_id) is event:
+                del self._http_requests[request_id]
+
+    async def _watch_disconnect(self, request: HttpRequest, request_id: str) -> None:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+        self.abort([request_id])
+
+    @asynccontextmanager
+    async def http_generation(self, request: HttpRequest) -> collections.abc.AsyncIterator[threading.Event]:
+        request_id, event = self._register_http_request(request)
+        disconnect = asyncio.create_task(self._watch_disconnect(request, request_id))
+        try:
+            yield event
+        except BaseException:
+            self.abort([request_id])
+            raise
+        finally:
+            disconnect.cancel()
+            self._unregister_http_request(request_id, event)
+            with suppress(asyncio.CancelledError):
+                await disconnect
+
+    def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
+        """Abort queued or running generation for the supplied HTTP request IDs."""
+        with self._requests_lock:
+            for request_id in request_ids:
+                event = self._http_requests.get(request_id)
+                if event is not None:
+                    event.set()
+            cancelled = [request for request in self._queued_requests.values() if request.abort_event.is_set()]
+            for request in cancelled:
+                del self._queued_requests[request.request_id]
+                self._abort_queued_request(request)
+
+    def _abort_queued_request(self, request: InferenceRequest) -> None:
+        if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
+            self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
+            return
+        self._resolve_request(
+            request,
+            [
+                InferenceResponse(
+                    request_id=request.request_id,
+                    text="",
+                    tokens=[],
+                    logprobs=[],
+                    prompt_tokens=len(request.prompt_tokens),
+                    completion_tokens=0,
+                    finish_reason=FinishReason.ABORT,
+                    model_version=self._model_version,
+                    policy_id=self._policy_id,
+                )
+                for _ in range(request.n_generations)
+            ],
         )
-
-        logger.debug("Enqueuing request %s with %d prompt tokens", request_id, len(prompt_tokens))
-        self.request_queue.put(request)
-        return request_id
 
     def _inference_loop(self) -> None:
         """Collect requests from the serving and batch them into batches of appropriate size for inference."""
@@ -336,6 +466,8 @@ class InferenceContext:
             logger.debug("Max tokens per sequence %d and batch %d", max_tokens_per_seq, max_tokens_per_batch)
 
             for r in requests:
+                if r.abort_event.is_set():
+                    continue
                 if len(r.prompt_tokens) > max_tokens_per_seq:
                     # slice down requests that are too long
                     logger.warning(
@@ -353,7 +485,9 @@ class InferenceContext:
                         f"the maximum allowed {self.engine.config.max_seqs}"
                     )
                     logger.error(error_msg)
-                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    with self._requests_lock:
+                        if self._queued_requests.pop(r.request_id, None) is not None:
+                            self._resolve_request(r, ValueError(error_msg))
                     continue
 
                 if (
@@ -415,33 +549,42 @@ class InferenceContext:
             except Exception as exc:
                 logger.exception("Inference window failed")
                 for request in batch:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
 
     def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
         admitted = InferenceBatch()
         for request in requests:
-            if request.future.cancelled():
+            with self._requests_lock:
+                queued = self._queued_requests.pop(request.request_id, None)
+                if queued is not None and request.abort_event.is_set():
+                    self._abort_queued_request(request)
+                    continue
+            if queued is None or request.future.cancelled():
                 continue
             if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
-                self._fail_request(request, PolicyMismatchError("The requested policy is no longer active"))
+                self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
             else:
                 admitted.append(request)
         return admitted
 
     @staticmethod
-    def _fail_request(request: InferenceRequest, error: Exception) -> None:
-        def fail() -> None:
-            if not request.future.done():
-                request.future.set_exception(error)
+    def _resolve_request(request: InferenceRequest, outcome: list[InferenceResponse] | Exception) -> None:
+        def resolve() -> None:
+            if request.future.done():
+                return
+            if isinstance(outcome, Exception):
+                request.future.set_exception(outcome)
+            else:
+                request.future.set_result(outcome)
 
-        request.future.get_loop().call_soon_threadsafe(fail)
+        request.future.get_loop().call_soon_threadsafe(resolve)
 
     @staticmethod
     def _engine_request(request: InferenceRequest, request_id: int) -> Request:
         stop_ids = None
         if request.stop_tokens:
             width = max(map(len, request.stop_tokens))
-            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            padded = [[INVALID] * (width - len(seq)) + seq for seq in request.stop_tokens]
             stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
         seed = request.seed
         if seed is None:
@@ -471,7 +614,7 @@ class InferenceContext:
                 try:
                     engine_request = self._engine_request(request, next_id)
                 except Exception as exc:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
                     continue
                 outstanding[next_id] = request
                 admitted.append(engine_request)
@@ -479,7 +622,7 @@ class InferenceContext:
             return admitted
 
         def receive(capacity: int) -> list[Request]:
-            if self._publication_pending.is_set() or self.shutdown_event.is_set():
+            if self._paused.is_set() or self._publication_pending.is_set() or self.shutdown_event.is_set():
                 return []
             return admit(poll(capacity, capture_routes))
 
@@ -490,7 +633,11 @@ class InferenceContext:
             try:
                 self._complete_request(request, result)
             except Exception as exc:
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
+
+        def should_abort(request_id: int) -> bool:
+            request = outstanding[request_id]
+            return self._paused.is_set() or request.abort_event.is_set() or request.future.cancelled()
 
         def stream_tokens(request_id: int, choice: int, tokens: list[int]) -> None:
             request = outstanding[request_id]
@@ -504,18 +651,21 @@ class InferenceContext:
                 on_complete=complete,
                 poll_requests=receive,
                 on_tokens=stream_tokens,
+                should_abort=should_abort,
                 capture_routes=capture_routes,
             )
         except Exception as exc:
             for request in outstanding.values():
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
             raise
 
     def _complete_request(self, request: InferenceRequest, result: GenerationResult) -> None:
         outputs = []
         for index, tokens in enumerate(result.tokens):
             echo_token_ids = echo_logprobs = None
-            if request.echo_logprobs_top_k is not None:
+            if request.echo_logprobs_top_k is not None and (
+                tokens or result.finish_reasons[index] != FinishReason.ABORT
+            ):
                 echo_token_ids = request.prompt_tokens + tokens
                 echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, request.echo_logprobs_top_k)
             outputs.append(
@@ -525,6 +675,7 @@ class InferenceContext:
                     tokens=tokens,
                     prompt_tokens=len(request.prompt_tokens),
                     completion_tokens=len(tokens),
+                    finish_reason=result.finish_reasons[index],
                     logprobs=result.logprobs[index] if result.logprobs is not None else None,
                     model_version=self._model_version,
                     policy_id=self._policy_id,
@@ -538,11 +689,7 @@ class InferenceContext:
                 )
             )
 
-        def finish() -> None:
-            if not request.future.done():
-                request.future.set_result(outputs)
-
-        request.future.get_loop().call_soon_threadsafe(finish)
+        self._resolve_request(request, outputs)
 
 
 def _health_check() -> dict:
@@ -588,7 +735,9 @@ def _chat_completion_events(
                 )
             )
         chunks.append(
-            ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
+            ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
+                update={"finish_reason": choice.finish_reason}
+            )
         )
         for chunk_choice in chunks:
             chunk = ChatCompletionChunk(
@@ -682,7 +831,9 @@ def _completion_logprobs(
     )
 
 
-async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
+async def _create_completion(
+    ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
+) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
         if isinstance(request.prompt, str):
@@ -731,6 +882,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 future=future,
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                abort_event=abort_event,
             )
 
         # Wait for all results
@@ -744,7 +896,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
                 # Format logprobs if available
                 logprobs = None
-                if request.logprobs:
+                if request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
                     if request.echo:
                         if generation.echo_token_ids is None or generation.echo_logprobs is None:
                             raise RuntimeError("Echo logprobs requested but missing from generation result.")
@@ -784,10 +936,11 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason=generation.openai_finish_reason,
                         logprobs=logprobs,
                     )
                 )
+                choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -870,6 +1023,8 @@ def _submit_chat_completion(
     ctx: InferenceContext,
     request: ChatCompletionRequest,
     on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
+    *,
+    abort_event: threading.Event | None = None,
 ) -> tuple[list[int], asyncio.Future[list[InferenceResponse]]]:
     prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools, request.chat_template_kwargs)
     future = asyncio.get_running_loop().create_future()
@@ -883,6 +1038,7 @@ def _submit_chat_completion(
         future=future,
         n_generations=request.n or 1,
         on_tokens=on_tokens,
+        abort_event=abort_event,
         return_route_captures=request.return_route_captures,
         expected_policy_id=request.expected_policy_id,
     )
@@ -930,10 +1086,11 @@ def _format_chat_completion(
             ChatCompletionChoice(
                 index=i,
                 message=ChatCompletionMessage(role="assistant", content=generation.text),
-                finish_reason="stop",
+                finish_reason=generation.openai_finish_reason,
                 logprobs=logprobs,
             )
         )
+        choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
         total_completion_tokens += generation.completion_tokens
 
     response = ChatCompletion(
@@ -951,9 +1108,11 @@ def _format_chat_completion(
     return response
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+async def _create_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, abort_event: threading.Event | None = None
+) -> ChatCompletion:
     try:
-        prompt, future = _submit_chat_completion(ctx, request)
+        prompt, future = _submit_chat_completion(ctx, request, abort_event=abort_event)
         return _format_chat_completion(
             ctx,
             request,
@@ -972,7 +1131,12 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
 
 
 async def _stream_chat_completion(
-    ctx: InferenceContext, request: ChatCompletionRequest, tokenizer: HfMarinTokenizer, *, include_usage: bool
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    tokenizer: HfMarinTokenizer,
+    raw_request: HttpRequest,
+    *,
+    include_usage: bool,
 ) -> StreamingResponse:
     loop = asyncio.get_running_loop()
     updates: asyncio.Queue[tuple[int, list[int]] | None] = asyncio.Queue()
@@ -988,7 +1152,12 @@ async def _stream_chat_completion(
         if not closed.is_set():
             updates.put_nowait(None)
 
-    prompt, future = _submit_chat_completion(ctx, request, on_tokens)
+    request_id, abort_event = ctx._register_http_request(raw_request)
+    try:
+        prompt, future = _submit_chat_completion(ctx, request, on_tokens, abort_event=abort_event)
+    except Exception:
+        ctx._unregister_http_request(request_id, abort_event)
+        raise
     future.add_done_callback(on_done)
     header = ChatCompletionChunk(
         id=_chat_completion_id(),
@@ -997,21 +1166,30 @@ async def _stream_chat_completion(
         model=request.model,
         choices=[],
     )
+    disconnect = asyncio.create_task(ctx._watch_disconnect(raw_request, request_id))
     try:
         first = await updates.get()
         if first is None:
             future.result()
     except asyncio.CancelledError:
         closed.set()
+        ctx.abort([request_id])
         future.cancel()
+        ctx._unregister_http_request(request_id, abort_event)
         raise
     except PolicyMismatchError as exc:
         closed.set()
+        ctx._unregister_http_request(request_id, abort_event)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         closed.set()
+        ctx._unregister_http_request(request_id, abort_event)
         logger.exception("Error before chat streaming started")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        disconnect.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnect
 
     async def events() -> collections.abc.AsyncIterator[str]:
         decoders: dict[int, collections.abc.Callable[[list[int]], str | None]] = {}
@@ -1054,9 +1232,14 @@ async def _stream_chat_completion(
             yield _sse_event('{"error":{"message":"Chat generation failed","type":"server_error"}}')
         finally:
             closed.set()
-            future.cancel()
+            if future.cancel():
+                ctx.abort([request_id])
+            ctx._unregister_http_request(request_id, abort_event)
 
-    return StreamingResponse(events(), media_type=_EVENT_STREAM)
+    return StreamingResponse(
+        events(), media_type=_EVENT_STREAM,
+        background=BackgroundTask(ctx._unregister_http_request, request_id, abort_event),
+    )
 
 
 def _encode_chat_route_frame(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
@@ -1113,25 +1296,27 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
 async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
     prompt, options = await _read_generate_request(request)
     _validate_binary_options(ctx, prompt, options)
-    future = asyncio.get_running_loop().create_future()
-    ctx.submit_request(
-        prompt.tolist(),
-        options.max_tokens,
-        options.temperature,
-        options.top_p,
-        options.stop_tokens,
-        options.seed,
-        future,
-        n_generations=options.n,
-        return_route_captures=options.return_route_captures,
-        expected_policy_id=options.expected_policy_id,
-    )
-    try:
-        outputs = await future
-    except PolicyMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with ctx.http_generation(request) as abort_event:
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt.tolist(),
+            options.max_tokens,
+            options.temperature,
+            options.top_p,
+            options.stop_tokens,
+            options.seed,
+            future,
+            n_generations=options.n,
+            abort_event=abort_event,
+            return_route_captures=options.return_route_captures,
+            expected_policy_id=options.expected_policy_id,
+        )
+        try:
+            outputs = await future
+        except PolicyMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     score_mode = LogprobMode(ctx.config.service.logprob_mode)
     if options.return_route_captures:
@@ -1148,6 +1333,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
     for choice, output in enumerate(outputs):
         metadata: dict[str, int | str] = {
             "completion_tokens": output.completion_tokens,
+            "finish_reason": output.finish_reason.name.lower(),
             "model_version": output.model_version,
         }
         if output.policy_id is not None:
@@ -1224,6 +1410,23 @@ class InferenceServer:
         async def health_check():
             return _health_check()
 
+        @app.post("/pause_generation")
+        async def pause_generation(request: PauseGenerationRequest):
+            if request.mode != "abort" or not request.clear_cache:
+                raise HTTPException(status_code=400, detail="Native serving requires mode=abort and clear_cache=true")
+            await asyncio.to_thread(inference_context.pause_generation)
+            return CONTROL_SUCCESS
+
+        @app.post("/resume_generation")
+        async def resume_generation():
+            await asyncio.to_thread(inference_context.resume_generation)
+            return CONTROL_SUCCESS
+
+        @app.post("/abort")
+        async def abort(request: AbortRequest):
+            inference_context.abort(request.request_ids)
+            return CONTROL_SUCCESS
+
         @app.get("/v1/models")
         async def list_models() -> dict:
             model = Model(id=model_name, object="model", created=int(time.time()), owned_by="levanter")
@@ -1237,7 +1440,7 @@ class InferenceServer:
         # A streaming request returns a StreamingResponse, which FastAPI passes through
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
-        async def create_chat_completion(request: ChatCompletionRequest):
+        async def create_chat_completion(request: ChatCompletionRequest, raw_request: HttpRequest):
             include_usage = (request.stream_options or {}).get("include_usage") is True
             tokenizer = inference_context.tokenizer
             if request.return_route_captures and (
@@ -1249,17 +1452,19 @@ class InferenceServer:
                 raise HTTPException(status_code=400, detail="Route frames require native Snowball streaming")
             if request.stream and not request.logprobs and isinstance(tokenizer, HfMarinTokenizer):
                 return await _stream_chat_completion(
-                    inference_context, request, tokenizer, include_usage=include_usage
+                    inference_context, request, tokenizer, raw_request, include_usage=include_usage
                 )
-            completion = await _create_chat_completion(inference_context, request)
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_chat_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             events = _chat_completion_events(completion, include_usage=include_usage)
             return StreamingResponse(events, media_type=_EVENT_STREAM)
 
         @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest):
-            completion = await _create_completion(inference_context, request)
+        async def create_completion(request: CompletionRequest, raw_request: HttpRequest):
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             return StreamingResponse(_completion_events(completion), media_type=_EVENT_STREAM)

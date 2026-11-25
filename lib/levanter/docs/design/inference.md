@@ -57,7 +57,20 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, and `seed`. In chat requests, `max_completion_tokens` takes precedence over `max_tokens`.
-- **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
+- **Response Schema**: Each choice reports `finish_reason` in OpenAI completion responses
+  and in the metadata from `POST /v1/levanter/generate`. A sampled EOS or a matched stop
+  sequence reports `stop`, including at the token limit. A choice that exhausts its token
+  budget reports `length`.
+- **Cancellation**: Send an `X-Request-ID` header on generation, then post
+  `{"request_ids": ["<id>"]}` to `/abort`. Unfinished choices return `abort` with their
+  sampled tokens and scores so far. Queued choices return zero completion tokens.
+  Disconnecting cancels the same request.
+- **Pause and resume**: Post `{"mode": "abort", "clear_cache": true}` to
+  `/pause_generation` to abort active requests and discard queued work. The
+  server clears its cache state before returning. Requests received while
+  paused return zero completion tokens with reason `abort`. Post to
+  `/resume_generation` to reopen admission. A binary client can append returned
+  token IDs to the prompt and request the rest of its token budget.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations
