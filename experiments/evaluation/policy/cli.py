@@ -14,9 +14,9 @@ from evalrecords.records import PromptFormat
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policies import POLICIES
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
+from experiments.evaluation.policy.versions import POLICIES
 
 _COLUMNS = ("evaluation", "context", "output", "seed", "runs as", "think", "trials", "cap", "judge", "metric")
 
@@ -49,7 +49,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
-    selection = item.evaluation.definition
+    selection = item.evaluation.selection
     model_format = PromptFormat.CHAT if item.candidate.model.apply_chat_template else PromptFormat.COMPLETION
     config = selection_dataset(selection, model_format)
     protocol = config.protocol

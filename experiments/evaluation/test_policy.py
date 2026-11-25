@@ -4,7 +4,6 @@
 from dataclasses import replace
 
 import pytest
-from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
 
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
@@ -21,21 +20,23 @@ LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", re
 SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=60_000)
 
 CONTEXT = 50_000
-PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)
-SEEDED = PolicyEvaluation(definition=EvaluationSelection(benchmark="seeded"), context=CONTEXT, max_output=None, seed=7)
-LONG = PolicyEvaluation(
-    definition=EvaluationSelection(benchmark="long"),
-    context=100_000,
-    max_output=30_000,
-    seed=None,
-)
+# Real catalog benchmarks, since a context left unset comes from the benchmark's declared window.
+PLAIN = PolicyEvaluation("aime24")
+SEEDED = PolicyEvaluation("math500", seed=7)
+LONG = PolicyEvaluation("gpqa-diamond", context=100_000, max_output=30_000)
 SMALL_LONG = PolicyOverride(
     candidate=SMALL, evaluation=LONG, context=60_000, max_output=10_000, reason="window too small"
 )
 
 
-def _policy(**exceptions) -> EvalPolicy:
-    return EvalPolicy(version="test", candidates=(LARGE, SMALL), in_distribution=(PLAIN, SEEDED, LONG), **exceptions)
+def _policy(*evaluations: PolicyEvaluation, **exceptions) -> EvalPolicy:
+    return EvalPolicy(
+        version="test",
+        context=CONTEXT,
+        candidates=(LARGE, SMALL),
+        in_distribution=evaluations or (PLAIN, SEEDED, LONG),
+        **exceptions,
+    )
 
 
 def _settings(resolved: tuple[ResolvedPolicyEvaluation, ...]) -> dict[str, tuple[int, int | None, int | None]]:
@@ -44,22 +45,29 @@ def _settings(resolved: tuple[ResolvedPolicyEvaluation, ...]) -> dict[str, tuple
 
 def test_candidate_runs_every_evaluation_with_its_declared_settings():
     assert _settings(resolve(_policy(), LARGE)) == {
-        "plain": (50_000, None, None),
-        "seeded": (50_000, None, 7),
-        "long": (100_000, 30_000, None),
+        "aime24": (50_000, None, None),
+        "math500": (50_000, None, 7),
+        "gpqa-diamond": (100_000, 30_000, None),
     }
 
 
+def test_an_unset_context_is_the_benchmarks_window_and_a_different_one_is_rejected():
+    windowed = PolicyEvaluation("mrcr", protocol="32k")
+    assert _settings(resolve(_policy(windowed), LARGE)) == {"mrcr-32k": (32_704, None, None)}
+    with pytest.raises(ValueError, match="mrcr-32k"):
+        resolve(_policy(replace(windowed, context=CONTEXT)), LARGE)
+
+
 def test_context_beyond_the_candidate_window_needs_an_override():
-    with pytest.raises(ValueError, match="small on long"):
+    with pytest.raises(ValueError, match="small on gpqa-diamond"):
         resolve(_policy(), SMALL)
-    with pytest.raises(ValueError, match="small on long"):
+    with pytest.raises(ValueError, match="small on gpqa-diamond"):
         resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
 
     assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL)) == {
-        "plain": (50_000, None, None),
-        "seeded": (50_000, None, 7),
-        "long": (60_000, 10_000, None),
+        "aime24": (50_000, None, None),
+        "math500": (50_000, None, 7),
+        "gpqa-diamond": (60_000, 10_000, None),
     }
 
 
@@ -69,7 +77,7 @@ def test_exceptions_apply_only_to_the_named_candidate():
         overrides=(SMALL_LONG,),
     )
 
-    assert _settings(resolve(policy, SMALL)) == {"plain": (50_000, None, None), "long": (60_000, 10_000, None)}
+    assert _settings(resolve(policy, SMALL)) == {"aime24": (50_000, None, None), "gpqa-diamond": (60_000, 10_000, None)}
     assert _settings(resolve(policy, LARGE)) == _settings(resolve(_policy(), LARGE))
 
 

@@ -3,17 +3,18 @@
 
 """Typed declarations of Marin's eval policy: which candidates run which evaluations, with which exceptions.
 
-Candidates wrap model catalog entries and evaluations hold benchmark catalog selections.
+Candidates wrap model catalog entries and evaluations name benchmark catalog protocols.
 """
 
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 
-from evalrecords.records import EvaluationSelection
+from evalrecords.records import EvaluationOverrides, EvaluationSelection, PromptFormat, TaskMachineSettings
 from marin.evaluation.model_config import ModelConfig
 
 HF_COMMIT = re.compile(r"[0-9a-f]{40}")
+_JUDGE_FIELDS = frozenset({"judge", "judge_endpoint", "judge_api_key"})
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,27 +39,54 @@ class PolicyCandidate:
         return self.model.name
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class PolicyEvaluation:
-    """One catalog selection and the settings the policy runs it with.
+    """One catalog benchmark and every setting the policy runs it with.
 
-    The policy owns ``max_output`` and ``seed``, so a selection may not set them in its run overrides.
+    The benchmark choice (``protocol``, ``num_fewshot``, ``prompt_format``) picks a catalog protocol, which
+    owns prompts, thinking mode, trials, output caps and metrics. Unset settings leave the protocol's value;
+    ``label`` names the evaluation where the benchmark's own name would not, such as an earlier run's name.
     """
 
-    definition: EvaluationSelection
-    context: int
-    max_output: int | None
+    benchmark: str
+    _: KW_ONLY
+    label: str | None = None
+    protocol: str | None = None
+    num_fewshot: int | None = None
+    prompt_format: PromptFormat | None = None
+    context: int | None = None
+    """The input window; None means the benchmark's own window if it declares one, else the policy's context."""
+    max_output: int | None = None
     """None leaves output limited only by the context and the benchmark protocol."""
-    seed: int | None
+    seed: int | None = None
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
+    judge: EvaluationOverrides | None = None
+    """The judge deployment, endpoint and key that grade the benchmark, for benchmarks that need one."""
+    concurrency: int | None = None
+    """The most attempts that run at once."""
+    task_machine: TaskMachineSettings | None = None
+    """The task machines agent episodes run on."""
 
     def __post_init__(self) -> None:
-        if self.definition.run.max_tokens is not None or self.definition.run.seed is not None:
-            raise ValueError(f"{self.name}: set max_output and seed on the policy evaluation, not the selection")
+        if self.judge is not None and self.judge.model_dump(exclude=_JUDGE_FIELDS, exclude_defaults=True):
+            raise ValueError(f"{self.name}: a judge sets only {sorted(_JUDGE_FIELDS)}")
+
+    @property
+    def selection(self) -> EvaluationSelection:
+        """The catalog selection, with every run setting but ``max_output`` and ``seed``, which launches apply."""
+        judge = {} if self.judge is None else self.judge.model_dump(include=_JUDGE_FIELDS)
+        return EvaluationSelection(
+            benchmark=self.benchmark,
+            label=self.label,
+            protocol=self.protocol,
+            num_fewshot=self.num_fewshot,
+            prompt_format=self.prompt_format,
+            run=EvaluationOverrides(concurrency=self.concurrency, task_machine=self.task_machine, **judge),
+        )
 
     @property
     def name(self) -> str:
-        return self.definition.name
+        return self.selection.name
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -88,9 +116,13 @@ class PolicyOverride:
 
 @dataclass(frozen=True, kw_only=True)
 class EvalPolicy:
-    """One version of the eval policy. Every evaluation runs for every candidate unless excluded."""
+    """One version of the eval policy. Every evaluation runs for every candidate unless excluded.
+
+    ``context`` is the input window of evaluations whose benchmark declares none.
+    """
 
     version: str
+    context: int
     candidates: tuple[PolicyCandidate, ...]
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()
@@ -101,7 +133,7 @@ class EvalPolicy:
         _require_unique("candidate", [candidate.name for candidate in self.candidates])
         _require_unique("evaluation", [evaluation.name for evaluation in self.in_distribution])
         _require_unique("exception for", [f"{item.candidate.name} on {item.evaluation.name}" for item in exceptions])
-        # Full-value comparison rejects exceptions built from stale definitions.
+        # Full-value comparison rejects exceptions built from stale evaluations.
         for item in exceptions:
             if item.candidate not in self.candidates or item.evaluation not in self.in_distribution:
                 raise ValueError(f"exception for {item.candidate.name} on {item.evaluation.name} is not in this policy")

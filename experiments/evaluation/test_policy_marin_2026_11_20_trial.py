@@ -7,9 +7,9 @@ import pytest
 from evalrecords.records import PromptFormat, TaskEvidence
 
 from experiments.evaluation.curated import agent_ref_for, resolve_selection, selection_dataset, settings_for
-from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY
 from experiments.evaluation.policy.cli import policy_rows
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY
 
 CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda candidate: candidate.name)
 
@@ -17,7 +17,7 @@ CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda 
 def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
     """The window the worker enforces: an agent's input limit, else the protocol's window, else the server's."""
     model = item.candidate.model
-    selection = item.evaluation.definition
+    selection = item.evaluation.selection
     model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
     resolved = resolve_selection(selection, model_format)
     settings = settings_for(
