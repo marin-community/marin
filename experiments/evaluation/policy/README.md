@@ -40,3 +40,14 @@ Print a policy's resolved settings for every candidate:
 ```bash
 uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial [--candidate NAME]
 ```
+
+Launch a candidate's evaluations, one job per server, without waiting for them:
+
+```bash
+uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
+  --candidate qwen3.6-35b-a3b --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
+```
+
+Evaluations share a server when they need the same window. Agent and single-turn evaluations never
+share one, nor do evaluations whose judges need different keys. A full run (no `--limit`) launches
+only from a clean checkout at HEAD, so its records name the commit that ran.
