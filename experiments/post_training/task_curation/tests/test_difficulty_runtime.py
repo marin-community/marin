@@ -304,6 +304,7 @@ def test_campaign_qualifies_only_required_judge_routes(
     assert set(downloads) == {difficulty_runtime.SOLVER_MODELS[solver] for solver in expected_solvers}
     assert secrets == ([difficulty_runtime.TOGETHER_API_KEY_ENV] if with_judge else [])
     (config,) = launches
+    assert Path(config.environment_options["image_cache"]).is_relative_to("/cache")
     serving = json.loads((output / "serving.json").read_text())
     if tpu_campaign:
         assert serving["placement"]["root_target_cluster"] == "marin"

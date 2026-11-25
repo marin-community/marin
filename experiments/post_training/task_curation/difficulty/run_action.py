@@ -99,15 +99,7 @@ def main() -> None:
             # The batch's local root must live on the node's NVMe /cache mount: the
             # container root and /tmp are memory-backed on CoreWeave bare metal, so
             # pulled images and sandbox disks there are unreclaimable cgroup memory.
-            local_root = (
-                Path(
-                    "/var/lib/iris-cache/atlas-difficulty/actions"
-                    if campaign_record(args.ledger)
-                    else "/cache/atlas-difficulty/actions"
-                )
-                / key
-                / "runtime"
-            )
+            local_root = Path("/cache/atlas-difficulty/actions") / key / "runtime"
             command = attempt_command(
                 action,
                 args.manifest,

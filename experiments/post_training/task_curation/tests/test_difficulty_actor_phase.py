@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,9 @@ import pytest
 pytest.importorskip("harbor")
 
 from finestore.rl.difficulty import Solver
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
 
+from experiments.post_training.task_curation.difficulty import run_action
 from experiments.post_training.task_curation.difficulty.importer import receipt_row
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, SourceAttempts
 from experiments.post_training.task_curation.difficulty.run_action import REGISTRY_AUTH_SECRET, attempt_command
@@ -205,3 +208,23 @@ def test_grader_tier_backend_routes_a_privilege_dropping_grader_to_daytona():
     assert grader_tier_backend("local", native=False, requires_multi_uid=False) == "local"
     assert grader_tier_backend("daytona", native=False, requires_multi_uid=True) == "daytona"
     assert grader_tier_backend("local", native=True, requires_multi_uid=True) == "local"
+
+
+@pytest.mark.parametrize("tpu_campaign", [False, True])
+def test_attempt_dispatch_uses_iris_node_scratch_mount(tmp_path, monkeypatch, tpu_campaign):
+    source = SourceAttempts("fixture", "population", (("task", "b" * 64, 1),), "queue", "c" * 64, ())
+    action = AttemptBatch(Solver.SMALL, (source,), 1)
+    ledger = str(tmp_path / "ledger")
+    commands = []
+    monkeypatch.setattr(run_action, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(run_action, "load_action", lambda path: action)
+    monkeypatch.setattr(run_action, "campaign_record", lambda path: {"campaign_id": "fixture"} if tpu_campaign else None)
+    monkeypatch.setattr(run_action, "marin_prefix", lambda: str(tmp_path))
+    monkeypatch.setattr(run_action, "get_secret", lambda name: None)
+    monkeypatch.setattr(run_action.subprocess, "run", lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr("sys.argv", ["run_action", "--manifest", "fixture", "--ledger", ledger])
+    run_action.main()
+    (command,) = commands
+    scratch = Path(command[command.index("--local-root") + 1])
+    assert scratch.is_relative_to(SCRATCH_CACHE_PATH)
+    assert scratch.name == "runtime"
