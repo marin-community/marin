@@ -301,3 +301,11 @@ def test_browser_api_response_retries_transient_read_timeouts(monkeypatch):
     with pytest.raises(MarinaRequestError):
         release_check.browser_api_response(exhausted, "api/curriculum/tasks?sample_pool=true", [])
     assert exhausted.failures == 0
+
+
+def test_landed_cut_takes_the_attested_revision_without_git(monkeypatch):
+    """A release bundle is not a checkout: the attested full sha replaces the git checks."""
+    monkeypatch.setattr(release_check, "git", lambda *args: pytest.fail("bundle mode must not call git"))
+    assert release_check.landed_cut("a" * 40) == "a" * 40
+    with pytest.raises(ValueError, match="not a full commit sha"):
+        release_check.landed_cut("HEAD")

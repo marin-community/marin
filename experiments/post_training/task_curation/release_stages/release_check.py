@@ -32,6 +32,7 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.release_stages.guard import attested_revision
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.package_preview import receipt_kind as package_receipt_kind
 from infra.marina.apps.rl_data_catalog.release_receipts import PreflightBaseline
@@ -146,17 +147,26 @@ def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
     return document
 
 
-def planned_checker_arguments(inputs: ReleaseCheckInputs, package_document: dict | None, receipt_path: str) -> list[str]:
-    """The exact maintained-checker arguments for the phase, computed as data."""
+def planned_checker_arguments(
+    inputs: ReleaseCheckInputs, package_document: dict | None, receipt_path: str, attested: str | None
+) -> list[str]:
+    """The exact maintained-checker arguments for the phase, computed as data.
+
+    ``attested`` is the in-region bundle's attested revision; the bundle has no git
+    checkout for the checker's own landed-cut checks.
+    """
     argv = [
         "--receipt",
         receipt_path,
+        *(("--attested-revision", attested) if attested is not None else ()),
         "--service-url",
         inputs.service_url,
         "--production-version",
         str(inputs.production_version),
     ]
     if inputs.phase == "preflight":
+        if package_document is None:
+            raise ValueError("the preflight release check needs the sealed package receipt")
         argv += [
             "--dist",
             package_document["package"]["uri"],
@@ -233,7 +243,7 @@ def run_release_check(
         if inputs.hosted_receipt is not None:
             verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
         receipt_path = f"{inputs.output_root}/{CHECKER_RECEIPT_PATTERN.format(phase=inputs.phase)}"
-        argv = planned_checker_arguments(inputs, package_document, receipt_path)
+        argv = planned_checker_arguments(inputs, package_document, receipt_path, attested_revision())
         proof: dict = {
             "kind": f"atlas-{inputs.release_id}-release-check",
             "release_id": inputs.release_id,

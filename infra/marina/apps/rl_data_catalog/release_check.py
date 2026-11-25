@@ -97,8 +97,16 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
-def landed_cut() -> str:
-    """Refuse uncommitted source and cuts absent from the freshly fetched integration branch."""
+def landed_cut(attested_revision: str | None) -> str:
+    """Refuse uncommitted source and cuts absent from the freshly fetched integration branch.
+
+    An in-region release bundle is a copied workspace, not a checkout: its submitter
+    verified the landing and passes the attested revision, which replaces the git checks.
+    """
+    if attested_revision is not None:
+        if len(attested_revision) != 40 or any(c not in "0123456789abcdef" for c in attested_revision):
+            raise ValueError(f"attested revision is not a full commit sha: {attested_revision!r}")
+        return attested_revision
     if git("status", "--porcelain"):
         raise ValueError("Release checks require a clean committed checkout")
     if git("branch", "--show-current") == "main":
@@ -535,7 +543,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
     receipt.gate = "workspace-environment"
     check_workspace_imports()
     receipt.gate = "landed-cut"
-    head = landed_cut()
+    head = landed_cut(args.attested_revision)
     receipt.source_revision = head
     baseline = PreflightBaseline.model_validate_json(args.baseline.read_bytes()) if args.baseline else None
     if baseline and baseline.production_version != args.production_version:
@@ -715,6 +723,10 @@ def main() -> None:
         help="Run the recorded non-blocking post-publish/nightly browser audit",
     )
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument(
+        "--attested-revision",
+        help="The landed revision an in-region release bundle was attested at (replaces the git checks)",
+    )
     args = parser.parse_args()
     if args.dist and (not args.source_counts or not args.oracle_inventory):
         parser.error("--dist requires --source-counts and --oracle-inventory")

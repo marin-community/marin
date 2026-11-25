@@ -590,6 +590,23 @@ def test_release_check_preflight_dry_run_plans_without_execution(tmp_path):
     assert not (tmp_path / "release" / "release-check" / "release-check-preflight.json").exists()
 
 
+def test_release_check_passes_the_bundle_attestation_to_the_checker(tmp_path, monkeypatch):
+    """The in-region bundle has no git checkout; the checker takes the attested revision."""
+    package_ref, oracle_ref, counts_ref, _ = _package_receipt(tmp_path)
+    inputs = _release_check_inputs(
+        tmp_path, "preflight", package=package_ref, oracle_inventory=oracle_ref, source_counts=counts_ref
+    )
+    checker = _FakeChecker("preflight", REVISION)
+    run = lambda: release_check.run_release_check(  # noqa: E731
+        inputs, dry_run=True, repo_root=tmp_path, feeds=_feeds(tmp_path), checker=checker
+    )
+    monkeypatch.delenv("ATLAS_RELEASE_SOURCE_REVISION", raising=False)
+    assert "--attested-revision" not in run()["planned_checker"]["arguments"]
+    monkeypatch.setenv("ATLAS_RELEASE_SOURCE_REVISION", REVISION)
+    argv = run()["planned_checker"]["arguments"]
+    assert argv[argv.index("--attested-revision") + 1] == REVISION
+
+
 def test_release_check_preflight_write_delegates_and_seals(tmp_path):
     package_ref, oracle_ref, counts_ref, _ = _package_receipt(tmp_path)
     checker = _FakeChecker("preflight", REVISION)
