@@ -133,8 +133,8 @@ def validate_staging(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> 
         raise ValueError("Regional frozen task inputs are not ready")
 
 
-def validate_pilot(root: str) -> None:
-    for solver in SHAPES:
+def validate_pilot(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> None:
+    for solver in solvers:
         receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
         if receipt["platform"] != "tpu" or receipt["chip_count"] != SHAPES[solver].chips:
             raise ValueError("Every solver needs one qualified pilot slice before the full allocation")
@@ -144,10 +144,12 @@ def validate_pilot(root: str) -> None:
         raise ValueError("Full layout does not fit the 256-chip allocation")
 
 
-def await_pilot_teardown(root: str, timeout_seconds: float = 600) -> None:
+def await_pilot_teardown(
+    root: str, timeout_seconds: float = 600, *, solvers: tuple[Solver, ...] = tuple(SHAPES)
+) -> None:
     """Do not overlap the 40-chip pilots with the 256-chip full allocation."""
     children = []
-    for solver in SHAPES:
+    for solver in solvers:
         receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
         children.extend(job for replica in receipt["replicas"] for job in replica["engine_jobs"])
     deadline = time.monotonic() + timeout_seconds
@@ -186,9 +188,9 @@ def await_pilot_teardown(root: str, timeout_seconds: float = 600) -> None:
         time.sleep(5)
 
 
-def pilot_owners(root: str) -> list[str]:
+def pilot_owners(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> list[str]:
     owners = set()
-    for solver in SHAPES:
+    for solver in solvers:
         receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
         for replica in receipt["replicas"]:
             for job in replica["engine_jobs"]:
@@ -213,14 +215,14 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--solver", type=Solver, choices=tuple(SHAPES))
     args = parser.parse_args()
-    if args.solver is not None and args.phase != "pilot":
-        parser.error("--solver selects only a staged pilot; full rollout always validates all solvers")
+    if args.solver is not None and args.phase not in {"pilot", "full"}:
+        parser.error("--solver selects a staged pilot or a qualified solver's full rollout")
     root = REGIONAL_ROOT + "/" + digest(identity_bundle())
     validate_gate(args.gate)
     if args.phase != "stage":
         validate_staging(root, (args.solver,) if args.solver is not None else tuple(SHAPES))
     if args.phase == "full":
-        validate_pilot(root)
+        validate_pilot(root, (args.solver,) if args.solver is not None else tuple(SHAPES))
     if args.phase == "controller":
         if args.dry_run:
             print(json.dumps({"ledger": root + "/ledger", "serving_pool": root + "/pools", "budget": None}))
@@ -251,14 +253,16 @@ def main() -> None:
         return
     environment = controller_environment(args.secrets_env)
     if args.phase == "full":
-        # Free the 40-chip pilots before reserving the 256-chip measured layout.
-        for name in pilot_owners(root):
+        # Replace each selected pilot with its final allocation. Unselected
+        # solvers retain either a pilot or their final share of the 256 chips.
+        selected = (args.solver,) if args.solver is not None else tuple(SHAPES)
+        for name in pilot_owners(root, selected):
             subprocess.run(
                 ["iris-cancel-own", "--cluster", "marin", name],
                 check=True,
                 env={**environment, "IRIS_AGENT_PREFIX": "/benfeuer/atlas-difficulty-engines-"},
             )
-        await_pilot_teardown(root)
+        await_pilot_teardown(root, solvers=selected)
     for command in commands:
         subprocess.run(command, check=True, env=environment)
 

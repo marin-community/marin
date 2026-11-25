@@ -111,7 +111,16 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
         # Prefix checkpoints retain a GDN state for every cache block and do
         # not fit the frozen context on this slice. The pinned TPU backend's
         # compact mode retains one state per active request instead.
-        extra += ("--no-enable-prefix-caching", "--mamba-cache-mode", "none")
+        # Share the logical block count with the engine driver, not only the
+        # workers' compact allocator. 16,384 attention blocks + 33 recurrent
+        # slots use 52.72 GiB, below the pilot's 66.55 GiB cache budget.
+        extra += (
+            "--no-enable-prefix-caching",
+            "--mamba-cache-mode",
+            "none",
+            "--num-gpu-blocks-override",
+            "16384",
+        )
     else:
         extra += ("--enable-prefix-caching",)
     if solver == Solver.SNOWBALL:

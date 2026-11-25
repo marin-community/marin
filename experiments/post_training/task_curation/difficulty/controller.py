@@ -98,20 +98,25 @@ def run_controller(
         MARIN_DESKTOP_OAUTH_CLIENT.client_secret,
         require_secret("MARINA_IAP_REFRESH_TOKEN"),
     )
-    while serving_pool is not None and not all(
-        (StoragePath(serving_pool) / f"{solver.value}.json").exists() for solver in SELF_HOSTED_SOLVERS
-    ):
-        LOGGER.info("DIFFICULTY_WAITING_FOR_MEASURED_SOLVER_POOLS %s", serving_pool)
-        time.sleep(CONTROLLER_INTERVAL)
-    if serving_pool is not None:
+    while serving_pool is not None:
+        if not all((StoragePath(serving_pool) / f"{solver.value}.json").exists() for solver in SELF_HOSTED_SOLVERS):
+            LOGGER.info("DIFFICULTY_WAITING_FOR_MEASURED_SOLVER_POOLS %s", serving_pool)
+            time.sleep(CONTROLLER_INTERVAL)
+            continue
         pools = [solver_pool_record(solver, serving_pool) for solver in SELF_HOSTED_SOLVERS]
         if campaign_record(ledger) is not None:
             if any(pool.get("platform") != "tpu" or pool.get("region") != "us-central2" for pool in pools):
                 raise ValueError("TPU campaign has a non-regional or non-TPU solver pool")
-            if sum(pool["chip_count"] for pool in pools) != 256:
+            chips = sum(pool["chip_count"] for pool in pools)
+            if chips < 256:
+                LOGGER.info("DIFFICULTY_WAITING_FOR_FULL_TPU_ALLOCATION chips=%d required=256", chips)
+                time.sleep(CONTROLLER_INTERVAL)
+                continue
+            if chips > 256:
                 raise ValueError("TPU campaign requires the measured 256-chip allocation")
         elif sum(pool["gpu_count"] for pool in pools) != SOLVER_POOL_GPU_COUNT:
             raise ValueError("GPU solver pool allocation differs from the protocol's 64 GPUs")
+        break
     reporting_started = datetime.now(UTC)
     if excluded_sources:
         LOGGER.warning("DIFFICULTY_SOURCE_QUARANTINE %s", json.dumps(sorted(excluded_sources)))

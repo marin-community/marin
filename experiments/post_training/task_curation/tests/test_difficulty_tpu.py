@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import importlib
 import json
+import sys
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -192,6 +193,8 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
             assert "--enable-prefix-caching" not in model.serve.vllm_extra_args
             assert "--no-enable-prefix-caching" in model.serve.vllm_extra_args
             assert model.serve.max_model_len == 65536
+            arguments = list(config.engine.extra_args)
+            assert int(arguments[arguments.index("--num-gpu-blocks-override") + 1]) == 16384
         assert not any("eager" in argument for argument in config.engine.extra_args)
     # Snowball's 20 Q / 5 KV heads cannot be split across TP8 or TP16.
     assert tpu.SHAPES[Solver.SNOWBALL].tensor_parallel == 1
@@ -509,3 +512,51 @@ def test_pilot_teardown_uses_receipt_owners_across_generations_and_rejects_forei
     )
     with pytest.raises(ValueError, match="owned pilot"):
         tpu_launch.pilot_owners(str(tmp_path))
+
+
+def test_full_solver_rollout_replaces_only_its_qualified_pilot(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tpu_launch",
+            "full",
+            "--solver",
+            "small",
+            "--generation",
+            "fixture",
+            "--gate",
+            "fixture",
+            "--secrets-env",
+            "fixture",
+            "--sealed-manifest",
+            "fixture",
+            "--sealed-sha256",
+            "a" * 64,
+            "--judge-qualification",
+            "fixture",
+        ],
+    )
+    monkeypatch.setattr(tpu_launch, "validate_gate", lambda path: None)
+    monkeypatch.setattr(tpu_launch, "validate_staging", lambda root, solvers: calls.append(("stage", solvers)))
+    monkeypatch.setattr(tpu_launch, "validate_pilot", lambda root, solvers: calls.append(("qualify", solvers)))
+    monkeypatch.setattr(
+        tpu_launch, "pilot_owners", lambda root, solvers: ["/benfeuer/atlas-difficulty-engines-small-v4-old-pilot"]
+    )
+    monkeypatch.setattr(tpu_launch, "await_pilot_teardown", lambda root, *, solvers: calls.append(("released", solvers)))
+    monkeypatch.setattr(tpu_launch, "controller_environment", lambda path: {})
+    monkeypatch.setattr(tpu_launch.subprocess, "run", lambda command, **kwargs: calls.append(("command", command)))
+    tpu_launch.main()
+    selected = (Solver.SMALL,)
+    assert ("stage", selected) in calls and ("qualify", selected) in calls and ("released", selected) in calls
+    commands = [value for kind, value in calls if kind == "command"]
+    assert len(commands) == 2
+    assert commands[0] == [
+        "iris-cancel-own",
+        "--cluster",
+        "marin",
+        "/benfeuer/atlas-difficulty-engines-small-v4-old-pilot",
+    ]
+    assert commands[1][commands[1].index("--solver") + 1] == "small"
+    assert commands[1][commands[1].index("--replicas") + 1] == "8"

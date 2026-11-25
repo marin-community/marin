@@ -17,6 +17,7 @@ from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
+from finestore.rl.difficulty import Solver
 from iris.cli.job import run
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
@@ -227,3 +228,31 @@ def test_launcher_loads_provider_credentials_from_explicit_file(tmp_path, monkey
     ((command, environment),) = accepted
     assert {name: environment[name] for name in names} == {name: f"file-{name}" for name in names}
     assert not any("file-" in argument for argument in command)
+
+
+def test_tpu_controller_waits_for_final_pool_allocation_before_submitting_work(tmp_path, monkeypatch):
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    for solver in controller.SELF_HOSTED_SOLVERS:
+        (pools / (solver.value + ".json")).write_text("{}")
+    sleeps, reconciled = [], []
+
+    def pool(solver, registry):
+        chips = 128 if solver == Solver.LARGE and sleeps else 16 if solver == Solver.LARGE else 64
+        return {"platform": "tpu", "region": "us-central2", "chip_count": chips}
+
+    monkeypatch.setattr(controller, "iris_ctx", lambda: SimpleNamespace(client=None, job_id="fixture"))
+    monkeypatch.setattr(controller, "IrisBackend", lambda *args: SimpleNamespace(jobs=lambda: []))
+    monkeypatch.setattr(controller, "require_secret", lambda name: "fixture-refresh")
+    monkeypatch.setattr(controller, "campaign_record", lambda ledger: {"holds": []})
+    monkeypatch.setattr(controller, "solver_pool_record", pool)
+    monkeypatch.setattr(controller, "served_catalog", lambda *args, **kwargs: [])
+    monkeypatch.setattr(controller, "read_rows", lambda ledger: [])
+    monkeypatch.setattr(controller, "available_artifact_uris", lambda cells: frozenset())
+    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    monkeypatch.setattr(controller, "reconcile_once", lambda *args: reconciled.append(True) or {})
+    controller.run_controller(
+        str(tmp_path), "fixture", True, frozenset(), None, str(pools), excluded_sources=frozenset()
+    )
+    assert sleeps == [controller.CONTROLLER_INTERVAL]
+    assert reconciled == [True]
