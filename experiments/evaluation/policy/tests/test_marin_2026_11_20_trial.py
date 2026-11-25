@@ -10,8 +10,9 @@ from marin.evaluation.model_config import prompt_format
 from experiments.evaluation.curated import agent_ref_for, resolve_selection, selection_dataset, settings_for
 from experiments.evaluation.policy.cli import policy_rows
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
-from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY
+from experiments.evaluation.policy.versions import POLICIES
 
+POLICY = POLICIES["marin-2026-11-20-trial"]
 CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda candidate: candidate.name)
 
 

@@ -1,11 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Eval policies by version."""
+"""Eval policies by version, one ``<version>/policy.yaml`` per directory here."""
 
 from collections.abc import Mapping
+from pathlib import Path
 
+from experiments.evaluation.policy.load import load_policy
 from experiments.evaluation.policy.schema import EvalPolicy
-from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY as MARIN_2026_11_20_TRIAL
 
-POLICIES: Mapping[str, EvalPolicy] = {policy.version: policy for policy in (MARIN_2026_11_20_TRIAL,)}
+
+def _load_versions() -> dict[str, EvalPolicy]:
+    policies: dict[str, EvalPolicy] = {}
+    for path in sorted(Path(__file__).parent.glob("*/policy.yaml")):
+        policy = load_policy(path)
+        if policy.version in policies:
+            raise ValueError(f"{path}: version {policy.version} is declared twice")
+        policies[policy.version] = policy
+    return policies
+
+
+POLICIES: Mapping[str, EvalPolicy] = _load_versions()
