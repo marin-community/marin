@@ -24,7 +24,6 @@ from finestore.rl.curation import (
     PipelineReference,
     SourceUse,
     huggingface_dataset_url,
-    require_lexical_qualification,
 )
 from finestore.rl.licenses import LicenseReceipt
 from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
@@ -37,8 +36,8 @@ from experiments.post_training.task_curation.retained_release import (
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
-RECEIPTS_REPO = "open-athena/marin-rl-data-atlas-registry"
 PINS_REPO = "open-athena/atlas-source-pins"
 PINS_REVISION = "5ab081a1db11de1f5a3fa07563b8944b86d15541"
 PINS_SHA256 = "baabdcd8ef3904f6fb910f120920ba50e4f5a76f147f71de5456ddfe755ee013"
@@ -46,11 +45,6 @@ PINS_BYTES = 1539862
 PINS_FILENAME = "retained_pins.json"
 
 
-# Runs inside the audit checkout, where the sealed receipt models live: every
-# retained-release shard reference is downloaded, digest-verified and validated,
-# then reduced to the pin-level content the reader binds. The lexical evidence is
-# the publication's own release proof when it admits the retained pin, else the
-# frozen lexical measurement measured at that pin.
 class RetainedCensus(BaseModel):
     """The population a census measured, pinned to its conversion."""
 
@@ -178,8 +172,6 @@ def bind_retained_pins(sources: list[RlDataSource]) -> list[RlDataSource]:
     visible instead of blocking every other binding.
     """
     pins = atlas_retained_pins()
-    if pins is None:
-        return sources
     bound = []
     for source in sources:
         pin = pins.get(source.info.id)
@@ -188,19 +180,23 @@ def bind_retained_pins(sources: list[RlDataSource]) -> list[RlDataSource]:
             continue
         try:
             bound.append(_bind(source, pin))
-        except ValueError as error:
-            bound.append(source_with_note(source, f"Retained pin drift: {error}"))
+        except RetainedLineageDrift as error:
+            note = f"Retained pin drift: {error}"
+            bound.append(replace(source, info=replace(source.info, notes=f"{source.info.notes} {note}".strip())))
     return bound
 
 
-def _configured_reference(source: RlDataSource, pin: RetainedPin) -> str | None:
-    """Check the declaration's pipeline against the sealed one; return a version drift note.
+class RetainedLineageDrift(ValueError):
+    """The declaration's lineage does not match the sealed receipt; binding skips it."""
 
-    The dataset pin, the pipeline name and the consumed files are the lineage
-    identity: a mismatch fails the binding. The converter version is a label
-    main's module may have bumped since the seal; a drift binds anyway and the
-    note records it, because the reader consumes the published bytes and
-    re-validates every task.
+
+def _pipeline_version_drift(source: RlDataSource, pin: RetainedPin) -> str | None:
+    """Fail the binding unless the declaration is the sealed conversion, at the sealed version.
+
+    The dataset pin, the pipeline name, the consumed files and the converter
+    version are the lineage identity: main's declaration must be the exact
+    conversion input the receipt sealed, or the retained release would be
+    attributed to a conversion that did not produce it.
     """
     dataset = source.dataset
     configured = None
@@ -209,17 +205,13 @@ def _configured_reference(source: RlDataSource, pin: RetainedPin) -> str | None:
             source.name,
             dataset.name if dataset else None,
             dataset.revision if dataset else None,
+            source.version,
             tuple(source.files),
         )
     sealed = pin.original_pipeline
-    observed = (sealed.name, sealed.source, sealed.revision, tuple(sealed.files))
+    observed = (sealed.name, sealed.source, sealed.revision, sealed.version, tuple(sealed.files))
     if configured != observed:
-        raise ValueError(f"retention lineage belongs to another pipeline: {source.info.id}")
-    if source.version != sealed.version:
-        return (
-            f"retention sealed at converter version {sealed.version}; the declaration labels its "
-            f"converter {source.version} — the sealed release predates that change and its re-seal is pending"
-        )
+        raise RetainedLineageDrift(f"retention lineage belongs to another conversion pipeline: {source.info.id}")
     return None
 
 
@@ -227,23 +219,19 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
     """Re-validate the sealed lineage and select the retained pin and reader."""
     dataset = source.dataset
     if dataset is None:
-        raise ValueError(f"retention binds to an unpinned declaration: {source.info.id}")
+        raise RetainedLineageDrift(f"retention binds to an unpinned declaration: {source.info.id}")
     expected = (source.info.id, dataset.name, dataset.revision)
     observed = (pin.source_id, pin.original_repo, pin.original_revision)
     if expected != observed:
-        raise ValueError(f"retention belongs to another conversion input: expected {expected}, sealed {observed}")
-    version_note = _configured_reference(source, pin)
+        raise RetainedLineageDrift(
+            f"retention belongs to another conversion input: expected {expected}, sealed {observed}"
+        )
+    version_note = _pipeline_version_drift(source, pin)
     require_lexical_qualification(pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value))
 
     config = pin.cohort(name=source.name)
     release = pin.release
-    inherited = None
-    try:
-        declared = source.current_release
-        if source.declaration.status == "Available":
-            inherited = declared
-    except ValueError:
-        inherited = None
+    inherited = source.current_release if source.declaration.status == "Available" else None
     drift = "" if version_note is None else f"{version_note}. "
     info = replace(
         source.info,
@@ -266,7 +254,3 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
     bound = RlDataSource(info=info, config=config, pipeline=import_retained)
     bound.require_license()
     return bound
-
-
-def source_with_note(source: RlDataSource, note: str) -> RlDataSource:
-    return replace(source, info=replace(source.info, notes=f"{source.info.notes} {note}".strip()))

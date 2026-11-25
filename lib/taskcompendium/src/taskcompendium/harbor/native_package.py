@@ -10,7 +10,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 
 def validate_native_package(task: TaskSpec) -> None:
-    """Require the complete original Harbor task-directory layout inside the TaskSpec."""
+    """Require the Harbor task-directory contract and a declared environment in the TaskSpec."""
     files = {resource.path: resource for resource in task.resources.verifier}
     required = {"task.toml", "instruction.md", "tests/test.sh"}
     if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags or not required <= files.keys():

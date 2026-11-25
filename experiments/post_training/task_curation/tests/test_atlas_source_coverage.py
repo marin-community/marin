@@ -21,7 +21,8 @@ Three checks, all computed from the catalog:
   recipe, version) equals the Atlas admitted pin, unless a recorded waiver
   states the blocker; parity that has landed makes the waiver stale.
 
-The tests fetch the pinned fixture and carry the ``data_integration`` marker.
+The gate runs in the default CI selection: the fixture is a public dataset
+fetched anonymously, so the unit job can read it.
 """
 
 import json
@@ -34,9 +35,9 @@ from finestore.rl.source_identity import canonical_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
-ATLAS_SOURCE_PINS_REVISION = "bc56c4bee9721bf5ef497384607a89d17457db98"
-ATLAS_SOURCE_PINS_SHA256 = "7eb5938b9c68735caa82a319f6f3741bec283ac4711c609ce326117ee28d7d03"
-ATLAS_SOURCE_PINS_BYTES = 138035
+ATLAS_SOURCE_PINS_REVISION = "53147ef2354b789879e2b93f7919accdd6a04c84"
+ATLAS_SOURCE_PINS_SHA256 = "f0b0e08bc3e53260142323c3acd29e9da44e5e9ff8f26504d47472fafcec7f26"
+ATLAS_SOURCE_PINS_BYTES = 170943
 
 
 ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
@@ -50,7 +51,7 @@ ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
 
 @cache
 def read_atlas_source_pins() -> dict:
-    """Download the pinned fixture and verify its bytes against the reference."""
+    """Read the pinned fixture, verify its bytes, and return the decoded mapping."""
     return json.loads(read_pinned_hf_file(ATLAS_SOURCE_PINS_REFERENCE))
 
 
@@ -66,7 +67,6 @@ def _durable_ref(source) -> dict:
     }
 
 
-@pytest.mark.data_integration
 def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked():
     """An Atlas-admitted source missing from the catalog fails unless its blocker stands."""
     fixture = read_atlas_source_pins()
@@ -80,7 +80,6 @@ def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked(
     assert missing == []
 
 
-@pytest.mark.data_integration
 def test_a_declaration_blocker_expires_when_main_declares_the_source():
     """The ingestion PR that lands the import removes the source's blocker entry."""
     fixture = read_atlas_source_pins()
@@ -90,7 +89,6 @@ def test_a_declaration_blocker_expires_when_main_declares_the_source():
     assert stale == []
 
 
-@pytest.mark.data_integration
 def test_main_pins_match_the_atlas_admitted_pins():
     """A declared pin differs from the Atlas admitted pin only under a recorded waiver."""
     fixture = read_atlas_source_pins()
@@ -117,7 +115,6 @@ def test_main_pins_match_the_atlas_admitted_pins():
     assert unwaived == [], f"pins differ from the Atlas admitted pins with no waiver: {unwaived}"
 
 
-@pytest.mark.data_integration
 def test_dapo_math_binds_to_its_retained_release():
     """The proof case: main's DAPO declaration selects the Atlas's deduplicated release.
 
