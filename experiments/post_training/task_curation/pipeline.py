@@ -202,7 +202,7 @@ class HarborHubSource:
 
 @dataclass(frozen=True)
 class HarborRepoSource:
-    """Harbor task packages, one top-level directory each, from a pinned Hugging Face dataset repository.
+    """Harbor task packages directly under ``root`` of a pinned Hugging Face dataset repository.
 
     Acquisition stages each package as a reproducible archive in Harbor Hub's layout, so ``read`` sees
     the same files as for a ``HarborHubSource``.
@@ -211,6 +211,7 @@ class HarborRepoSource:
     repo: str
     revision: str
     read: FileReader
+    root: str = field(default="", metadata={"fingerprint_omit_value": ""})
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
@@ -687,6 +688,7 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
             "harbor_repository": source.repo,
             "revision": source.revision,
             "archive_revision": PACKAGE_ARCHIVE_REVISION,
+            **({"root": source.root} if source.root else {}),
         }
     if isinstance(source, HarborArchiveSource):
         return {
@@ -779,7 +781,7 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
                 source.prepare(task.destination_path, campaign.context)
         return
     if isinstance(source, HarborRepoSource):
-        stage_repository_packages(source.repo, source.revision, StoragePath(request.output_path))
+        stage_repository_packages(source.repo, source.revision, StoragePath(request.output_path), root=source.root)
         return
     if isinstance(source, HarborHubSource):
         acquire_release(f"{source.name}@{source.revision}", StoragePath(request.output_path), ())
