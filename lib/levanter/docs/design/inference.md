@@ -60,6 +60,33 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
 - **Error Handling**: Proper HTTP status codes and error messages
 
+### Exact-token gRPC generation
+
+Set `InferenceServerConfig.grpc_port` to enable a plaintext gRPC listener on the
+configured serving host. The unary `levanter.inference.v1.Inference/Generate`
+RPC takes prompt token IDs and returns each choice's generated token IDs and
+behavior log probabilities. Both listeners submit to the same inference queue.
+Run the gRPC listener on the private rollout network.
+
+The schema at `lib/levanter/src/levanter/inference/inference.proto` defines the
+request and response. Generate Python bindings from the repo root after editing it.
+
+```sh
+uvx --from grpcio-tools==1.76.0 python -m grpc_tools.protoc \
+  -I lib/levanter/src --python_out=lib/levanter/src --pyi_out=lib/levanter/src \
+  --grpc_python_out=lib/levanter/src lib/levanter/src/levanter/inference/inference.proto
+```
+
+To capture Snowball router replay, set `capture_router_replay`. Each choice then
+includes `router_replay`. Both fields use tag 50001 in their respective messages.
+The replay positions index the concatenated prompt and generated tokens. A
+route at position `i` was used to predict token `i + 1`. The validity mask
+marks positions actually processed by the model.
+
+For long contexts or multiple choices, size the client's
+`grpc.max_receive_message_length` for the expected route payload. Packed expert
+IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
+
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
 - **Memory Management**: Efficient KV cache page allocation and deallocation

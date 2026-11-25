@@ -13,20 +13,23 @@ import asyncio
 import collections
 import collections.abc
 import logging
+import math
 import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
+import grpc
 import haliax as hax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -38,18 +41,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from levanter.inference.binary import (
-    EXPERT_IDS,
-    EXPERT_VALID,
-    GENERATE_PATH,
-    MEDIA_TYPE,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    GenerateOptions,
-    choice_tensor_key,
-    encode_frame,
-    read_generate_request,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
     GeneratedExpertRoutes,
     InferenceEngine,
@@ -99,6 +91,8 @@ class InferenceServerConfig:
 
     host: str = "localhost"
     port: int = 0  # auto-assign port
+    grpc_port: int | None = None
+    """Optional exact-token gRPC listener on the same host. Use 0 for an ephemeral port."""
 
 
 @dataclass
@@ -833,66 +827,92 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not ctx.engine.supports_route_capture:
-        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
-    config = ctx.engine.config
-    max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
-        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
-    if options.n > config.max_seqs:
-        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
-    vocab_size = ctx.model.Vocab.size
-    if np.any((prompt < 0) | (prompt >= vocab_size)):
-        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
-    stops = options.stop_tokens
-    if stops and (
-        len(stops) > config.max_stop_seqs
-        or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
-        or any(not 0 <= token < vocab_size for seq in stops for token in seq)
-    ):
-        raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
+class _GrpcInference:
+    def __init__(self, inference_context: InferenceContext):
+        self._inference_context = inference_context
+
+    async def Generate(
+        self, request: inference_pb2.GenerateRequest, context: grpc.aio.ServicerContext
+    ) -> inference_pb2.GenerateResponse:
+        ctx = self._inference_context
+        prompt = list(request.prompt_token_ids)
+        max_tokens = request.max_new_tokens
+        temperature = request.temperature if request.HasField("temperature") else 1.0
+        top_p = request.top_p if request.HasField("top_p") else 1.0
+        seed = request.seed if request.HasField("seed") else None
+        num_choices = request.num_choices if request.HasField("num_choices") else 1
+        stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
+
+        capture_routes = request.capture_router_replay
+        if capture_routes and not ctx.engine.supports_route_capture:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
+
+        config = ctx.engine.config
+        max_prefill_size = config.max_prefill_size or config.max_seq_len
+        if (
+            not prompt
+            or not max_tokens
+            or len(prompt) + max_tokens > config.max_seq_len
+            or len(prompt) > max_prefill_size
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Prompt and generation must fit the configured context"
+            )
+        if not 1 <= num_choices <= config.max_seqs:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Requested choices exceed the configured capacity")
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid temperature or top_p")
+        vocab_size = ctx.model.Vocab.size
+        if any(token >= vocab_size for token in prompt):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
+        if (
+            len(stops) > config.max_stop_seqs
+            or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+            or any(token >= vocab_size for sequence in stops for token in sequence)
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Stop tokens exceed the configured capacity or vocabulary"
+            )
+
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt,
+            max_tokens,
+            temperature,
+            top_p,
+            stops or None,
+            seed,
+            future,
+            n_generations=num_choices,
+            return_route_captures=capture_routes,
+        )
+        try:
+            # The inference thread completes the queue's future even when the caller disconnects.
+            outputs = await asyncio.shield(future)
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
+        if capture_routes:
+            if any(output.expert_routes is None for output in outputs):
+                await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs)
+        return _grpc_generate_response(prompt, outputs)
 
 
-async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
-    prompt, options = await read_generate_request(request)
-    _validate_binary_options(ctx, prompt, options)
-    future = asyncio.get_running_loop().create_future()
-    ctx.submit_request(
-        prompt.tolist(),
-        options.max_tokens,
-        options.temperature,
-        options.top_p,
-        options.stop_tokens,
-        options.seed,
-        future,
-        n_generations=options.n,
-        return_route_captures=options.return_route_captures,
-    )
-    try:
-        outputs = await future
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if options.return_route_captures:
-        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs)
-    else:
-        content = _encode_binary_outputs(prompt, outputs)
-    return Response(content=content, media_type=MEDIA_TYPE)
-
-
-def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse]) -> bytes:
-    tensors = {PROMPT_TOKEN_IDS: prompt}
-    choices = []
-    for choice, output in enumerate(outputs):
-        choices.append({"completion_tokens": output.completion_tokens})
-        tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
-        if output.logprobs is not None:
-            tensors[choice_tensor_key(choice, "behavior_logprobs")] = np.asarray(output.logprobs, dtype=np.float32)
+def _grpc_generate_response(prompt: list[int], outputs: list[InferenceResponse]) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt)
+    for output in outputs:
+        choice = response.choices.add(token_ids=output.tokens, behavior_logprobs=output.logprobs)
         if output.expert_routes is not None:
-            tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
-            tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices}, tensors)
+            experts = output.expert_routes.expert_ids
+            layers, positions, experts_per_token = experts.shape
+            replay = choice.router_replay
+            replay.num_layers = layers
+            replay.num_positions = positions
+            replay.experts_per_token = experts_per_token
+            replay.expert_ids.extend(experts.ravel().tolist())
+            replay.valid.extend(output.expert_routes.valid.tolist())
+    return response
 
 
 class InferenceServer:
@@ -949,8 +969,25 @@ class InferenceServer:
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
-        app = FastAPI(title="Levanter Inference Service", version="1.0.0")
-        model_name = inference_context.config.model_name
+        config = inference_context.config
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if config.grpc_port is None:
+                yield
+                return
+            server = grpc.aio.server()
+            inference_pb2_grpc.add_InferenceServicer_to_server(_GrpcInference(inference_context), server)
+            host = f"[{config.host}]" if ":" in config.host and not config.host.startswith("[") else config.host
+            app.state.grpc_port = server.add_insecure_port(f"{host}:{config.grpc_port}")
+            await server.start()
+            try:
+                yield
+            finally:
+                await server.stop(grace=0)
+
+        app = FastAPI(title="Levanter Inference Service", version="1.0.0", lifespan=lifespan)
+        model_name = config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
@@ -986,10 +1023,6 @@ class InferenceServer:
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
             return await _fetch_tokens(inference_context, request)
-
-        @app.post(GENERATE_PATH)
-        async def generate_binary(request: HttpRequest) -> Response:
-            return await _generate_binary(inference_context, request)
 
         return app
 

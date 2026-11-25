@@ -22,11 +22,12 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    import grpc
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
-    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, choice_expert_routes, decode_frame, encode_frame
+    from levanter.inference import inference_pb2, inference_pb2_grpc
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -38,6 +39,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.router_replay import read_router_replay
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -68,6 +70,8 @@ def inference_server_config():
             hbm_utilization=0.1,
         ),
         model_name=TEST_MODEL_NAME,
+        host="127.0.0.1",
+        grpc_port=0,
         temperature=0.7,
         seed=42,
     )
@@ -620,27 +624,38 @@ def test_tokens_endpoint(test_client):
     print(f"Tokenization results: {result['results']}")
 
 
-def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
-    client, _ = test_client
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    body = encode_frame({"max_tokens": 2, "temperature": 0, "seed": 17}, {"prompt_token_ids": prompt})
-    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-    assert response.status_code == 200, response.text
-    metadata, tensors = decode_frame(response.content)
+def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
+    _, server = test_client
+    prompt = [18, 7, 3, 18]
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        stub = inference_pb2_grpc.InferenceStub(channel)
+        result = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt, max_new_tokens=2, temperature=0, seed=17, num_choices=2
+            ),
+            timeout=30,
+        )
+        assert list(result.prompt_token_ids) == prompt
+        assert len(result.choices) == 2
+        for choice in result.choices:
+            assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
+            assert np.isfinite(choice.behavior_logprobs).all()
 
-    np.testing.assert_array_equal(tensors["prompt_token_ids"], prompt)
-    assert metadata["choices"] == [{"completion_tokens": 2}]
-    assert tensors["choice.0.token_ids"].shape == (2,)
-    assert tensors["choice.0.token_ids"].dtype == np.int32
-    assert tensors["choice.0.behavior_logprobs"].shape == (2,)
-    assert np.isfinite(tensors["choice.0.behavior_logprobs"]).all()
+        with pytest.raises(grpc.RpcError) as invalid:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=TEST_MAX_SEQ_LEN),
+                timeout=30,
+            )
+        assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(grpc.RpcError) as unsupported:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=2, capture_router_replay=True),
+                timeout=30,
+            )
+        assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
-    wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
-    response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
-    assert response.status_code == 400
 
-
-def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
     cfg = SnowballConfig(
         vocab_size=48,
         hidden_dim=16,
@@ -657,6 +672,8 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         attention_implementation="reference",
     )
     server_config = InferenceServerConfig(
+        host="127.0.0.1",
+        grpc_port=0,
         service=InferenceEngineConfig(
             max_seq_len=16,
             max_pages=16,
@@ -676,19 +693,26 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
             model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
             server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
             try:
-                with TestClient(server.app) as client:
-                    body = encode_frame(
-                        {"max_tokens": 4, "temperature": 0, "return_route_captures": True},
-                        {"prompt_token_ids": prompt},
+                with (
+                    TestClient(server.app),
+                    grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+                ):
+                    stub = inference_pb2_grpc.InferenceStub(channel)
+                    request = inference_pb2.GenerateRequest(
+                        prompt_token_ids=prompt.tolist(), max_new_tokens=4, temperature=0, capture_router_replay=True
                     )
-                    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-                    assert response.status_code == 200, response.text
-                    _, tensors = decode_frame(response.content)
+                    response = stub.Generate(request, timeout=60)
+                    request.capture_router_replay = False
+                    plain = stub.Generate(request, timeout=60)
             finally:
                 server.inference_context.shutdown()
 
-            inputs = np.concatenate((prompt, tensors["choice.0.token_ids"]))
-            experts, valid = choice_expert_routes(tensors, 0, inputs)
+            choice = response.choices[0]
+            assert list(choice.token_ids) == list(plain.choices[0].token_ids)
+            assert not plain.choices[0].HasField("router_replay")
+            inputs = np.concatenate((prompt, choice.token_ids)).astype(np.int32)
+            experts, valid = read_router_replay(response, 0, inputs)
+            assert valid[:-1].all()
             tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
             replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
             learner_loss, _ = model.next_token_loss_and_metrics(
@@ -696,9 +720,9 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
             )
 
     np.testing.assert_allclose(
-        tensors["choice.0.behavior_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+        choice.behavior_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
     )
     wrong_inputs = inputs.copy()
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
-        choice_expert_routes(tensors, 0, wrong_inputs)
+        read_router_replay(response, 0, wrong_inputs)
