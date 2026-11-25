@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.release_stages import graph as rele
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages import preflight_slices
 from experiments.post_training.task_curation.release_stages.graph import write_plan
+from experiments.post_training.task_curation.release_stages.plan_derivation import DerivedRelease
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 
 EXPECTED_NODE_COUNT = 31
@@ -280,3 +281,116 @@ def test_slice_inputs_are_digest_stable(plan_document):
 def test_module_path_resolves_the_stage_module():
     assert preflight_slices.module_path("census").endswith("release_stages/census.py")
     assert preflight_slices.module_path("release_check_postpublish").endswith("release_stages/release_check.py")
+
+
+# ---------------------------------------------------------------------------
+# The release mode: derive from the reviewed config, dry-run or seal+submit.
+
+
+def _release_config(tmp_path: Path, release_id: str = "testrelease") -> Path:
+    """A fixture release config; the derivation's ports are injected in the tests."""
+    config = {
+        "kind": "atlas-release-config",
+        "release_id": release_id,
+        "cluster": "cw-us-east-02a",
+        "freeze_source_revision": "a" * 40,
+        "prior_release": {
+            "release_id": "priorrelease",
+            "declarations": {"uri": "s3://bucket/prior/declarations.json", "sha256": "c" * 64},
+            "identity": {"uri": "s3://bucket/prior/identity.json", "sha256": "c" * 64},
+            "backend": {"uri": "s3://bucket/prior/backend.json", "sha256": "c" * 64},
+            "composed_release": {"uri": "s3://bucket/prior/release.json", "sha256": "c" * 64},
+            "composed_coverage": {"uri": "s3://bucket/prior/coverage.json", "sha256": "c" * 64},
+            "oracle_inventory": {"uri": "s3://bucket/prior/oracle-inventory.json", "sha256": "c" * 64},
+            "source_counts": {"uri": "s3://bucket/prior/source-counts.json", "sha256": "c" * 64},
+        },
+        "production_version": 41,
+        "preview_base_version": 30,
+    }
+    path = tmp_path / "release-config.json"
+    path.write_text(json.dumps(config))
+    return path
+
+
+def _derived_fixture(tmp_path: Path):
+    """A fixture DerivedRelease over the shared fixture plan."""
+    plan = fixture_plan(release_root=str(tmp_path / "release"), slice_output_root=str(tmp_path / "slice"))
+    receipt = {
+        "release_id": plan.release_id,
+        "artifact_version": plan.artifact_version,
+        "measured": {
+            "declared_source_count": plan.expected_source_count,
+            "prior_source_count": plan.expected_prior_sources,
+            "targets": list(plan.targets),
+            "expected_population_tasks": plan.expected_population_tasks,
+            "expected_panels": plan.expected_panels,
+            "expected_contract_tasks": plan.expected_contract_tasks,
+            "population_task_counts": {"Marin:fixture": plan.expected_population_tasks},
+            "population_evidence_kinds": {"Marin:fixture": "population"},
+        },
+    }
+    return DerivedRelease(plan_document=plan.model_dump(mode="json"), receipt=receipt)
+
+
+def _release_argv(config: Path, *extra: str) -> list[str]:
+    return ["release", "--release", "testrelease", "--config", str(config), *extra]
+
+
+def test_release_mode_dry_run_derives_and_prints_the_graph(tmp_path, monkeypatch, capsys):
+    """The dry run derives from state, prints the graph, writes nothing."""
+    derived = _derived_fixture(tmp_path)
+    monkeypatch.setattr(entry_point, "derive_release_plan", lambda *args, **kwargs: derived)
+    preflight_calls = {}
+    monkeypatch.setattr(
+        entry_point,
+        "_run_preflight",
+        lambda plan, **kwargs: preflight_calls.update({"release_id": plan.release_id}) or 0,
+    )
+    exit_code = entry_point.main(_release_argv(_release_config(tmp_path), "--dry-run"))
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert f"DERIVED testrelease at freeze {'a' * 12}" in output
+    assert output.count("NODE ") == EXPECTED_NODE_COUNT
+    assert "RELEASE testrelease: plan derived from state" in output
+    assert preflight_calls == {"release_id": "testrelease"}
+    assert not (tmp_path / "release" / "release-plan.json").exists()
+
+
+def test_release_mode_seals_and_submits_the_derived_plan(tmp_path, monkeypatch, capsys):
+    """Without --dry-run the derivation seals write-once and composes the submitter."""
+    derived = _derived_fixture(tmp_path)
+    monkeypatch.setattr(entry_point, "derive_release_plan", lambda *args, **kwargs: derived)
+    sealed_uri = str(tmp_path / "release" / "release-plan.json")
+    monkeypatch.setattr(entry_point, "seal_derivation", lambda release_root, d: {"uri": sealed_uri, "sha256": "b" * 64})
+    captured = {}
+
+    def fake_submit(args, *, verb):
+        captured["args"] = args
+        captured["verb"] = verb
+        return 0
+
+    monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
+    exit_code = entry_point.main(_release_argv(_release_config(tmp_path)))
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert f"SEALED {sealed_uri}" in output
+    assert captured["verb"] == "run"
+    assert captured["args"].version == "testrelease"
+    assert captured["args"].plan == sealed_uri
+    assert captured["args"].cluster == "cw-us-east-02a"
+
+
+def test_release_mode_refuses_a_release_mismatch(tmp_path, capsys):
+    exit_code = entry_point.main(
+        ["release", "--release", "other", "--config", str(_release_config(tmp_path)), "--dry-run"]
+    )
+    assert exit_code == 2
+    assert "binds release" in capsys.readouterr().err
+
+
+def test_release_mode_refuses_a_cluster_mismatch(tmp_path, monkeypatch, capsys):
+    derived = _derived_fixture(tmp_path)
+    monkeypatch.setattr(entry_point, "derive_release_plan", lambda *args, **kwargs: derived)
+    exit_code = entry_point.main(_release_argv(_release_config(tmp_path), "--cluster", "cw-us-west-01b", "--dry-run"))
+    assert exit_code == 2
+    assert "pins cluster" in capsys.readouterr().err

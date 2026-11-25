@@ -16,8 +16,9 @@ Modes:
 
 - ``release``    — derive the release plan from the reviewed config and authoritative
                    state (``--dry-run`` prints the derived summary, the lowered graph
-                   and the preflight results; the sealing path composes submission once
-                   the P0 ``submit/resume --cluster`` mode lands).
+                   and the preflight results; otherwise the derivation seals the plan
+                   under the release prefix and submits the in-region root job through
+                   the ``submit`` mode's auto-resuming run).
 - ``plan``      — resolve the plan, lower the graph and print every node; I/O-free.
 - ``preflight`` — per-stage type-check + small-slice run on real inputs; seals a
                   receipt per stage under the release prefix. Stages whose real
@@ -45,6 +46,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
@@ -87,7 +89,7 @@ from experiments.post_training.task_curation.release_stages.release_config impor
 def _plan_document(args) -> ReleasePlan:
     if getattr(args, "plan", None) is None or getattr(args, "version", None) is None:
         raise ValueError("this mode requires --version and --plan")
-    plan = load_plan(Path(args.plan))
+    plan = load_plan(args.plan)
     if args.version is not None and plan.release_id != args.version:
         raise ValueError(f"the plan binds release {plan.release_id!r}, not {args.version!r}")
     return plan
@@ -201,9 +203,10 @@ def mode_release(args) -> int:
 
     ``--dry-run`` derives, prints the derived plan summary, the lowered graph and
     the preflight results, and writes nothing. Without it the derivation seals the
-    plan and its receipt write-once under the release prefix and then refuses the
-    submission until the P0 ``submit/resume --cluster`` mode lands (the R40 lane
-    owns that plumbing; this command composes it rather than duplicating it).
+    plan and its receipt write-once under the release prefix and composes the P0
+    in-region submitter: the sealed plan travels by storage URI, the bundle ships
+    the newest landed tip containing the freeze, and the root job runs the graph
+    with its auto-resume semantics.
     """
     configure_coreweave_s3()
     config_path = args.config or Path(__file__).parent / "plans" / f"{args.release}.json"
@@ -231,11 +234,11 @@ def mode_release(args) -> int:
         release_root = derived.plan_document["release_root"]
         plan_ref = seal_derivation(release_root, derived)
         print(f"SEALED {plan_ref['uri']} sha256={plan_ref['sha256']}")
-        raise ValueError(
-            "release submission rides on the P0 submit/resume --cluster mode (the R40 lane owns"
-            " that plumbing); the derived plan is sealed, and this command composes submission"
-            " once that mode lands"
-        )
+        # Compose the P0 submitter: the sealed plan travels by storage URI, the
+        # bundle bundles at the newest landed tip containing the freeze, and the
+        # root job auto-resumes at the same version.
+        submission = SimpleNamespace(version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster)
+        return _submit_root(submission, verb="run")
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
     for node in graph_nodes(release_graph(plan)):
@@ -342,18 +345,23 @@ _ROOT_JOB_MAX_TASK_FAILURES = 6
 _ROOT_JOB_TIMEOUT_HOURS = 24
 
 
-def _plan_relative_path(plan_path: Path) -> str:
-    """The plan's repo-relative path (the bundle ships the repo tree)."""
-    return str(plan_path.resolve().relative_to(REPO_ROOT))
+def _plan_argument(plan_path: Path | str) -> str:
+    """The plan argument the root job passes: a repo-relative path or a storage URI."""
+    source = str(plan_path)
+    if "://" in source:
+        return source
+    return str(Path(plan_path).resolve().relative_to(REPO_ROOT))
 
 
-def _bundle_revision(plan: ReleasePlan, plan_path: Path) -> str:
+def _bundle_revision(plan: ReleasePlan, plan_path: Path | str) -> str:
     """The newest landed tip whose plan document is the pinned plan.
 
     A fresh cut bundles at its re-pin landing (the plan document inside the bundle
     carries the current artifact version); a fix-forward resume bundles at the newest
     landed fix. Both are the same rule: the newest origin tip whose plan file is
-    unchanged. Git runs here, on the submitting checkout — never inside the bundle.
+    unchanged. A sealed derived plan has no repo file: it pins a storage document
+    the bundle reads directly, so the rule reduces to the freeze containment. Git
+    runs here, on the submitting checkout — never inside the bundle.
     """
     subprocess.run(["git", "fetch", "--quiet", "origin", "atlas-env-audit"], cwd=REPO_ROOT, check=True)
     tip = subprocess.run(
@@ -363,7 +371,18 @@ def _bundle_revision(plan: ReleasePlan, plan_path: Path) -> str:
         text=True,
         check=True,
     ).stdout.strip()
-    relative = _plan_relative_path(plan_path)
+    if "://" in str(plan_path):
+        pinned = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", plan.source_revision, tip],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pinned.returncode != 0:
+            raise ValueError(f"the plan's pinned revision {plan.source_revision} is not landed on atlas-env-audit")
+        return tip
+    relative = str(Path(plan_path).resolve().relative_to(REPO_ROOT))
     document = json.loads(
         subprocess.run(
             ["git", "show", f"{tip}:{relative}"],
@@ -373,7 +392,7 @@ def _bundle_revision(plan: ReleasePlan, plan_path: Path) -> str:
             check=True,
         ).stdout
     )
-    if document != json.loads(plan_path.read_text()):
+    if document != json.loads(Path(plan_path).read_text()):
         raise ValueError(
             f"origin's newest tip {tip[:12]} carries a different plan document;"
             " re-pin the plan (version bump + fresh prefix) before submitting"
@@ -442,6 +461,7 @@ def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
 
 def _submit_root(args, *, verb: str) -> int:
     """Submit the in-region root job that runs (or resumes) the plan's graph."""
+    configure_coreweave_s3()
     if getattr(args, "source_revision", None) and args.source_revision != _plan_document(args).source_revision:
         plan = _plan_document(args)
         raise ValueError(
@@ -449,9 +469,9 @@ def _submit_root(args, *, verb: str) -> int:
             f" {plan.source_revision}; the pin travels with the plan"
         )
     plan = _plan_document(args)
-    plan_path = Path(args.plan)
+    plan_path = args.plan
     revision = _bundle_revision(plan, plan_path)
-    relative = _plan_relative_path(plan_path)
+    relative = _plan_argument(plan_path)
 
     landing_log = guard.landing_log_path()
     if not landing_log.is_file():

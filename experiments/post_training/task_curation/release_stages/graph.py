@@ -331,9 +331,16 @@ def _plan_document_data(plan: ReleasePlan) -> dict:
     return data
 
 
-def load_plan(path: Path) -> ReleasePlan:
-    """Load and validate the sealed release plan document."""
-    plan = ReleasePlan.model_validate_json(path.read_text(encoding="utf-8"))
+def load_plan(path: Path | str) -> ReleasePlan:
+    """Load and validate the sealed release plan document.
+
+    The document is either a repo file (the reviewed plan) or the sealed derived
+    plan's storage URI under the release prefix; storage URIs read through the
+    storage layer so an in-region bundle can run the sealed plan directly.
+    """
+    source = str(path)
+    text = StoragePath(source).read_text() if "://" in source else Path(source).read_text(encoding="utf-8")
+    plan = ReleasePlan.model_validate_json(text)
     registry = json.loads(DIFFICULTY_SNAPSHOTS.read_text())
     bound = registry.get(plan.release_id)
     if bound is not None:
