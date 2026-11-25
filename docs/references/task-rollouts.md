@@ -240,7 +240,7 @@ becomes a cleanup error and does not change the record or the grade.
 ### Run a harness alone
 
 `harness_rollout(harness, task, model, *, limits, machine=None, trace=TraceMode.EXACT_TOKENS, events=NO_EVENTS,
-run_id=None)` from `rolloutengine.recorder` runs one harness on one task with one model, without the engine. It
+rollout_id=None)` from `rolloutengine.recorder` runs one harness on one task with one model, without the engine. It
 starts no machine and does not grade. The turn limits and `total_turn_timeout` apply. The harness's closes run
 at the end, the closes registered with `push` first, and `Rollout.metrics["cleanup_error_count"]` counts the closes that failed. An attempt that fails
 raises `RolloutInterrupted` with the rollout so far.
@@ -585,15 +585,15 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
-A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, its `index`, its `emitted_at`, and a
+A `RolloutEvent` carries the attempt's `rollout_id`, the task's `task_id`, its `index`, its `emitted_at`, and a
 `payload`. `index` is the event's position in the attempt, counted when the engine emits it, so a missing index
 is an event that the observer did not receive. The last events of an attempt can be lost without a gap, so the
 events are complete when `AttemptEnded` is among them and every lower index is present. `emitted_at` is the
 wall-clock time of the emit in seconds since the epoch, because delivery is later.
-`run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
-of repeated attempts of a task stay apart. `(run_id, index)` identifies an event and `index` starts at 0 in each
-attempt, so a caller that sets the run ID must give each `run_task` call a new one, also when it retries the same
-task. `Rollout.run_id` returns the ID, so a caller can match a rollout with its events.
+`run_task(spec, model, rollout_id=...)` sets the rollout ID. Without one, each attempt gets a new random ID, so the events
+of repeated attempts of a task stay apart. `(rollout_id, index)` identifies an event and `index` starts at 0 in each
+attempt, so a caller that sets the rollout ID must give each `run_task` call a new one, also when it retries the same
+task. `Rollout.rollout_id` returns the ID, so a caller can match a rollout with its events.
 Each payload is a frozen dataclass from `rolloutengine.models` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
@@ -635,7 +635,7 @@ No end event is emitted when a token-contract error or cancellation propagates.
 log = FinelogRolloutLog(client)
 scope = RolloutScope(run_id=run_id, run_attempt_id=run_attempt_id, phase="train", step=step)
 engine = RolloutEngine(machine_factories, harnesses, observer=FinelogObserver(log, scope, content_fraction=1.0))
-await engine.run_task(spec, model, run_id=unique_rollout_id)
+await engine.run_task(spec, model, rollout_id=unique_rollout_id)
 await asyncio.to_thread(log.flush, 60)
 ```
 
@@ -646,7 +646,7 @@ await asyncio.to_thread(log.flush, 60)
 
 Every row has the scope: `run_id` and `run_attempt_id` are the `run_id` and `attempt_id` of
 `marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` and `step` place the task
-attempt in the run. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
+attempt in the run. `rollout_id` is the `rollout_id` of `run_task`, so give each task attempt a unique one.
 
 In the events table, payloads share the columns `duration`, `stop_reason`, `done`, and `error`, so the meaning
 of those follows `event_type`. Other columns name their payload: `tool_call_id` and `tool_name` are the `call_id`

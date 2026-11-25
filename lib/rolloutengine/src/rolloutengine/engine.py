@@ -123,7 +123,7 @@ class RolloutEngine:
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
         ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
-        ``run_id`` is a deprecated alias of ``rollout_id``.
+        ``run_id`` is a deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31.
         """
         if run_id is not None:
             if rollout_id is not None:

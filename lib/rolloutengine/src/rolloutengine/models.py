@@ -220,7 +220,7 @@ class Rollout:
 
     @property
     def run_id(self) -> str:
-        """Deprecated alias of ``rollout_id``."""
+        """Deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31."""
         warnings.warn("Rollout.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
         return self.rollout_id
 
@@ -469,7 +469,7 @@ class RolloutEvent:
 
     @property
     def run_id(self) -> str:
-        """Deprecated alias of ``rollout_id``."""
+        """Deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31."""
         warnings.warn("RolloutEvent.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
         return self.rollout_id
 
