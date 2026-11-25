@@ -13,7 +13,6 @@ October.
 from evalrecords.records import PromptFormat, TaskImageBuild, TaskMachineSettings
 
 from experiments.evaluation.benchmarks.agentic import CAMPAIGN_PROTOCOL
-from experiments.evaluation.evals import JUDGES
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 
@@ -24,8 +23,6 @@ OCTOBER_SEED = 42
 # Daytona machines that build each task image without creating a snapshot, for the benchmarks whose
 # images would together exceed the account's snapshot quota.
 DECLARATIVE_BUILDS = TaskMachineSettings(image_build=TaskImageBuild.DECLARATIVE)
-# The judge for FinanceBench and OlympiadBench answers; October's reported scores used a local MiniMax-M3.
-TOGETHER_GPT_OSS_120B = JUDGES["together"]
 
 _CATALOG = models()
 GLIMMER = PolicyCandidate(model=_CATALOG["muse-glimmer-30b"], max_context=131_072)
@@ -36,7 +33,8 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     PolicyEvaluation("aime24", seed=OCTOBER_SEED),
     PolicyEvaluation("boolq"),
     PolicyEvaluation("cruxeval"),
-    PolicyEvaluation("financebench", judge=TOGETHER_GPT_OSS_120B),
+    # The Together GPT-OSS-120B judge; October's reported scores used a local MiniMax-M3 (see README.md).
+    PolicyEvaluation("financebench", judge="together"),
     PolicyEvaluation("gpqa-diamond"),
     # October ran the thinking-off chat variants of GSM8K and TriviaQA; pin them for every candidate.
     PolicyEvaluation("gsm8k", label="gsm8k-0shot", num_fewshot=0, prompt_format=PromptFormat.CHAT),
@@ -49,7 +47,7 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     PolicyEvaluation("mrcr", protocol="65k"),
     PolicyEvaluation("mrcr"),
     PolicyEvaluation("nupa5k-loose", label="nupa"),
-    PolicyEvaluation("olympiadbench", judge=TOGETHER_GPT_OSS_120B, seed=OCTOBER_SEED),
+    PolicyEvaluation("olympiadbench", judge="together", seed=OCTOBER_SEED),
     PolicyEvaluation("piqa"),
     PolicyEvaluation("triviaqa", label="triviaqa", prompt_format=PromptFormat.CHAT),
     PolicyEvaluation("truthfulqa"),
