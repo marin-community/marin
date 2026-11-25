@@ -14,8 +14,6 @@ class RLEntrypoint(StrEnum):
     GENERATE = "generate"
     STANDARD = "standard"
     TASKCOMPENDIUM = "taskcompendium"
-    TERMINAL_BENCH = "terminal_bench"
-    TERMINAL_BENCH_GENERATE = "terminal_bench_generate"
 
 
 # Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py

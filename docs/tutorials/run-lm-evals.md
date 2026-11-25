@@ -14,7 +14,8 @@ run inside a privileged Iris CPU worker, isolated with Shellbox bubblewrap.
 Keep source corpora, grader environments and result storage near the evaluation
 cluster. The launcher uses that cluster's artifact prefix. See
 [task curation](../references/task-curation.md) for source publication and
-[Harbor integration](../harbor-integration.md) for agentic benchmarks.
+[Harbor integration](../harbor-integration.md) for Harbor policies. Catalog agentic
+benchmarks run as curated corpora; see [evaluation tasks](../references/evaluation-tasks.md).
 
 ## Launch registered models and evaluations
 
@@ -58,6 +59,12 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[PDBThink](../explanations/pdbthink.md) uses the published 88-question coordinate
+panel with three completions per question. `--evals pdbthink` preserves each
+prompt and fails before inference if any selected question exceeds the context.
+Use the model's full context and output allowance; headline accuracy gives each
+question family equal weight. It needs no LLM judge.
+
 [LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
 multiple-choice questions over contexts of 8,000 to 2 million words, with the
 upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
@@ -90,7 +97,7 @@ Submit both with `--evaluation-config evaluations.yaml`. Add `--evals bounded-ma
 to select one entry from that document. Repeat `--harbor-config` to add Harbor jobs.
 Ordinary benchmark defaults are available through `--evals math500,gsm8k` without
 a selection file. The repository's curated suite choices and run overrides live in
-`experiments/evaluation/configs/evalchemy.yaml`.
+`experiments/evaluation/configs/evaluations.yaml`.
 
 Exactly one of `--model <registry-key>` or `--model-config <path>` is required.
 The latter accepts a model catalog YAML for a new export without adding it to the
@@ -117,20 +124,80 @@ continuations and have no generation output budget.
 Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
 `judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
 secret references. The standard
-FinanceBench and OlympiadBench definitions use Together and record its model alias
-as provider-managed. A provider alias does not establish the exact weights served.
+FinanceBench, OlympiadBench, EconEvals and IMO-Bench definitions use Together and record its model alias
+as provider-managed. IMO-Bench's published scores used Gemini 2.5 Pro as the judge, so IMO-AnswerBench and
+IMO-ProofBench scores are comparable only between runs that share a judge. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
 The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
 supplies its separately pinned hosted judge through `--policy-finalization-config`.
 
+EconEvals scores are not directly comparable with the
+[EconEvals paper](https://arxiv.org/abs/2607.19375), which judged with gpt-4.1-mini. The `econevals`
+suite uses the paper's o3-mini baseline; strong models beat it on most items, so compare them with
+the `econevals-o3` suite, which judges against o3's released answers. The `econevals-sampled` and
+`econevals-sampled-o3` suites keep six questions from each category, about a tenth of the items,
+for development runs. The judge often prefers whichever answer it reads first, and such split items
+score 0.5, so treat score differences under about 0.1 as noise.
+
 Harbor files retain Harbor's `JobConfig` schema and `--harbor-config` option.
 Harbor execution is independent of curated TaskSpec evaluation.
+
+### Curated agent benchmarks
+
+A curated benchmark whose protocol is an agent episode runs its declared harness,
+such as `terminus-2`, on a task machine for each attempt. Its task machines run on
+Daytona unless `run.task_machine` or `--task-machine-backend` selects `docker` or
+`local`. `run.task_machine` also sets default `cpus`, `memory_mb` and `storage_mb`
+for tasks that declare none, and `startup_timeout`, which covers online image builds:
+
+```yaml
+evaluations:
+  terminal-bench-docker:
+    benchmark: terminal-bench-2.0
+    run:
+      task_machine:
+        backend: docker
+        memory_mb: 8192
+```
+
+On Daytona, `image_build` selects how each machine gets its image. The default,
+`snapshot`, builds each distinct environment once into a named snapshot that counts
+against the eval account's snapshot quota. `declarative` builds the image for every
+machine and creates no snapshot. Catalog entries for datasets with more distinct
+environments than the quota, such as `tb2`, `swebench` and `aider`, select
+`declarative`:
+
+```yaml
+    run:
+      task_machine:
+        image_build: declarative
+```
+
+Each attempt holds a task machine, and the agent's time budget includes the model's latency,
+which grows with load. `run.concurrency` bounds the attempts that run at once; the model's
+`evaluation_num_concurrent` also bounds them, and the default is 64. The catalog's agent
+benchmarks run as many attempts at once as their Harbor jobs did:
+
+```yaml
+    run:
+      concurrency: 32
+```
+
+The model must set `serve.max_model_len`, the agent's context window. Its
+`generation.max_gen_toks` and `run.max_tokens` cap each reply, as in Harbor.
+The protocol can cap the context window further and set its own reply limit. The dry run
+prints the harness and its revision, the backend, and the resolved
+`max_input_tokens` and `max_output_tokens`. `record.json` keeps them under
+`eval.curated.agent` and `eval.curated.settings.task_machine`. The backend, task
+machine resources, harness revision and budgets are part of the run identity;
+request concurrency is not.
 
 ## Launch controls
 
 - `--model-config`: a model catalog YAML instead of a registry model.
 - `--limit`: override the source-row cap for each selected corpus.
 - `--seed`: override the run seed; trial seeds advance from it.
+- `--task-machine-backend`: run curated agent benchmarks on `daytona`, `docker` or `local` task machines.
 - `--max-concurrent`: simultaneous evaluations sharing the candidate server.
 - `--instances`: candidate serving instances behind the inference broker.
 - `--run-id`: reuse an explicitly named launch when its resolved identities match.
@@ -149,11 +216,49 @@ Historical verified Evalchemy cohort labels require their recorded historical
 checkout. Curated runs need a new cohort label; they do not attest equivalence to a
 historical evaluator.
 
-## Harbor credentials
+## Daytona and verifier credentials
 
 Configure Daytona and verifier credentials through the secret references declared
 by the selected Harbor policy. `--judge-model` and `--judge-accelerator` configure
 Harbor's hosted verifier. See [Harbor integration](../harbor-integration.md).
+
+Curated agent benchmarks on Daytona use the same eval-org key as Harbor:
+`DAYTONA_EVAL_API_KEY` from the launch environment, then the `DAYTONA_EVAL_API_KEY`
+secret in the `hai-gcp-models` GCP project. The evaluation worker receives it as its
+`DAYTONA_API_KEY` secret and may reach `app.daytona.io`. Judged agent graders use the
+curated `judge`, `judge_endpoint` and `judge_api_key` run settings; task machines
+receive no judge credentials.
+
+Task machines receive only the host variables named in `run.task_secrets`, each
+resolved from ordered secret references. A benchmark whose tasks read an undeclared
+variable fails before its first attempt. The agent can read every value it receives,
+so supply keys scoped for that use. FinanceAgent's tools read four variables, and its
+answers go to a GPT-5 judge. No catalog entry runs FinanceAgent, because these keys are
+not provisioned; a run that supplies them uses:
+
+```yaml
+evaluations:
+  financeagent-curated:
+    benchmark: financeagent
+    run:
+      judge:
+        deployment: openai
+        models:
+          gpt-5-2025-08-07: provider-managed:gpt-5-2025-08-07
+        default_model: gpt-5-2025-08-07
+      judge_endpoint: https://api.openai.com/v1
+      judge_api_key: [env:OPENAI_API_KEY]
+      task_secrets:
+        SEC_EDGAR_API_KEY: [env:SEC_EDGAR_API_KEY]
+        SERPAPI_API_KEY: [env:SERPAPI_API_KEY]
+        MODEL_FOR_TOOLS: [env:MODEL_FOR_TOOLS]
+        OPENAI_API_KEY: [env:FINANCEAGENT_TOOLS_OPENAI_API_KEY]
+```
+
+The package's image and `retrieve_information` tool use LiteLLM; Marin's FinanceAgent
+dataset edits them to install and call the OpenAI SDK instead. The tool also reads
+`MODEL_API_KEY`, which the package never passes to the agent's container, so that tool
+fails under Harbor as well.
 
 ## Results
 

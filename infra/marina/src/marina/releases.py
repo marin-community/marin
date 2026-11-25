@@ -3,6 +3,7 @@
 
 """Source identity for independently released, checked-in applets."""
 
+import subprocess
 import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -15,21 +16,51 @@ from rigging.provenance import git_output
 RELEASE_METADATA = "dist/marina-release.json"
 
 
-def require_current_main(repo_dir: Path) -> str:
-    """Require a clean checkout at origin's current main and return its full commit."""
+DEFAULT_RELEASE_BRANCH = "main"
+
+
+def _clean_checkout_message(branch: str) -> str:
+    if branch == DEFAULT_RELEASE_BRANCH:
+        return "Releases require a clean checkout by default; use --allow-dirty to override or --local to preview."
+    return "Releases require a clean checkout; --allow-dirty does not cover the release-branch guard."
+
+
+def require_release_checkout(repo_dir: Path, *, branch: str = DEFAULT_RELEASE_BRANCH) -> str:
+    """Require a clean checkout at a commit the release may cut from; return its commit.
+
+    A ``main`` release must sit exactly at origin's current main commit. A declared
+    release branch — an integration branch a release pipeline cuts from — accepts
+    any commit origin's branch already contains, its tip or an ancestor, because the
+    branch moves ahead of the release cut while CI and receipts run.
+    """
     if git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir):
-        raise RuntimeError(
-            "Releases require a clean checkout by default; use --allow-dirty to override or --local to preview."
-        )
+        raise RuntimeError(_clean_checkout_message(branch))
     commit = git_output(["rev-parse", "HEAD"], repo_dir)
     # Query the remote directly: tracking refs and rerun CI checkouts may be stale.
-    remote = git_output(["ls-remote", "--exit-code", "origin", "refs/heads/main"], repo_dir, timeout=30)
-    if commit != remote.split()[0]:
-        raise RuntimeError(
-            "Releases require origin's current main commit by default; "
-            "update the checkout or use --allow-dirty to override."
+    tip = git_output(["ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"], repo_dir, timeout=30).split()[0]
+    if commit == tip:
+        return commit
+    if branch != DEFAULT_RELEASE_BRANCH:
+        # Ancestry needs the tip object locally: fetch the branch ref explicitly so a
+        # tag that shares the branch's name can never shadow the ancestry check.
+        git_output(["fetch", "--quiet", "origin", f"refs/heads/{branch}"], repo_dir, timeout=120)
+        landed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", commit, "FETCH_HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    return commit
+        if landed.returncode == 0:
+            return commit
+        raise RuntimeError(
+            f"The checkout at {commit[:12]} is not landed on origin/{branch} (tip {tip[:12]}); "
+            "release from a commit the declared branch contains."
+        )
+    raise RuntimeError(
+        "Releases require origin's current main commit by default; "
+        "update the checkout or use --allow-dirty to override."
+    )
 
 
 @contextmanager
@@ -56,6 +87,9 @@ class ReleaseSource:
     path: str
     tree: str
     inputs: dict[str, str] = field(default_factory=dict)
+    branch: str | None = None
+    """The declared release branch a published record was cut from; None on a
+    default main release and on checkout descriptions, which declare no branch."""
 
 
 class ReleaseState(StrEnum):
@@ -82,6 +116,29 @@ def release_source(app_dir: Path, source_paths: tuple[str, ...]) -> ReleaseSourc
     tree = git_output(["rev-parse", f"{commit}:{path}"], app_dir)
     inputs = {source: git_output(["rev-parse", f"{commit}:{source}"], app_dir) for source in source_paths}
     return ReleaseSource(commit=commit, path=path, tree=tree, inputs=inputs)
+
+
+def require_forward_move(repo_dir: Path, *, branch: str, live_commit: str) -> None:
+    """Refuse a release that moves backward along its declared branch.
+
+    The landing check accepts any commit the branch contains, so a stale checkout
+    could otherwise republish older source over newer. The live release's commit
+    must be an ancestor of this checkout's; it is reachable after the branch fetch
+    the landing check performs. A different or undeclared lineage skips the check.
+    """
+    git_output(["fetch", "--quiet", "origin", f"refs/heads/{branch}"], repo_dir, timeout=120)
+    forward = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", live_commit, "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if forward.returncode != 0:
+        raise RuntimeError(
+            f"The live release's commit {live_commit[:12]} is ahead of this checkout on {branch!r}; "
+            "release from a newer commit instead of republishing older source."
+        )
 
 
 def source_status(

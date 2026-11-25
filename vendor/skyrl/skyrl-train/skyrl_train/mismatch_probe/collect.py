@@ -31,7 +31,7 @@ from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_disp
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
-from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 from skyrl_train.mismatch_probe.archive import (
     BUILDING_STATUS,
     COMPLETE_STATUS,

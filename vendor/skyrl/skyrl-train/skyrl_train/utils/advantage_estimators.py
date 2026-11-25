@@ -17,13 +17,10 @@ from omegaconf import DictConfig
 from marinskyrl.runtime_options import AdvantageEstimator
 from skyrl_train.utils.algorithm_registry import (
     AdvantageEstimatorRegistry,
-    ExactPhysicalGroup,
-    MinimumBaselineEligibleGroup,
-    NoGroupAdvantage,
     register_advantage_estimator,
 )
 from skyrl_train.utils.policy_math import masked_whiten, right_pad_to_match
-from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
+from skyrl_train.group_admission import BUILTIN_GROUP_ADVANTAGE_CONTRACTS, GroupAdvantageInvariant, GroupAdvantageKind
 from skyrl_train.training_batch import TrainingInputBatch
 
 GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
@@ -66,7 +63,11 @@ def batch_advantages(
     )
 
 
-@register_advantage_estimator(AdvantageEstimator.UNIFORM, group_contract=NoGroupAdvantage())
+def _register_builtin_advantage_estimator(name: str):
+    return register_advantage_estimator(name, group_contract=BUILTIN_GROUP_ADVANTAGE_CONTRACTS[name])
+
+
+@_register_builtin_advantage_estimator(AdvantageEstimator.UNIFORM)
 def compute_uniform_advantage(
     token_level_rewards: torch.Tensor,
     **kwargs,
@@ -76,7 +77,7 @@ def compute_uniform_advantage(
     return ones, ones
 
 
-@register_advantage_estimator(AdvantageEstimator.REWARD, group_contract=NoGroupAdvantage())
+@_register_builtin_advantage_estimator(AdvantageEstimator.REWARD)
 @torch.no_grad()
 def compute_reward_advantage(
     token_level_rewards: torch.Tensor,
@@ -90,7 +91,7 @@ def compute_reward_advantage(
     return advantages, advantages
 
 
-@register_advantage_estimator(AdvantageEstimator.REINFORCE_PP, group_contract=NoGroupAdvantage())
+@_register_builtin_advantage_estimator(AdvantageEstimator.REINFORCE_PP)
 def compute_reinforce_plus_plus_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -125,7 +126,7 @@ def compute_reinforce_plus_plus_outcome_advantage(
     return advantages, returns
 
 
-@register_advantage_estimator(AdvantageEstimator.RLOO, group_contract=ExactPhysicalGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.RLOO)
 def compute_rloo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -176,7 +177,7 @@ def compute_rloo_outcome_advantage(
     return scores, scores
 
 
-@register_advantage_estimator(AdvantageEstimator.RLOO_N, group_contract=MinimumBaselineEligibleGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.RLOO_N)
 def compute_rloo_n_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -330,7 +331,7 @@ def compute_rloo_n_outcome_advantage(
     return scores, scores
 
 
-@register_advantage_estimator("rloo_n_pbs", group_contract=MinimumBaselineEligibleGroup())
+@_register_builtin_advantage_estimator("rloo_n_pbs")
 def compute_rloo_n_pbs_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -344,10 +345,8 @@ def compute_rloo_n_pbs_advantage(
     """Combine RLOO-N outcome advantage with potential-based token shaping.
 
     Combines RLOO-N's per-trajectory outcome advantage (computed exactly as
-    ``compute_rloo_n_outcome_advantage`` — the outcome term reads ``rewards``
-    ONLY and is left bit-for-bit intact) with the per-token potential-based
-    shaping channel ``token_level_shaping`` (the PBS test-delta credit scattered
-    onto the EDIT-token span by ``pbs_shaping.compute_pbs_token_shaping``).
+    ``compute_rloo_n_outcome_advantage``) with the per-token potential-based
+    shaping channel ``token_level_shaping`` supplied by the rollout.
 
     The two signals remain additive and separate:
 
@@ -389,7 +388,7 @@ def compute_rloo_n_pbs_advantage(
     return combined, combined
 
 
-@register_advantage_estimator(AdvantageEstimator.GRPO, group_contract=ExactPhysicalGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.GRPO)
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,

@@ -4,7 +4,7 @@ from copy import deepcopy
 from enum import StrEnum
 from typing import cast
 
-from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
+from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX, TASK_TIMING_KEYS
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.trajectory_runners.trajectory_processing import get_rollout_metrics
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
@@ -20,7 +20,7 @@ def _refresh_filtered_rollout_metrics(filtered: TrajectoryBatch) -> None:
         return
     metrics = dict(filtered.get("rollout_metrics") or {})
     for name in tuple(metrics):
-        if name.startswith(ENVIRONMENT_METRIC_PREFIX):
+        if name.startswith(ENVIRONMENT_METRIC_PREFIX) or any(name.startswith(key + "/") for key in TASK_TIMING_KEYS):
             del metrics[name]
     metrics.update(
         get_rollout_metrics(

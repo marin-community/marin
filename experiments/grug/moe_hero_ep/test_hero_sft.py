@@ -273,6 +273,8 @@ def _expert_sharded_mesh(devices):
 
 
 @pytest.mark.multidevice
+# Compiling the expert-parallel training step can exceed 60 seconds on CI workers.
+@pytest.mark.timeout(120)
 def test_expert_placement_commutes_with_a_training_step():
     # Placing then stepping equals stepping then placing only if every expert-indexed parameter and
     # optimizer moment moved together; a missed leaf pairs an expert with another expert's state.

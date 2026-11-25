@@ -50,10 +50,10 @@ def read_hf_export_request(checkpoint_path: str) -> HFExportRequest | None:
     return request
 
 
-def protected_hf_export_steps(checkpoint_base_path: str) -> set[int]:
+def protected_hf_export_steps(checkpoint_base_path: str, *, strict: bool = False) -> set[int]:
     """Return steps whose incomplete or unreadable requests prevent cleanup."""
     protected: set[int] = set()
-    for directory in list_checkpoint_dirs(checkpoint_base_path):
+    for directory in list_checkpoint_dirs(checkpoint_base_path, strict=strict):
         checkpoint_path = os.path.join(checkpoint_base_path, directory)
         try:
             request = read_hf_export_request(checkpoint_path)

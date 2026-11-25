@@ -10,7 +10,8 @@ from functools import lru_cache
 from skyrl_train.workers.worker import PPORayActorGroup
 from skyrl_train.entrypoints.main_base import config_dir
 from skyrl_train.utils import get_ray_pg_ready_with_timeout
-from skyrl_train.utils.utils import peer_access_supported, print_mem, validate_cfg
+from skyrl_train.utils.utils import peer_access_supported, print_mem
+from skyrl_train.config.driver_validation import validate_cfg
 
 
 # Rank diagnostics file the DPO equivalence runner cats at the end of the job stream.

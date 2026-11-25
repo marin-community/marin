@@ -3,27 +3,123 @@
   "evaluation": {
     "seed": 20261030,
     "data_relative_path": "rollouts.parquet",
-    "capability_origin": "https://iris.test",
-    "gpu_variant": "H100", "judge_gpu_count": 1,
-    "judge": {"name": "fixture-judge", "location": "test/judge", "resource_hint": {"cpu": 1, "memory": "1g", "disk": "1g"}},
-    "ray_timeouts": {"cluster_join_timeout": 60},
+    "gpu_variant": "H100",
+    "judge": {
+      "provider": "together_serverless",
+      "model": "zai-org/GLM-5.3-Flash",
+      "base_url": "https://api.together.ai/v1",
+      "temperature": 0.0,
+      "top_p": 0.95,
+      "reasoning_effort": "low",
+      "token_budgets": [
+        128,
+        512,
+        2048
+      ],
+      "request_timeout": 300.0,
+      "transport_budget": 1800.0,
+      "transport_attempts": 6,
+      "bixbench_max_tokens": 1024,
+      "bixbench_request_timeout": 600.0,
+      "bixbench_transport_attempts": 3,
+      "credential": "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",
+      "bixbench_temperature": 1.0
+    },
+    "ray_timeouts": {
+      "cluster_join_timeout": 60
+    },
     "execution": {
-      "cluster": "test", "cluster_config": "test.yaml", "target_cluster": null,
-      "parent_cluster_config": null, "cpu": 1, "memory": "1GB", "disk": "1GB",
-      "priority": "batch", "max_retries": 0, "job_timeout_seconds": 3600, "required_env_vars": []
+      "cluster": "test",
+      "cluster_config": "test.yaml",
+      "target_cluster": null,
+      "parent_cluster_config": null,
+      "cpu": 1,
+      "memory": "1GB",
+      "disk": "1GB",
+      "priority": "batch",
+      "max_retries": 0,
+      "job_timeout_seconds": 3600,
+      "required_env_vars": []
     },
     "role_plan": {
-      "colocate_all": true, "policy_num_nodes": 1, "policy_num_gpus_per_node": 1,
-      "num_inference_engines": 1, "inference_engine_tensor_parallel_size": 1,
-      "inference_engine_pipeline_parallel_size": 1, "inference_engine_data_parallel_size": 1,
-      "inference_engine_expert_parallel_size": 1, "train_batch_size": 1,
-      "policy_mini_batch_size": 1, "micro_train_batch_size_per_gpu": 1, "n_samples_per_prompt": 1
+      "colocate_all": true,
+      "policy_num_nodes": 1,
+      "policy_num_gpus_per_node": 1,
+      "num_inference_engines": 1,
+      "inference_engine_tensor_parallel_size": 1,
+      "inference_engine_pipeline_parallel_size": 1,
+      "inference_engine_data_parallel_size": 1,
+      "inference_engine_expert_parallel_size": 1,
+      "train_batch_size": 1,
+      "policy_mini_batch_size": 1,
+      "micro_train_batch_size_per_gpu": 1,
+      "n_samples_per_prompt": 1
     },
     "config": {
-      "trainer": {"strategy": "megatron", "algorithm": {"use_kl_loss": false}},
-      "generator": {"backend": "vllm", "run_engines_locally": true, "trajectory_retention": {}, "sampling_params": {"stop_token_ids": [128001, 128009]}, "eval_sampling_params": {"stop_token_ids": [128001, 128009], "temperature": 0.7, "top_p": 0.95}},
-      "terminal_bench": {"harbor": {}}, "extra_env": {}, "context_budget": {"request_window_tokens": 1024, "max_new_tokens_per_turn": 128, "max_turns": 2},
-      "environment": {"task_sessions": {"remote_judge": {"base_url": "runtime://fixture-judge"}}}
+      "trainer": {
+        "strategy": "megatron",
+        "algorithm": {
+          "use_kl_loss": false
+        }
+      },
+      "generator": {
+        "backend": "vllm",
+        "run_engines_locally": true,
+        "trajectory_retention": {},
+        "sampling_params": {
+          "stop_token_ids": [
+            128001,
+            128009
+          ]
+        },
+        "eval_sampling_params": {
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "temperature": 0.7,
+          "top_p": 0.95
+        }
+      },
+      "terminal_bench": {
+        "harbor": {},
+        "installed_agent": {
+          "agent": {
+            "kwargs": {
+              "compaction_reserve_tokens": 16384,
+              "mcp_adapter_version": "7.0.0",
+              "model_info": {
+                "max_input_tokens": 65536,
+                "max_output_tokens": 16384
+              },
+              "thinking": "high",
+              "thinking_format": "chat-template",
+              "version": "0.87.0"
+            },
+            "name": "pi",
+            "override_setup_timeout_sec": 360
+          },
+          "cleanup_timeout": 60,
+          "run_timeout": 1800,
+          "service_shutdown_timeout": 60,
+          "service_startup_timeout": 60,
+          "setup_timeout": 360,
+          "trial_reward_key": "reward"
+        }
+      },
+      "extra_env": {},
+      "context_budget": {
+        "request_window_tokens": 1024,
+        "max_new_tokens_per_turn": 128,
+        "max_turns": 2
+      },
+      "environment": {
+        "task_sessions": {
+          "remote_judge": {
+            "api_key_env": "JUDGE_API_KEY"
+          }
+        }
+      }
     }
   }
 }

@@ -8,6 +8,8 @@ from skyrl_train.config.ftpo import FTPOBoundary
 from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
+from skyrl_train.config.rollout_validation import BatchPolicy
+from skyrl_train.config.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
 from skyrl_train.curriculum import SamplingKind, WeightingKind
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
@@ -15,8 +17,6 @@ from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSam
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.group_admission import GroupAdvantageKind
 from skyrl_train.hf_export_schema import HFUploadMode
-from skyrl_train.rollouts.buffer import BatchPolicy
-from skyrl_train.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
 from skyrl_train.utils.trainer_utils import ResumeMode
 
@@ -46,7 +46,6 @@ OPTIMIZER_CHECKPOINT_SHARDING = 'Literal["fully_reshardable", "dp_reshardable"]'
 
 TYPES = MappingProxyType(
     {
-        "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
         "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
@@ -131,6 +130,7 @@ TYPES = MappingProxyType(
         "trainer.max_steps": "NonNegativeInt | None",
         "trainer.resume_path": "str | None",
         "trainer.eval_num_prompts": "PositiveInt | None",
+        "trajectory_runner.max_concurrent_training_machine_tasks": "PositiveInt | None",
         "trainer.callbacks": "tuple[Callback, ...] | None",
         "trainer.rollout_buffer.max_in_flight": "PositiveInt | None",
         "trainer.rollout_buffer.object_store_root": "str | None",
@@ -157,7 +157,6 @@ TYPES = MappingProxyType(
         "generator.error_handling.mask_exceptions": "tuple[str, ...]",
         "generator.error_handling.zero_exceptions": "tuple[str, ...]",
         "generator.trajectory_retention.redact_fields": "tuple[str, ...]",
-        "data.terminal_bench_data": "tuple[str, ...]",
         "trainer.trajectory_selector.type": _literal(TrajectorySelectorKind) + " | None",
         "trainer.policy.grug_query_bias_interpolation_weight": "int | float | None",
         "trainer.policy.grug_query_bias_update_rate": "int | float | None",
@@ -206,10 +205,15 @@ OPEN = frozenset(
 UNDECLARED = MappingProxyType(
     {
         "trainer.policy.megatron_config.optimizer_config_kwargs.store_param_remainders": ("bool", Ellipsis),
+        "trainer.policy.megatron_config.output_projection_chunk_size": ("PositiveInt | None", Ellipsis),
+        "trainer.policy.megatron_config.memory_profile": ("TrainerMemoryProfile", Ellipsis),
         "teachers": ("SectionMap[Teacher]", Ellipsis),
         "teacher_routing": ("SectionMap[TeacherRouting]", Ellipsis),
         "data.kind": ('Literal["tasks", "parquet"]', "tasks"),
         "trainer.enable_db_registration": ("bool", True),
+        "trainer.checkpoint_retention": ('Literal["latest", "best"] | None', None),
+        "trainer.checkpoint_keep_every": ("PositiveInt | None", None),
+        "trainer.rollout_buffer.groups_per_family": ("CountMap", Ellipsis),
         "trainer.hf_hub_repo_id": ("str | None", None),
         "trainer.hf_hub_private": ("bool", False),
         "trainer.hf_hub_revision": ("str", "main"),

@@ -10,10 +10,13 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from iris.cluster.client.job_info import JobInfo
+from iris.cluster.types import JobName
 
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     all_to_all_element_count,
+    gate_endpoint_name,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
@@ -42,14 +45,16 @@ def _gloo_a2a_rank(rank, world_size, buffer_bytes, init_file, done_dir):
 
 
 def test_parse_nccl_census_distinguishes_ib_and_socket():
+    device_line = "g853134:13596:14951 [0] NCCL INFO NET/IB : Using [0]ibp0:1/IB [1]mlx5_2:1/RoCE"
     ib_log = [
+        device_line,
         "g853134:13596:14951 [0] NCCL INFO Using network InfiniBand",
         "g853134:13596:14951 [0] NCCL INFO Channel 00 : 0[0] -> 1[0] via NET/IB/0/GDRDMA",
         "g853134:13596:14951 [0] NCCL INFO Channel 01 : 1[0] -> 0[0] via NET/IB/0/GDRDMA",
         "g853134:13596:14951 [0] NCCL INFO NCCL version 2.29.7+cuda13.2",
     ]
     census = parse_nccl_census(ib_log)
-    assert census == NcclCensus(nccl_version="2.29.7", transports=["NET/IB/0/GDRDMA"])
+    assert census == NcclCensus(nccl_version="2.29.7", transports=["NET/IB/0/GDRDMA"], ib_device_lines=[device_line])
 
     socket_log = [
         "g95c40:13657:14951 [0] NCCL INFO Channel 00 : 0[0] -> 2[0] via NET/Socket/0/0",
@@ -75,6 +80,15 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
+
+
+def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
+    first_head = JobInfo(JobName.from_wire("/test/coordinator/control-r0/0"))
+    first_worker = JobInfo(JobName.from_wire("/test/coordinator/control-r0/1"))
+    second_head = JobInfo(JobName.from_wire("/test/coordinator/control-r1/0"))
+    assert first_head.job_id.namespace == second_head.job_id.namespace
+    assert gate_endpoint_name(first_head) == gate_endpoint_name(first_worker)
+    assert gate_endpoint_name(first_head) != gate_endpoint_name(second_head)
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):

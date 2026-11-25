@@ -24,6 +24,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from functools import partial
 from typing import TypedDict
 
@@ -359,9 +360,10 @@ def _iter_surviving_docs(
 
 def _spill_source_shard(
     spec: dict[str, str],
+    shard_index: int,
+    *,
     cluster_col: str,
     scratch_dir: str,
-    shard_index: int,
 ) -> _SpillShardResult:
     """Join one source shard and write its bucket runs to local storage."""
     shard_dir = os.path.join(scratch_dir, f"shard-{shard_index:05d}")
@@ -440,18 +442,18 @@ def _partition_and_write_task(
     bucket_tokens: dict[tuple[int, int], int] = defaultdict(int)
     n_tokens = 0
     partition_started = time.monotonic()
+    workers = min(partition_processes, len(batch_specs))
     with tempfile.TemporaryDirectory(prefix="datakit-store-") as scratch_dir:
-        with ProcessPoolExecutor(
-            max_workers=min(partition_processes, len(batch_specs)),
-            mp_context=multiprocessing.get_context("spawn"),
-        ) as executor:
-            results = executor.map(
-                _spill_source_shard,
-                batch_specs,
-                [cluster_col] * len(batch_specs),
-                [scratch_dir] * len(batch_specs),
-                range(len(batch_specs)),
-            )
+        spill = partial(_spill_source_shard, cluster_col=cluster_col, scratch_dir=scratch_dir)
+        shard_indices = range(len(batch_specs))
+        with ExitStack() as pool:
+            if workers == 1:
+                results = map(spill, batch_specs, shard_indices)
+            else:
+                executor = pool.enter_context(
+                    ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"))
+                )
+                results = executor.map(spill, batch_specs, shard_indices)
             for result in results:
                 n_tokens += result.tokens
                 for name, value in result.stats.counters().items():
@@ -598,7 +600,8 @@ def build_clustered_store(
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
             task. Each writer may hold one 512 MiB aligned token buffer.
         partition_processes: Source shards joined and partitioned concurrently
-            into append-only local bucket runs inside each task.
+            into append-only local bucket runs inside each task. A task with one
+            partition worker runs the partition work in the Zephyr process.
     """
     if not tokenize:
         raise ValueError("build_clustered_store: tokenize is empty")

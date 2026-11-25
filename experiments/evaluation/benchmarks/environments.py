@@ -8,6 +8,21 @@ from experiments.post_training.task_curation.environment import Archive, Environ
 
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
+# The vendored LiveCodeBench scorer preloads NumPy and pandas for every submission.
+LIVECODEBENCH_GRADER = Environment(requirements=(*PYTHON_GRADER.requirements, "pandas==2.2.2"))
+TESTLIB_REVISION = "68f9f300b6abebec82d2a68d8ca04394f2664fb6"
+"""MikeMirzayanov/testlib 0.9.41 (MIT), the header the LiveCodeBench Pro judge compiles checkers against."""
+# Compiles replies and testlib checkers with the worker image's g++; testlib.h is installed at /srv/testlib.
+LIVECODEBENCH_PRO_GRADER = Environment(
+    apt=("build-essential",),
+    files={
+        "/srv/testlib/testlib.h": Archive(
+            f"https://github.com/MikeMirzayanov/testlib/archive/{TESTLIB_REVISION}.zip",
+            "017b7922992524abc86092d403562b45b1ae03bfcbcb5a3403f27f530a065505",
+            f"testlib-{TESTLIB_REVISION}/testlib.h",
+        )
+    },
+)
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(
@@ -15,6 +30,8 @@ MATH_GRADER = Environment(
 )
 MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
 JUDGE_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "openai==2.24.0"))
+# The ARC-AGI-2 grid grader uses verifyit's JSON Schema mode.
+ARC_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "jsonschema==4.25.1", "pyyaml==6.0.3"))
 
 NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 NLTK_DATA_ROOT = "/srv/nltk_data"
@@ -31,11 +48,7 @@ ENGLISH_TAGGER = Archive(
 )
 COMMON_REQUIREMENTS = ("nltk==3.10.3", "tomli-w==1.2.0")
 PUNKT_FILES = {NLTK_DATA_ROOT + "/tokenizers/punkt_tab/english": PUNKT_TAB}
-IFEVAL_GRADER = Environment(
-    requirements=(*COMMON_REQUIREMENTS, "langdetect==1.0.9", "immutabledict==4.3.1"),
-    files=PUNKT_FILES,
-    env={"NLTK_DATA": NLTK_DATA_ROOT},
-)
+IFEVAL_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "langdetect==1.0.9"))
 IFBENCH_GRADER = Environment(
     requirements=(*COMMON_REQUIREMENTS, "emoji==2.16.0", "syllapy==0.8.0"),
     files={

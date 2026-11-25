@@ -60,7 +60,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
 from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
@@ -83,6 +83,7 @@ ENDPOINT_BASE_NAME = "nccl-probe"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
+IB_DEVICE_SELECTION_RE = re.compile(r"\bNET/IB\s*:\s*Using\b")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
@@ -104,6 +105,7 @@ class NcclCensus:
 
     nccl_version: str
     transports: list[str]
+    ib_device_lines: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -164,9 +166,10 @@ def build_variants(extra_env: dict[str, str] | None = None) -> list[Variant]:
 
 
 def parse_nccl_census(lines: list[str]) -> NcclCensus:
-    """Extract the NCCL version and selected transports from NCCL INFO output."""
+    """Extract the version, transports, and InfiniBand device selection from NCCL INFO output."""
     version = ""
     transports: list[str] = []
+    ib_device_lines: list[str] = []
     for line in lines:
         if not version:
             match = NCCL_VERSION_RE.search(line)
@@ -175,7 +178,9 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
         match = TRANSPORT_RE.search(line)
         if match and match.group(1) not in transports:
             transports.append(match.group(1))
-    return NcclCensus(nccl_version=version, transports=transports)
+        if IB_DEVICE_SELECTION_RE.search(line) and line not in ib_device_lines:
+            ib_device_lines.append(line)
+    return NcclCensus(nccl_version=version, transports=transports, ib_device_lines=ib_device_lines)
 
 
 def allocate_port_block(count: int) -> int:
@@ -415,6 +420,7 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
         "worker": rank.worker,
         "nccl_version": rank.census.nccl_version,
         "transports": rank.census.transports,
+        "ib_device_lines": rank.census.ib_device_lines,
     }
 
 
@@ -509,6 +515,12 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
+def gate_endpoint_name(job_info: JobInfo) -> str:
+    """Give each GPU gang its own rendezvous within the coordinator namespace."""
+    job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
+    return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
+
+
 def run_gate(args: argparse.Namespace) -> None:
     """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
 
@@ -542,7 +554,7 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    endpoint_name = gate_endpoint_name(job_info)
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

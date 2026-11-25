@@ -4,10 +4,10 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. Both sides are parsed as anchored LaTeX (``$...$``) so math-verify reads a whole expression
-instead of the first bare number it finds, falling back to parsing the raw text with math-verify's
-own anchors (``the answer is ...``) when the anchored parse yields nothing. Other profiles retain
-raw source extraction or require a boxed expression; their parser options remain task-controlled.
+none. References parse as a whole LaTeX expression. Candidates first use
+anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
+nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
+options remain task-controlled.
 
 ``math_type`` selects the comparison. Set and interval answers allow math-verify's set/relation
 comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list is an ordered
@@ -21,6 +21,7 @@ import math
 import re
 import threading
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -32,7 +33,6 @@ from verifyit.grade import (
     InvalidTask,
     Reward,
     empty_output_policy,
-    invalid_task,
     numeric_tolerance,
     read_output,
     scored,
@@ -45,6 +45,12 @@ SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
 
 CLOSERS = {"(": ")", "[": "]", "{": "}"}
 SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
+MATH_VERIFIER_DEADLINE = "math_verifier_deadline"
+MATH_DEADLINE_REFERENCE_PARSE = "reference_parse"
+MATH_DEADLINE_CANDIDATE_PARSE = "candidate_parse"
+MATH_DEADLINE_COMPARISON = "comparison"
+"""Which grading step ran out: the reference parse is a task property, while the
+candidate parse and the comparison follow the reply."""
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
@@ -55,6 +61,19 @@ def _timeout() -> int:
 
 
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
+TEXT_GROUP_COMMAND = r"\\(?:text|mbox|mathrm)"
+REFERENCE_TEXT_GROUP = re.compile(TEXT_GROUP_COMMAND + r"\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
+LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
+# Unit normalization strips terminal text groups and their powers.
+TERMINAL_UNIT_POWER = r"\^(?:[+-]?[0-9]|\{\s*[+-]?[0-9]+\s*\})"
+UNIT_GROUP_CONTENT_PATTERN = r"[\s~]*[A-Za-z]+"
+TERMINAL_UNIT_GROUP = TEXT_GROUP_COMMAND + r"\{" + UNIT_GROUP_CONTENT_PATTERN + r"\}"
+TERMINAL_UNIT_SUFFIX = re.compile(
+    rf"(?:{TERMINAL_UNIT_POWER})?(?:\s*(?:/|\\cdot|\\times)\s*{TERMINAL_UNIT_GROUP}(?:{TERMINAL_UNIT_POWER})?)*"
+)
+UNIT_GROUP_CONTENT = re.compile(UNIT_GROUP_CONTENT_PATTERN)
+ORDINAL_SUFFIX = re.compile(r"^(\s*[0-9]+)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -77,13 +96,96 @@ def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = N
     return parse(text, extraction_config=unitless, **kwargs)
 
 
-def _parse(text: str) -> list:
-    """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
+def _parse(text: str, *, strip_units: bool = True) -> list:
+    """Parse a candidate as anchored LaTeX, else as written."""
+    from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
     timeout = _timeout()
+    latex = LatexExtractionConfig()
+    if not strip_units:
+        latex = replace(latex, normalization_config=replace(latex.normalization_config, units=False))
+    extraction_config = [latex, ExprExtractionConfig()]
     return _math_verify_parse(
-        f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True
-    ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
+        f"${strip_math_delimiters(text)}$",
+        extraction_config=extraction_config,
+        parsing_timeout=timeout,
+        raise_on_error=True,
+    ) or _math_verify_parse(text, extraction_config=extraction_config, parsing_timeout=timeout, raise_on_error=True)
+
+
+def _parse_reference(text: str) -> tuple[list, bool]:
+    """Parse a whole reference and return whether candidates should strip units."""
+    from latex2sympy2_extended import latex2sympy, normalize_latex  # noqa: PLC0415
+    from math_verify.grader import should_treat_as_complex  # noqa: PLC0415
+    from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
+    from math_verify.utils import timeout  # noqa: PLC0415
+
+    # Normalization would otherwise leave a dangling exponent before an ordinal text group.
+    value = ORDINAL_SUFFIX.sub(r"\1", strip_math_delimiters(text))
+    text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
+    strip_units = bool(text_groups)
+    symbolic_text_group = False
+    if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
+        return [], strip_units
+    for text_group in text_groups:
+        # Unit normalization removes a terminal text-group suffix. It can
+        # also swallow any intervening expression up to the final closing brace.
+        _, first_close = _scan_brackets(value[text_group.end() - 1 :])
+        if first_close is None:
+            return [], strip_units
+        group_contents = value[text_group.end() : text_group.end() + first_close - 1]
+        suffix = value[text_group.end() + first_close :].strip()
+        terminal_unit_suffix = TERMINAL_UNIT_SUFFIX.fullmatch(suffix)
+        if (
+            suffix
+            and terminal_unit_suffix
+            and not re.fullmatch(TERMINAL_UNIT_POWER, suffix)
+            and not UNIT_GROUP_CONTENT.fullmatch(group_contents)
+        ):
+            return [], strip_units
+        if suffix and not terminal_unit_suffix:
+            prefix = value[: text_group.start()].rstrip()
+            upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
+            no_gap_before_group = text_group.start() > 0 and not value[text_group.start() - 1].isspace()
+            if not re.fullmatch(r"[^\s~]+", group_contents) or (
+                prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol and not no_gap_before_group
+            ):
+                return [], strip_units
+            # A text symbol starting a term or adjacent to one is part of the expression.
+            symbolic_text_group = True
+            strip_units = False
+        if text_group.start() == 0 and len(group_contents.split()) > 4:
+            return [], strip_units
+    latex = LatexExtractionConfig(boxed_match_priority=-1)
+
+    # math-verify can match an inner math fragment or retry only the last equation.
+    @timeout(_timeout())
+    def parse_whole() -> tuple[object, bool]:
+        normalized = normalize_latex(value, config=latex.normalization_config)
+        candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
+        if strip_units and _DANGLING_OPERATOR.search(normalized):
+            # A terminal text symbol can be the operand that unit normalization removed.
+            candidate_strip_units = False
+        if not candidate_strip_units:
+            # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
+            unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+            candidate_strip_units = not symbolic_text_group and normalized == unitless
+            if not candidate_strip_units:
+                normalized = unitless
+        parsed = latex2sympy(
+            normalized,
+            is_real=not should_treat_as_complex(normalized),
+            convert_degrees=False,
+            normalization_config=None,
+        )
+        return parsed, candidate_strip_units
+
+    try:
+        parsed, strip_units = parse_whole()
+    except Exception as error:
+        # latex2sympy reports syntax errors as bare Exception.
+        raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
+    return ([parsed] if parsed is not None else []), strip_units
 
 
 def _as_list(value: Any) -> list:
@@ -281,13 +383,7 @@ def _candidate_parse(parse: Callable[[], list]) -> list:
         return []
 
 
-def _parsed_members(text: str) -> list[list]:
-    return [_parse(member) for member in _split_members(text)]
-
-
 def _members_match(expected: list[list], candidate: list[list]) -> bool:
-    if len(expected) != len(candidate):
-        return False
     return all(
         bool(parsed_candidate) and _verify(parsed_expected, parsed_candidate)
         for parsed_expected, parsed_candidate in zip(expected, candidate, strict=True)
@@ -316,6 +412,36 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
+def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tuple[str, ...]) -> bool:
+    """Prove scalar equality after applying only the contract's positive assumptions."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Expr, Symbol, simplify  # noqa: PLC0415
+    from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
+
+    @timeout(_timeout())
+    def equal_under_assumptions(gold, target) -> bool:
+        replacements = {
+            symbol: Symbol(symbol.name, positive=True)
+            for symbol in gold.free_symbols | target.free_symbols
+            if symbol.name in positive_symbols
+        }
+        return simplify(gold.xreplace(replacements) - target.xreplace(replacements)) == 0
+
+    return any(
+        equal_under_assumptions(gold, target)
+        for gold in expected
+        for target in candidate
+        if isinstance(gold, Expr)
+        and isinstance(target, Expr)
+        and not isinstance(gold, MatrixExpr)
+        and not isinstance(target, MatrixExpr)
+        and gold.is_commutative
+        and target.is_commutative
+        and not _is_undefined(gold)
+        and not _is_undefined(target)
+    )
+
+
 def validate_math(spec: MathSpec) -> None:
     """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
@@ -323,6 +449,17 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if (
+        not isinstance(spec.positive_symbols, tuple)
+        or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+            for name in spec.positive_symbols
+        )
+        or len(set(spec.positive_symbols)) != len(spec.positive_symbols)
+    ):
+        raise InvalidTask("positive_symbols must contain unique symbol names")
+    if spec.positive_symbols and spec.math_type is not MathType.SCALAR:
+        raise InvalidTask("positive_symbols requires scalar math_type")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -334,7 +471,24 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         return _grade_math_candidate(spec, candidate)
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
-        raise GradingInfraError("math verifier deadline exhausted") from error
+        # Phase-tagged deadlines are raised by _deadline_phase below; this catch is the
+        # fallback for any site outside a tagged phase.
+        raise GradingInfraError("math verifier deadline exhausted", code=MATH_VERIFIER_DEADLINE) from error
+
+
+@contextmanager
+def _deadline_phase(phase: str):
+    """Re-raise a math-verify deadline from one grading step with its phase tagged.
+
+    The reference parse is a property of the task; the candidate parse and the
+    comparison follow the reply.
+    """
+    from math_verify.errors import TimeoutException  # noqa: PLC0415
+
+    try:
+        yield
+    except TimeoutException as error:
+        raise GradingInfraError("math verifier deadline exhausted", code=MATH_VERIFIER_DEADLINE, phase=phase) from error
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
@@ -351,35 +505,40 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         boxed = extract_boxed(candidate)
         candidate = f"\\boxed{{{boxed}}}" if boxed else ""
     gold_text = f"\\boxed{{{spec.expected}}}"
-    expected = _math_verify_parse(
-        gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
-    )
+    with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+        expected = _math_verify_parse(
+            gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
+        )
     if not _is_expression(expected):
         raise InvalidTask("raw math profile could not parse the reference")
-    parsed = _math_verify_parse(
-        candidate,
-        extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
-        parsing_timeout=_timeout(),
-        raise_on_error=True,
-    )
-    match = bool(parsed) and _verify(expected, parsed)
-    chosen = None
-    if parsed:
-        gold_strings = strings_of(expected)
-        prediction_strings = strings_of(parsed)
-        chosen = next(
-            (value for value in prediction_strings if any(_verify(gold, value) for gold in gold_strings)),
-            prediction_strings[0],
+    with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+        parsed = _math_verify_parse(
+            candidate,
+            extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
+            parsing_timeout=_timeout(),
+            raise_on_error=True,
         )
-    if not match and spec.allow_additive_constant:
-        latex_prediction = _math_verify_parse(
-            candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
-        )
-        match = _additive_constant_match(expected, latex_prediction)
-        if match:
+    with _deadline_phase(MATH_DEADLINE_COMPARISON):
+        match = bool(parsed) and _verify(expected, parsed)
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
+        chosen = None
+        if parsed:
+            gold_strings = strings_of(expected)
+            prediction_strings = strings_of(parsed)
             chosen = next(
-                strings_of([value])[0] for value in latex_prediction if _additive_constant_match(expected, [value])
+                (value for value in prediction_strings if any(_verify(gold, value) for gold in gold_strings)),
+                prediction_strings[0],
             )
+        if not match and spec.allow_additive_constant:
+            latex_prediction = _math_verify_parse(
+                candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
+            )
+            match = _additive_constant_match(expected, latex_prediction)
+            if match:
+                chosen = next(
+                    strings_of([value])[0] for value in latex_prediction if _additive_constant_match(expected, [value])
+                )
     return scored(float(match), extracted=candidate, expected=spec.expected, parsed_candidate=chosen)
 
 
@@ -390,33 +549,56 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
         if spec.math_type is not MathType.SCALAR:
             raise InvalidTask("boxed math profile requires scalar math_type")
-        expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+            expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
-        parsed = _candidate_parse(
-            lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
-        )
+        with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+            parsed = _candidate_parse(
+                lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+            )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
-        match = bool(_verify(expected, parsed))
-        if not match and spec.allow_additive_constant:
-            match = _additive_constant_match(expected, parsed)
+        with _deadline_phase(MATH_DEADLINE_COMPARISON):
+            match = bool(_verify(expected, parsed))
+            if not match and spec.positive_symbols:
+                match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
+            if not match and spec.allow_additive_constant:
+                match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
     is_list = spec.math_type is MathType.LIST
-    expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
+    reference_members = _split_members(spec.expected) if is_list else [spec.expected]
+    if is_list:
+        # A connector after a list comma normalizes to another leading comma.
+        reference_members = [LEADING_LIST_CONNECTOR.sub("", member) for member in reference_members]
+    with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+        references = [_parse_reference(member) for member in reference_members]
+    expected = [parsed for parsed, _ in references]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
+    candidate_members = _split_members(candidate) if is_list else [candidate]
+    if len(candidate_members) != len(expected):
+        return scored(0.0, extracted=candidate, expected=spec.expected)
+    with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+        parsed = _candidate_parse(
+            lambda: [
+                _parse(member, strip_units=strip_units)
+                for member, (_, strip_units) in zip(candidate_members, references, strict=True)
+            ]
+        )
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 
-    if is_list:
-        match = _members_match(expected, parsed)
-    else:
-        match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
-    if not match and spec.allow_additive_constant and not is_list:
-        match = _additive_constant_match(expected[0], parsed[0])
+    with _deadline_phase(MATH_DEADLINE_COMPARISON):
+        if is_list:
+            match = _members_match(expected, parsed)
+        else:
+            match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+            if not match and spec.positive_symbols:
+                match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
+        if not match and spec.allow_additive_constant and not is_list:
+            match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
 
 
@@ -441,79 +623,6 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
     return grade_math_candidate(spec, math_answer(spec, text))
-
-
-def _numeric_rows(value: object) -> list[list[float]]:
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("numeric rows must be a nonempty matrix")
-    rows = []
-    for row in value:
-        if not isinstance(row, (list, tuple)) or not row:
-            raise ValueError("numeric rows must have nonempty columns")
-        if any(isinstance(cell, bool) or not isinstance(cell, (int, float)) for cell in row):
-            raise ValueError("matrix cells must be numeric")
-        converted = [float(cell) for cell in row]
-        if not all(math.isfinite(cell) for cell in converted):
-            raise ValueError("matrix cells must be finite")
-        if rows and len(converted) != len(rows[0]):
-            raise ValueError("numeric rows must be rectangular")
-        rows.append(converted)
-    return rows
-
-
-def grade_regression_candidate(expected: object, candidate: object, *, variance_floor: float) -> Reward:
-    """Grade groups of finite prediction matrices by pooled, uniform-output R².
-
-    Group counts and each group shape must match before rows are pooled. Within
-    each group, rows are observations and columns are outputs. A variance at or below
-    the task's explicit floor yields zero because normalized error is undefined.
-    Trusted references are validated before candidate data; no sklearn dependency.
-    """
-    try:
-        if isinstance(variance_floor, bool) or not math.isfinite(variance_floor) or variance_floor < 0:
-            raise ValueError("variance floor must be finite and nonnegative")
-        if not isinstance(expected, (list, tuple)) or not expected:
-            raise ValueError("reference must contain nonempty groups")
-        groups = [_numeric_rows(group) for group in expected]
-        truth = _numeric_rows([row for group in groups for row in group])
-        columns = list(zip(*truth, strict=True))
-        means = [math.fsum(column) / len(column) for column in columns]
-        variances = [
-            math.fsum((x - mean) ** 2 for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-        deviations = [
-            math.fsum(abs(x - mean) for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-    except (ValueError, TypeError, OverflowError) as error:
-        return invalid_task(str(error))
-    try:
-        if not isinstance(candidate, (list, tuple)) or len(candidate) != len(groups):
-            raise ValueError("prediction group count differs from reference")
-        predicted_groups = [_numeric_rows(group) for group in candidate]
-        for reference, prediction in zip(groups, predicted_groups, strict=True):
-            if len(prediction) != len(reference) or len(prediction[0]) != len(reference[0]):
-                raise ValueError("prediction group shape differs from reference")
-        prediction = [row for group in predicted_groups for row in group]
-        if any(variance <= variance_floor for variance in variances):
-            return scored(0, reason="undefined_variance")
-        errors = [
-            [actual - target for actual, target in zip(predicted, column, strict=True)]
-            for predicted, column in zip(zip(*prediction, strict=True), columns, strict=True)
-        ]
-        nmse = math.fsum(
-            math.fsum(x * x for x in error) / len(error) / variance
-            for error, variance in zip(errors, variances, strict=True)
-        ) / len(columns)
-        nmae = math.fsum(
-            math.fsum(abs(x) for x in error) / len(error) / deviation
-            for error, deviation in zip(errors, deviations, strict=True)
-        ) / len(columns)
-        r2 = 1.0 - nmse
-        if not all(math.isfinite(value) for value in (nmse, nmae, r2)):
-            raise ValueError("prediction metrics are nonfinite")
-    except (ValueError, OverflowError, ZeroDivisionError) as error:
-        return scored(0, reason="invalid_predictions", error=str(error))
-    return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:

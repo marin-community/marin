@@ -12,6 +12,7 @@ from iris.cluster.controller import db, writes
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.write_lock_cost import CostWindow
 from iris.cluster.types import WorkerId
 from sqlalchemy import insert, select
 
@@ -171,7 +172,9 @@ def test_cascade_delete_invalidates_projection(state):
 
     health = WorkerHealthTracker()
     health.register(worker_id, now_ms=1000)
-    with db.write_transaction(state._db.sa_write_engine, threading.RLock(), state._db.caches) as tx:
+    with db.write_transaction(
+        state._db.sa_write_engine, threading.RLock(), state._db.caches, CostWindow(started=0.0)
+    ) as tx:
         writes.remove_worker(
             tx,
             worker_id,

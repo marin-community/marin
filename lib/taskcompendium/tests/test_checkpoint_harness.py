@@ -11,7 +11,7 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import ChoiceLikelihood
-from taskcompendium.importers.evalchemy.biomedical import pubmedqa_template
+from taskcompendium.importers.evalchemy.biomedical import medmcqa_template, pubmedqa_template
 from taskcompendium.importers.evalchemy.code import read_humaneval_fewshot
 from taskcompendium.importers.evalchemy.commonsense import commonsense_qa_template, copa_template, wsc_template
 from taskcompendium.importers.evalchemy.reasoning import agieval_template, gpqa_likelihood_template
@@ -107,6 +107,37 @@ def test_pubmedqa_joins_abstract_sections_and_scores_three_way_decision(tmp_path
         (prompt, " maybe"),
     ]
     assert operation.gold == (2,)
+
+
+def test_medmcqa_scores_answer_letters_after_lettered_options(tmp_path):
+    document = {
+        "question": "Which vitamin deficiency causes scurvy?",
+        "opa": "Vitamin A",
+        "opb": "Vitamin C",
+        "opc": "Vitamin D",
+        "opd": "Vitamin K",
+        "cop": 1,
+    }
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.Table.from_pylist([document]), path)
+    (row,) = read_choice_file(
+        StoragePath(str(path)),
+        ConversionContext(inputs={}, grader_environment=None),
+        template=medmcqa_template(),
+    )
+    operation = ChoiceLikelihood.model_validate(row["operation"])
+    # Rendered by lm-eval utils_medmcqa.doc_to_text at d6de81643928d653435c431bae19945d41d32520.
+    prompt = (
+        "Question: Which vitamin deficiency causes scurvy?\nChoices:\nA. Vitamin A\nB. Vitamin C\n"
+        "C. Vitamin D\nD. Vitamin K\nAnswer:"
+    )
+    assert [(request.context, request.continuation) for request in operation.requests] == [
+        (prompt, " A"),
+        (prompt, " B"),
+        (prompt, " C"),
+        (prompt, " D"),
+    ]
+    assert operation.gold == (1,)
 
 
 def test_winogrande_fewshots_precede_both_candidate_contexts():

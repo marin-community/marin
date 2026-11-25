@@ -1,6 +1,9 @@
 import asyncio
 import copy
+import json
+import math
 import os
+import time
 from collections import defaultdict
 from datetime import timedelta
 from enum import StrEnum
@@ -15,11 +18,16 @@ from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
 from megatron.core.optimizer import DistributedOptimizer
+from megatron.core.optimizer.optimizer import ChainedOptimizer, MixedPrecisionOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.io import io
+from skyrl_train.telemetry import record_event
+from skyrl_train.trainer_memory_profile import preserve_training_state, warm_state_profile
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
@@ -46,12 +54,8 @@ from skyrl_train.training_batch import (
 from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.utils.progress import tqdm
-from skyrl_train.utils.utils import (
-    get_physical_gpu_id,
-    moe_router_replay_requested,
-    str_to_torch_dtype,
-    update_model_config,
-)
+from skyrl_train.utils.utils import get_physical_gpu_id, str_to_torch_dtype, update_model_config
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot
@@ -80,6 +84,12 @@ from skyrl_train.training_batch import TrainingInputBatch
 class _MegatronInitMode(StrEnum):
     TRAINING = "training"
     CHECKPOINT_EXPORT = "checkpoint-export"
+
+
+# Outcome labels shared by the sizing report, its headroom gate and the receipt consumers.
+SIZING_PASSED = "passed"
+SIZING_OOM = "oom"
+SIZING_INSUFFICIENT_HEADROOM = "insufficient_headroom"
 
 
 class MegatronWorker:
@@ -575,6 +585,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
+            output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.get("output_projection_chunk_size"),
         )
         self._maybe_install_router_replay("policy")
 
@@ -608,6 +619,136 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
         )
+
+    def profile_train_memory(self) -> dict:
+        """Exercise the configured optimizer warm at capacity before initial weight publication/rollouts."""
+        config = self.cfg.trainer.policy.megatron_config.memory_profile
+        maximum = config.max_sequence_length
+        if maximum > self.strategy.hf_config.max_position_embeddings:
+            raise ValueError("Trainer sizing maximum exceeds the model's max_position_embeddings")
+        trained = self.cfg.trainer.algorithm.get("max_seq_len")
+        if trained is not None and trained > maximum:
+            raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
+        token_counts = sorted(set([*config.valid_token_counts, maximum]))
+        device = torch.cuda.current_device()
+        rng_state = MegatronStrategy.get_rng_state()
+        rng_tracker = get_cuda_rng_tracker()
+        tracker_states = copy.deepcopy(rng_tracker.get_states())
+        modes = [(module, module.training) for chunk in self.actor_module for module in chunk.modules()]
+        reports = []
+        destination = prefix_join(self.cfg.trainer.export_path, f"trainer-sizing/rank-{self._rank}.json")
+
+        def publish():
+            report = {"rank": self._rank, "max_seq_len": maximum, "measurements": reports}
+            io.write_bytes_atomic(destination, (json.dumps(report, sort_keys=True) + "\n").encode())
+            return report
+
+        def step(tokens):
+            generator = torch.Generator().manual_seed(20261020 + mpu.get_data_parallel_rank())
+            batch_size = self.cfg.trainer.micro_train_batch_size_per_gpu
+            sequences = torch.randint(
+                self.strategy.hf_config.vocab_size, (batch_size, tokens), generator=generator, dtype=torch.long
+            ).to(device)
+            attention = torch.ones_like(sequences, dtype=torch.bool)
+            action_shape = (batch_size, tokens - 1)
+            old = torch.full(action_shape, -math.log(self.strategy.hf_config.vocab_size), device=device)
+            advantages = torch.ones(action_shape, device=device)
+            advantages[:, 1::2] = -1
+            micro = MegatronPolicyMicroBatch(
+                sequences=sequences,
+                attention_mask=attention,
+                position_ids=torch.arange(tokens, device=device).expand(batch_size, -1),
+                num_actions=tokens - 1,
+                old_action_log_probs=old,
+                base_action_log_probs=old.clone() if self.cfg.trainer.algorithm.use_kl_loss else None,
+                advantages=advantages,
+                loss_mask=torch.ones(action_shape, device=device),
+                rollout_action_logprobs=old.clone(),
+                response_span_tags=torch.zeros(action_shape, dtype=torch.int8, device=device),
+            )
+            self.model.train()
+            self.optimizer.zero_grad()
+            for chunk in self.actor_module:
+                chunk.zero_grad_buffer()
+            # Fill the real pipeline's activation slots, not just one under-filled PP microbatch.
+            self.model.forward_backward_mini_batch(
+                [micro] * mpu.get_pipeline_model_parallel_world_size(),
+                seq_len=tokens,
+                micro_batch_size=batch_size,
+                temperature=self.scoring_temperature,
+            )
+            result = self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, name="sizing")
+            if not result.applied:
+                raise RuntimeError("Synthetic trainer sizing did not apply its optimizer update")
+            torch.cuda.synchronize(device)
+
+        def measure(tokens, run, warm_optimizer):
+            torch.cuda.synchronize(device)
+            torch.cuda.empty_cache()
+            free_before, total = torch.cuda.mem_get_info(device)
+            external_before = max(0, total - free_before - torch.cuda.memory_reserved(device))
+            torch.cuda.reset_peak_memory_stats(device)
+            started = time.monotonic()
+            outcome = SIZING_PASSED
+            try:
+                run()
+            except torch.OutOfMemoryError:
+                outcome = SIZING_OOM
+                raise
+            finally:
+                free_after, _ = torch.cuda.mem_get_info(device)
+                allocated = torch.cuda.max_memory_allocated(device)
+                reserved = torch.cuda.max_memory_reserved(device)
+                external_after = max(0, total - free_after - torch.cuda.memory_reserved(device))
+                estimated_used = reserved + max(external_before, external_after)
+                headroom = total - estimated_used
+                report = {
+                    "valid_tokens": tokens,
+                    "warm_optimizer": warm_optimizer,
+                    "seconds": time.monotonic() - started,
+                    "peak_allocated_bytes": allocated,
+                    "peak_reserved_bytes": reserved,
+                    "device_total_bytes": total,
+                    "estimated_headroom_bytes": headroom,
+                    "minimum_headroom_fraction": config.minimum_headroom_fraction,
+                    "outcome": outcome,
+                }
+                if outcome == SIZING_PASSED and headroom < total * config.minimum_headroom_fraction:
+                    report["outcome"] = SIZING_INSUFFICIENT_HEADROOM
+                reports.append(report)
+                record_event("trainer_memory_profile", report, attributes={"rank": str(self._rank)})
+                publish()
+                logger.info("Trainer sizing rank={} {}", self._rank, report)
+            if report["outcome"] != SIZING_PASSED:
+                raise RuntimeError(f"Trainer sizing failed before rollouts: rank={self._rank} {report}")
+            return report
+
+        try:
+            children = self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
+            optimizers = [
+                child.optimizer for child in children
+                if not (isinstance(child, DistributedOptimizer) and child.is_stub_optimizer)
+            ]
+            scalers = [
+                child.grad_scaler for child in children
+                if isinstance(child, MixedPrecisionOptimizer) and child.grad_scaler is not None
+            ]
+            master_shards = [parameter for optimizer in optimizers for group in optimizer.param_groups for parameter in group["params"]]
+            with preserve_training_state(
+                [*self.actor_module, *optimizers, *scalers, self.scheduler],
+                optimizer_parameters=master_shards,
+                cuda_devices=[device],
+            ):
+                warm_state_profile(token_counts, step=step, measure=measure)
+        finally:
+            for module, was_training in modes:
+                module.training = was_training
+            MegatronStrategy.load_rng_state(rng_state)
+            rng_tracker.set_states(tracker_states)
+            self.optimizer.zero_grad()
+            for chunk in self.actor_module:
+                chunk.zero_grad_buffer()
+        return publish()
 
     def _ppo_train_impl(self, train_data, timing: PhaseBreakdown) -> "TrainingOutputBatch":
         """Train through Megatron Core's pipeline scheduler."""
