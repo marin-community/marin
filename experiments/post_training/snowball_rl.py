@@ -231,6 +231,10 @@ _REPORTING_P40 = replace(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
+# The nightly Iris principal can submit H100 workloads in Reno.
+_RENO_P40 = replace(_ASYNC_P40, layout=replace(P40, cluster="cw-rno2a"))
+_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_P40.layout.cluster))
+
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
@@ -267,7 +271,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_REPORTING_P40,
+    recipe=replace(_REPORTING_P40, layout=_RENO_P40.layout),
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -410,9 +414,9 @@ _PRESETS = (
         name="speed-short",
         checkpoints="none",
         recipe=replace(
-            _GENERATING,
+            _RENO_GENERATING,
             fixed_reply_tokens=4096,
-            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+            config=_RENO_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
         ),
         updates=0,
         measured=range(1),
@@ -426,7 +430,7 @@ _PRESETS = (
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="data-short",
         checkpoints="none",
-        recipe=_GENERATING,
+        recipe=_RENO_GENERATING,
         updates=0,
         measured=range(1),
         tasks_input="required",
@@ -442,9 +446,9 @@ _PRESETS = (
         name="speed-medium",
         checkpoints="none",
         recipe=replace(
-            _ASYNC_P40,
+            _RENO_P40,
             fixed_reply_tokens=4096,
-            config=_ASYNC_P40.config.merge(
+            config=_RENO_P40.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
                 )
@@ -462,7 +466,7 @@ _PRESETS = (
         evaluations=(),
         name="speed-long",
         checkpoints="none",
-        recipe=_ASYNC_P40,
+        recipe=_RENO_P40,
         updates=20,
         measured=range(3, 21),
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,

@@ -347,7 +347,7 @@ under the preset's output root.
 3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
    with fewer than five completed controls gets enough runs to reach five. Otherwise the workflow
    starts one run per preset. Dispatch the workflow with `controls=true` and optional `model` and
-   `preset` filters to run a subset. Snowball uses H100s and the Mochi speed and learning presets
+   `preset` filters to run a subset. Snowball's gated presets use Reno H100s. The Mochi speed and learning presets
    each use one GB200 rack.
 
 ## Tasks and evaluation
