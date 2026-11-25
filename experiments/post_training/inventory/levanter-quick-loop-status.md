@@ -21,6 +21,18 @@ configured. The limit is 64 records and 32 KiB per native process. ACK, atexit
 and watchdog events add no file writes. Missing or incomplete phase evidence
 cannot qualify a diagnostic; no full-model shutdown fix is established.
 
+The first two-host tiny diagnostic at `8c838edfbd` stopped before starting the
+learner driver. Both Ray nodes joined, then the existing driver launcher rejected
+the missing `SKYRL_HOME` runtime-checkout setting. Retained task errors establish
+the cause; an independent bounded log query returned no rows. The head archive
+verifies source and exact input staging, with no learner receipts. The companion
+archive is unavailable and both original Pods are absent. A local control
+reproduced the failure before process creation and passed with an explicit
+checkout path and a harmless child. No learner lifecycle or full-model gate
+passed. The next two-host diagnostic launcher must set
+`SKYRL_HOME=/app/vendor/skyrl` inside the container.
+[Two-host bootstrap failure](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-twohost-20261125-1)
+
 At runtime source `634a4baa9c`, the production observer-OFF one-H100 tiny
 Snowball run passed all 24 independent terminal checks with the deterministic
 compiler profile. Its genuine Ray `HostWorker` completed two finite updates;

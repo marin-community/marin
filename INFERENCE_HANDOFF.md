@@ -41,6 +41,19 @@ The artifact is limited to 64 records and 32 KiB per native process. Missing
 or incomplete phase evidence cannot qualify a diagnostic. This adds evidence
 collection; the full-model shutdown failure remains unresolved.
 
+The first two-host tiny diagnostic at `8c838edfbd` stopped before starting the
+learner driver. Both Ray nodes joined, but the experimental launcher omitted
+`SKYRL_HOME`, which the existing driver launcher requires to identify its
+immutable runtime checkout. Retained task errors establish this failure; the
+separate log query returned no rows. The head archive verifies source and input
+staging, with no learner receipts. The companion archive is unavailable and
+both Pods are absent. A local control reproduced the failure before process
+creation, then launched and reaped a harmless child with the checkout as its
+working directory. The next two-host diagnostic launcher must set
+`SKYRL_HOME=/app/vendor/skyrl` inside the container. No learner gate passed in
+this run.
+[Two-host bootstrap failure](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-twohost-20261125-1)
+
 | Gate | Integrated path |
 | --- | --- |
 | Paged inference | Snowball initializes KV pages and runs prefill and decode with GPU and TPU implementations. Tests cover mixed requests, compact short-window KV, and reuse of retained prompt pages. |
@@ -58,6 +71,8 @@ separately.
 The binary serving endpoint is `/v1/levanter/generate`: a versioned frame
 containing JSON metadata and safetensors tensors. It is separate from the
 learner's local pickle-protocol-5 IPC and the protobuf worker-pipe proofs.
+SkyRL has no inference-engine adapter for this binary endpoint on this branch.
+Its quick-loop recipe still uses the vLLM engine group.
 
 Penalty-free training is supported by disabling both `use_kl_loss` and
 `use_kl_in_reward`. The quick-loop bridge requires both off, supplies no
