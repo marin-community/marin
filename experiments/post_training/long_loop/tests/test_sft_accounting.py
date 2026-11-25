@@ -201,6 +201,22 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
             destinations[str(archive / "objects/sft-data" / name)]
             == hashlib.sha256((output / name).read_bytes()).hexdigest()
         )
+    modern = tmp_path / "accounting-with-separate-population"
+    modern.mkdir()
+    population = {name: pins[name] for name in ("truncation-census.json", "population-padding.json", "decision.md")}
+    producer_files = [item for item in receipt["files"] if item["name"] not in population]
+    for item in producer_files:
+        (modern / item["name"]).write_bytes((output / item["name"]).read_bytes())
+    (modern / "receipt.json").write_text(json.dumps({**receipt, "files": producer_files}))
+    with pytest.raises(ValueError, match="lacks population"):
+        sft_accounting_inputs(str(modern))
+    modern_inputs, modern_receipt = sft_accounting_inputs(str(modern), population)
+    assert modern_receipt["supplemental_population_evidence"] == population
+    seal_archive(str(tmp_path / "modern-archive"), modern_inputs, {"sft_data_accounting": modern_receipt})
+    decision = tmp_path / "decision.md"
+    decision.write_text("changed after pinning")
+    with pytest.raises(ValueError, match="Supplemental accounting evidence changed"):
+        sft_accounting_inputs(str(modern), population)
     (output / "realized-truncation-padding.json").write_text("{}")
     with pytest.raises(ValueError, match="artifact changed"):
         sft_accounting_inputs(str(output))

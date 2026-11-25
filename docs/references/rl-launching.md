@@ -605,6 +605,12 @@ Accounting saves an immutable sample prefix and `.pin.json` every 4,096 samples
 under `progress/`. After an interruption, supply the latest complete pin's JSON
 contents as `accounting_resume`; replay verifies both the consumed configuration and native
 checkpoint before continuing after that prefix.
+After accounting succeeds, adopt its `sft_data_accounting` artifact to retry only
+the archive. When population reports were published separately from accounting,
+set `archive.sft_data_accounting.population_evidence` in the resolved recovery
+specification to filename/source/SHA-256 pins. The archive verifies these pins,
+requires the same population/padding/decision evidence, and records the supplement
+without changing the accounting producer.
 
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the

@@ -486,7 +486,9 @@ def derive_archive_plan(
     inputs, documents, limitations, blockers = [], {}, [], []
     sft_accounting = None
     if "sft_data_accounting" in roots:
-        accounting_inputs, sft_accounting = sft_accounting_inputs(roots["sft_data_accounting"])
+        accounting_inputs, sft_accounting = sft_accounting_inputs(
+            roots["sft_data_accounting"], settings["sft_data_accounting"].get("population_evidence")
+        )
         inputs.extend(vars(item) for item in accounting_inputs)
     if "finalization" in roots:
         inputs.append(_input(prefix_join(roots["finalization"], "finalization.json"), "finalization.json", "provenance"))

@@ -10,7 +10,8 @@ from experiments.post_training.long_loop.graph import execute_local_graph
 
 
 @pytest.mark.parametrize("adopt_report", [False, True])
-def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monkeypatch, adopt_report):
+@pytest.mark.parametrize("adopt_accounting", [False, True])
+def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monkeypatch, adopt_report, adopt_accounting):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "outputs"))
     roots = {}
     for key in ("inputs", "sft", "sft_adoption", "export", "rl", "finalization", "eval_inputs", "eval"):
@@ -29,6 +30,12 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
             (directory / "producer.txt").write_text(f"original-{key}")
             roots[key] = str(directory)
     calls = []
+    if adopt_accounting:
+        directory = tmp_path / "original" / "sft_data_accounting"
+        directory.mkdir()
+        (directory / "producer.txt").write_text("original-sft_data_accounting")
+        (directory / "accounting.txt").write_text("original SFT consumption")
+        roots["sft_data_accounting"] = str(directory)
     remote_timeouts = {}
 
     def bind_remote(fn, **kwargs):
@@ -103,10 +110,15 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
         "task_timeouts": {"accounting": 21600},
     }
     terminal = postprocess.build_postprocessing_graph(plan, resolved)
-    assert remote_timeouts["accounting"] == postprocess.Duration.from_seconds(21600)
+    if not adopt_accounting:
+        assert remote_timeouts["accounting"] == postprocess.Duration.from_seconds(21600)
     assert remote_timeouts["archive"] == postprocess.Duration.from_seconds(5400)
     execute_local_graph(terminal)
-    assert calls == (["accounting", "archive"] if adopt_report else ["merge", "report", "accounting", "archive"])
+    assert calls == [
+        *([] if adopt_report else ["merge", "report"]),
+        *([] if adopt_accounting else ["accounting"]),
+        "archive",
+    ]
     assert Path(terminal.path(), "archive.txt").read_text() == "evidence archive"
     for key, root in roots.items():
         assert Path(root, "producer.txt").read_text() == f"original-{key}"

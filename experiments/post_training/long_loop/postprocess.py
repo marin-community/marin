@@ -147,7 +147,7 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
     if not isinstance(resources.device, CpuConfig):
         raise ValueError("Postprocessing requires the resolved CPU archive resources")
     timeouts = {**resolved_spec["execution"]["task_timeouts"], **plan.get("task_timeouts", {})}
-    accounting = apply(
+    accounting = handles.get("sft_data_accounting") or apply(
         f"{name}/sft-data-accounting",
         remote(
             write_sft_accounting,

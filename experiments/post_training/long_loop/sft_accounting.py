@@ -391,7 +391,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     )
 
 
-def sft_accounting_inputs(root: str) -> tuple[list[ArchiveInput], dict]:
+def sft_accounting_inputs(root: str, population_evidence: dict | None = None) -> tuple[list[ArchiveInput], dict]:
     """Verify every accounting artifact before adding it to the durable archive."""
     receipt = json.loads((StoragePath(root) / "receipt.json").read_text())
     required = {
@@ -401,7 +401,8 @@ def sft_accounting_inputs(root: str) -> tuple[list[ArchiveInput], dict]:
         "realized-truncation-padding.json",
         "realized-samples.jsonl",
     }
-    if not required <= {item["name"] for item in receipt["files"]}:
+    supplemental = population_evidence or {}
+    if not required <= {item["name"] for item in receipt["files"]} | supplemental.keys():
         raise ValueError("SFT accounting lacks population, realized, padding or decision evidence")
     inputs = [ArchiveInput(str(StoragePath(root) / "receipt.json"), "sft-data/receipt.json", "dataset")]
     for item in receipt["files"]:
@@ -409,4 +410,12 @@ def sft_accounting_inputs(root: str) -> tuple[list[ArchiveInput], dict]:
         if digest(uri)[1] != item["sha256"]:
             raise ValueError(f"SFT accounting artifact changed: {item['name']}")
         inputs.append(ArchiveInput(uri, "sft-data/" + item["name"], "dataset"))
+    for name, pin in supplemental.items():
+        if name in {item["name"] for item in receipt["files"]}:
+            raise ValueError(f"Supplemental accounting evidence duplicates a producer file: {name}")
+        if digest(pin["source"])[1] != pin["sha256"]:
+            raise ValueError(f"Supplemental accounting evidence changed: {name}")
+        inputs.append(ArchiveInput(pin["source"], "sft-data/" + name, "dataset"))
+    if supplemental:
+        receipt = {**receipt, "supplemental_population_evidence": supplemental}
     return inputs, receipt
