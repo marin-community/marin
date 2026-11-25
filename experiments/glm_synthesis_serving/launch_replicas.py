@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit independent TP4 replicas through the maintained Iris serving backend."""
+"""Submit independent single-node replicas through the maintained Iris serving backend."""
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from fray.iris_backend import convert_constraints, convert_environment, convert_
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint
+from iris.rpc.proto_display import priority_band_value
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
@@ -36,6 +37,7 @@ def main() -> None:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("--priority", choices=("interactive",), required=True)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.count < 1 or args.start_index < 0 or args.start_index + args.count > pool.POOL_INSTANCES:
@@ -62,7 +64,7 @@ def main() -> None:
                     constraints=convert_constraints(resources),
                     environment=convert_environment(service.iris.worker_environment),
                     ports=["http"],
-                    priority_band=pool.PRIORITY,
+                    priority_band=priority_band_value(args.priority),
                     max_retries_failure=REPLICA_RETRIES,
                     max_task_failures=REPLICA_RETRIES,
                     max_retries_preemption=pool.MAX_RETRIES_PREEMPTION,

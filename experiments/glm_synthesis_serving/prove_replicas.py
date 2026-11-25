@@ -356,13 +356,23 @@ def main() -> None:
     parser.add_argument("--duration", type=float, default=900)
     parser.add_argument("--wait-timeout", type=float, default=7200)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--request-sample", help="Regional JSON sample of archived real request bodies.")
     args = parser.parse_args()
     if args.requests < PROOF_REQUEST_COUNT or args.requests < len(args.endpoint):
         raise ValueError(f"Proof requires at least {PROOF_REQUEST_COUNT} requests and one per replica")
     if args.concurrency < 1 or args.duration < 0 or args.wait_timeout < 0:
         raise ValueError("Concurrency must be positive and durations must not be negative")
     targets = ready_targets(args.endpoint, args.wait_timeout)
-    bodies = archived_requests(args.requests)
+    if args.request_sample:
+        fs, path = filesystem_for(args.request_sample)
+        with fs.open(path) as source:
+            bodies = json.load(source)
+        if len(bodies) != args.requests:
+            raise ValueError("Request sample size must match --requests")
+        for body in bodies:
+            body["model"] = pool.SERVED_MODEL_NAME
+    else:
+        bodies = archived_requests(args.requests)
     output = StoragePath(args.output)
     started = time.monotonic()
     outcomes = asyncio.run(prove(targets, bodies, args.concurrency))

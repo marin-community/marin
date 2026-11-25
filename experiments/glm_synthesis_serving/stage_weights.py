@@ -3,7 +3,7 @@
 
 """Stage the pinned GLM-5.3-Flash weights into the pool's in-region prefix.
 
-Run as an Iris CPU job on cw-us-east-08a. The cache helper resumes partial staging
+Run as an Iris CPU job on cw-rno2a. The cache helper resumes partial staging
 and reuses a completed snapshot; the 306 GiB weights never pass through the Mac.
 """
 

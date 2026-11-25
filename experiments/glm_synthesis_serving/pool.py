@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned single-tray GLM-5.3-Flash recipe for independent Iris replicas."""
+"""Pinned single-node H100 recipe for independent GLM-5.3-Flash replicas."""
 
 from fray.types import ResourceConfig, create_environment
 from iris.rpc.proto_display import priority_band_value
@@ -17,12 +17,12 @@ from marin.inference.config import (
 MODEL_REPO = "zai-org/GLM-5.3-Flash"
 MODEL_REVISION = "46a050bec13002ad29ee795c16e61cf4fa3c4a9c"
 SERVED_MODEL_NAME = "glm-5.3"
-CLUSTER = "cw-us-east-08a"
-WEIGHTS_PREFIX = f"s3://marin-us-east-08a/marin/users/benfeuer/models/glm-5.3-flash/{MODEL_REVISION}"
+CLUSTER = "cw-rno2a"
+WEIGHTS_PREFIX = f"s3://marin-rno2a/marin/users/benfeuer/models/glm-5.3-flash/{MODEL_REVISION}"
 ENDPOINT_NAME = "/serve/glm-5-3-flash"
 CONTROLLER_PROXY_ORIGIN = "http://iris-controller-svc:10000"
-GPUS_PER_ENGINE = 4
-POOL_INSTANCES = 32
+GPUS_PER_ENGINE = 8
+POOL_INSTANCES = 24
 VLLM_VERSION = "0.34.0"
 RUNAI_STREAMER_VERSION = "0.17.1"
 MAX_MODEL_LEN = 262_144
@@ -32,7 +32,7 @@ GPU_MEMORY_UTILIZATION = 0.90
 GLM_PARSER = "glm47"
 REQUEST_TIMEOUT_SECONDS = 3600.0
 MAX_RETRIES_PREEMPTION = 10
-PRIORITY = priority_band_value("production")
+PRIORITY = priority_band_value("interactive")
 SERVICE_TIMEOUT_HOURS = 72.0
 JOB_PREFIX = "glm-synthesis-serving"
 
@@ -51,7 +51,8 @@ def engine() -> VllmEngineConfig:
             "--gpu-memory-utilization",
             str(GPU_MEMORY_UTILIZATION),
             "--kv-cache-dtype",
-            "fp8",
+            "auto",
+            "--disable-flashinfer-autotune",
             "--enable-prefix-caching",
             "--tool-call-parser",
             GLM_PARSER,
@@ -75,16 +76,21 @@ def model() -> ServedModelConfig:
 
 
 def worker_resources() -> ResourceConfig:
-    """One GB200x4 tray, submitted directly to the pool controller.
+    """One eight-H100 node, submitted directly to the pool controller.
 
     Streaming the full 306 GiB checkpoint exceeded 256 GiB of host memory;
     512 GiB accommodates its load-time buffers.
     """
-    return ResourceConfig.with_gpu("GB200", count=GPUS_PER_ENGINE, cpu=16.0, ram="512g", disk="200g", preemptible=False)
+    return ResourceConfig.with_gpu("H100", count=GPUS_PER_ENGINE, cpu=32.0, ram="512g", disk="200g", preemptible=False)
 
 
 def iris_config() -> IrisConfig:
     return IrisConfig(
         worker_resources=worker_resources(),
-        worker_environment=create_environment(),
+        worker_environment=create_environment(
+            env_vars={
+                "MARIN_PREFIX": "s3://marin-rno2a/marin",
+                "MARIN_TEMP_PREFIX": "s3://marin-rno2a/tmp",
+            }
+        ),
     )
