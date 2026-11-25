@@ -5,7 +5,8 @@
 
 Submits a single Iris job that boots a serving backend on a TPU slice or GPU allocation and
 registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
-stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
+stops itself after ``--timeout-hours`` so a forgotten server frees its slice; ``--no-timeout``
+keeps a persistent endpoint up until the job is cancelled.
 
 Examples::
 
@@ -51,6 +52,7 @@ from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
+from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
@@ -96,6 +98,7 @@ _LEVANTER_GPU_EXTRAS = ("gpu",)
 _ENDPOINT_READY_POLL_SECONDS = 5.0
 _BROKER_WORKER_TIMEOUT_FRACTION = 0.9
 _BROKER_LEASE_TIMEOUT_FRACTION = 0.95
+_MAX_CAPABILITY_TTL_HOURS = MAX_ENDPOINT_TOKEN_TTL_SECONDS / 3600
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
 # other backend is a mistake worth failing on, but several carry non-None defaults, so only a
@@ -345,7 +348,7 @@ def _wait_and_report_endpoint(
     wait_timeout: float,
     proxy_url: str,
     dashboard_url: str | None,
-    timeout_hours: float,
+    timeout_hours: float | None,
 ) -> None:
     """Wait, mint the scoped URL, and hold the tunnel independently of submission planning."""
     click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
@@ -358,7 +361,9 @@ def _wait_and_report_endpoint(
     click.echo("")
     # Mint after the endpoint registers (the controller resolves the row for owner authz),
     # so the token is bound to a live endpoint.
-    _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+    # A persistent server outlives any token; ask for the longest one the controller allows.
+    ttl_hours = _MAX_CAPABILITY_TTL_HOURS if timeout_hours is None else timeout_hours
+    _mint_and_print_capability_url(client, endpoint, dashboard_url, ttl_hours)
     click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
     with contextlib.suppress(KeyboardInterrupt):
         while True:
@@ -440,6 +445,12 @@ def _wait_and_report_endpoint(
 )
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
 @click.option(
+    "--no-timeout",
+    is_flag=True,
+    default=False,
+    help="Keep the server up until the job is cancelled (for a persistent endpoint); overrides --timeout-hours.",
+)
+@click.option(
     "--proxy-timeout",
     type=float,
     default=600.0,
@@ -473,6 +484,11 @@ def _wait_and_report_endpoint(
     is_flag=True,
     default=False,
     help="Use the request broker for one instance; multiple instances always use it.",
+)
+@click.option(
+    "--served-model-name",
+    default=None,
+    help="Model name clients send to the OpenAI API and the dashboard uses (default: the model path).",
 )
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
 @click.option(
@@ -549,6 +565,7 @@ def main(
     cache_ttl_days: int,
     no_cache: bool,
     timeout_hours: float,
+    no_timeout: bool,
     proxy_timeout: float,
     region: str | None,
     cpu: float,
@@ -559,6 +576,7 @@ def main(
     priority: str | None,
     instances: int,
     broker: bool,
+    served_model_name: str | None,
     vllm_args: tuple[str, ...],
     vllm_metrics_config: Path | None,
     vllm_version: str,
@@ -594,6 +612,12 @@ def main(
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
+    if not no_timeout and timeout_hours <= 0:
+        raise click.ClickException("--timeout-hours must be positive; use --no-timeout for a persistent endpoint.")
+    server_timeout_hours = None if no_timeout else timeout_hours
+    if any(arg.partition("=")[0] == "--served-model-name" for arg in vllm_args):
+        # vLLM would answer to the new name while the dashboard kept sending the old one.
+        raise click.ClickException("Use --served-model-name, not --vllm-arg=--served-model-name.")
 
     extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
 
@@ -646,6 +670,8 @@ def main(
     brokered = broker or instances > 1
     if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
         raise click.ClickException("multi-host TPU serving requires one instance and no broker")
+    if brokered and not preemptible:
+        raise click.ClickException("--no-preemptible applies only to direct serves, not --broker or --instances > 1.")
     broker_config = (
         BrokerConfig(
             worker=InferenceWorkerConfig(
@@ -693,6 +719,7 @@ def main(
     )
     model_config = ServedModelConfig(
         weights=model,
+        api_model=served_model_name,
         dtype=dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
@@ -713,7 +740,7 @@ def main(
         endpoint_name=endpoint,
         instances=instances,
         broker=broker_config,
-        timeout_hours=timeout_hours,
+        timeout_hours=server_timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
@@ -799,7 +826,7 @@ def main(
                 click.echo(f"  share url    {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             else:
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
-            click.echo(f"  timeout      {timeout_hours:g}h")
+            click.echo(f"  timeout      {'none (runs until cancelled)' if no_timeout else f'{timeout_hours:g}h'}")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
                 click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
@@ -818,7 +845,7 @@ def main(
                 wait_timeout,
                 proxy_url,
                 dashboard_url,
-                timeout_hours,
+                server_timeout_hours,
             )
 
 

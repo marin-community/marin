@@ -54,7 +54,14 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, _staged_model, run_iris_service
+from marin.inference.iris import (
+    IrisServiceConfig,
+    _block_until_timeout,
+    _resolved_engine,
+    _resolved_model,
+    _staged_model,
+    run_iris_service,
+)
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -1133,6 +1140,71 @@ def test_iris_serve_priority_sets_job_band(monkeypatch, flags, band):
 
     assert result.exit_code == 0, result.output
     assert client.submit.call_args.kwargs["priority_band"] == job_pb2.PriorityBand.Value(band)
+
+
+def test_iris_serve_no_timeout_runs_until_cancelled(monkeypatch):
+    result, client, services, mint = _invoke_iris_serve(monkeypatch, "--no-timeout")
+
+    assert result.exit_code == 0, result.output
+    assert services[0].timeout_hours is None
+    assert "none (runs until cancelled)" in result.output
+    # The Iris job itself carries no wall-clock limit either.
+    assert client.submit.call_args.kwargs.get("timeout") is None
+    assert mint.call_args.args[3] == 7 * 24.0
+
+
+def test_iris_serve_rejects_zero_timeout_hours(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--timeout-hours", "0")
+
+    assert result.exit_code != 0
+    assert "--no-timeout" in result.output
+    client.submit.assert_not_called()
+
+
+def test_block_until_timeout_without_a_limit_polls_until_the_server_dies(monkeypatch):
+    monkeypatch.setattr("marin.inference.iris._TIMEOUT_POLL_SECONDS", 0)
+    calls = []
+
+    def check_alive():
+        calls.append(None)
+        if len(calls) == 3:
+            raise RuntimeError("server exited")
+
+    with pytest.raises(RuntimeError, match="server exited"):
+        _block_until_timeout(check_alive, None)
+    assert len(calls) == 3
+
+
+def test_iris_serve_forwards_unlimited_preemption_retries(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--max-retries-preemption", "2147483647")
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["max_retries_preemption"] == 2**31 - 1
+    assert services[0].iris.max_retries_preemption == 2**31 - 1
+
+
+def test_iris_serve_served_model_name_names_the_api_model(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(monkeypatch, "--served-model-name", "snowball-10-05")
+
+    assert result.exit_code == 0, result.output
+    assert services[0].model.model_id == "snowball-10-05"
+    assert services[0].model.weights == "Qwen/Qwen3-0.6B"
+
+
+def test_iris_serve_rejects_served_model_name_as_raw_vllm_arg(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--vllm-arg=--served-model-name=snowball")
+
+    assert result.exit_code != 0
+    assert "Use --served-model-name" in result.output
+    client.submit.assert_not_called()
+
+
+def test_iris_serve_rejects_no_preemptible_when_brokered(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--no-preemptible", "--instances", "2")
+
+    assert result.exit_code != 0
+    assert "--no-preemptible applies only to direct serves" in result.output
+    client.submit.assert_not_called()
 
 
 def test_iris_serve_model_preparation_disables_xet(monkeypatch):

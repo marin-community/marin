@@ -229,7 +229,8 @@ class IrisServiceConfig:
     endpoint_name: str
     instances: int = 1
     broker: BrokerConfig | None = None
-    timeout_hours: float = 24.0
+    # None keeps the server up until the job is cancelled.
+    timeout_hours: float | None = 24.0
     # Covers both the Iris proxy and dashboard upstream client for long generations.
     controller_proxy_timeout_seconds: float = 12 * 60 * 60
     port_name: str | None = "http"
@@ -517,8 +518,8 @@ def _register_dashboard(
             yield
 
 
-def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) -> None:
-    deadline = time.monotonic() + timeout_hours * 3600
+def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float | None) -> None:
+    deadline = math.inf if timeout_hours is None else time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
         check_alive()
         time.sleep(_TIMEOUT_POLL_SECONDS)
@@ -816,7 +817,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=24 * 365,
+        timeout_hours=None,
         port_name=None,
     )
     device = iris.worker_resources.device
