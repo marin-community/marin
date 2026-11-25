@@ -872,11 +872,8 @@ def job() -> None:
 
 @job.command(
     "run",
-    # allow_interspersed_args=False: everything from the first word of the
-    # command on belongs to the command, with or without '--', so a flag the
-    # command shares with iris (for example --project) is never taken by iris.
-    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
-    help="""Submit jobs to Iris clusters. Iris options go before the command.
+    context_settings={"ignore_unknown_options": True},
+    help="""Submit jobs to Iris clusters.
 
 Examples:
 

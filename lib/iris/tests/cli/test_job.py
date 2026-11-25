@@ -74,17 +74,18 @@ def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
     assert [s["tags"] for s in recorded_job_submissions] == [_job_pb2.JobTags(category="evaluation"), None]
 
 
-def test_job_run_passes_flags_after_the_command_to_the_command(recorded_job_submissions):
-    # The command's own --project and --description must reach it untouched,
-    # not become job tags, even without '--'.
+def test_job_run_leaves_everything_after_double_dash_to_the_command(recorded_job_submissions):
+    # Iris options may come before or after the command's first word; everything
+    # after '--' is the command's, including its own --project and --memory.
     result = CliRunner().invoke(
         run,
-        ["--no-wait", "python", "train.py", "--project", "p", "--description", "d", "--cpu", "4"],
+        ["--no-wait", "script.py", "--memory", "2G", "--", "--project", "p", "--memory", "3G"],
         obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
     assert result.exit_code == 0, result.output
     [submission] = recorded_job_submissions
-    assert submission["entrypoint"].command[-7:] == ["train.py", "--project", "p", "--description", "d", "--cpu", "4"]
+    assert submission["entrypoint"].command[-5:] == ["script.py", "--project", "p", "--memory", "3G"]
+    assert submission["resources"].memory == "2G"
     assert submission["tags"] is None
 
 

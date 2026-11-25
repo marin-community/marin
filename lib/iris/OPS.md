@@ -121,8 +121,8 @@ Tag each root job you submit with what it is for: `--project <effort>`,
 `IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested projects and
 categories are in "Iris Job Tags" in the root `AGENTS.md`. On a child job, each
 tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
-Iris options go before the command: from its first word on, every argument,
-`--project` included, belongs to the command, with or without `--`.
+Put the command's own arguments after `--`: without it, an argument named like
+an iris option (`--project`, `--memory`, ...) is taken by iris.
 
 Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job
