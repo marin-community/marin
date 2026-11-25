@@ -235,7 +235,14 @@ def completed_controls(
             if record.is_control
             and record.branch == branch
             and record.dirty is False
-            and (branch != "main" or (record.base_commit is not None and record.commit == record.base_commit))
+            and (
+                branch != "main"
+                or (
+                    record.base_commit is not None
+                    and record.commit is not None
+                    and record.base_commit.startswith(record.commit)
+                )
+            )
             and record.status == "succeeded"
             and record.artifact_uri
             and record.completed_at

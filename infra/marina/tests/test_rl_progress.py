@@ -90,8 +90,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         dirty=False,
         is_control=True,
         preset_version="current",
-        commit="main-source",
-        base_commit="main-source",
+        commit="abcdef1234",
+        base_commit="abcdef1234567890abcdef1234567890abcdef12",
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed

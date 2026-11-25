@@ -566,7 +566,7 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
     except (OSError, RuntimeError):
         logger.debug("Git could not resolve the main merge base for preset %s", preset)
         return None, None
-    if index.is_control and index.branch == "main" and index.source_revision == base and not index.dirty:
+    if index.is_control and index.branch == "main" and base.startswith(index.source_revision) and not index.dirty:
         return base, index.preset_version
     try:
         snapshot = subprocess.run(
