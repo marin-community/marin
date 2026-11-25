@@ -4,7 +4,6 @@
 import hashlib
 import json
 import sys
-from dataclasses import asdict, replace
 from pathlib import Path
 
 import pyarrow as pa
