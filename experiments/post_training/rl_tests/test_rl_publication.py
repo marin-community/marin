@@ -48,7 +48,7 @@ from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_index import APPLET_ID
 from experiments.post_training.rl_index import list_attempts as read_progress_index
-from experiments.post_training.rl_measurements import RunInputs, lineage_gpu_hours
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     cohort_from_fixtures,
@@ -278,6 +278,9 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     assert row.evaluation_task_set == baseline.evaluation_task_set
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
     assert row.gate_result is not None and row.gate_result.reason == report.reason
+    assert {
+        item.evaluation_score.step for item in row.evaluations if item.evaluation_score and item.evaluation_score.final
+    } == {preset.updates}
 
     def family_identity(summary):
         return next(
@@ -319,6 +322,7 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     pq.write_table(pa.Table.from_pylist(samples), source_path)
     changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
     assert changed_tasks.evaluation_task_set != baseline.evaluation_task_set
+    assert family_identity(changed_tasks) != family_identity(differently_grouped)
     assert changed_tasks.evaluation_protocol_identity == baseline.evaluation_protocol_identity
 
     altered_config = copy.deepcopy(attempt.native.config)
@@ -528,9 +532,18 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 ),
             ),
         )
+    input_record = sources[0] / RUN_INPUTS_FILENAME
+    declared_inputs = RunInputs.model_validate_json(input_record.read_text())
+    sentinel = "fixture-private-setting-value"
+    input_record.write_text(
+        declared_inputs.model_copy(update={"settings": (f'trainer.api_key="{sentinel}"',)}).model_dump_json()
+    )
     first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
+    assert sentinel not in persisted["native-0"]["label"]
+    assert "trainer.api_key=[REDACTED]" in persisted["native-0"]["label"]
+    input_record.write_text(declared_inputs.model_dump_json())
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"

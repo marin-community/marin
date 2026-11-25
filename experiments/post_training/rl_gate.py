@@ -1070,7 +1070,7 @@ class GateTarget(BaseModel):
         self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
     ) -> str:
         evidence = [
-            (identity, receipt.model_dump(mode="json") if receipt is not None else None)
+            (identity, receipt.model_dump(mode="json", exclude={"issue"}) if receipt is not None else None)
             for identities, receipts in (
                 (self.candidates, candidates),
                 (tuple(member.attempt_id for member in self.controls), controls),

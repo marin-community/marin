@@ -205,11 +205,9 @@ Set `RUN_OUTPUT` to the path in the run's status, `ATTEMPT_ID` to the selected n
 and `MARINA_ORIGIN` to the target Marina origin. Both attempt selectors are required together.
 Use `--issue NUMBER` to associate that stored attempt with an issue. Each native output accepts
 one issue number across its attempts.
-Pass the complete `EvaluationResult.run_ids` tuple with one
-`--evaldash-run-id RUN_ID` per evaluation definition. Providing IDs sets the entire list for the
-selected attempt. Publishing without IDs preserves its saved links. Historical attempts retain their
-own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt
-evaluation summaries.
+EvalDash links a saved evaluation to its Marina record when the evaluation has a native
+attempt reference. Historical attempts retain their own native identity and window.
+Per-attempt evaluation summaries use the evaluation results saved by that attempt.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 

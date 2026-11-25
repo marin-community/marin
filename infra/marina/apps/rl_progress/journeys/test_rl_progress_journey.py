@@ -174,6 +174,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
             ((0.5, "tasks-a/grader-a"), (0.4, "tasks-a/grader-a"), (0.7, "tasks-b/grader-a"), (0.75, "tasks-b/grader-b"))
         )
     ]
+    controls[0]["run_id"] = controls[1]["run_id"] = "shared-index-run"
     branch = attempt("branch-at-first-preset", 5, 0.55) | {
         "branch": "experiment",
         "is_control": False,
@@ -211,6 +212,9 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     for name in ("superseded", "early-only", "unpushed-main"):
         expect(chart.get_by_role("link", name=re.compile(f"^{name}"))).to_have_count(0)
     journey.shoot("preset-main-controls")
+    chart.get_by_role("link", name="control-0 · 50.0%").click()
+    expect(journey.page.get_by_role("dialog")).to_contain_text("control-0")
+    journey.page.keyboard.press("Escape")
 
     toggle = journey.page.get_by_role("checkbox", name="Show branch runs")
     toggle.check()
