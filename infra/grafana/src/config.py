@@ -10,9 +10,12 @@ per entry and addresses it by name in the URL path.
 import dataclasses
 import os
 
-# The hub finelog's own cluster name. Rows the hub wrote before it named its
-# cluster have an empty `cluster`; readers map those to this name until they age
-# out of retention.
+# The hub finelog's own cluster name. The hub routes read the store of this name,
+# and map its rows left with an empty `cluster`, written before it named its
+# cluster, to this name until they age out of retention. An empty row always
+# belongs to the store that holds it, so this must stay the hub server's own name:
+# renaming the hub server would split its old rows (empty, read as this name)
+# from its new ones.
 FINELOG_HUB_CLUSTER = "marin"
 
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
