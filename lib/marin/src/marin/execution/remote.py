@@ -57,6 +57,7 @@ class RemoteCallable(Generic[P, R]):
     pip_packages: list[str] | None = None
     name: str | None = None
     timeout: Duration | None = None
+    priority: int = 0
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
@@ -81,6 +82,7 @@ class RemoteCallable(Generic[P, R]):
                 entrypoint=Entrypoint.from_callable(lambda: self.fn(*args, **kwargs)),
                 resources=self.resources,
                 timeout=self.timeout,
+                priority=self.priority,
                 environment=create_environment(
                     extras=dependency_groups,
                     pip_packages=self.pip_packages,
@@ -101,6 +103,7 @@ def remote(
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
+    priority: int = 0,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -113,6 +116,7 @@ def remote(
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
+    priority: int = 0,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -125,6 +129,7 @@ def remote(
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
+    priority: int = 0,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -144,6 +149,7 @@ def remote(
             pip_packages=pip_packages,
             name=name,
             timeout=timeout,
+            priority=priority,
         )
 
     if fn is not None:

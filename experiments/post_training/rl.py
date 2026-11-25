@@ -40,7 +40,7 @@ from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version, read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
@@ -932,15 +932,46 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
+        sft_only = options["through"] == "sft"
         if (coordinator := get_job_info()) is not None:
-            validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
-            if following := handles[count:]:
-                build_artifacts(*following, max_concurrent=max_concurrent)
+            if sft_only:
+                validate_coordinator_graph(handles, execution=context.meta["sft_execution"])
+                build_artifacts(context.meta["sft_handle"], max_concurrent=max_concurrent)
+            else:
+                validate_coordinator_graph(handles)
+                _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
+                if following := handles[count:]:
+                    build_artifacts(*following, max_concurrent=max_concurrent)
             return
-        job, cached_attempts = _submit_from_launcher(
-            entry_module, argv, handles, rl_handles, max_concurrent, context, preset
-        )
+        if sft_only:
+            module = entry_module
+            if module is None:
+                specification = sys.modules["__main__"].__spec__
+                module = specification.name if specification is not None else None
+            if not module:
+                raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
+            submitted_at = datetime.now(UTC).isoformat()
+            environment = dict(os.environ)
+            if revision := context.meta.get("sft_source_revision"):
+                environment["GIT_COMMIT"] = revision
+            if preset.output_ttl_days is not None:
+                environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+            job = submit_or_run(
+                module, handles, max_concurrent, environment, argv=argv, execution=context.meta["sft_execution"]
+            )
+            _print_status(
+                {
+                    "coordinator_job_id": str(job),
+                    "submitted_at": submitted_at,
+                    "through": "sft",
+                    "runs": [],
+                }
+            )
+            cached_attempts: dict[str, str] = {}
+        else:
+            job, cached_attempts = _submit_from_launcher(
+                entry_module, argv, handles, rl_handles, max_concurrent, context, preset
+            )
         if options["wait"]:
             _wait_for_run(
                 job,
@@ -980,6 +1011,13 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
+    @click.option(
+        "--through",
+        type=click.Choice(("sft", "rl")),
+        default="rl",
+        show_default=True,
+        help="Build only the SFT export or continue through RL.",
+    )
     @click.option(
         "--checkpoints", type=click.Choice(("none", "latest", "best")), help="Select native checkpoint retention."
     )
@@ -1072,6 +1110,7 @@ def command(
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
+        through: str,
         checkpoints: presets.CheckpointPolicy | None,
         checkpoint_every: int | None,
         export: presets.CheckpointPolicy | None,
@@ -1093,6 +1132,11 @@ def command(
             raise click.UsageError("Choose either --plan or --run")
         if control is not None and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", control):
             raise click.BadParameter("use a 1-48 character control batch identifier", param_hint="--control")
+        if through == "sft":
+            if sft_name is None:
+                raise click.UsageError("--through sft requires --sft")
+            if click.get_current_context().params["wait"]:
+                raise click.UsageError("--wait reports RL results; inspect the SFT coordinator without --wait")
         if control and any(value is not None for value in (checkpoints, checkpoint_every, export, priority)):
             raise click.BadParameter("controls use only the preset's default run options")
         preset = _with_run_options(
@@ -1180,6 +1224,7 @@ def command(
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
             export = initializer.step
+            click.get_current_context().meta["sft_handle"] = export
             export_config = export.build_config(StepContext.for_fingerprint(export.runtime_args, export.deps))
             if isinstance(export_config, dict) and (revision := export_config.get("source_revision")):
                 click.get_current_context().meta["sft_source_revision"] = revision
@@ -1196,6 +1241,28 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
+        if through == "sft":
+            assert initializer is not None
+            _provenance(control=False)
+            if do_run:
+                materialized_config(initializer.step, recipe.run_prefix(preset))
+            context = click.get_current_context()
+            context.meta["rl_handle_count"] = 1
+            context.meta["sft_execution"] = recipe.run_execution(
+                preset, wandb_entity=os.environ.get(_WANDB_ENTITY_ENV), forward_env=forward_env
+            )
+            _print_status(
+                {
+                    "through": "sft",
+                    "sft": {
+                        "name": initializer.step.name,
+                        "version": initializer.step.version,
+                        "fingerprint": initializer.step.fingerprint(),
+                        "path": initializer.step.path(recipe.run_prefix(preset)),
+                    },
+                }
+            )
+            return (initializer.step,)
         provenance = _provenance(control=bool(control))
         from_launcher = get_job_info() is None
         run = build_experiment(
@@ -1259,6 +1326,7 @@ def command(
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         if preset_version is not None:
             snapshot["preset_version"] = preset_version
+        snapshot["through"] = through
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])

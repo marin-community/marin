@@ -1767,6 +1767,63 @@ print(json.dumps({'stop':trainer.total_training_steps,'available':trainer.availa
     assert native["stop"] == rl_updates < native["available"]
 
 
+def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selection):
+    monkeypatch.setenv("MARIN_PREFIX", SFT_ARM_TEST_PREFIX)
+    fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
+    monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
+    monkeypatch.setattr(snowball, "read_stored_skyrl_attempt", lambda _path: None)
+    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
+    monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
+    tokenizer = MIXTURE_262K_32NODE.recipe.model.tokenizer_cache_key()
+    (tmp_path / "data.json").write_text(json.dumps(draccus.encode(LmDataConfig(tokenizer=tokenizer))))
+    plans = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", plans.extend)
+    arguments = (
+        "--preset",
+        "train-long-agentic",
+        "--sft",
+        MIXTURE_262K_32NODE.name,
+        "--sft-data-mix",
+        "tests/sft-only@2026.11.25",
+        "--sft-data-uri",
+        str(tmp_path),
+        "--sft-data-file",
+        "data.json",
+        "--sft-data-tokenizer",
+        tokenizer,
+        "--sft-steps",
+        "1679",
+        "--through",
+        "sft",
+        "--version",
+        "2026.11.25.7",
+    )
+    command = snowball.command(snowball_model.SNOWBALL, argv=arguments, sft_presets=lambda: (MIXTURE_262K_32NODE,))
+    result = CliRunner().invoke(command, arguments)
+    assert result.exit_code == 0, (result.output, result.exception)
+    execution = recipe.run_execution(snowball_model.SNOWBALL.by_name["train-long-agentic"])
+    environment = {key: "fixture" for key in execution.required_env_vars}
+    _, request = _coordinator_request(
+        plans, "experiments.post_training.snowball_rl", arguments, Path.cwd(), environment, execution=execution
+    )
+    for key, value in request.environment.env_vars.items():
+        monkeypatch.setenv(key, value)
+    built = []
+    monkeypatch.setattr(snowball, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(snowball, "build_artifacts", lambda *steps, **kwargs: built.extend(steps))
+    result = CliRunner().invoke(command, (*arguments, "--run"))
+    assert result.exit_code == 0, (result.output, result.exception)
+    [export] = built
+    assert export.name.startswith("checkpoints/snowball/")
+    assert export.version == "2026.11.25.7"
+    assert skyrl_api.skyrl_execution(export) is None
+    assert all(skyrl_api.skyrl_execution(step) is None for step in graph_handles([export]))
+    changed = tuple("1680" if value == "1679" else value for value in arguments)
+    refused = CliRunner().invoke(command, (*changed, "--run"))
+    assert refused.exit_code == 4, (refused.output, refused.exception)
+    assert len(built) == 1
+
+
 def test_data_mix_changes_get_separate_sft_outputs(tmp_path):
     source = ArtifactStep.adopt("tests/sft-mix", "2026.11.25.1", str(tmp_path))
     first = PreparedData(source, "v5.json", MIXTURE_262K_32NODE.recipe.model.tokenizer_cache_key())
