@@ -217,9 +217,10 @@ def test_in_process_graded_runs_never_build_the_local_sandbox(
 
 
 @pytest.mark.parametrize(
-    ("task_backend", "grader_backend"), [(None, "local"), ("local", "local"), ("daytona", "daytona")]
+    ("task_backend", "grader_backend"),
+    [(None, "local"), ("local", "local"), ("docker", "docker"), ("daytona", "daytona")],
 )
-def test_daytona_task_machines_grade_on_daytona(driver_config, task_backend, grader_backend):
+def test_graders_run_on_the_task_machine_backend(driver_config, task_backend, grader_backend):
     task_machine = None
     if task_backend is not None:
         task_machine = MachineRuntimeSpec(
