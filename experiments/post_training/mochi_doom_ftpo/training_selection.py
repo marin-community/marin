@@ -145,6 +145,20 @@ def main() -> None:
                 "rows": len(full),
                 "format": "task_spec",
             },
+            *(
+                {
+                    "uri": str(
+                        StoragePath(SELECTION_ROOT)
+                        / (SELECTION_NAME + suffix)
+                        / args.version
+                        / "full_validation.parquet"
+                    ),
+                    "version": args.version,
+                    "rows": len(full),
+                    "format": "task_spec",
+                }
+                for suffix in ("-targets", "-targets-math")
+            ),
         ],
     }
     for suffix, rows in (("-targets", train), ("-targets-math", [row for row in train if row["family"] == "math"])):
