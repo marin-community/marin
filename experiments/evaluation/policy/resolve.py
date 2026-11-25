@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass
 
-from evalrecords.records import PromptFormat
+from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
@@ -38,14 +38,9 @@ class ResolvedPolicyEvaluation:
             )
 
 
-def prompt_format(candidate: PolicyCandidate) -> PromptFormat:
-    """The prompt format the candidate's evaluations use."""
-    return PromptFormat.CHAT if candidate.model.apply_chat_template else PromptFormat.COMPLETION
-
-
 def benchmark_window(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -> int | None:
     """The input window the benchmark enforces on any server: its agent's input limit, else its protocol's window."""
-    dataset = selection_dataset(evaluation.selection, prompt_format(candidate))
+    dataset = selection_dataset(evaluation.selection, prompt_format(candidate.model))
     if dataset.agent is not None:
         return dataset.agent.max_input_tokens
     return dataset.protocol.context_window

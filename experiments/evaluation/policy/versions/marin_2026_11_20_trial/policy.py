@@ -24,7 +24,7 @@ OCTOBER_SEED = 42
 # Daytona machines that build each task image without creating a snapshot, for the benchmarks whose
 # images would together exceed the account's snapshot quota.
 DECLARATIVE_BUILDS = TaskMachineSettings(image_build=TaskImageBuild.DECLARATIVE)
-# October's judge for FinanceBench and OlympiadBench answers.
+# The judge for FinanceBench and OlympiadBench answers; October's reported scores used a local MiniMax-M3.
 TOGETHER_GPT_OSS_120B = JUDGES["together"]
 
 _CATALOG = models()

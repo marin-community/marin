@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
-from evalrecords.records import PromptFormat
+from marin.evaluation.model_config import prompt_format
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 
 from experiments.evaluation.curated import selection_dataset
@@ -50,8 +50,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
     selection = item.evaluation.selection
-    model_format = PromptFormat.CHAT if item.candidate.model.apply_chat_template else PromptFormat.COMPLETION
-    config = selection_dataset(selection, model_format)
+    config = selection_dataset(selection, prompt_format(item.candidate.model))
     protocol = config.protocol
     sampling = protocol.sampling
     generation = item.candidate.model.generation

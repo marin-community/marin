@@ -4,7 +4,8 @@
 """The 2026-11-20 trial policy resolves to the catalog selections and windows each candidate runs with."""
 
 import pytest
-from evalrecords.records import PromptFormat, TaskEvidence
+from evalrecords.records import TaskEvidence
+from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import agent_ref_for, resolve_selection, selection_dataset, settings_for
 from experiments.evaluation.policy.cli import policy_rows
@@ -18,7 +19,7 @@ def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
     """The window the worker enforces: an agent's input limit, else the protocol's window, else the server's."""
     model = item.candidate.model
     selection = item.evaluation.selection
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+    model_format = prompt_format(model)
     resolved = resolve_selection(selection, model_format)
     settings = settings_for(
         selection,

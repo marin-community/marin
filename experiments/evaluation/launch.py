@@ -28,7 +28,6 @@ from evalrecords.records import (
     EvaluationSelection,
     ModelConfigRef,
     ModelRef,
-    PromptFormat,
     RLAttemptRef,
     RunStatus,
     TaskEvidence,
@@ -54,7 +53,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, prompt_format
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
@@ -310,9 +309,7 @@ def _resolve_definitions(
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvaluationSelection):
-            protocol = resolve_selection(
-                definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-            )
+            protocol = resolve_selection(definition, prompt_format(model))
             settings = settings_for(
                 definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
             )
@@ -439,7 +436,7 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+    model_format = prompt_format(model)
     # An agent's token budgets and run identity come from the window the server runs, which the checkpoint can clamp.
     if model.serve.max_model_len is not None and any(
         isinstance(definition, HarborDefinition)
