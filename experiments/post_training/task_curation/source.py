@@ -122,8 +122,6 @@ class SourceReference:
 
 EXCLUDED_TAG = "excluded"
 """The source tag that keeps a declared source out of admission."""
-ATLAS_ADMITTED_TAG = "atlas-admitted"
-"""The Atlas admits this source; the import path that would run it on main is still pending."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -338,11 +336,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
-                (
-                    "Available"
-                    if pipeline is not None
-                    else ("Atlas-admitted" if ATLAS_ADMITTED_TAG in tags else "Inventory")
-                ),
+                "Inventory" if pipeline is None else "Available",
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
