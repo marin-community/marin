@@ -38,9 +38,9 @@ from huggingface_hub import hf_hub_download
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
-ATLAS_SOURCE_PINS_REVISION = "bc56c4bee9721bf5ef497384607a89d17457db98"
-ATLAS_SOURCE_PINS_SHA256 = "7eb5938b9c68735caa82a319f6f3741bec283ac4711c609ce326117ee28d7d03"
-ATLAS_SOURCE_PINS_BYTES = 138035
+ATLAS_SOURCE_PINS_REVISION = "2e7057ec8d1743aa86ac9157b0aa640d0536c181"
+ATLAS_SOURCE_PINS_SHA256 = "e8b7a43643001294670584f6fc4dc2f2b3222d8389d4a5d7b295dfd11668e90f"
+ATLAS_SOURCE_PINS_BYTES = 131639
 
 
 @dataclass(frozen=True)
