@@ -230,6 +230,11 @@ current pin when its task specs are byte-identical to the current pin's actor ce
 (same digest and count); the binding records the cross-pin digest equality. A panel
 whose task bytes changed is refused, and the source needs a fresh panel.
 
+The maintained `experiments.post_training.task_curation.sample_qc` campaign defaults
+to `--priority interactive`; `--priority batch` selects batch Iris scheduling
+priority for its reviewer-serving jobs. The V4 model, revision, request settings
+and request-cache namespace stay unchanged.
+
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
 has no separate oracle column. Every header count is in tasks. Admission totals
 split TRAIN and EVAL, alongside tasks pending oracle filtration and tasks excluded.
