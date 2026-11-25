@@ -55,6 +55,11 @@ def _all_panels(dashboard: dict) -> list[dict]:
     return [nested for panel in dashboard["panels"] for nested in (panel, *panel.get("panels", []))]
 
 
+def _target_sql(target: dict) -> list[str]:
+    """The SQL an Infinity target sends in its `sql` URL parameter."""
+    return [param["value"] for param in target.get("url_options", {}).get("params", []) if param["key"] == "sql"]
+
+
 def _panel_sql(dashboard: dict) -> list[str]:
     """Every SQL string a dashboard sends, panels and template variables alike."""
     queries = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
@@ -62,12 +67,7 @@ def _panel_sql(dashboard: dict) -> list[str]:
         query = variable.get("query")
         if isinstance(query, dict) and query.get("queryType") == "infinity":
             queries.append(query["infinityQuery"])
-    return [
-        param["value"]
-        for query in queries
-        for param in query.get("url_options", {}).get("params", [])
-        if param["key"] == "sql"
-    ]
+    return [sql for query in queries for sql in _target_sql(query)]
 
 
 def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
@@ -1344,8 +1344,7 @@ def _finelog_sql(panel: dict) -> list[str]:
         if not str(datasource.get("uid", "")).startswith("finelog-"):
             continue
         assert target.get("url") == "/query", f"{panel.get('title')}: {target.get('url')}"
-        params = target.get("url_options", {}).get("params", [])
-        sql += [param["value"] for param in params if param["key"] == "sql"]
+        sql += _target_sql(target)
     return sql
 
 

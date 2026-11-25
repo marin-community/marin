@@ -31,6 +31,7 @@ from wandb_source import LoggedPoint, WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
 HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
+LOCAL_FINELOG_URL = "iap+https://iris.example.com/proxy/system.log-server"
 
 
 def _iris(handler) -> IrisSource:
@@ -145,7 +146,7 @@ def _iap_finelog(monkeypatch, client, *, max_concurrent_queries: int) -> IapFine
     monkeypatch.setattr(finelog_source, "connect", lambda url, factory, auth: client)
     return IapFinelogSource(
         TARGET,
-        "iap+https://iris.example.com/proxy/system.log-server",
+        LOCAL_FINELOG_URL,
         timeout_ms=5_000,
         max_concurrent_queries=max_concurrent_queries,
     )
@@ -940,11 +941,11 @@ def test_the_deployed_bridge_serves_every_cluster_over_vpc(monkeypatch):
     served = _served_finelog_sources(monkeypatch)
 
     assert set(served) == {cluster.name for cluster in CLUSTERS}
-    assert all(type(source) is FinelogSource for source in served.values())
+    assert all(isinstance(source, FinelogSource) for source in served.values())
 
 
 def test_a_local_bridge_serves_only_the_hub_through_iap(monkeypatch):
-    monkeypatch.setenv(LOCAL_FINELOG_URL_ENV, "iap+https://iris.example.com/proxy/system.log-server")
+    monkeypatch.setenv(LOCAL_FINELOG_URL_ENV, LOCAL_FINELOG_URL)
     monkeypatch.setenv(LOCAL_FINELOG_MAX_QUERIES_ENV, "1")
     monkeypatch.setattr(finelog_source, "iap_provider_for", lambda name: object())
     monkeypatch.setattr(finelog_source, "connect", lambda url, factory, auth: _FakeLogClient())

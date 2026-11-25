@@ -1,7 +1,7 @@
 {
   "uid": "marin-utilization",
   "title": "Utilization",
-  "description": "Fleet-wide GPU use with a table of nodes to inspect, TPU VMs held, and the selected node: its jobs, their requests, and what the node and each attempt used. Three hub queries per load; three more once a node is selected.",
+  "description": "Fleet-wide GPU use with a table of nodes to inspect, TPU VMs held, and the selected node: its jobs, their requests, and what the node and each attempt used. Two fleet queries per load; three more once a node is selected.",
   "tags": [
     "marin"
   ],
