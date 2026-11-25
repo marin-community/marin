@@ -18,7 +18,7 @@ from marinskyrl.task_sources import PreparedTaskCacheSource
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
-from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
@@ -32,6 +32,7 @@ from taskcompendium.models import (
     TextMessage,
     grader_environment,
     grades_with_judge,
+    task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
@@ -44,13 +45,11 @@ from skyrl_train.dataset.prepared_tasks import (
     write_prepared_tasks,
 )
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
-from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
-TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_EVALUATION_IDENTITY = "task_evaluation_identity"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
@@ -107,11 +106,7 @@ class TaskDataset(PromptDataset):
         inputs = []
         for _, environment, extras, uid in rows:
             lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
-            if (
-                isinstance(lowered.task.grader, NoGrader)
-                and lowered.harness != HARBOR_TRIAL_SESSION
-                and {"extras", "config"} <= lowered.task.grader.contract.keys()
-            ):
+            if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")
@@ -131,6 +126,8 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
+                            task_id=lowered.task.id,
+                            subset_id=task_subset(lowered.task),
                             evaluation_identity=(
                                 TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
                                 if extras.get(TASK_EVALUATION_IDENTITY) is not None

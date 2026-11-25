@@ -205,7 +205,8 @@ _AGENTIC_LIMITS = agentic_limits(
     trial_timeout=14_400,
     agent_timeout=10_800,
     stall_timeout=28_800,
-).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
+    memory_mb=4096,
+)
 
 
 _TRAIN_LONG = Preset(

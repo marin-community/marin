@@ -3,7 +3,10 @@
 
 import asyncio
 import json
+import os
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -255,7 +258,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
@@ -565,9 +567,9 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
-def test_a_multi_process_save_waits_for_another_writers_lock_file():
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
     """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
-    assert eight_device_checkpoints.save_waits_for_held_lock_across_processes()
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
 
 
 def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
@@ -577,6 +579,89 @@ def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
     values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
     for restored in results:
         np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
+def test_a_multi_process_save_of_a_bare_array_restores():
+    """A PyTree that is one array stores it at the OCDBT root, where the restore looks for it."""
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in eight_device_checkpoints.bare_array_roundtrip_across_processes():
+        np.testing.assert_array_equal(restored, values)
+
+
+def test_a_single_process_save_keeps_default_locking(tmp_path):
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
+    explicit = TensorStoreWriteConfig(file_io_locking="os")
+    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
+
+
+def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp_path):
+    """The next holder reads the file the previous holder published, then replaces it."""
+    manifest = tmp_path / "manifest.ocdbt"
+    manifest.write_text("v0")
+    order = tensorstore_serialization._CommitOrder(str(tmp_path))
+    first_holds = threading.Event()
+    release_first = threading.Event()
+    seen: list[str] = []
+
+    def publish_first() -> None:
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v1")
+            first_holds.set()
+            assert release_first.wait(5)
+
+    def publish_second() -> None:
+        assert first_holds.wait(5)
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v2")
+
+    writers = [threading.Thread(target=publish_first), threading.Thread(target=publish_second)]
+    for writer in writers:
+        writer.start()
+    assert first_holds.wait(5)
+    release_first.set()
+    for writer in writers:
+        writer.join(10)
+        assert not writer.is_alive()
+
+    assert seen == ["v0", "v1"]
+    assert manifest.read_text() == "v2"
+
+
+def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
+    """A lease refreshed by another host means the lock file is still a live commit."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+
+    assert not lease.try_acquire()
+    assert lock.read_text() == "held"
+    assert lease_path.read_text() == "other-host 1\n"
+
+
+def test_a_stale_writer_lease_loses_its_lock_file(tmp_path):
+    """A remote lease that has not been refreshed is an abandoned save, lock file included."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    stale = time.time() - (tensorstore_serialization._WRITER_LEASE_STALE_S + 5)
+    os.utime(lease_path, (stale, stale))
+
+    assert not tensorstore_serialization._writer_lease_is_live(str(lease_path))
+    lease.acquire()
+    try:
+        assert not lock.exists()
+        host, pid = lease_path.read_text().split()
+        assert host == socket.gethostname()
+        assert int(pid) == os.getpid()
+    finally:
+        lease.release()
+    assert not lease_path.exists()
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():

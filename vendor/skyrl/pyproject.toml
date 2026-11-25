@@ -66,7 +66,6 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "accelerate>=1.14,<2",
-    "harbor",
     "peft>=0.19",
     "tensordict",
     "torch==2.11.0",
@@ -101,7 +100,6 @@ vllm = [
     "vllm==0.0.0.dev20261124+marin.36cef9c0caf3.cu132 ; sys_platform == 'linux'",
 ]
 megatron = [
-    "harbor ; sys_platform == 'linux'",
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -155,7 +153,6 @@ dev = [
     "pytest-xdist",
     "universal-pathlib",
 ]
-harbor-test = ["harbor"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_train"]
@@ -240,7 +237,6 @@ pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wh
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
 flash-attn-3 = { index = "pytorch-cu132", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
-harbor = { path = "../harbor", editable = true }
 # Matching packages built normally from source; recipe, hashes and checks accompany the release.
 # https://github.com/marin-community/speculators/releases/tag/v0.8.0%2Bmarin.1
 hs-connectors = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" }
