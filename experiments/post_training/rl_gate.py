@@ -63,7 +63,7 @@ from experiments.post_training.rl_measurements import (
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
-GATE_REVISION = "2026.11.24"
+GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 _NATIVE_PREPARATION_TIMEOUT = 300

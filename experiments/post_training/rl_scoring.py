@@ -134,24 +134,19 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
     return dict(groups)
 
 
-def score_membership(session: pa.Table, statistic: str, *, scored_only: bool = False) -> dict:
-    """Describe panel assignments, or the answers that contributed to a plotted score."""
-    columns = {
-        "family_mean": ("task_id", "family"),
-        "aai_weighted_mean": ("task_id", "aai_category"),
-    }.get(statistic, ("task_id",))
+def score_membership(session: pa.Table, statistic: str) -> dict:
+    """Describe the answers contributing to a plotted score."""
+    columns = ("task_id", "answer")
+    if statistic == "family_mean" or statistic.startswith("family/"):
+        columns = ("task_id", "family", "answer")
+    session = session.filter(session["scored"])
     if statistic.startswith("family/"):
-        columns = ("task_id", "family")
-    if scored_only:
-        session = session.filter(session["scored"])
-        if statistic.startswith("family/"):
-            family = statistic.removeprefix("family/").removesuffix("/mean")
-            session = session.filter(pc.equal(session["family"], family))
-        columns = (*columns, "answer")
+        family = statistic.removeprefix("family/").removesuffix("/mean")
+        session = session.filter(pc.equal(session["family"], family))
     members = {tuple(row[column] for column in columns) for row in session.select(columns).to_pylist()}
     return {
         "members": sorted(members, key=lambda values: tuple("" if value is None else str(value) for value in values)),
-        "weights": AAII_WEIGHTS if statistic == "aai_weighted_mean" else None,
+        "weights": None,
     }
 
 
