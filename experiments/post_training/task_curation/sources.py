@@ -5,7 +5,6 @@
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
-    atlas_admissions,
     campaign_releases,
     nemo_tool_calls,
     structure_closure,
@@ -76,7 +75,6 @@ def all_sources() -> dict[str, RlDataSource]:
         *nemo_tool_calls.sources(),
         *campaign_releases.sources(),
         *unconverted.sources(),
-        *atlas_admissions.sources(),
     ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
