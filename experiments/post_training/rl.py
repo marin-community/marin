@@ -65,6 +65,7 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output, username_segment
+from skyrlrecipe.documents import MISSING, get_path
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate, rl_publication
@@ -144,7 +145,7 @@ def _run_rl(
         rl_publication.reserve_issue(config.output.export_root, issue)
     if index is not None:
         launch = yaml.safe_load(config.launch_config_yaml)
-        if "trainer.project_name" in recipe.override_document(inputs.settings):
+        if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
             index = index.model_copy(update={"wandb_project": launch["skyrl"]["trainer"]["project_name"]})
         launch["run"]["index"] = index.model_dump(mode="json")
         config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
