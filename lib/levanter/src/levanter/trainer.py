@@ -528,12 +528,6 @@ class Trainer:
     def device_mesh(self) -> Mesh:
         return self.layout.mesh
 
-    def _parameter_context(self):
-        return self.layout.parameter_context()
-
-    def _compute_context(self):
-        return self.layout.compute_context()
-
     @property
     def microbatch_size(self) -> int | None:
         return self.layout.microbatch_size(self.config)
@@ -553,7 +547,7 @@ class Trainer:
         self._cmanagers = [
             levanter.tracker.current_tracker(self.tracker),
             self.layout.mesh_context(),
-            self._parameter_context(),
+            self.layout.parameter_context(),
         ]
 
         for cmanager in self._cmanagers:
@@ -924,7 +918,7 @@ class Trainer:
         # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
-            with self._compute_context():
+            with self.layout.compute_context():
                 model = self.mp.cast_to_compute(model)
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
                 # result is (loss, metrics) tuple
@@ -936,7 +930,7 @@ class Trainer:
 
         hook_infos = None
         if not _no_hooks:
-            with self._parameter_context():
+            with self.layout.parameter_context():
                 jit_info: InsideJitInfo = InsideJitInfo(grads=grads, updates=updates)
                 hook_infos = self.hooks.run_jit_hooks(state, jit_info, force=False)
 
@@ -965,7 +959,7 @@ class Trainer:
             grad_fn, self.microbatch_size, self.config.batch_axis_name, batch, batch_kwargs
         )
 
-        with self._compute_context():
+        with self.layout.compute_context():
             (loss, metrics), grads = grad_fn(*batch, **batch_kwargs)
 
         return loss, grads, metrics
