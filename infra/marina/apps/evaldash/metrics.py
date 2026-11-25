@@ -215,19 +215,21 @@ def in_cohort(record: EvalRunRecord, request: SelectionRequest | None) -> bool:
 
 
 def _panel_records(records: list[EvalRunRecord], request: SelectionRequest | None = None) -> list[EvalRunRecord]:
-    """Return policy-compliant, non-smoke records for the selected cohort."""
+    """Return non-smoke records; an all-cohorts request skips policy enforcement."""
     return [
         record
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
         if in_cohort(record, request)
-        if not record_policy_violations(record)
+        if (request is not None and request.cohort is CohortMode.LATEST_VALID) or not record_policy_violations(record)
     ]
 
 
 def _policy_rejections(
     records: list[EvalRunRecord], request: SelectionRequest, models: tuple[str, ...] | None = None
 ) -> list[dict[str, object]]:
+    if request.cohort is CohortMode.LATEST_VALID:
+        return []
     metadata = run_metadata(records)
     return [
         {
@@ -417,9 +419,10 @@ def build_panel(
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
+    measurement_records = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
     measurements = [
         measurement
-        for measurement in dashboard_measurements(_panel_records(records))
+        for measurement in dashboard_measurements(measurement_records)
         if request.cohort_version is None or measurement.version == request.cohort_version
     ]
     protocols = declared_protocols(measurements)
@@ -431,7 +434,7 @@ def build_panel(
         protocols,
     )
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
-    families = _family_columns(requested, declared_families(_panel_records(records)), selection.cells)
+    families = _family_columns(requested, declared_families(measurement_records), selection.cells)
     panel = [column.default for column in families]
     # Omit gap entries for sibling variants without a visible column; admitted cells remain in the payload.
     hidden = {name for column in families for name in column.variants if name != column.default}
@@ -504,9 +507,10 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
+    measurement_records = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
     measurements = [
         measurement
-        for measurement in dashboard_measurements(_panel_records(records))
+        for measurement in dashboard_measurements(measurement_records)
         if request.cohort_version is None or measurement.version == request.cohort_version
     ]
     selection = select(
@@ -562,7 +566,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "user": sorted({r.user for r in records if r.user}),
         "accelerator": sorted({r.hardware.accelerator for r in records if r.hardware.accelerator}),
     }
-    records = _panel_records(records)
+    records = _panel_records(records, panel_request())
     eval_names = {measurement.benchmark for measurement in dashboard_measurements(records)}
     eval_names.update(
         (

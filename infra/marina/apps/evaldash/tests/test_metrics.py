@@ -851,6 +851,31 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     assert rejected_run["headline"] is None
 
 
+def test_policy_violations_only_exclude_runs_in_a_named_cohort():
+    policy = "eval-policy-2026-09-24-verified"
+    prior = [_record(model, "math500", "v1", "2026-09-24T00:00:00+00:00", 0.4) for model in ("a", "b")]
+    violating = [_record(model, "math500", policy, "2026-09-25T00:00:00+00:00", 0.6) for model in ("a", "b")]
+    records = prior + violating
+    newest = {record.model.name: record.run_id for record in violating}
+
+    panel = build_panel(records, panel_request())
+    comparison = build_comparison(records, panel_request(), ("a", "b"))
+
+    assert {row["model"]: row["cells"]["math500"]["run_id"] for row in panel["rows"]} == newest
+    assert panel["policy_rejections"] == []
+    assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
+    assert comparison["policy_rejections"] == []
+    assert "math500" in build_meta(violating)["evals"]
+
+    named_panel = build_panel(records, panel_request(cohort=policy))
+    named_comparison = build_comparison(records, panel_request(cohort=policy), ("a", "b"))
+
+    assert named_panel["rows"] == []
+    assert {item["run_id"] for item in named_panel["policy_rejections"]} == set(newest.values())
+    assert named_comparison["rows"] == []
+    assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
+
+
 def test_panel_groups_tau_context_override_with_other_evals_despite_archived_config_alias():
     records = []
     for evaluation, context, tokens in (("math500", 73728, None), ("tau3-pi", 131072, 32768)):
