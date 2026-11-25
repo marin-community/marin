@@ -31,9 +31,9 @@ An evaluation's context is the window its benchmark declares, else the policy's 
 | an agent input limit, such as SWE-bench's 32,768 | that limit, or less through an override, since the agent gets the smaller of it and the served window |
 | nothing | the policy's `context`, or the evaluation's own |
 
-Judges come from [`judges.py`](../judges.py), which reads the judges named in
-`configs/evaluations.yaml`. A `PolicyOverride` changes a candidate's context or output limit on
-one evaluation; a `PolicyExclusion` drops one. Each needs a reason.
+Judges come from `evals.JUDGES`, the judges named in `configs/evaluations.yaml`. A
+`PolicyOverride` changes a candidate's context or output limit on one evaluation; a
+`PolicyExclusion` drops one. Each needs a reason.
 
 Print a policy's resolved settings for every candidate:
 

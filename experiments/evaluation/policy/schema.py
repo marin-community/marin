@@ -70,8 +70,8 @@ class PolicyEvaluation:
 
     @property
     def selection(self) -> EvaluationSelection:
-        """The catalog selection with the evaluation's own run settings; a candidate's run adds its output
-        limit and seed (``ResolvedPolicyEvaluation.selection``)."""
+        """The catalog selection with the evaluation's judge, concurrency and task machines, without the output
+        limit and seed, which can differ by candidate."""
         run = EvaluationOverrides() if self.judge is None else self.judge.run_settings()
         return EvaluationSelection(
             benchmark=self.benchmark,
