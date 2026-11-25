@@ -344,7 +344,6 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
     assert buffer["max_staleness_steps"] == 3
     assert buffer["consumed_route_quotas"] == {"agentic": 22, "nonagentic": 42}
-    assert buffer["source_routes"]["allenai/IF_multi_constraints_upto5"] == "nonagentic"
     assert buffer["max_in_flight"] >= 4 * trainer["train_batch_size"]
     two_batches = 2 * trainer["train_batch_size"] * generator["n_samples_per_prompt"]
     slots = (
@@ -395,6 +394,7 @@ def test_exp4_dspark_round_keeps_normalized_training_and_derives_curriculum_quot
     assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 64
     assert generator["n_samples_per_prompt"] == 8
     assert generator["gpu_memory_utilization"] == 0.775
+    assert buffer["source_routes"]["nvidia/Llama-Nemotron-Post-Training-Dataset"] == "nonagentic"
     assert generator["speculative_decoding"] == draft.speculative_decoding()
     assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
     assert generator["inference_engine_tensor_parallel_size"] == 1
