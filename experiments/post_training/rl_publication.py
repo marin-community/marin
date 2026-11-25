@@ -345,10 +345,10 @@ def _prepare_publication_attempts(
     if coordinator is None:
         return _OutputAttempts(current, stored)
     attempts = _coordinator_attempts(path, coordinator)
-    if current in stored:
+    if current in stored and (not interrupted or current in attempts):
         attempts[current] = stored[current]
-    elif len(attempts) == 1:
-        current = next(iter(attempts))
+    else:
+        current = next(iter(attempts)) if len(attempts) == 1 else None
     if interrupted:
         for key, record in attempts.items():
             if record.native.result.state.is_terminal or record.interruption is not None:
