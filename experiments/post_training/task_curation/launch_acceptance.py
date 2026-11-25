@@ -86,7 +86,7 @@ def main() -> None:
         args.disk,
         "--enable-extra-resources",
         "--priority",
-        "batch",
+        "interactive",
         "--no-preemptible",
         "--timeout",
         args.timeout,
