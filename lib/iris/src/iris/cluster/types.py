@@ -716,18 +716,20 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
 logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
-workdir = os.environ["IRIS_WORKDIR"]
-
-try:
-    with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
-        fn, args, kwargs = cloudpickle.loads(f.read())
-    fn(*args, **kwargs)
-except BaseException as exc:
-    if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
-        # The callable runner is an exception boundary. Retain the failure for
-        # atexit hooks before re-raising it with its original exit semantics.
-        sys.last_exc = exc
-    raise
+# multiprocessing "spawn" and "forkserver" children re-import this file as
+# __mp_main__; the guard keeps them from re-running the callable.
+if __name__ == "__main__":
+    workdir = os.environ["IRIS_WORKDIR"]
+    try:
+        with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
+            fn, args, kwargs = cloudpickle.loads(f.read())
+        fn(*args, **kwargs)
+    except BaseException as exc:
+        if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+            # The callable runner is an exception boundary. Retain the failure for
+            # atexit hooks before re-raising it with its original exit semantics.
+            sys.last_exc = exc
+        raise
 """
 
 
