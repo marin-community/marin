@@ -14,11 +14,13 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     QualifiedSourceDeclaration,
+    SourceOrigin,
 )
 from finestore.rl.status_taxonomy import SourceStatus
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
+from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.source_status import consumer_inputs
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
@@ -265,3 +267,21 @@ def test_source_runtime_requires_an_immutable_commit_in_declarations_and_serving
             consumer_projection(declaration)
     finally:
         consumer.packaged_consumer_inputs.cache_clear()
+
+
+def test_workplace_runtime_binding_preserves_its_published_source_identity(qualified_source):
+    source_id = "Nvidia:Nemotron-RL-agent-workplace_assistant"
+    receipt = qualified_source.info.consumer_receipt.model_copy(update={"source_id": source_id})
+    info = replace(
+        qualified_source.info,
+        id=source_id,
+        origin=SourceOrigin.NVIDIA,
+        upstream_dataset="Nemotron-RL-agent-workplace_assistant",
+        upstream_name="Nemotron Workplace Assistant",
+        title=None,
+        consumer_runtime_commit=receipt.runtime_commit,
+        consumer_receipt=receipt,
+    )
+    restored = TypeAdapter(SourceInfo).validate_json(TypeAdapter(SourceInfo).dump_json(info))
+    assert restored.id == restored.consumer_receipt.source_id == source_id
+    assert restored.consumer_runtime_commit == restored.consumer_receipt.runtime_commit

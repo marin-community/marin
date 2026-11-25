@@ -176,6 +176,7 @@ class SourceOrigin(StrEnum):
     MARIN = "Marin"
     MARIN_COMMUNITY = "marin-community"
     NEMOTRON = "Nemotron"
+    NVIDIA = "Nvidia"
     OPEN_R1 = "Open-R1"
     OPENAI = "OpenAI"
     OPENATHENA = "OpenAthena"
