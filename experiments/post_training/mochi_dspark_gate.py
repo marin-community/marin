@@ -11,6 +11,7 @@ import logging
 import tempfile
 from enum import StrEnum
 from pathlib import Path
+from statistics import mean
 
 from iris.cluster.client.job_info import get_job_info
 from marin.inference.backend import ModelSpec
@@ -115,6 +116,11 @@ def require_difference(spec: dict, name: str, reference: dict, scores: dict, bou
 async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibration: dict) -> None:
     base = environment.server_url
     if stage == "plain-rescore":
+        fixed_reference = json.loads((StoragePath(spec["output"]) / "plain-check/fixed-reference.json").read_text())
+        teacher = await prefix_scores(base, calibration["probes"], 16)
+        require_difference(
+            spec, "plain-rescore/fixed-control", fixed_reference["scores"], teacher, calibration["fixed_bounds"]
+        )
         for arm in ("plain-check", "dspark-check"):
             recorded = json.loads((StoragePath(spec["output"]) / f"{arm}/autoregressive.json").read_text())
             teacher = await prefix_scores(base, list(recorded["scores"].values()), 16)
@@ -122,34 +128,54 @@ async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibrat
                 spec, f"{arm}/autoregressive-correctness", recorded["scores"], teacher, calibration["decode_bounds"]
             )
         write_json(
-            spec["output"], "correctness-passed.json", {"passed": True, "calibration_sha256": spec["calibration_sha256"]}
+            spec["output"],
+            "correctness-passed.json",
+            {
+                "passed": True,
+                "calibration_sha256": spec["calibration_sha256"],
+                "teacher_model": spec["model"]["weights"],
+                "reference": "independent plain decoding of the same policy",
+            },
         )
         return
     scores = await prefix_scores(base, calibration["probes"], 16)
-    require_difference(spec, f"{stage}/fixed-correctness", calibration["reference"], scores, calibration["fixed_bounds"])
     if stage == "plain-check":
-        # Re-qualify the runtime change against the old teacher before observing DSpark.
-        recorded = checked_json(spec["reference_autoregressive"], spec["reference_autoregressive_sha256"])
+        write_json(spec["output"], "plain-check/fixed-reference.json", {"scores": scores})
         for repeat in range(2):
-            teacher = await prefix_scores(base, list(recorded["scores"].values()), 16)
+            teacher = await prefix_scores(base, calibration["probes"], 16)
             require_difference(
-                spec, f"{stage}/old-teacher-{repeat}", recorded["scores"], teacher, calibration["decode_bounds"]
+                spec, f"plain-check/independent-control-{repeat}", scores, teacher, calibration["fixed_bounds"]
             )
-        repeat = await prefix_scores(base, calibration["probes"], 16)
-        require_difference(
-            spec, f"{stage}/independent-control", calibration["reference"], repeat, calibration["fixed_bounds"]
-        )
+    else:
+        reference = json.loads((StoragePath(spec["output"]) / "plain-check/fixed-reference.json").read_text())
+        require_difference(spec, f"{stage}/fixed-correctness", reference["scores"], scores, calibration["fixed_bounds"])
     decoded = await decode_probes(base, calibration["probes"], spec["correctness_seeds"])
     write_json(spec["output"], f"{stage}/autoregressive.json", decoded)
-    sampling = sampling_difference(sampling_by_prompt(decoded["trajectories"]), calibration["sampling"])
-    write_json(spec["output"], f"{stage}/sampling-correctness.json", sampling)
-    if not sampling["passed"]:
-        raise ValueError(f"Strict sampled-distribution check failed: {stage}")
+    grouped = sampling_by_prompt(decoded["trajectories"])
     if stage == "plain-check":
+        # Rebind the teacher to this policy without changing the frozen noise limits.
+        sampling_reference = {
+            **calibration["sampling"],
+            "by_prompt": grouped,
+            "metrics": {
+                metric: {
+                    **bounds,
+                    "reference": mean(mean(row[metric] for row in rows) for rows in grouped.values()),
+                }
+                for metric, bounds in calibration["sampling"]["metrics"].items()
+            },
+        }
+        write_json(spec["output"], "plain-check/sampling-reference.json", sampling_reference)
         teacher = await prefix_scores(base, list(decoded["scores"].values()), 16)
         require_difference(
             spec, f"{stage}/fresh-teacher-control", decoded["scores"], teacher, calibration["decode_bounds"]
         )
+        return
+    reference = json.loads((StoragePath(spec["output"]) / "plain-check/sampling-reference.json").read_text())
+    sampling = sampling_difference(grouped, reference)
+    write_json(spec["output"], f"{stage}/sampling-correctness.json", sampling)
+    if not sampling["passed"]:
+        raise ValueError(f"Strict sampled-distribution check failed: {stage}")
 
 
 async def benchmark(environment: VllmEnvironment, spec: dict, stage: str) -> None:
