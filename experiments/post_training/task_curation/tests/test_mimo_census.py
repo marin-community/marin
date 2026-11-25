@@ -152,6 +152,8 @@ def test_run_census_binds_every_receipt_to_the_release_pin(population, workdir, 
     def fake_survey(manifest, checkers, revision):
         calls.append(("survey", revision, manifest["inputs"][0]["expected_tasks"]))
         assert manifest["source_ids"] == [SOURCE_ID]
+        assert manifest["catalog_root"] == mimo_census.MANIFEST_BOUND_CATALOG_ROOT
+        assert manifest["snapshot_id"] == EXPECTED_TASKS_PARQUET_SHA256
         assert manifest["grading_environments"][SOURCE_ID]["required_counts"] == {"shared": TASKS}
         return FakeSurvey([FakeSurveyRow("daytona", "verify")])
 

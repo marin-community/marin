@@ -77,6 +77,10 @@ NO_ORACLE_POLICY = NoOracleExecutabilityPolicy(
     executability_proof_required_for_no_oracle=False,
     version=1,
 )
+MANIFEST_BOUND_CATALOG_ROOT = "manifest-bound:mimo-repaired-census"
+"""The census survey binds no catalog snapshot: the release pins its own manifest scope."""
+SURVEY_SNAPSHOT_ID = EXPECTED_TASKS_PARQUET_SHA256
+"""The measured release rows are the survey's bound snapshot identity."""
 SURVEY_RUNTIME_DEFAULTS = {
     "agent": {
         "cleanup_timeout": 120.0,
@@ -200,6 +204,8 @@ def run_census(output_root: str, workdir: Path, survey_revision: str) -> dict:
         raise ValueError(f"Static retention did not retain the complete population: {summary_evidence}")
 
     manifest = {
+        "catalog_root": MANIFEST_BOUND_CATALOG_ROOT,
+        "snapshot_id": SURVEY_SNAPSHOT_ID,
         "runtime_defaults": SURVEY_RUNTIME_DEFAULTS,
         "source_ids": [SOURCE_ID],
         "inputs": [
