@@ -315,7 +315,7 @@ SWEBENCH_MULTILINGUAL = HarborDataset(
     benchmark="swebench-multilingual",
     title="SWE-bench Multilingual",
     # Registry swebench_multilingual@1.0, which pins tokio-rs__tokio-4384 at this commit and the other packages
-    # at its parent 61366953; the commits differ only in that package's tests/test.sh.
+    # at its ancestor 61366953; between them only that package's tests/test.sh changes in this dataset.
     source=github_packages(
         "laude-institute/harbor-datasets",
         "19fb29e2b4d1e24615f620541b1a91461c00f5c5",
