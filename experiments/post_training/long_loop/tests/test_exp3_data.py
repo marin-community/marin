@@ -18,7 +18,8 @@ def test_exp3_pool_materialization_preserves_tasks_and_excludes_random_holdout()
         ]
         for route in ["agentic", "nonagentic"]
     }
-    curriculum, train, val = partition_tasks(tasks)
+    prepared = partition_tasks(tasks)
+    curriculum, train, val = prepared.curriculum, prepared.training, prepared.validation
     assert {route: len(rows) for route, rows in train.items()} == {"agentic": 80, "nonagentic": 80}
     assert len(val) == 200
     assert consumed_route_quotas(curriculum, {route: route for route in tasks}, 64) == {"agentic": 32, "nonagentic": 32}
@@ -29,7 +30,9 @@ def test_exp3_pool_materialization_preserves_tasks_and_excludes_random_holdout()
     assert sorted(train_tasks + val_tasks, key=lambda row: row["id"]) == sorted(
         [row for rows in tasks.values() for row in rows], key=lambda row: row["id"]
     )
-    reordered = partition_tasks({route: list(reversed(rows)) for route, rows in reversed(list(tasks.items()))})[0]
+    reordered = partition_tasks(
+        {route: list(reversed(rows)) for route, rows in reversed(list(tasks.items()))}
+    ).curriculum
     assert reordered == curriculum
     rebuilt = curriculum_from_manifest(
         {"curriculum": curriculum.identity, "validation": validation_payload(curriculum.validation)}

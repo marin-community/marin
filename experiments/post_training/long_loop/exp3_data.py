@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 import click
 from marin.execution.build_context import resolve_version
@@ -19,7 +19,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
 
-from experiments.post_training.long_loop.exp4_data import write_pool_file
+from experiments.post_training.long_loop.exp4_data import _write_pool_file
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE_URL,
     AGENTIC_TRAIN_ROWS,
@@ -38,7 +38,14 @@ from experiments.post_training.task_curation.exp3_curriculum import (
 )
 
 
-def partition_tasks(tasks: dict[str, list[dict]]) -> tuple[RlCurriculum, dict[str, list[dict]], list[dict]]:
+@dataclass(frozen=True)
+class PreparedPools:
+    curriculum: RlCurriculum
+    training: dict[str, list[dict]]
+    validation: list[dict]
+
+
+def partition_tasks(tasks: dict[str, list[dict]]) -> PreparedPools:
     """Extract the deterministic holdout without changing any task document."""
     identities = {
         route: tuple(PoolRow(id=task["id"], sha256=canonical_sha256(task)) for task in rows)
@@ -62,7 +69,7 @@ def partition_tasks(tasks: dict[str, list[dict]]) -> tuple[RlCurriculum, dict[st
         raise ValueError("Exp3 holdout and training overlap by task ID")
     if {canonical_sha256(task) for task in train_tasks} & {canonical_sha256(task) for task in val_tasks}:
         raise ValueError("Exp3 holdout and training overlap by task content hash")
-    return curriculum, training, heldout
+    return PreparedPools(curriculum, training, heldout)
 
 
 def prepare_pool(*, output: str, agentic: str, blend: str) -> None:
@@ -81,14 +88,15 @@ def prepare_pool(*, output: str, agentic: str, blend: str) -> None:
     composition = {route: len(rows) for route, rows in tasks.items()}
     if composition != {"agentic": AGENTIC_TRAIN_ROWS, "nonagentic": NONAGENTIC_TRAIN_ROWS}:
         raise ValueError(f"Exp3 training population changed: {composition}")
-    curriculum, training, heldout = partition_tasks(tasks)
+    prepared = partition_tasks(tasks)
+    curriculum, training, heldout = prepared.curriculum, prepared.training, prepared.validation
     destination = StoragePath(output)
     destination.mkdirs(exist_ok=True)
     files = {
-        f"{route}/train.parquet": write_pool_file(destination, f"{route}/train.parquet", rows)
+        f"{route}/train.parquet": _write_pool_file(destination, f"{route}/train.parquet", rows)
         for route, rows in training.items()
     }
-    files["validation.parquet"] = write_pool_file(destination, "validation.parquet", heldout)
+    files["validation.parquet"] = _write_pool_file(destination, "validation.parquet", heldout)
     document = json.dumps(asdict(curriculum), indent=2).encode()
     (destination / "curriculum.json").write_bytes(document)
     files["curriculum.json"] = hashlib.sha256(document).hexdigest()
