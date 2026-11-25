@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
@@ -124,6 +124,10 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+
+    @property
+    def openai_finish_reason(self) -> Literal["stop", "length"]:
+        return "stop" if self.finish_reason == FinishReason.STOP else "length"
 
 
 class InferenceBatch(list):
@@ -629,7 +633,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
+                        finish_reason=generation.openai_finish_reason,
                         logprobs=logprobs,
                     )
                 )
@@ -772,7 +776,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
+                    finish_reason=generation.openai_finish_reason,
                     logprobs=logprobs,
                 )
             )

@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
@@ -23,7 +22,7 @@ try:
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
-    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, decode_frame, encode_frame
+    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, PROMPT_TOKEN_IDS, decode_frame, encode_frame
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -622,41 +621,29 @@ def test_tokens_endpoint(test_client):
 def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     client, _ = test_client
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    body = encode_frame({"max_tokens": 2, "temperature": 0, "seed": 17}, {"prompt_token_ids": prompt})
+    body = encode_frame({"max_tokens": 2, "temperature": 0, "seed": 17}, {PROMPT_TOKEN_IDS: prompt})
     response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
     assert response.status_code == 200, response.text
     metadata, tensors = decode_frame(response.content)
 
-    np.testing.assert_array_equal(tensors["prompt_token_ids"], prompt)
+    np.testing.assert_array_equal(tensors[PROMPT_TOKEN_IDS], prompt)
     assert metadata["choices"] == [{"completion_tokens": 2, "finish_reason": "length"}]
     assert tensors["choice.0.token_ids"].shape == (2,)
     assert tensors["choice.0.token_ids"].dtype == np.int32
     assert tensors["choice.0.behavior_logprobs"].shape == (2,)
     assert np.isfinite(tensors["choice.0.behavior_logprobs"]).all()
 
-    wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
+    wrong_dtype = encode_frame({"max_tokens": 2}, {PROMPT_TOKEN_IDS: prompt.astype(np.float32)})
     response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
     assert response.status_code == 400
 
 
-class _GreedyServingModel(eqx.Module):
-    Vocab: hax.Axis = eqx.field(static=True)
-    token_id: int = eqx.field(static=True)
-
-    def initial_cache(self, spec, *, dtype):
-        return KvPageCache.init(spec, hax.Axis("kv_head", jax.device_count()), hax.Axis("embed", 1), dtype=dtype)
-
-    def decode(self, input_ids, kv_cache, batch_info, pos_ids):
-        logits = hax.nn.one_hot(self.token_id, self.Vocab, dtype=jnp.float32)
-        return logits.broadcast_axis(input_ids.resolve_axis("position")), kv_cache
-
-
 @pytest.fixture(scope="module")
-def greedy_client(inference_server_config, local_gpt2_tokenizer):
+def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
     tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     token_ids = tokenizer.encode("a", add_special_tokens=False)
     assert len(token_ids) == 1
-    model = _GreedyServingModel(hax.Axis("vocab", len(tokenizer)), token_ids[0])
+    model = fixed_token_model(len(tokenizer), token_ids[0])
     service = dataclasses.replace(inference_server_config.service, max_pages=32)
     config = dataclasses.replace(inference_server_config, service=service)
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
@@ -698,7 +685,7 @@ def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_cli
     def generate(metadata):
         response = client.post(
             GENERATE_PATH,
-            content=encode_frame(metadata, {"prompt_token_ids": prompt}),
+            content=encode_frame(metadata, {PROMPT_TOKEN_IDS: prompt}),
             headers={"content-type": MEDIA_TYPE},
         )
         assert response.status_code == 200, response.text

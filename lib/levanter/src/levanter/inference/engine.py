@@ -1338,7 +1338,7 @@ class InferenceEngine:
         pending_outputs = jax.device_get(pending_outputs)
         n = int(pending_outputs.num_tokens)
         reasons = pending_outputs.finish_reasons.array
-        fins = reasons != FinishReason.RUNNING
+        finished_slots = reasons != FinishReason.RUNNING
         toks_arr = pending_outputs.tokens.array
         sids_arr = pending_outputs.slot_ids.array
 
@@ -1361,7 +1361,7 @@ class InferenceEngine:
 
         # Finish outputs before releasing slots, so a new request can reuse them.
         released_slots = []
-        for local_slot, is_done in enumerate(fins):
+        for local_slot, is_done in enumerate(finished_slots):
             if not bool(is_done):
                 continue
             info = self.local_map.get(local_slot)
@@ -1383,7 +1383,7 @@ class InferenceEngine:
                     )
 
         if released_slots:
-            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(fins))
+            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(finished_slots))
             self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
             self.free_slots.extend(released_slots)
         logger.debug(
