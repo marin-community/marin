@@ -4,6 +4,7 @@
 """Behavior tests for the maintained catalog-load stage (R40 gate slice 2)."""
 
 import dataclasses
+import gzip
 import hashlib
 import json
 
@@ -222,3 +223,26 @@ def test_failed_run_emits_alert(tmp_path):
         cl.run_catalog_load(inputs, dry_run=True, feeds=(feed,))
     rows = [json.loads(line) for line in feed.read_text().splitlines()]
     assert [row["kind"] for row in rows] == ["STAGE_START", "STAGE_FAIL"]
+
+
+def test_fresh_qc_panel_at_an_older_pin_replays_as_stale(tmp_path):
+    """A complete panel the prior load served at an older pin replays and reports its currency."""
+
+    def staged_panel(name: str, records: int, current_pin: bool) -> dict:
+        document = {"items": [{}] * records, "raw": [{}] * records, "receipt": {"current_pin": current_pin}}
+        raw = gzip.compress(json.dumps(document).encode())
+        path = tmp_path / f"{name}.json.gz"
+        path.write_bytes(raw)
+        return {
+            "source_id": f"Test:{name}",
+            "status": "complete",
+            "records": cl.QC_PANEL_RECORDS,
+            "reference": {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()},
+        }
+
+    inputs = _inputs(tmp_path)
+    loader = lambda staged, load_id, source_id, query: {"items": len(staged["items"])}  # noqa: E731
+    stale = cl._stage_qc_panel(inputs, staged_panel("stale", cl.QC_PANEL_RECORDS, False), loader, None)
+    assert stale["current_pin"] is False and stale["counts"] == {"items": cl.QC_PANEL_RECORDS}
+    with pytest.raises(ValueError, match="is not a complete panel"):
+        cl._stage_qc_panel(inputs, staged_panel("short", cl.QC_PANEL_RECORDS - 1, True), loader, None)

@@ -349,6 +349,7 @@ def _run_write(
         "snapshot_id": inputs.snapshot_id,
         "contracts": result_contracts,
         "fresh_qc_results": qc_results,
+        "stale_pin_panels": sorted(row["source_id"] for row in qc_results if not row["current_pin"]),
         "selected_review_panels": selected_panels,
         "difficulty_coverage": coverage_result,
         "sealed_difficulty": sealed_difficulty,
@@ -400,15 +401,17 @@ def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Call
     if hashlib.sha256(raw).hexdigest() != panel["reference"]["sha256"]:
         raise ValueError(f"fresh QC panel digest mismatch for {panel['source_id']}")
     staged = json.loads(gzip.decompress(raw))
-    complete_panel = len(staged["items"]) == len(staged["raw"]) == QC_PANEL_RECORDS
-    if not complete_panel or not staged["receipt"]["current_pin"]:
-        raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete pinned panel")
+    if not len(staged["items"]) == len(staged["raw"]) == QC_PANEL_RECORDS:
+        raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete panel")
+    # A panel the prior load served at an older population pin replays as stale: the
+    # loader records its pin currency, matching the admission gate's sample_pin_stale.
     loaded = reviews_loader(staged, inputs.target_load_id, panel["source_id"], query)
     return {
         "source_id": panel["source_id"],
         "reference": panel["reference"],
         "counts": loaded,
         "review": staged["receipt"],
+        "current_pin": bool(staged["receipt"]["current_pin"]),
     }
 
 

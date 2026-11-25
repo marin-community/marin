@@ -1383,6 +1383,23 @@
       "reasons": []
     },
     {
+      "id": "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
+      "display_name": "Nvidia \u00b7 Nemotron-System-User-Instruction-Hierarchy-v1",
+      "status": "Pending",
+      "origin": "Nvidia",
+      "upstream_dataset": "Nemotron-System-User-Instruction-Hierarchy-v1",
+      "upstream_url": null,
+      "notes": "TRAIN source rubrics; original role messages and all private evaluation criteria preserved. The user_only N/A sentinel means no system event. No source reference responses or executable scorer exist; verifyit checklist fraction with explicit MEDIUM MiniMax M3 settings binds grading. No live judge execution is claimed. One unsupported source criterion remains uncounted;63 lexical rows removed. Fresh SAMPLE99/100 reviewed,3issues,1unavailable,GOOD. Known weaknesses: contradictory mandatory constraints and a task with missing advertisement context; every finding remains recorded. Static no-oracle retention follows the pinned policy; consumer findings remain advisory.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
       "display_name": "TaskTrove \u00b7 tasktrove-competitive-coding-rebuilt-v1",
       "status": "Pending",
