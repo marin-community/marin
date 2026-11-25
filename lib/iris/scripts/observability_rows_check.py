@@ -36,8 +36,8 @@ from iris.cluster.stats.observability_rows_check import (
     MAX_CHECK_DAYS,
     SETTLE_MARGIN,
     DayWindow,
-    check_days,
     day_coverage,
+    days_to_check,
     format_report,
 )
 from iris.rpc import query_pb2
@@ -57,7 +57,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
     now = datetime.now(UTC)
-    days = check_days(now, start=args.start_date, days=args.days)
+    days = days_to_check(now, start=args.start_date, days=args.days)
     if not days:
         print(f"cluster {args.cluster}: no full UTC day since {args.start_date} yet")
         return 0

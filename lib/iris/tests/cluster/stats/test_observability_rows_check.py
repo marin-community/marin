@@ -11,7 +11,7 @@ from iris.cluster.controller import ops, writes
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.observability_rows_check import DayWindow, RowTable, TableCoverage, check_days, day_coverage
+from iris.cluster.stats.observability_rows_check import DayWindow, RowTable, TableCoverage, day_coverage, days_to_check
 from iris.cluster.stats.tables import (
     CONTROLLER_JOB_CONFIG_NAMESPACE,
     CONTROLLER_JOB_NAMESPACE,
@@ -192,19 +192,19 @@ def test_day_coverage_reports_a_removed_job_as_extra_without_failing(state, log_
     assert _counts(coverage) == [(0, 1), (0, 1), (0, 1), (0, 1)]
 
 
-def test_check_days_covers_settled_days_inside_retention_from_the_start_date():
+def test_days_to_check_covers_settled_days_inside_retention_from_the_start_date():
     morning = datetime(2026, 11, 20, 6, tzinfo=UTC)
 
-    assert check_days(morning, start=date(2026, 11, 18), days=5) == [date(2026, 11, 18), date(2026, 11, 19)]
-    assert check_days(morning, start=date(2026, 11, 1), days=3) == [
+    assert days_to_check(morning, start=date(2026, 11, 18), days=5) == [date(2026, 11, 18), date(2026, 11, 19)]
+    assert days_to_check(morning, start=date(2026, 11, 1), days=3) == [
         date(2026, 11, 17),
         date(2026, 11, 18),
         date(2026, 11, 19),
     ]
-    assert check_days(morning, start=date(2026, 11, 20), days=5) == []
+    assert days_to_check(morning, start=date(2026, 11, 20), days=5) == []
     # Within an hour after midnight the previous day has not settled, and the
     # oldest day must still start after the retention cutoff (2026-11-13 00:30).
     just_after_midnight = datetime(2026, 11, 20, 0, 30, tzinfo=UTC)
-    assert check_days(just_after_midnight, start=date(2026, 11, 1), days=6) == [
+    assert days_to_check(just_after_midnight, start=date(2026, 11, 1), days=6) == [
         date(2026, 11, 14) + timedelta(days=i) for i in range(5)
     ]

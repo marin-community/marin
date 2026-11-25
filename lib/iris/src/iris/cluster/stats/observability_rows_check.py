@@ -47,9 +47,10 @@ RowQuery = Callable[[str], Sequence[Sequence[object]]]
 Key = tuple[object, ...]
 
 _CLUSTER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-# Full days inside the retention window. ``check_days`` also drops a day that
-# starts before the pruner's cutoff, so every job submitted on a checked day is
-# still in the DB.
+# Full days inside the retention window. No cluster config overrides
+# ControllerConfig.job_retention, so its default is the retention in force.
+# ``days_to_check`` also drops a day that starts before the pruner's cutoff, so
+# every job submitted on a checked day is still in the DB.
 MAX_CHECK_DAYS = int(JOB_RETENTION.to_seconds() // 86400) - 1
 # A finish this recent may still have its terminal row in flight, and a day is
 # checked only once it ended this long ago.
@@ -111,7 +112,7 @@ class TableCoverage:
         return not self.missing and not self.missing_terminal
 
 
-def check_days(now: datetime, *, start: date, days: int) -> list[date]:
+def days_to_check(now: datetime, *, start: date, days: int) -> list[date]:
     """The UTC days to check at ``now``: up to ``days`` days, from ``start`` on.
 
     A day is checked once it ended ``SETTLE_MARGIN`` ago, and only if it starts
@@ -146,6 +147,11 @@ _TERMINAL_TASK_NAMES = [job_pb2.TaskState.Name(s) for s in TERMINAL_TASK_STATES]
 _JOB_KEY = "root_job_id, root_submitted_at_ms, job_id, submitted_at_ms"
 
 
+def _terminal_flag(state_names: list[str]) -> str:
+    """A 0/1 aggregate: whether any of a key's Finelog rows has a terminal state."""
+    return f"max(CASE WHEN state IN ({_name_list(state_names)}) THEN 1 ELSE 0 END) AS terminal"
+
+
 def controller_sql(table: RowTable, window: DayWindow) -> str:
     """The controller DB query for ``table``'s keys on ``window.day``: key columns, then a 0/1 settled-terminal flag.
 
@@ -160,7 +166,7 @@ def controller_sql(table: RowTable, window: DayWindow) -> str:
             "FROM task_attempts a JOIN tasks t ON t.task_id = a.task_id JOIN jobs j ON j.job_id = t.job_id "
             f"WHERE j.cluster = '{LOCAL_CLUSTER}' AND a.created_at_ms >= {lo} AND a.created_at_ms < {hi}"
         )
-    keys = "j.root_job_id, j.root_submitted_at_ms, j.job_id, j.submitted_at_ms"
+    keys = ", ".join(f"j.{column}" for column in _JOB_KEY.split(", "))
     where = f"WHERE j.cluster = '{LOCAL_CLUSTER}' AND j.submitted_at_ms >= {lo} AND j.submitted_at_ms < {hi}"
     if table is RowTable.TASK:
         return (
@@ -189,7 +195,7 @@ def finelog_sql(table: RowTable, cluster: str, window: DayWindow) -> str:
     if table is RowTable.TASK_ATTEMPT:
         return (
             "SELECT attempt_uid, "
-            f"max(CASE WHEN state IN ({_name_list(_TERMINAL_TASK_NAMES)}) THEN 1 ELSE 0 END) AS terminal "
+            f"{_terminal_flag(_TERMINAL_TASK_NAMES)} "
             f'FROM "{table}" WHERE {bounds} '
             f"AND created_at >= {_ts(window.start)} AND created_at < {_ts(window.end)} "
             "GROUP BY attempt_uid"
@@ -198,7 +204,7 @@ def finelog_sql(table: RowTable, cluster: str, window: DayWindow) -> str:
     if table is RowTable.TASK:
         return (
             "SELECT task_id, "
-            f"max(CASE WHEN state IN ({_name_list(_TERMINAL_TASK_NAMES)}) THEN 1 ELSE 0 END) AS terminal "
+            f"{_terminal_flag(_TERMINAL_TASK_NAMES)} "
             f'FROM "{table}" WHERE {bounds} AND {day_filter} '
             "GROUP BY task_id"
         )
@@ -206,7 +212,7 @@ def finelog_sql(table: RowTable, cluster: str, window: DayWindow) -> str:
         return f'SELECT DISTINCT {_JOB_KEY}, 0 AS terminal FROM "{table}" WHERE {bounds} AND {day_filter}'
     return (
         f"SELECT {_JOB_KEY}, "
-        f"max(CASE WHEN state IN ({_name_list(_TERMINAL_JOB_NAMES)}) THEN 1 ELSE 0 END) AS terminal "
+        f"{_terminal_flag(_TERMINAL_JOB_NAMES)} "
         f'FROM "{table}" WHERE {bounds} AND {day_filter} '
         f"GROUP BY {_JOB_KEY}"
     )
