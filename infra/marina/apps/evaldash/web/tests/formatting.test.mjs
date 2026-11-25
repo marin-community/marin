@@ -11,6 +11,14 @@ test('the metric Value display rounds to 2 significant digits in plain decimal n
   assert.equal(formatValue(null), '—')
 })
 
+test('rounding across a magnitude boundary never prints a third significant digit', () => {
+  assert.equal(formatValue(0.996), '1.0')
+  assert.equal(formatValue(0.0996), '0.1')
+  assert.equal(formatValue(9.96), '10')
+  // trailing zeros after an upward round carry magnitude, not precision (like 12345 → 12000)
+  assert.equal(formatValue(99.6), '100')
+})
+
 test('the Value display keeps sign, integers, and ordinary magnitudes readable', () => {
   assert.equal(formatValue(3.14159), '3.1')
   assert.equal(formatValue(42), '42')

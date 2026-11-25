@@ -22,13 +22,20 @@ export function formatScore(value: number | null | undefined): string {
 }
 
 // A raw metric value at 2 significant digits, in plain decimal notation like the rest of the
-// dashboard (12345 reads 12000, not 1.2e4). Display only; stored values stay exact.
+// dashboard (12345 reads 12000, not 1.2e4). Display only; stored values stay exact. Rounding can
+// cross a magnitude (0.996 rounds to 1), so the printed decimals follow the rounded value, and
+// trailing zeros trim — but never past the first decimal of a rounded fraction.
 export function formatValue(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   if (value === 0) return '0'
-  const magnitude = Math.floor(Math.log10(Math.abs(value)))
   const rounded = Number(value.toPrecision(2))
-  return rounded.toFixed(Math.max(0, 1 - magnitude))
+  const magnitude = Math.floor(Math.log10(Math.abs(rounded)))
+  let text = rounded.toFixed(Math.max(0, 1 - magnitude))
+  if (text.includes('.')) {
+    text = text.replace(/0+$/, '')
+    if (text.endsWith('.')) text += '0'
+  }
+  return text
 }
 
 export function shortSha(sha: string | null | undefined): string {
