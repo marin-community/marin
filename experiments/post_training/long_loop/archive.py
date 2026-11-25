@@ -5,8 +5,10 @@
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from itertools import repeat
 from pathlib import PurePosixPath
 
 from rigging.filesystem.buckets import filesystem_for
@@ -15,6 +17,8 @@ from rigging.filesystem.transfer import copy
 
 from experiments.post_training.long_loop.hf_archive import file_identity, verify_hf_checkpoint
 from experiments.post_training.long_loop.verify_final_sft_checkpoint import verify_final_checkpoint
+
+ARCHIVE_COPY_WORKERS = 16
 
 
 @dataclass(frozen=True)
@@ -80,7 +84,8 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
         raise ValueError("Archive inputs have duplicate destination names")
     if any(item.category == "checkpoint" or item.source.endswith((".safetensors", ".distcp")) for item in inputs):
         raise ValueError("Checkpoint payloads belong in Hugging Face, not the evidence archive")
-    objects = [archive_object(item, root) for item in inputs]
+    with ThreadPoolExecutor(max_workers=ARCHIVE_COPY_WORKERS) as pool:
+        objects = list(pool.map(archive_object, inputs, repeat(root)))
     manifest = {"schema": 1, "provenance": provenance, "objects": [asdict(obj) for obj in objects]}
     raw = json.dumps(manifest, sort_keys=True, indent=2).encode()
     write_once(prefix_join(root, "manifest.json"), raw)
