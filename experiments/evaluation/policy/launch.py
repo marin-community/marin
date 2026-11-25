@@ -44,6 +44,7 @@ def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
     server at the evaluation's context, which the agent's input then fills.
     """
     own = benchmark_window(item.evaluation, item.candidate)
+    # resolve checked the catalog's window; ``served`` is what the checkpoint actually allows, which can be less.
     if own is None or item.context < own.tokens:
         window = item.context
         if own is not None and (served is None or served < window):

@@ -154,7 +154,7 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
     caps = {
         (row["dataset"], row["source_row"]): row["max_tokens"]
         for row in selections
-        if row["status"] == "selected" and row["dataset"] in single_turn and row["max_tokens"] is not None
+        if row["status"] == SelectionStatus.SELECTED and row["dataset"] in single_turn and row["max_tokens"] is not None
     }
     decided = Counter(row["dataset"] for row in selections if row["status"] != SelectionStatus.UNINSPECTED)
     tokens = [

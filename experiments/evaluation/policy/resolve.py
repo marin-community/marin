@@ -78,8 +78,8 @@ def benchmark_window(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -
 def _context(policy: EvalPolicy, candidate: PolicyCandidate, evaluation: PolicyEvaluation, context: int | None) -> int:
     """The context an evaluation runs with: ``context`` if set, else its benchmark's window, else the policy's.
 
-    A benchmark that declares a window runs on the candidate's served window, not one sized for it, so the
-    candidate must be served at least that large.
+    A benchmark that declares a window runs on the candidate's served window, or for an agent run below its
+    input limit on a server of its context, so the candidate must be served at least that large.
     """
     window = benchmark_window(evaluation, candidate)
     if window is None:
