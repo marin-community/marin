@@ -31,9 +31,11 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 import glob
 import json
+import math
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -50,6 +52,7 @@ from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -59,6 +62,7 @@ from cloud.iris.artifacts import (
     file_inventory,
     fs_and_path,
     materialize,
+    write_json,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -84,8 +88,6 @@ from marinskyrl.environment_contract import (
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
-    HuggingFaceModelCache,
-    immutable_model_cache_key,
     validate_hf_model_weights,
 )
 from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -367,9 +369,7 @@ def stage_hugging_face_models(config: DictConfig) -> None:
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
-    return os.path.join(
-        tempfile.gettempdir(), "marinskyrl", "model_metadata", immutable_model_cache_key(source_uri, identity)
-    )
+    return str(Path(tempfile.gettempdir()) / model_metadata_relative_path(source_uri, identity))
 
 
 @dataclass(frozen=True)
@@ -486,7 +486,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
         return None
 
     revision = args.policy_tokenizer_revision
-    local_path = _metadata_path(tokenizer_path, revision or "main")
+    local_path = _metadata_path(tokenizer_path, revision or DEFAULT_TOKENIZER_REVISION)
     target = Path(local_path)
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)
@@ -1805,17 +1805,33 @@ class RayLogSyncSession:
         return stop
 
 
+_TRAINER_COMPLETION_MARKER = b"Training run completed: elapsed_excluding_eval_seconds="
+_TRAINER_COMPLETION_LINE = re.compile(
+    rb"skyrl_train\.entrypoints\.main_base:_run:\d+ - "
+    + _TRAINER_COMPLETION_MARKER
+    + rb"(\d+\.\d{3})\s*$"
+)
+_ANSI_COLOR = re.compile(rb"\x1b\[[0-9;]*m")
+
+
 @dataclass
 class DriverOutputActivity:
     """Track child output that provides evidence of training progress."""
 
     last_progress_at: float = field(default_factory=time.monotonic)
     condition: threading.Condition = field(default_factory=threading.Condition)
+    elapsed_excluding_eval: float | None = None
 
     def record(self, line: bytes) -> None:
         if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
             return
         with self.condition:
+            if _TRAINER_COMPLETION_MARKER in line:
+                match = _TRAINER_COMPLETION_LINE.search(_ANSI_COLOR.sub(b"", line))
+                if match is not None:
+                    seconds = float(match[1])
+                    if math.isfinite(seconds) and seconds > 0:
+                        self.elapsed_excluding_eval = seconds
             self.last_progress_at = time.monotonic()
             self.condition.notify_all()
 
@@ -1923,6 +1939,7 @@ def run_head(
     derived_gloo_ifname: str | None = None,
     *,
     debug_mode: DebugMode = DebugMode.LIGHT,
+    trainer_timing_uri: str | None = None,
 ) -> int:
     ensure_task_debug_artifact_directory(debug_mode)
     num_tasks = _num_tasks()
@@ -2063,6 +2080,11 @@ def run_head(
             )
             ray_stop()
             return exit_code
+        if trainer_timing_uri is not None and not output_thread.is_alive() and driver_activity.elapsed_excluding_eval:
+            try:
+                write_json(trainer_timing_uri, {"elapsed_excluding_eval_seconds": driver_activity.elapsed_excluding_eval})
+            except Exception as error:
+                _log(f"Could not persist the trainer completion time: {error}")
         # Final flush of this node's Ray session logs before teardown reaps them.
         persist_runtime_artifacts(f"driver exit_code={exit_code} (head)")
     # Signal workers to unpark, then tear down.
@@ -2369,7 +2391,8 @@ def main() -> None:
         apply_policy_chat_template(model_path, args.policy_chat_template)
     resolve_ray_ports()
     rank = _rank()
-    debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
+    trainer = launch_config.skyrl.get("trainer", {})
+    debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
     if rank == 0:
         final_config_path = _write_final_config(
             launch_config,
@@ -2377,7 +2400,12 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
+        timing_uri = None
+        if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
+            timing_uri = join_resource_path(str(trainer.grader_report_dir), "trainer_timing.json")
+        exit_code = run_head(
+            args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode, trainer_timing_uri=timing_uri
+        )
     else:
         exit_code = run_worker(args, debug_mode=debug_mode)
     if exit_code != 0:

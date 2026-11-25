@@ -592,6 +592,7 @@ class Trainer(Section):
     tracker_commit_each_step: bool = field(True)
     dump_data_batch: bool = field(False)
     dump_eval_results: bool = field(True)
+    dump_grader_report: bool = field(False)
     log_level: str = field("INFO")
     rope_scaling: OpenMap | None = field(None)
     rope_theta: int | float | None = field(None)
@@ -653,7 +654,7 @@ class SpeculatorTraining(Section):
 
 
 class SpeculativeDecoding(Section):
-    method: Literal["eagle3"] = unset_field()
+    method: Literal["eagle3", "dspark"] = unset_field()
     model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
     training: SpeculatorTraining | None = field(None)
@@ -819,8 +820,8 @@ class Generator(Section):
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})
     speculative_decoding: SpeculativeDecoding | None = field(None)
-    """Managed EAGLE serving and optional online draft training. vLLM resolves immutable Hugging Face revisions or
-    streams object-store checkpoints through Run:ai."""
+    """Managed speculative decoding with optional online training for EAGLE3. SkyRL mirrors pinned Hugging Face
+    drafts and streams object-store checkpoints into vLLM through Run:ai."""
     override_existing_update_group: Literal["auto", "enable", "disable"] = field("auto")
     sampling_params: SamplingParams = Field(default_factory=SamplingParams)
     """Objectives that consume rollout logprobs use processed probabilities and require full-distribution,

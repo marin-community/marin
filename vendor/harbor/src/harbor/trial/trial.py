@@ -16,6 +16,7 @@ from harbor_config.models.trial.config import TaskConfig
 from shellbox.machine import CommandOutputLost
 
 from harbor.agents.factory import AgentFactory
+from harbor.environments.setup import run_environment_setup
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
@@ -428,6 +429,12 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        if self.task.config.environment.setup is not None:
+            await self._await_phase(
+                run_environment_setup(self.agent_environment, self.task.config.environment.setup),
+                timeout_sec=self.task.config.environment.setup.timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("Task initialization timed out"),
+            )
         await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()

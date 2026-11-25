@@ -16,6 +16,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
@@ -25,10 +26,13 @@ from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
+from skyrl_train.task_inputs import TrajectoryMetadata
 
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
+        GRADING_DURATION_SECONDS,
+        GRADING_FAILURE,
         "exception_type",
         "cause_error_type",
         "operation",
@@ -263,8 +267,7 @@ def dump_per_dataset_eval_results(
     dump_dir_path: str,
     tokenizer: AutoTokenizer,
     trajectory_batch: TrajectoryBatch,
-    concat_data_sources: List[str],
-    concat_all_envs: List[str],
+    metadata: List[TrajectoryMetadata],
     eval_metrics: Dict[str, float],
     uids: List[str],
     *,
@@ -277,10 +280,12 @@ def dump_per_dataset_eval_results(
     # Prepare common data
     input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
     output_responses = [tokenizer.decode(response) for response in trajectory_batch["response_ids"]]
+    stop_reasons = trajectory_batch.get("stop_reasons") or [None] * len(input_prompts)
 
     # Group indices by data source
     data_source_indices = {}
-    for i, data_source in enumerate(concat_data_sources):
+    for i, row in enumerate(metadata):
+        data_source = row.data_source
         if data_source is None:
             data_source = "unknown"
         if data_source not in data_source_indices:
@@ -310,11 +315,12 @@ def dump_per_dataset_eval_results(
                     # The parsed conversation the grader read: tool calls, observations and the final answer.
                     "messages": (trajectory_batch.get("evidence_messages") or [None] * len(input_prompts))[i],
                     "score": trajectory_batch["rewards"][i],
-                    "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
+                    "stop_reason": stop_reasons[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
-                    "env_class": concat_all_envs[i],
+                    "env_class": metadata[i].metric_class,
+                    "subset_id": metadata[i].subset_id,
                     "data_source": data_source,
                     "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
                     # Keep operational categories, not arbitrary verifier references or credentials.

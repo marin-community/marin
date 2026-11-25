@@ -25,16 +25,14 @@ from experiments.evaluation.migrations.archive_backup import superseded_samples_
 logger = logging.getLogger(__name__)
 
 
-def copy_table(root: str, table: str, destination: str) -> int:
+def copy_table(reader: ReadView, table: str, destination: str) -> int:
     """Copy a table's pinned metadata and shards to ``destination``; return objects copied.
 
     Each shard copy's size is checked against its source before this returns. An object already at
     the destination is left alone: the earliest snapshot is the pristine one, and a resumed
     migration must not write over it.
     """
-    reader = ReadView(root)
-    shards = reader.list_shards(table)
-    if not shards:
+    if reader.table_metadata_path(table) is None:
         return 0
     destination_path = StoragePath(destination)
     destination_path.mkdirs()
@@ -43,11 +41,11 @@ def copy_table(root: str, table: str, destination: str) -> int:
     metadata_bytes = reader.table_metadata(table).model_dump_json(indent=2).encode()
     if metadata_target.exists():
         if metadata_target.read_bytes() != metadata_bytes:
-            raise ValueError(f"existing table metadata backup does not match {table!r} at {root}")
+            raise ValueError(f"existing table metadata backup does not match {table!r} at {reader.root}")
     else:
         metadata_target.write_bytes(metadata_bytes)
         copied += 1
-    for shard in shards:
+    for shard in reader.list_shards(table):
         source = StoragePath(shard.path)
         target = destination_path / source.name
         if target.exists():
@@ -67,41 +65,41 @@ def copy_table(root: str, table: str, destination: str) -> int:
     return copied
 
 
-def drop_table(root: str, table: str) -> int:
+def drop_table(reader: ReadView, table: str) -> int:
     """Remove a table from the next manifest and return its active shard count."""
-    shards = ReadView(root).list_shards(table)
-    if not shards:
+    if reader.table_metadata_path(table) is None:
         return 0
-    drop_manifest_table(root, table)
-    logger.info("removed %d shard(s) of table %s from the active manifest under %s", len(shards), table, root)
-    return len(shards)
+    count = len(reader.list_shards(table))
+    drop_manifest_table(reader.root, table, expected=reader.table_version(table))
+    logger.info("dropped table %s with %d active shard(s) under %s", table, count, reader.root)
+    return count
 
 
-def replace_table(root: str, table: str, destination: str) -> None:
+def backup_and_drop_table(reader: ReadView, table: str, destination: str) -> None:
     """Snapshot ``table`` to ``destination``, then drop it.
 
     The snapshot is complete and size-verified before the manifest removes the table, so a failure
     leaves either the original logical table or a full copy outside the run.
     """
-    copy_table(root, table, destination)
-    drop_table(root, table)
+    copy_table(reader, table, destination)
+    drop_table(reader, table)
 
 
-def preserve_and_replace_samples(results_path: str, stored_version: int) -> None:
-    """Snapshot one run's samples table to its 30-day prefix, keyed by the version being replaced."""
-    destination = superseded_samples_prefix(results_path, stored_version)
+def backup_and_drop_samples(reader: ReadView, stored_version: int) -> None:
+    """Back up and drop a run's samples table under its prior schema version."""
+    destination = superseded_samples_prefix(reader.root, stored_version)
     logger.info(
         "replacing %s samples written under schema v%s at v%s, preserved at %s",
-        results_path,
+        reader.root,
         stored_version,
         SCHEMA_VERSION,
         destination,
     )
-    replace_table(results_path, ARCHIVE_SAMPLES_TABLE, destination)
+    backup_and_drop_table(reader, ARCHIVE_SAMPLES_TABLE, destination)
 
 
-def replace_stale_samples(results_path: str) -> int | None:
-    """Replace a stale samples table so a caller can rewrite it; return the version replaced.
+def backup_and_drop_stale_samples(results_path: str) -> int | None:
+    """Back up and drop a stale samples table and return its schema version.
 
     ``None`` means the table was already current and nothing was touched. Refuses a table holding
     agentic samples, which come from Harbor and no lm-eval source can regenerate.
@@ -118,5 +116,5 @@ def replace_stale_samples(results_path: str) -> int | None:
                 f"{results_path} holds {agentic} agentic sample(s) that an lm-eval export cannot "
                 "regenerate; migrate the run with migrate_archive instead"
             )
-    preserve_and_replace_samples(results_path, stored_version)
+    backup_and_drop_samples(reader, stored_version)
     return stored_version

@@ -18,8 +18,8 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.chat_render import render_chat_record, render_marin_chat
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from openai_harmony import Author, Message, Role
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.marin_tokenizer import (

@@ -66,6 +66,15 @@ EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+    ),
+    num_speculative_tokens=4,
+)
+
 _DEFAULT_MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
@@ -216,6 +225,11 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_REPORTING_P40 = replace(
+    _ASYNC_P40,
+    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
+)
+
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
@@ -238,9 +252,10 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.3",
+    revision="2026.11.22.3",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
+    default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -250,12 +265,11 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.4",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -275,13 +289,12 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.4",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
     export="best",
     name="train-long",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),
@@ -338,7 +351,6 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.5",
         recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
@@ -370,7 +382,6 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
-        revision="2026.11.20.1",
         recipe=replace(
             _TRAIN_LONG.recipe,
             config=_TRAIN_LONG.recipe.config.merge(
@@ -403,7 +414,11 @@ _PRESETS = (
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
         checkpoints="none",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        recipe=replace(
+            _GENERATING,
+            fixed_reply_tokens=4096,
+            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+        ),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
@@ -449,7 +464,7 @@ _PRESETS = (
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="asynchronous runtime unmeasured",
+        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
     ),
     _snowball(
         evaluations=(),
@@ -482,7 +497,6 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.7",
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

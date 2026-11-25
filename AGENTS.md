@@ -7,6 +7,7 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 - `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
 - `lib/fray/AGENTS.md` — Fray (distributed execution)
+- `lib/taskforge/AGENTS.md` — Taskforge (effect-driven task generation)
 
 ## Operational Guides
 

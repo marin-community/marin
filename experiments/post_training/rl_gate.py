@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -41,6 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -422,6 +423,46 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
+def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
+    aliases = [recorded.model_uri, recorded.model_local_path]
+    model_metadata = model_metadata_relative_path(recorded.model_uri, recorded.model_identity)
+    model = config["inputs"]["model"]
+    tokenizer_uri = model.get("tokenizer_uri")
+    tokenizer_metadata = (
+        model_metadata_relative_path(tokenizer_uri, model.get("tokenizer_revision") or DEFAULT_TOKENIZER_REVISION)
+        if tokenizer_uri
+        else model_metadata
+    )
+    model_staging = "<model-staging>"
+    model["local_path"] = model_staging
+    for path, metadata in (
+        ("skyrl.trainer.policy.model.path", model_metadata),
+        ("skyrl.trainer.ref.model.path", model_metadata),
+        ("skyrl.trainer.policy.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.trainer.ref.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.generator.model_name", None),
+        ("skyrl.generator.trajectory_retention.model_path", None),
+    ):
+        value = get_path(config, path)
+        if value is MISSING:
+            continue
+        staged = (
+            metadata is not None
+            and isinstance(value, str)
+            and PurePosixPath(value).is_absolute()
+            and PurePosixPath(value).parts[-len(metadata.parts) :] == metadata.parts
+        )
+        if value not in aliases and not staged:
+            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
+        if staged and path.endswith(".tokenizer_path"):
+            revision_path = path.removesuffix("tokenizer_path") + "tokenizer_revision"
+            if get_path(config, revision_path) is not None:
+                raise InvalidComparison(f"native tokenizer revision differs from the staged tokenizer: {revision_path}")
+            # Staging resolves the revision into the path, so the worker no longer needs it.
+            set_path(config, revision_path, recorded.model_identity)
+        set_path(config, path, model_staging)
+
+
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
@@ -483,25 +524,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                     )
                 )
 
-    aliases = [recorded.model_uri, recorded.model_local_path]
-    config["inputs"]["model"]["local_path"] = "<model-staging>"
-    for path in (
-        "skyrl.trainer.policy.model.path",
-        "skyrl.trainer.ref.model.path",
-        "skyrl.trainer.policy.model.tokenizer_path",
-        "skyrl.trainer.ref.model.tokenizer_path",
-        "skyrl.generator.model_name",
-        "skyrl.generator.trajectory_retention.model_path",
-    ):
-        value = get_path(config, path)
-        if value is MISSING:
-            continue
-        if value not in aliases:
-            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
-        set_path(config, path, "<model-staging>")
+    _normalize_model_bindings(config, recorded)
     replace_alias(
         "skyrl.generator.engine_init_kwargs.served_model_name",
-        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
+        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in (recorded.model_uri, recorded.model_local_path)],
         "<served-model-name>",
     )
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
@@ -542,6 +568,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 raise InvalidComparison(f"native resume binding differs from declared inputs: skyrl.runtime.{field}")
     if not runtime:
         config["skyrl"].pop("runtime", None)
+    # Grader reports are attempt diagnostics, like other launch-output destinations.
+    trainer = config["skyrl"]["trainer"]
+    trainer.pop("grader_report_dir", None)
+    trainer.pop("dump_grader_report", None)
     for section in ("trainer", "checkpoint_export"):
         export = config["skyrl"].get(section, {})
         if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):
@@ -555,8 +585,36 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     return _config_values(_comparison_document(launch, recorded))
 
 
-def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
+def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
+    """Normalize a draft mirror when its receipt matches the planned Hub source and revision."""
+    path = "skyrl.generator.speculative_decoding.model"
+    draft, expected = get_path(config, path), get_path(expected_launch, path)
+    if not isinstance(draft, dict) or not isinstance(expected, dict):
+        return
+    expected_uri = expected["source_uri"]
+    model_id = expected_uri.removeprefix("hf://")
+    if model_id == expected_uri:
+        return
+    mirrors = config["inputs"].get("hugging_face_models", [])
+    matches = [
+        index
+        for index, mirror in enumerate(HuggingFaceModelCache(**row) for row in mirrors)
+        if mirror.uri == draft["source_uri"]
+        and mirror.identity == draft["source_identity"]
+        and mirror.model_id == model_id
+        and mirror.revision == mirror.resolved_revision == expected["source_identity"]
+    ]
+    if len(matches) == 1:
+        draft.update(source_uri=expected_uri, source_identity=expected["source_identity"])
+        del mirrors[matches[0]]
+
+
+def _gate_config(
+    launch: dict, recorded: RecordedLaunch | None = None, *, expected_launch: dict | None = None
+) -> dict[str, object]:
     config = _comparison_document(launch, recorded)
+    if expected_launch is not None:
+        _normalize_draft_mirror(config, expected_launch)
     config["iris"].pop("priority", None)
     return _config_values(config)
 
@@ -698,7 +756,8 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
 def _check_control_config(
     config: dict, current_config: dict, recorded: RecordedLaunch | None = None, *, preset: presets.Preset
 ) -> None:
-    observed, current = _gate_config(config, recorded), _gate_config(current_config)
+    observed = _gate_config(config, recorded, expected_launch=current_config)
+    current = _gate_config(current_config)
     differences = _changed_config_keys(observed, current)
     missing = {key for key in differences if key not in observed}
     if missing:
@@ -783,7 +842,8 @@ def _write_gate(
         explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
-            differences = _changed_config_keys(_gate_config(candidate.config, candidate.recorded), expected)
+            observed = _gate_config(candidate.config, candidate.recorded, expected_launch=expected_config)
+            differences = _changed_config_keys(observed, expected)
             if differences:
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"

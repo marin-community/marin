@@ -1,10 +1,28 @@
 # Unlabeled evaluation campaign
 
 This directory contains the campaign's model configs, benchmark selections in
-`evalchemy.yaml`, Harbor configs, co-hosted judge config, validation and launch commands.
+`evaluations.yaml`, validation and launch commands.
 The launcher records the Marin revision, resolved protocol choices and execution settings.
-Curation publishes immutable TaskSpec corpora before candidate inference. Harbor uses its
-independent runtime and lockfile.
+Curation publishes immutable TaskSpec corpora before candidate inference.
+
+The agentic evaluations keep the names of the campaign's earlier Harbor runs, under which Evaldash lists
+them. Their curated protocols in `experiments/evaluation/benchmarks/agentic.py` pin the same packages,
+agents and limits:
+
+| Evaluation | Benchmark and protocol | Agent | Trials | Input / reply tokens | Attempts at once |
+|---|---|---|---|---|---|
+| `tb2-recovery` | `terminal-bench-2.1`, `campaign-2026-09-25` | Terminus 2 | 3 | 65,536 / 16,384 | 16 |
+| `ot-tblite-recovery` | `ot-tblite`, `campaign-2026-09-25` | Terminus 2 | 3 | 32,768 / 8,192 | 16 |
+| `swebench-verified` | `swebench-verified`, `mini-swe-agent` | mini-swe-agent 2.1.0 | 1 | 32,768 / 8,192 | 16 |
+| `ds-1000-local` | `ds-1000`, `terminus-2` | Terminus 2 | 1 | 32,768 / 8,192 | 32 |
+| `bfclparity-pi` | `bfcl-parity`, `pi` | Pi 0.87.0 | 1 | 32,768 / 16,384 | 32 |
+| `bixbench-pi` | `bixbench`, `pi` | Pi 0.87.1 | 1 | 65,536 / 16,384 | 16 |
+
+Each gives the agent 1,800 seconds and the verifier 300, whatever the package sets. BixBench machines
+have 10,240 MB of storage. The Pi protocols install their Pi version into each task image.
+An agent's context is the smaller of its input limit and the served window. Pi's BixBench profile keeps
+a 32,768-token compaction reserve, which a 32,768-token window cannot hold, so `campaign.yaml` selects
+the `pi-32k` protocol, with a 16,384-token reserve, for the models served with that window.
 
 Launch policy evaluations from the Marin revisions pinned in the
 [eval policy](https://github.com/marin-community/marin/issues/10197#codebase-pins), not from `main`.
@@ -22,48 +40,33 @@ policy. Policy conformance requires the independently trusted evidence and verif
 in [PR #9461](https://github.com/marin-community/marin/pull/9461) must consume that trusted decision
 before presenting a run as policy-conformant.
 
-SWE-bench uses Harbor's native mini-SWE 2.1.0 adapter.
+SWE-bench runs mini-swe-agent 2.1.0 as Harbor ran it.
 Its 32,768-token budget includes the rendered prompt and the requested reply. Before each
-completion, the adapter counts the prompt, including tools and the generation prefix, through
+completion, the agent counts the prompt, including tools and the generation prefix, through
 the serving model's `/tokenize` endpoint. It caps the reply to the remaining context and the
-model's output limit. When no reply fits, the harness exits through its normal limit handling
-so Harbor can verify the existing patch. It does not truncate or summarize the conversation.
-The model limits and dataset pins are recorded in the launch snapshot;
-results from the previous adapter have a different policy digest and cannot be resumed under
-this configuration.
+model's output limit. When no reply fits, the episode ends normally and the existing patch is
+graded. It does not truncate or summarize the conversation. A model config's
+`agent.agent_kwargs.model_format` selects how the agent formats the model's history; K2 uses
+`k2_horizon`.
 
-Harbor's native SOTOPIA agent enforces the declared `model_info.max_input_tokens` budget for
-the evaluated model at each request. It counts the rendered prompt with the serving endpoint's
-tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
-their independently configured models and are not subject to this evaluated-model budget.
-The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Harbor applies
-length correction at job completion using the campaign's `sotopia_cohort` in
-`harbor-configs/sotopia-hard.yaml`: the versioned `policy-10197-v1` cohort of 13 baseline
-archives plus the evaluated model’s current run. SOTOPIA jobs require an explicit cohort
-with a `version` and a `models` list containing `model` and `results_path` for each baseline. A rerun of a baseline model
-replaces its previous source in the fit. Harbor preserves raw rewards and saves the cohort sources, input digest, fit parameters,
-and adjusted episodes in the job result. Marin reads the corrected metric from that result. Goal achievement remains an explicit
-non-default dataset generation mode.
-
-`finalization.yaml` selects MiniMax for native FinanceBench and OlympiadBench grading.
+`finalization.yaml` selects MiniMax for FinanceBench, OlympiadBench and BixBench grading.
 Each judged benchmark starts the pinned 262,144-token TP8 MiniMax service on eight H100s
 in the candidate's cluster before evaluation and releases it afterward. The TaskSpec driver grades
-answers once and preserves judge verdicts with the samples. Judge requests use constrained
-labels and escalate empty final answers through 128, 512, and 2048 output tokens.
+answers once and preserves judge verdicts with the samples. FinanceBench and OlympiadBench judge
+requests use constrained labels and escalate empty final answers through 128, 512, and 2048 output
+tokens; BixBench sends its package's structured 1,024-token request, as Harbor's verifier did.
 
-These stages finish before the run is recorded as successful. Missing cohort evidence
-fails the Harbor job and records the run as `failed`. Curated jobs preserve raw attempts for
+These stages finish before the run is recorded as successful. Jobs preserve raw attempts for
 resume and finish as `artifact_failed` if fewer than 90% of selected trials are scored.
-Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
-The launch snapshot includes the finalization configuration, judge YAML, and Harbor YAML
-containing the campaign cohort. Harbor saves the resolved baseline cohort with the correction
-evidence in its job result. `record.json` records the effective FinanceBench and OlympiadBench judge
+To resume a launch, repeat it for its one model and suite with `--run-id` set to the group ID it
+printed; finished attempts are reused and infrastructure failures are retried.
+The launch snapshot includes the finalization configuration and judge YAML. `record.json` records the effective FinanceBench, OlympiadBench and BixBench judge
 identity in `evaluation.curated.settings.judge`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
 absolute path to this YAML by default.
 
-`evaluation_num_concurrent` in a model config limits simultaneous requests to that model's endpoint.
+`evaluation_num_concurrent` in a model config limits simultaneous requests to that model's endpoint,
+and an evaluation's `run.concurrency` limits its attempts at once; the smaller applies.
 K2 is limited to four after its 16-request runs saturated serving and produced mostly timed-out
 generations. Effective concurrency is recorded in `evaluation.curated.settings.concurrency`.
 
@@ -80,17 +83,16 @@ cd experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled
 ./launch-campaign.sh --submit --model Qwen-Qwen3.6-35B-A3B
 ```
 
-The first launch command is a dry run. `--suite nonagentic` and `--suite agentic` select one full
-mechanism. Repeat `--curated NAME` or `--harbor NAME` to select individual configs; pair a selector
-with its corresponding suite to avoid launching the other mechanism. `--wait` waits for durable
-records and requires CoreWeave object-store credentials.
+The first launch command is a dry run. `--suite nonagentic` and `--suite agentic` select one suite;
+the two suites launch as separate jobs. Repeat `--eval NAME` to select individual evaluations.
+`--wait` waits for durable records and requires CoreWeave object-store credentials.
 
 The launcher writes generated effective configs beneath
 `experiments/evaluation/campaigns/.launch-staging/` and local provenance snapshots beneath
 `experiments/evaluation/campaigns/.launch-snapshots/`. Both paths are ignored by Git. Durable
-`record.json` files contain the effective model and evaluator configuration, repository revision,
-and Harbor policy digest.
+`record.json` files contain the effective model and evaluator configuration and repository revision.
 
 Credentials are operational inputs. Export `HF_TOKEN`, `TOGETHER_API_KEY`, and CoreWeave object-store
 credentials, or use the configured Google Secret Manager access. Set `EVAL_CAMPAIGN_SECRETS_ENV` only
 when reading Hugging Face or Together credentials from a local environment file.
+The agentic suites run their task machines on Daytona.
