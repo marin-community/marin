@@ -247,6 +247,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
     )
     with open_dict(algorithm):
         algorithm.resolved_group_advantage = invariant.to_config()
+    marker_penalty = 0.25
     groups = []
     for index in range(6):
         lengths = [0 if index in (2, 3) else 1, 2, 3, 9 if index == 5 else 4]
@@ -262,10 +263,10 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             "stop_reasons": ["stop", "length", None, "stop"],
         }
         if loop_channel is True or (loop_channel == "first" and index == 0) or (loop_channel == "last" and index == 5):
-            batch["loop_advantages"] = [[-0.25] + [-0.1] * (length - 1) if length else [] for length in lengths]
+            batch["loop_advantages"] = [[-marker_penalty] + [-0.1] * (length - 1) if length else [] for length in lengths]
             batch["reasoning_span_violations"] = [int(length > 0) for length in lengths]
             batch["reasoning_span_violation_tokens"] = [[0] if length else [] for length in lengths]
-            batch["reasoning_span_token_penalties"] = [0.25 if length else 0.0 for length in lengths]
+            batch["reasoning_span_token_penalties"] = [marker_penalty if length else 0.0 for length in lengths]
         if index % 2 == 0:
             batch["rewards"] = [
                 [0.0] * (length - 1) + [reward] if length else [] for length, reward in zip(lengths, rewards)
@@ -301,12 +302,12 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         violations = [int(row in active and row not in (8, 12)) for row in range(24)]
         assert normalized["reasoning_span_violations"] == violations
         assert normalized["reasoning_span_violation_tokens"] == [[0] if value else [] for value in violations]
-        assert normalized["reasoning_span_token_penalties"] == [0.25 * value for value in violations]
+        assert normalized["reasoning_span_token_penalties"] == [marker_penalty * value for value in violations]
         lengths = [1, 2, 3, 4] * 6
         lengths[8] = lengths[12] = 0
         lengths[-1] = 9
         assert normalized["loop_advantages"] == [
-            [-0.25] + [-0.1] * (length - 1) if violation else [0.0] * length
+            [-marker_penalty] + [-0.1] * (length - 1) if violation else [0.0] * length
             for length, violation in zip(lengths, violations, strict=True)
         ]
     normalized["rewards"] = token_reward_rows(normalized["rewards"], normalized["response_ids"])

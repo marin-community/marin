@@ -177,7 +177,7 @@ class RowFacts:
 
     @classmethod
     def from_batch(cls, batch: TrajectoryBatch) -> RowFacts:
-        """Capture finalized row scalars without retaining token arrays or verifier records."""
+        """Capture row facts for training batch assembly and rollout metrics."""
         responses = batch["response_ids"]
         count = len(responses)
         loop_credit = loop_credit_without_markers(batch)
