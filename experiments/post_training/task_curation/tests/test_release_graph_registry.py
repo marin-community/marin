@@ -613,9 +613,10 @@ def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_remote(callable_, *, resources, env_vars=None):
+    def fake_remote(callable_, *, resources, env_vars=None, pip_packages=None):
         captured["dispatch"] = callable_
         captured["env_vars"] = env_vars
+        captured["pip_packages"] = pip_packages
         return lambda config: callable_(config)
 
     monkeypatch.setitem(release_graph_module._STAGE_EXECUTORS, spec.stage, fake_executor)

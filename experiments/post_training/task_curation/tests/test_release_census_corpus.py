@@ -45,6 +45,7 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 
 FIXTURE_IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 SOURCE_ID = "Marin:fixture"
+EMPTY_SOURCE_ID = "Marin:empty-fixture"
 
 
 def _task_spec(task_id: str) -> TaskSpec:
@@ -162,7 +163,7 @@ def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
 
 def _source_registry(declaration):
     """A callable source registry with the single fixture source, like ``all_sources``."""
-    source = SimpleNamespace(info=SimpleNamespace(id=SOURCE_ID), declaration=declaration)
+    source = SimpleNamespace(info=SimpleNamespace(id=SOURCE_ID, oracle_filtration=None), declaration=declaration)
     return lambda: {SOURCE_ID: source}
 
 
@@ -467,3 +468,111 @@ def test_corpus_assembly_refuses_a_pinned_scan_drift(tmp_path):
         corpus_stage.run_corpus_assembly(
             inputs, dry_run=True, only=SOURCE_ID, sources_fn=_source_registry(declaration), feeds=_feeds(tmp_path)
         )
+
+
+def test_census_records_an_empty_oracle_filtration(tmp_path):
+    """A 0-admission oracle-filtered source ships the excluded, zero-task declaration.
+
+    The census records the empty measurement from the oracle receipt without loading
+    the pinned population, drawing an inventory, or preparing public inputs — the
+    prior releases carried the same shape (the corpus omits these sources).
+    """
+    evidence = SimpleNamespace(
+        original_count=13562,
+        exclusion_counts={"failed_oracle": 13562},
+        filtered_release=SimpleNamespace(repo="open-athena/filtered", revision="7af7"),
+        validation=SimpleNamespace(uri="s3://bucket/validation"),
+        admitted_count=0,
+    )
+    declaration = _declaration(tmp_path, "b" * 64)
+    source = SimpleNamespace(info=SimpleNamespace(id=SOURCE_ID, oracle_filtration=evidence), declaration=declaration)
+    row = census_stage.CensusSourceRow(
+        source_id=SOURCE_ID,
+        declaration=declaration.model_dump(mode="json"),
+        population_path=str(tmp_path / "absent-population"),
+    )
+    result = census_stage.measure_source(
+        row,
+        str(tmp_path / "release" / "census"),
+        "a" * 40,
+        str(tmp_path) + "/",
+        sources_fn=lambda: {SOURCE_ID: source},
+        inventory_fn=lambda *args, **kwargs: pytest.fail("the empty census draws no inventory"),
+    )
+    assert result["oracle_empty"]["original_count"] == 13562
+    assert result["oracle_empty"]["filtered_release"]["repo"] == "open-athena/filtered"
+    assert result["inventory"] is None and result["population"] is None
+    assert result["public_preparation"] is None and result["oracle_tasks"] == 0
+
+
+def test_corpus_omits_empty_oracle_sources(tmp_path):
+    """The corpus covers the shipped sources only; empty oracle filtrations ride as
+    excluded, zero-task declarations without corpus presence."""
+    tasks = [_task_spec("fixture-task-one"), _task_spec("fixture-task-two")]
+    _, scan_sha = _write_population(tmp_path, tasks)
+    declaration = _declaration(tmp_path, scan_sha)
+    empty_evidence = SimpleNamespace(
+        original_count=10,
+        exclusion_counts={"failed_oracle": 10},
+        filtered_release=SimpleNamespace(repo="open-athena/filtered", revision="7af7"),
+        validation=SimpleNamespace(uri="s3://bucket/validation"),
+        admitted_count=0,
+    )
+    empty_source = SimpleNamespace(
+        info=SimpleNamespace(id=EMPTY_SOURCE_ID, oracle_filtration=empty_evidence), declaration=declaration
+    )
+    revision = "a" * 40
+    document = {
+        "kind": census_stage.INPUTS_KIND,
+        "source_revision": revision,
+        "rows": [
+            {
+                "source_id": SOURCE_ID,
+                "declaration": declaration.model_dump(mode="json"),
+                "population_path": str(tmp_path / "population"),
+            },
+            {
+                "source_id": EMPTY_SOURCE_ID,
+                "declaration": declaration.model_dump(mode="json"),
+                "population_path": str(tmp_path / "absent"),
+            },
+        ],
+    }
+    census_inputs = census_stage.CensusInputs(
+        release_id="testrelease",
+        source_revision=revision,
+        inputs=_seal_json(tmp_path, "census-inputs.json", document),
+        output_root=str(tmp_path / "release" / "census"),
+        region_prefix=str(tmp_path) + "/",
+        expected_sources=2,
+        slice_output_root=str(tmp_path / "slice" / "census"),
+    )
+    census_proof = census_stage.run_census(
+        census_inputs,
+        dry_run=False,
+        sources_fn=lambda: {SOURCE_ID: _source_registry(declaration)()[SOURCE_ID], EMPTY_SOURCE_ID: empty_source},
+        feeds=_feeds(tmp_path),
+    )
+    assert census_proof["tasks"] == 2 and census_proof["sources"] == 2
+    receipt = ArtifactRef(uri=census_proof["receipt"]["uri"], sha256=census_proof["receipt"]["sha256"])
+
+    inputs = corpus_stage.CorpusAssemblyInputs(
+        release_id="testrelease",
+        source_revision=revision,
+        inputs=_seal_json(tmp_path, "corpus-inputs.json", document),
+        census_receipt=receipt,
+        output_root=str(tmp_path / "release" / "corpus"),
+        expected_sources=2,
+        slice_output_root=str(tmp_path / "slice" / "corpus"),
+        workers=1,
+    )
+    proof = corpus_stage.run_corpus_assembly(
+        inputs,
+        dry_run=False,
+        sources_fn=lambda: {SOURCE_ID: _source_registry(declaration)()[SOURCE_ID], EMPTY_SOURCE_ID: empty_source},
+        feeds=_feeds(tmp_path),
+    )
+    assert proof["sources"] == 1 and proof["tasks"] == 2
+    corpus = json.loads((tmp_path / "release" / "corpus" / "corpus.json").read_text())
+    assert len(corpus["inventory"]) == 1
+    assert sum(row["task_count"] for row in corpus["inventory"]) == 2

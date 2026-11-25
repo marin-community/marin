@@ -84,21 +84,41 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
 PAGE_ROWS = 500
 
 
-def _paged(query, sql: str, params: dict, order_column: str) -> list[dict]:
-    """Read one panel's table rows through the applet's bounded response size."""
+def _paged(query, sql: str, params: dict, order_columns: tuple[str, ...]) -> list[dict]:
+    """Read one panel's table rows through the applet's bounded response size.
+
+    Pages by a keyset over the sort key (composite keys keep every row — a single
+    column would skip rows sharing it) and halves the page size when a page exceeds
+    the applet's response cap; a single row larger than the cap refuses.
+    """
+    from marina.client import MarinaRequestError  # noqa: PLC0415 — beside its only use
+
     rows: list[dict] = []
-    after = None
+    after: dict[str, object] | None = None
     while True:
         bound = dict(params)
         predicate = ""
         if after is not None:
-            bound["after"] = after
-            predicate = f" AND {order_column}>CAST(:after AS TEXT)"
-        page = query(sql.format(predicate=predicate) + f" LIMIT {PAGE_ROWS}", bound)["rows"]
+            for index, column in enumerate(order_columns):
+                bound[f"after_{index}"] = after[column]
+            clauses = []
+            for index, column in enumerate(order_columns):
+                equal = " AND ".join(f"{earlier} = :after_{j}" for j, earlier in enumerate(order_columns[:index]))
+                clauses.append(f"({equal} AND {column} > :after_{index})" if equal else f"{column} > :after_{index}")
+            predicate = " AND (" + " OR ".join(clauses) + ")"
+        page_rows = PAGE_ROWS
+        while True:
+            try:
+                page = query(sql.format(predicate=predicate) + f" LIMIT {page_rows}", bound)["rows"]
+                break
+            except MarinaRequestError as error:
+                if error.status_code != 413 or page_rows == 1:
+                    raise
+                page_rows //= 2
         if not page:
             return rows
         rows.extend(page)
-        after = page[-1][order_column]
+        after = {column: page[-1][column] for column in order_columns}
 
 
 def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, dict], query, *, write: bool) -> dict:
@@ -122,7 +142,7 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         " FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key{predicate}"
         " ORDER BY pipeline_key",
         bound,
-        "pipeline_key",
+        ("pipeline_key",),
     )
     if len(assessments) != 1:
         raise ValueError(f"{len(assessments)} assessments for the staged panel {source_id}")
@@ -131,7 +151,7 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         "SELECT pipeline_key,cohort,population,sample_count"
         " FROM atlas_populations WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY cohort",
         bound,
-        "cohort",
+        ("cohort",),
     )
     items = _paged(
         query,
@@ -139,21 +159,22 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         "omissions,exclusion_reason,confidence,reference_status,defects,provenance,replaced_task_sha256,"
         "repair_advisories FROM atlas_items WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-        "task_id",
+        ("task_id",),
     )
     raw_rows = _paged(
         query,
         "SELECT pipeline_key,task_id,record,reviewer"
         " FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-        "task_id",
+        # a task may carry several review rows; the composite keyset keeps every row
+        ("task_id", "reviewer"),
     )
     batch_rows = _paged(
         query,
         "SELECT pipeline_key,batch_key,record,chunk_count"
         " FROM atlas_review_batches WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY batch_key",
         bound,
-        "batch_key",
+        ("batch_key",),
     )
     chunk_rows = _paged(
         query,
@@ -161,14 +182,15 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         " FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key{predicate}"
         " ORDER BY batch_key,chunk_index",
         bound,
-        "batch_key",
+        # chunks repeat the batch key; the composite keyset keeps every chunk
+        ("batch_key", "chunk_index"),
     )
     links = _paged(
         query,
         "SELECT pipeline_key,task_id,batch_key"
         " FROM atlas_review_batch_tasks WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-        "task_id",
+        ("task_id", "batch_key"),
     )
     chunks_by_batch: dict[str, list[str]] = {}
     for chunk in chunk_rows:

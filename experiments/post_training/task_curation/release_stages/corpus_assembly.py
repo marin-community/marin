@@ -80,10 +80,21 @@ def frozen_sources_for(
     *,
     sources_fn=all_sources,
 ) -> list[FrozenCoverageSource]:
-    """Build the frozen coverage sources from the census receipt's population pins."""
+    """Build the frozen coverage sources from the census receipt's population pins.
+
+    The 0-admission oracle-filtered sources ship excluded, zero-task declarations and
+    stay out of the corpus (the prior releases carried the same shape).
+    """
     configure_coreweave_s3()
     frozen = []
     for row in rows:
+        census_result = census_results.get(row.source_id)
+        if census_result is None:
+            raise ValueError(f"sealed census receipt carries no result for {row.source_id}")
+        if census_result.get("oracle_empty") is not None:
+            # The 0-admission oracle filtration ships an excluded, zero-task
+            # declaration; the corpus omits it exactly as the prior releases did.
+            continue
         source = resolve_source(row.source_id, row.declaration, sources_fn)
         declaration = source.declaration
         binding = declaration.actor_census_input
@@ -153,7 +164,8 @@ def run_corpus_assembly(
         frozen = frozen_sources_for(rows, census_results, sources_fn=sources_fn)
         prepare_sources(frozen, output_root, workers=inputs.workers)
         corpus = json.loads((StoragePath(output_root) / "corpus.json").read_text())
-        tasks = verify_corpus(corpus, rows)
+        shipped = [row for row in rows if (census_results.get(row.source_id) or {}).get("oracle_empty") is None]
+        tasks = verify_corpus(corpus, shipped)
         corpus_raw = (json.dumps(corpus, indent=2, sort_keys=True) + "\n").encode()
         corpus_ref = {"uri": f"{output_root}/corpus.json", "sha256": hashlib.sha256(corpus_raw).hexdigest()}
         proof = {
@@ -162,7 +174,7 @@ def run_corpus_assembly(
             "source_revision": inputs.source_revision,
             "inputs": {"uri": inputs.inputs.uri, "sha256": inputs.inputs.sha256},
             "census_receipt": {"uri": inputs.census_receipt.uri, "sha256": inputs.census_receipt.sha256},
-            "sources": len(rows),
+            "sources": len(shipped),
             "tasks": tasks,
             "corpus": corpus_ref,
             "dry_run": dry_run,

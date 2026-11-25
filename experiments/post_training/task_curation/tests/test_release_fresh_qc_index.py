@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from marina.client import MarinaRequestError
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import fresh_qc_index as stage
@@ -125,12 +126,17 @@ class _FakeQuery:
     def query(self, sql: str, params: dict) -> dict:
         for table, rows in self.tables.items():
             if f"FROM {table}" in sql:
-                order = sql.split("ORDER BY ")[1].split(",")[0].strip() if "ORDER BY" in sql else "pipeline_key"
+                order = [c.strip() for c in sql.split("ORDER BY ")[1].split(",")]
+                order = [c.split()[0] for c in order]
                 filtered = [r for r in rows if r.get("pipeline_key") == params.get("key")]
-                after = params.get("after")
-                if after is not None:
-                    filtered = [r for r in filtered if str(r.get(order)) > after]
-                return {"rows": filtered[:2]}
+                for index, column in enumerate(order):
+                    after = params.get(f"after_{index}")
+                    if after is not None:
+                        filtered = [r for r in filtered if str(r.get(column)) > str(after)]
+                limit = 2
+                if "LIMIT " in sql:
+                    limit = int(sql.rsplit("LIMIT ", 1)[1].strip())
+                return {"rows": filtered[:limit]}
         raise AssertionError(f"unexpected query: {sql[:80]}")
 
 
@@ -239,3 +245,53 @@ def test_refuses_a_failed_browse_completion(tmp_path, fake_query):
     )
     with pytest.raises(ValueError, match="needs a PASS"):
         stage.run_fresh_qc_index(broken, dry_run=True)
+
+
+def test_paged_halves_through_the_response_cap():
+    """A page exceeding the applet's response cap halves until it fits, and the
+    composite keyset still collects every row."""
+
+    class _CapQuery:
+        def __init__(self, rows):
+            self.rows = rows
+            self.pages = []
+
+        def __call__(self, sql, params):
+            limit = int(sql.rsplit("LIMIT ", 1)[1])
+            self.pages.append(limit)
+            if limit > 3:
+                raise MarinaRequestError(413, "query response exceeds 5242880 bytes")
+            order_sql = sql.split("ORDER BY ")[1].split(" LIMIT ")[0]
+            order = [c.strip() for c in order_sql.split(",")]
+            filtered = self.rows
+            for index, column in enumerate(order):
+                after = params.get(f"after_{index}")
+                if after is not None:
+                    filtered = [r for r in filtered if str(r.get(column)) > str(after)]
+            return {"rows": filtered[:limit]}
+
+    rows = [{"task_id": f"t{i}", "reviewer": "r", "record": {"n": i}} for i in range(7)]
+    query = _CapQuery(rows)
+    out = stage._paged(
+        query,
+        "SELECT task_id,record,reviewer FROM atlas_raw_reviews"
+        " WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
+        {"load": "l", "key": "k"},
+        ("task_id", "reviewer"),
+    )
+    assert [row["record"]["n"] for row in out] == list(range(7))
+    assert query.pages[0] == stage.PAGE_ROWS and 3 in query.pages
+
+
+def test_paged_refuses_a_row_larger_than_the_cap():
+    class _Always413:
+        def __call__(self, sql, params):
+            raise MarinaRequestError(413, "query response exceeds 5242880 bytes")
+
+    with pytest.raises(MarinaRequestError):
+        stage._paged(
+            _Always413(),
+            "SELECT task_id FROM atlas_items WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
+            {"load": "l", "key": "k"},
+            ("task_id",),
+        )

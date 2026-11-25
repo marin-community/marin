@@ -886,6 +886,7 @@ class StageSpec:
     depends_on: tuple[str, ...]
     cluster: bool
     receipt_key: str = "receipt"
+    pip_packages: tuple[str, ...] = ()
 
 
 _STAGE_SPECS: dict[str, StageSpec] = {
@@ -912,7 +913,14 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         receipt_key="documents.identity_receipt",
     ),
     "backend_validation": StageSpec(
-        "backend_validation", "backend_validation", backend_validation_stage.__name__, ("census_inputs",), True
+        "backend_validation",
+        "backend_validation",
+        backend_validation_stage.__name__,
+        ("census_inputs",),
+        True,
+        # the qualification's survey imports the shellbox daytona machines; the
+        # package rides as a pip install (the pin follows lib/shellbox's extra)
+        pip_packages=("daytona==0.200.2",),
     ),
     "fresh_qc_index": StageSpec(
         "fresh_qc_index",
@@ -1064,6 +1072,7 @@ def _stage_step(
                     partial(_execute_stage_node, node, spec.stage, receipt_key),
                     resources=dispatch_resources,
                     env_vars=_stage_child_env(),
+                    pip_packages=list(spec.pip_packages) or None,
                 )
                 dispatch(config)
             document = json.loads(StoragePath(path).read_text())

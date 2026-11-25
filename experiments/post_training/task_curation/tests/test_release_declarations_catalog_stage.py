@@ -57,7 +57,9 @@ def _declaration(identifier: str) -> QualifiedSourceDeclaration:
 def _registry(declarations: dict[str, QualifiedSourceDeclaration]):
     def sources_fn():
         return {
-            source_id: SimpleNamespace(info=SimpleNamespace(id=source_id), declaration=declaration)
+            source_id: SimpleNamespace(
+                info=SimpleNamespace(id=source_id, oracle_filtration=None), declaration=declaration
+            )
             for source_id, declaration in declarations.items()
         }
 

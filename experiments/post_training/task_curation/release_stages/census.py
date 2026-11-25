@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from finestore.rl.curation import ActorCensusInput, SourceDeclaration
+from finestore.rl.curation import ActorCensusInput, OracleFiltrationEvidence, SourceDeclaration
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -152,6 +152,59 @@ def declared_binding(declaration: SourceDeclaration, source_id: str) -> ActorCen
     return retained.actor.input
 
 
+def _oracle_empty_evidence(source) -> OracleFiltrationEvidence | None:
+    """The 0-admission oracle filtration the source's declaration binds, if any."""
+    evidence = source.info.oracle_filtration
+    if evidence is not None and evidence.admitted_count == 0:
+        return evidence
+    return None
+
+
+def _measure_oracle_empty(
+    row: CensusSourceRow,
+    source,
+    evidence: OracleFiltrationEvidence,
+    output_root: str,
+    revision: str,
+) -> dict:
+    """The census of a 0-admission oracle-filtered source.
+
+    The filtration retained nothing, so the release ships the excluded, zero-task
+    declaration exactly as the prior releases carried it (the prior corpus omitted
+    these sources): there is no population to pin, no inventory to draw, and no
+    specs to scan — the oracle receipt is the census evidence.
+    """
+    declaration = source.declaration
+    result = {
+        "source_id": row.source_id,
+        "declaration": declaration.model_dump(mode="json"),
+        "oracle_empty": {
+            "original_count": evidence.original_count,
+            "exclusion_counts": dict(evidence.exclusion_counts),
+            "filtered_release": {
+                "repo": evidence.filtered_release.repo,
+                "revision": evidence.filtered_release.revision,
+            },
+            "evidence": evidence.validation.uri,
+        },
+        "inventory": None,
+        "inventory_reference": None,
+        "static_audit": None,
+        "static_blocked_tasks": None,
+        "static_reason_counts": {},
+        "oracle_tasks": 0,
+        "population": None,
+        "public_preparation": None,
+        "old_task_specs_or_count_bindings_inherited": False,
+        "qa_bindings_inherited": False,
+        "source_commands": 0,
+        "model_requests": 0,
+    }
+    key = canonical_sha256(row.source_id)[:20]
+    result_ref = seal(f"{output_root}/results/{key}.json", result)
+    return {**result, "result_ref": {"uri": result_ref.uri, "sha256": result_ref.sha256}}
+
+
 def measure_source(
     row: CensusSourceRow,
     output_root: str,
@@ -165,6 +218,9 @@ def measure_source(
     configure_coreweave_s3()
     source = resolve_source(row.source_id, row.declaration, sources_fn)
     declaration = source.declaration
+    empty_oracle = _oracle_empty_evidence(source)
+    if empty_oracle is not None:
+        return _measure_oracle_empty(row, source, empty_oracle, output_root, revision)
     population = SourceTextPopulation.raw_load(row.population_path)
     if canonical_source_id(population.source_id) != canonical_source_id(row.source_id):
         raise ValueError(f"population {population.source_id!r} does not bind {row.source_id!r}")
@@ -322,7 +378,7 @@ def run_census(
             "inputs": {"uri": inputs.inputs.uri, "sha256": inputs.inputs.sha256},
             "region_prefix": inputs.region_prefix,
             "sources": len(measured),
-            "tasks": sum(entry["inventory"]["retained_tasks"] for entry in measured),
+            "tasks": sum((entry.get("inventory") or {}).get("retained_tasks", 0) for entry in measured),
             "oracle_tasks": sum(entry["oracle_tasks"] for entry in measured),
             "dry_run": dry_run,
             "sql_writes": 0,
