@@ -35,21 +35,30 @@ release configuration, and release-identifying values never appear in stage sour
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
+from iris.cli.connect import connect_controller
+from iris.client.client import IrisClient
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.execution.lazy import run as run_handles
 from marin.execution.step_runner import StepRunner
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import read_step_status
+from rigging.timing import Duration
 
 from experiments.post_training.task_curation.release_stages import guard, preflight_slices
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages.graph import (
     REPO_ROOT,
+    STAGE_CHILD_ENV_KEYS,
     PreflightPolicy,
     ReleaseGraph,
     ReleasePlan,
@@ -234,8 +243,182 @@ def _artifact_status(handle) -> str:
 
 
 def mode_resume(args) -> int:
-    """A rerun: completed stages are skipped; failed stages restart alone."""
+    """A rerun: completed stages are skipped; failed stages restart alone.
+
+    With ``--cluster`` the resume submits as an in-region root job (the sealed
+    steps skip by fingerprint there too); without it the graph runs locally.
+    """
+    if getattr(args, "cluster", None):
+        return _submit_root(args, verb="resume")
     return mode_run(args, force_run_failed=True)
+
+
+def mode_submit(args) -> int:
+    """Submit the release's root job: the graph runs in-region, auto-resuming."""
+    return _submit_root(args, verb="run")
+
+
+# ---------------------------------------------------------------------------
+# In-region submission (the root job submits itself; no out-of-repo scripts)
+
+_ROOT_JOB_CPU = 8
+_ROOT_JOB_MEMORY_GB = 32
+_ROOT_JOB_DISK_GB = 512
+# Auto-resume caps: interruption retries (preemption, node loss, a killed hung
+# root) rerun `resume` at the same version, so sealed steps skip; a deterministic
+# code failure burns the cap and the root fails with the node's error.
+_ROOT_JOB_MAX_RETRIES_FAILURE = 2
+_ROOT_JOB_MAX_RETRIES_PREEMPTION = 2
+_ROOT_JOB_TIMEOUT_HOURS = 24
+
+
+def _plan_relative_path(plan_path: Path) -> str:
+    """The plan's repo-relative path (the bundle ships the repo tree)."""
+    return str(plan_path.resolve().relative_to(REPO_ROOT))
+
+
+def _bundle_revision(plan: ReleasePlan, plan_path: Path) -> str:
+    """The newest landed tip whose plan document is the pinned plan.
+
+    A fresh cut bundles at its re-pin landing (the plan document inside the bundle
+    carries the current artifact version); a fix-forward resume bundles at the newest
+    landed fix. Both are the same rule: the newest origin tip whose plan file is
+    unchanged. Git runs here, on the submitting checkout — never inside the bundle.
+    """
+    subprocess.run(["git", "fetch", "--quiet", "origin", "atlas-env-audit"], cwd=REPO_ROOT, check=True)
+    tip = subprocess.run(
+        ["git", "log", "--format=%H", "-1", "origin/atlas-env-audit"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    relative = _plan_relative_path(plan_path)
+    document = json.loads(
+        subprocess.run(
+            ["git", "show", f"{tip}:{relative}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    if document != json.loads(plan_path.read_text()):
+        raise ValueError(
+            f"origin's newest tip {tip[:12]} carries a different plan document;"
+            " re-pin the plan (version bump + fresh prefix) before submitting"
+        )
+    pinned = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", plan.source_revision, tip],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        raise ValueError(f"the plan's pinned revision {plan.source_revision} is not landed on atlas-env-audit")
+    return tip
+
+
+def _submit_environment() -> dict[str, str]:
+    """The root job's environment: the named allowlist and the credential record."""
+    env = {}
+    for key in STAGE_CHILD_ENV_KEYS:
+        if key == "MARIN_IAP_CREDENTIAL_JSON":
+            continue  # delivered from the credential record below, not the caller's env
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    record = Path.home() / ".config/marin/credentials/marin.json"
+    if record.is_file():
+        env["MARIN_IAP_CREDENTIAL_JSON"] = record.read_text()
+    elif os.environ.get("MARIN_IAP_CREDENTIAL_JSON"):
+        env["MARIN_IAP_CREDENTIAL_JSON"] = os.environ["MARIN_IAP_CREDENTIAL_JSON"]
+    return env
+
+
+def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
+    """The root job's entrypoint: the attempt-aware run/resume verb.
+
+    Attempt 0 runs the graph; an iris-level retry (preemption, node loss, a killed
+    hung root) reruns ``resume`` at the same version, so sealed steps skip and only
+    failed or unstarted nodes re-run.
+    """
+    attempt_check = (
+        "from iris.cluster.client.job_info import get_job_info;"
+        " info = get_job_info(); print(getattr(info, 'attempt_id', 0) or 0)"
+    )
+    script = (
+        'set -euo pipefail; cd "$IRIS_WORKDIR";'
+        " export ATLAS_PUSH_LOG=$IRIS_WORKDIR/atlas-landing-log.jsonl;"
+        " export ATLAS_WATCHDOG_FEED=$IRIS_WORKDIR/.atlas-alerts.jsonl;"
+        " export UV_CACHE_DIR=$IRIS_WORKDIR/.uv-cache;"
+        ' if [ -n "${MARIN_IAP_CREDENTIAL_JSON:-}" ]; then'
+        " mkdir -p ~/.config/marin/credentials;"
+        " printf '%s' \"$MARIN_IAP_CREDENTIAL_JSON\" > ~/.config/marin/credentials/marin.json; fi;"
+        ' ATTEMPT=$(uv run --frozen python -c "' + attempt_check + '" 2>/dev/null || echo 0);'
+        ' VERB=run; if [ "$ATTEMPT" -gt 0 ]; then VERB=resume; fi;'
+        ' echo "root attempt $ATTEMPT -> $VERB";'
+        " exec uv run --frozen atlas-release --version "
+        + plan.release_id
+        + " --plan "
+        + plan_relative
+        + " --source-revision "
+        + plan.source_revision
+        + ' "$VERB"'
+    )
+    return ["bash", "-lc", script]
+
+
+def _submit_root(args, *, verb: str) -> int:
+    """Submit the in-region root job that runs (or resumes) the plan's graph."""
+    if getattr(args, "source_revision", None) and args.source_revision != _plan_document(args).source_revision:
+        plan = _plan_document(args)
+        raise ValueError(
+            f"--source-revision {args.source_revision} disagrees with the plan's pinned revision"
+            f" {plan.source_revision}; the pin travels with the plan"
+        )
+    plan = _plan_document(args)
+    plan_path = Path(args.plan)
+    revision = _bundle_revision(plan, plan_path)
+    relative = _plan_relative_path(plan_path)
+
+    landing_log = guard.landing_log_path()
+    if not landing_log.is_file():
+        raise ValueError(f"the atlas-push landing log is missing at {landing_log}; the guard verifies against it")
+
+    snapshot = Path(tempfile.mkdtemp(prefix="atlas-release-bundle-"))
+    subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
+    try:
+        (snapshot / "atlas-landing-log.jsonl").write_bytes(landing_log.read_bytes())
+        command = _root_command(plan, relative)
+        name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{verb}-{uuid.uuid4().hex[:8]}"
+        with connect_controller(cluster_name=args.cluster) as endpoint:
+            with IrisClient.remote(
+                endpoint.url,
+                credentials=endpoint.credentials,
+                workspace=snapshot,
+                extra_bundle_includes=["atlas-landing-log.jsonl"],
+            ) as client:
+                job = client.submit(
+                    entrypoint=Entrypoint.from_command(*command),
+                    name=name,
+                    resources=ResourceSpec(
+                        cpu=_ROOT_JOB_CPU, memory=f"{_ROOT_JOB_MEMORY_GB}GB", disk=f"{_ROOT_JOB_DISK_GB}GB"
+                    ),
+                    environment=EnvironmentSpec(env_vars=_submit_environment()),
+                    priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                    scheduling_timeout=Duration.from_hours(1),
+                    timeout=Duration.from_hours(_ROOT_JOB_TIMEOUT_HOURS),
+                    max_retries_failure=_ROOT_JOB_MAX_RETRIES_FAILURE,
+                    max_retries_preemption=_ROOT_JOB_MAX_RETRIES_PREEMPTION,
+                )
+        job_id = str(job.job_id)
+        print(f"SUBMITTED {verb} {plan.release_id}@{plan.artifact_version} bundle={revision[:12]} job={job_id}")
+        return 0
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(snapshot)], cwd=REPO_ROOT, check=False)
+        shutil.rmtree(snapshot, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,6 +458,13 @@ def main(argv: list[str] | None = None) -> int:
     resume_parser.add_argument("--source")
     resume_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
     resume_parser.add_argument("--max-concurrent", type=int, default=8)
+    resume_parser.add_argument(
+        "--cluster",
+        help="Submit the resume as an in-region root job on this cluster instead of running locally",
+    )
+
+    submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
+    submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
 
     args = parser.parse_args(argv)
     handlers = {
@@ -282,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         "preflight": mode_preflight,
         "status": mode_status,
         "resume": mode_resume,
+        "submit": mode_submit,
     }
     try:
         if args.mode == "run":

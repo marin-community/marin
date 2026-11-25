@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 import pytest
+from marin.execution import lazy
+from rigging.filesystem.step_status import read_step_status
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import __main__ as entry_point
@@ -151,6 +153,77 @@ def test_resume_mode_forces_failed_stages_alone(tmp_path, plan_document, monkeyp
     assert exit_code == 0
     assert captured["force_run_failed"] is True
     assert "RESUME testrelease" in capsys.readouterr().out
+
+
+def test_resume_with_cluster_submits_the_resume_job(tmp_path, plan_document, monkeypatch):
+    """`resume --cluster` submits an in-region resume job instead of running locally."""
+    captured = {}
+
+    def fake_submit(args, *, verb):
+        captured["verb"] = verb
+        captured["cluster"] = args.cluster
+        return 0
+
+    monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
+    exit_code = entry_point.main(_argv(plan_document, "resume", "--cluster", "cw-us-east-02a"))
+    assert exit_code == 0
+    assert captured == {"verb": "resume", "cluster": "cw-us-east-02a"}
+
+
+def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):
+    captured = {}
+
+    def fake_submit(args, *, verb):
+        captured["verb"] = verb
+        return 0
+
+    monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
+    exit_code = entry_point.main(_argv(plan_document, "submit", "--cluster", "cw-us-east-02a"))
+    assert exit_code == 0
+    assert captured == {"verb": "run"}
+
+
+def test_interrupted_graph_resumes_and_skips_sealed_nodes(tmp_path, monkeypatch):
+    """The auto-resume semantics: a retry runs resume at the same version.
+
+    The iris-level retry reruns the root entrypoint with the resume verb; the
+    sealed steps skip by fingerprint and only the failed or unstarted nodes re-run.
+    A deterministic failure stays bounded: without force_run_failed the run
+    refuses instead of silently re-running.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    def _mark(name: str) -> None:
+        with (tmp_path / f"{name}.calls").open("a", encoding="utf-8") as handle:
+            handle.write("x\n")
+
+    def _count(name: str) -> int:
+        path = tmp_path / f"{name}.calls"
+        return len(path.read_text().splitlines()) if path.exists() else 0
+
+    def sealed() -> dict:
+        _mark("sealed")
+        return {"n": 1}
+
+    root = lazy.apply("atlas-resume-fixture-sealed", sealed, version="2026.11.25.1")
+
+    def interrupted(sealed) -> dict:
+        _mark("node")
+        raise ValueError("the node died mid-run")
+
+    broken = lazy.apply("atlas-resume-fixture-node", interrupted, version="2026.11.25.1", sealed=root)
+    with pytest.raises(RuntimeError, match="step\\(s\\) failed"):
+        lazy.run(broken, force_run_failed=False)
+    assert (_count("sealed"), _count("node")) == (1, 1)
+    assert read_step_status(broken.path(str(tmp_path))) == "FAILED"
+
+    def fixed(sealed) -> dict:
+        _mark("node")
+        return {"n": 2}
+
+    resumed = lazy.apply("atlas-resume-fixture-node", fixed, version="2026.11.25.1", sealed=root)
+    lazy.run(resumed, force_run_failed=True)
+    assert (_count("sealed"), _count("node")) == (1, 2)
 
 
 def test_status_mode_reports_missing_state(tmp_path, plan_document, capsys):
