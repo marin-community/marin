@@ -295,13 +295,37 @@ def _derive_target_load_id(kind: str, plan_identity: dict) -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
-def read_prior_catalog_state(catalog_root: str, query: Query, *, catalog_factory: Any = None) -> PriorCatalogState:
+def read_prior_catalog_state(
+    catalog_root: str, query: Query, *, catalog_factory: Any = None, receipt_keys_fn: Any = None
+) -> PriorCatalogState:
     """Measure the prior release's catalog and applet state (every read read-only)."""
     from finestore.rl.curation import CurationCatalog  # noqa: PLC0415 — the maintained catalog reader
 
     catalog = (catalog_factory or CurationCatalog)(catalog_root)
     snapshot = catalog.current()
-    source_ids = tuple(sorted(source.id for source in catalog.sources(snapshot.snapshot_id)))
+    # Pre-stage Pending rows convert through the maintained evidence-computed
+    # stage callback (never hand-entered); the receipt registry is read once.
+    from experiments.post_training.task_curation.source_status import (  # noqa: PLC0415 — beside its only use
+        pending_stage,
+        receipt_registry_keys,
+    )
+
+    receipts = (receipt_keys_fn or receipt_registry_keys)()
+    # The served snapshot carries historical source IDs; resolve them through the
+    # permanent alias table so the prior state is canonical (collapsing two
+    # historical entries into one canonical ID is a refusal, not a silent merge).
+    from infra.marina.apps.rl_data_catalog.server.source_identity import (  # noqa: PLC0415 — beside its only use
+        canonical_source_map,
+    )
+
+    def canonical_ids(rows) -> tuple[str, ...]:
+        mapped = canonical_source_map({row: row for row in rows})
+        return tuple(sorted(mapped))
+
+    source_ids = canonical_ids(
+        source.id
+        for source in catalog.sources(snapshot.snapshot_id, pending_stage_of=lambda sid: pending_stage(sid, receipts))
+    )
     load_row = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if len(load_row) != 1 or not load_row[0].get("load_id"):
         raise ValueError(f"the catalog pointer carries no selected load: {load_row!r}")
@@ -338,8 +362,8 @@ def read_prior_catalog_state(catalog_root: str, query: Query, *, catalog_factory
         source_ids=source_ids,
         load_id=load_id,
         curriculum_load_id=curriculum_load_id,
-        review_panel_source_ids=tuple(sorted(set(panels))),
-        available_source_ids=tuple(sorted(available)),
+        review_panel_source_ids=canonical_ids(panels),
+        available_source_ids=canonical_ids(available),
         snapshot_uri=snapshot_uri,
         snapshot_sha256=snapshot_sha256,
     )

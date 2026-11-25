@@ -210,7 +210,7 @@ def _applet_query(prior_load_id: str, curriculum_load_id: str, panels: list[str]
 def _catalog_factory(source_ids: tuple[str, ...]):
     catalog = SimpleNamespace(
         current=lambda: SimpleNamespace(snapshot_id="assembly-prior-v1"),
-        sources=lambda snapshot_id: [SimpleNamespace(id=source_id) for source_id in source_ids],
+        sources=lambda snapshot_id, pending_stage_of=None: [SimpleNamespace(id=source_id) for source_id in source_ids],
     )
     return lambda root: catalog
 
@@ -274,7 +274,10 @@ def _derive(
         query=_applet_query(PRIOR_LOAD_ID, PRIOR_CURRICULUM_LOAD_ID, panels, available),
         sources_fn=lambda: layer,
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
-            root, q, catalog_factory=_catalog_factory(catalog_source_ids)
+            root,
+            q,
+            catalog_factory=_catalog_factory(catalog_source_ids),
+            receipt_keys_fn=lambda: {},
         ),
     )
 
@@ -485,7 +488,10 @@ def test_read_prior_catalog_state_measurements(tmp_path, frozen_layer, deploymen
         available=[RETAINED_ID],
     )
     state = read_prior_catalog_state(
-        deployment.catalog_root, query, catalog_factory=_catalog_factory((RETAINED_ID, TARGET_ID))
+        deployment.catalog_root,
+        query,
+        catalog_factory=_catalog_factory((RETAINED_ID, TARGET_ID)),
+        receipt_keys_fn=lambda: {},
     )
     assert state.snapshot_id == "assembly-prior-v1"
     assert state.source_ids == (RETAINED_ID, TARGET_ID)
@@ -500,7 +506,12 @@ def test_read_prior_catalog_state_refuses_a_moving_pointer(tmp_path, frozen_laye
     """A catalog pointer without a selected load refuses."""
     query = _applet_query("", PRIOR_CURRICULUM_LOAD_ID, panels=[], available=[])
     with pytest.raises(ValueError, match="no selected load"):
-        read_prior_catalog_state(deployment.catalog_root, query, catalog_factory=_catalog_factory((RETAINED_ID,)))
+        read_prior_catalog_state(
+            deployment.catalog_root,
+            query,
+            catalog_factory=_catalog_factory((RETAINED_ID,)),
+            receipt_keys_fn=lambda: {},
+        )
 
 
 def test_snapshot_publication_witness_runs_the_real_check_path(tmp_path, frozen_layer, deployment, monkeypatch):
