@@ -76,7 +76,7 @@ pipeline = [
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
     # through JAX/CuTe. Keep the pipeline environment on one CUDA runtime.
-    "torch==2.11.0+cpu; sys_platform == 'linux'",
+    "torch==2.13.0+cpu; sys_platform == 'linux'",
 ]
 
 [tool.uv]
@@ -124,7 +124,7 @@ constraint-dependencies = [
 override-dependencies = [
     # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
     # https://github.com/NVIDIA/nccl/issues/2625
-    "nvidia-nccl-cu12>=2.32.6; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
