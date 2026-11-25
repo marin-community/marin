@@ -132,7 +132,7 @@ federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted
 a peer only if that peer's policy names it explicitly."""
 
 # Longest JobTags.project the controller accepts.
-MAX_JOB_TAG_CHARS = 100
+MAX_JOB_PROJECT_CHARS = 100
 # Longest JobTags.description the controller accepts.
 MAX_JOB_DESCRIPTION_CHARS = 1000
 

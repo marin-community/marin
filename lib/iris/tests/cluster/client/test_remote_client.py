@@ -44,20 +44,23 @@ def test_task_status_rpc_uses_the_wait_deadline():
     assert 0 < stub.timeout_ms <= 1_000
 
 
+class _RecordingController:
+    """Controller stand-in that keeps the last LaunchJobRequest."""
+
+    request: controller_pb2.Controller.LaunchJobRequest | None = None
+
+    def launch_job(self, request, *, timeout_ms=None):
+        self.request = request
+        return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+    def close(self):
+        pass
+
+
 def test_sandbox_submission_carries_no_bundle_or_submitter_env(tmp_path, monkeypatch):
-    class ControllerStub:
-        request: controller_pb2.Controller.LaunchJobRequest | None = None
-
-        def launch_job(self, request, *, timeout_ms=None):
-            self.request = request
-            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
-
-        def close(self):
-            pass
-
     monkeypatch.setenv("HF_TOKEN", "submitter-token")
     (tmp_path / "secrets.env").write_text("KEY=value\n")
-    stub = ControllerStub()
+    stub = _RecordingController()
     client = RemoteClusterClient("http://controller.example:8080/", bundle_id="parent-bundle", workspace=tmp_path)
     client._client = stub
     try:
@@ -80,17 +83,7 @@ def test_sandbox_submission_carries_no_bundle_or_submitter_env(tmp_path, monkeyp
 def test_an_untagged_submission_sends_no_tags_field():
     """An untagged submit is the same on the wire as before tags existed."""
 
-    class ControllerStub:
-        request: controller_pb2.Controller.LaunchJobRequest | None = None
-
-        def launch_job(self, request, *, timeout_ms=None):
-            self.request = request
-            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
-
-        def close(self):
-            pass
-
-    stub = ControllerStub()
+    stub = _RecordingController()
     client = RemoteClusterClient("http://controller.example:8080/", bundle_id="test-bundle")
     client._client = stub
     try:
@@ -107,17 +100,7 @@ def test_an_untagged_submission_sends_no_tags_field():
 
 
 def test_submission_serializes_termination_grace_as_duration():
-    class ControllerStub:
-        request: controller_pb2.Controller.LaunchJobRequest | None = None
-
-        def launch_job(self, request, *, timeout_ms=None):
-            self.request = request
-            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
-
-        def close(self):
-            pass
-
-    stub = ControllerStub()
+    stub = _RecordingController()
     client = RemoteClusterClient("http://controller.example:8080/", bundle_id="test-bundle")
     client._client = stub
     try:

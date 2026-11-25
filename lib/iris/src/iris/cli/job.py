@@ -52,7 +52,7 @@ from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     JOB_CATEGORIES,
     MAX_JOB_DESCRIPTION_CHARS,
-    MAX_JOB_TAG_CHARS,
+    MAX_JOB_PROJECT_CHARS,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -1069,7 +1069,7 @@ Examples:
     "--project",
     type=str,
     default=None,
-    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. "
+    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_PROJECT_CHARS} characters. Child jobs inherit it. "
     + _JOB_TAG_RETENTION,
 )
 @click.option(

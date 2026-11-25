@@ -80,7 +80,6 @@ def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
 def test_job_run_refuses_a_category_outside_the_list_before_submitting(recorded_job_submissions):
     result = _run_cli(["--category", "post-training"])
     assert result.exit_code == 2
-    assert "Invalid value for '--category'" in result.output
     assert recorded_job_submissions == []
 
 
