@@ -20,6 +20,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from taskcompendium.chat import ChatFunction, message_text
 
 from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
 from marinskyrl.runtime_options import PolicyLossType
@@ -136,6 +137,19 @@ class RolloutBatchMetadata:
     sampling_dispositions: tuple[GroupDisposition, ...] = ()
 
 
+def _public_message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    calls = message.get("tool_calls")
+    if message.get("role") != "assistant" or not calls:
+        return message_text(content)
+    text = "" if content is None else message_text(content)
+    # Public tool calls distinguish conversations even when the assistant has no text.
+    # The provider's transport IDs do not change the requested action.
+    functions = [ChatFunction.model_validate(call["function"]) for call in calls]
+    actions = [function.model_dump(mode="json") for function in functions]
+    return text + "\n" + json.dumps(actions, ensure_ascii=False, sort_keys=True)
+
+
 def _public_prompt_texts(dataset: PromptDataset) -> list[str]:
     # Read only the model-visible prompt column. Canonical prepared rows store messages as JSON.
     texts = []
@@ -145,9 +159,7 @@ def _public_prompt_texts(dataset: PromptDataset) -> list[str]:
         if isinstance(prompt, str):
             texts.append(prompt)
             continue
-        if any(not isinstance(message.get("content"), str) for message in prompt):
-            raise ValueError("Prompt Thompson sampling requires text-only public messages")
-        texts.append("\n".join(message["content"] for message in prompt))
+        texts.append("\n".join(_public_message_text(message) for message in prompt))
     return texts
 
 

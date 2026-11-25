@@ -33,6 +33,13 @@ class _StubTokenizer:
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
 
 
+def _update_prepared_prompt(dataset, row, update):
+    dataframe = dataset.dataframe.with_format(None)
+    prompts = list(dataframe["prompt"])
+    prompts[row] = json.dumps(update(json.loads(prompts[row])))
+    dataset.dataframe = dataframe.remove_columns("prompt").add_column("prompt", prompts)
+
+
 def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluation_overlap(tmp_path):
     config = get_default_config()
     config.trainer.train_batch_size = 3
@@ -59,13 +66,60 @@ def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluatio
     revised_order.load_state_dict(order.state_dict())
     assert [revised_order.next_index() for _ in range(6)] == [order.next_index() for _ in range(6)]
 
+    def text_blocks(messages):
+        for message in messages:
+            content = message["content"]
+            message["content"] = [{"type": "text", "text": part} for part in (content[:3], content[3:])]
+        return messages
+
     duplicate = text_task("another-task-id", prompt="Compute 1 plus one.", source="math")
+    evaluation_duplicate = dataset("duplicate", [duplicate])
+    _update_prepared_prompt(evaluation_duplicate, 0, text_blocks)
     with pytest.raises(ValueError, match="held-out public prompt"):
-        prompt_order_from_config(config, training, held_out=[validation, dataset("duplicate", [duplicate])])
+        prompt_order_from_config(config, training, held_out=[validation, evaluation_duplicate])
+
+    training_duplicates = dataset("training-duplicates", [*tasks, duplicate])
+    _update_prepared_prompt(training_duplicates, len(tasks), text_blocks)
+    with pytest.raises(ValueError, match="distinct training prompts"):
+        prompt_order_from_config(config, training_duplicates, held_out=[validation])
 
     config.data.sampling.reversion_mass = 1.0
     with pytest.raises(ValueError, match=r"data.sampling.reversion_mass.*Set it to 0"):
         prompt_order_from_config(config, training, held_out=[validation])
+
+
+def test_prompt_thompson_uses_public_tool_calls_without_transport_ids(tmp_path):
+    config = get_default_config()
+    config.trainer.train_batch_size = 2
+    config.generator.n_samples_per_prompt = 2
+    config.data.sampling.kind = "prompt-thompson-contextual"
+    sessions = OmegaConf.to_container(config.environment.task_sessions)
+
+    def dataset(name, task_ids):
+        path = tmp_path / f"{name}.parquet"
+        tasks = [text_task(uid, prompt="Check the calendar.") for uid in task_ids]
+        pq.write_table(pa.table({TASK_SPEC_COLUMN: [task.model_dump_json() for task in tasks]}), path)
+        return SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=sessions)
+
+    def tool_call(call_id, arguments):
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": call_id, "type": "function", "function": {"name": "calendar_lookup", "arguments": arguments}}
+            ],
+        }
+
+    training = dataset("train", ["first", "second"])
+    _update_prepared_prompt(training, 0, lambda messages: [*messages, tool_call("call-a", '{"day":1,"month":6}')])
+    _update_prepared_prompt(training, 1, lambda messages: [*messages, tool_call("call-b", '{"day":2,"month":6}')])
+    order = prompt_order_from_config(config, training)
+    assert {training.label(order.next_index()) for _ in range(2)} == {"first", "second"}
+
+    held_out = dataset("held-out", ["third"])
+    _update_prepared_prompt(held_out, 0, lambda messages: [*messages, tool_call("call-c", '{"month": 6, "day": 1}')])
+    with pytest.raises(ValueError, match="held-out public prompt"):
+        prompt_order_from_config(config, training, held_out=[held_out])
 
 
 @pytest.mark.parametrize("kind,epsilon", [("adaptive-source", 0.2), ("adaptive-source-thompson", 0.05)])
