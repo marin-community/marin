@@ -974,11 +974,14 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
 
 
 def test_staged_weights_leave_admission_open_and_recheck_version(
-    inference_server_config, generated_model_and_tokenizer
+    inference_server_config, llama_model_config, local_gpt2_tokenizer
 ):
-    model, tokenizer = generated_model_and_tokenizer
+    tokenizer = local_gpt2_tokenizer
     config = dataclasses.replace(inference_server_config, initial_policy_id="initial")
-    server = InferenceServer.create(config, model, tokenizer)
+    mesh = config.trainer.device_mesh
+    with hax.partitioning.set_mesh(mesh), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        model = LlamaLMHeadModel.init(hax.Axis("vocab", len(tokenizer)), llama_model_config, key=jax.random.key(0))
+        server = InferenceServer.create(config, model, tokenizer, mesh=mesh)
     entered, release = threading.Event(), threading.Event()
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
 
