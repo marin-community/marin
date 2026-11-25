@@ -63,7 +63,7 @@ def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list[TaskInput]:
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
     configs["task_spec"].update(task_spec_overrides)
     dataset = SourceTaskDataset([str(path)], _tokenizer(), 128, num_workers=1, environment_configs=configs)
-    return [row["input"].spec for row in dataset.collate_fn(list(dataset))]
+    return [row["input"] for row in dataset.collate_fn(list(dataset))]
 
 
 FACTORIES = {
@@ -77,7 +77,8 @@ def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
     output = text_task("output-task", source="probes").model_copy(update={"output_paths": ("/workspace/answer.txt",)})
     reply = text_task("reply-task", source="probes")
     runtime = machine_runtime("shellsim")
-    loaded = _load(tmp_path, (shell, output, reply), task_machine_by_dataset={"probes": runtime.model_dump()})
+    inputs = _load(tmp_path, (shell, output, reply), task_machine_by_dataset={"probes": runtime.model_dump()})
+    loaded = [item.spec for item in inputs]
     assert [spec.task_machine for spec in loaded] == [runtime, runtime, None]
     for spec in (loaded[0], loaded[2]):
         validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
@@ -90,7 +91,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
     linux = text_task("linux-task", source="mixed").model_copy(update={"environment_requirements": NATIVE_ENVIRONMENT})
     reply = text_task("reply-task", source="mixed")
     shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
-    loaded = _load(
+    inputs = _load(
         tmp_path,
         (simulated, linux, reply),
         task_machine_by_command_semantics={
@@ -98,6 +99,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
             CommandSemantics.LINUX_PROCESS.value: daytona.model_dump(),
         },
     )
+    loaded = [item.spec for item in inputs]
     assert [spec.task_machine for spec in loaded] == [shellsim, daytona, None]
     for spec in loaded:
         validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
@@ -115,7 +117,8 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
         }
     )
 
-    loaded = _load(tmp_path, (harbor, ordinary, prefix), harness_by_dataset={"harbor-source": HARBOR_TRIAL_SESSION})
+    inputs = _load(tmp_path, (harbor, ordinary, prefix), harness_by_dataset={"harbor-source": HARBOR_TRIAL_SESSION})
+    loaded = [item.spec for item in inputs]
 
     assert loaded[0].harness == HARBOR_TRIAL_SESSION
     assert is_shell_harness(loaded[1].harness)
@@ -148,8 +151,9 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
 
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
-    image = text_task("image-task").model_copy(
+    image = text_task("image-task", source="nvidia/Nemotron-RL-Ultra-Training-Blends").model_copy(
         update={
+            "labels": {"subset_id": "competitive-coding"},
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
                 placement=GraderMachine(
@@ -161,7 +165,7 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             )
         }
     )
-    prefix = text_task("prefix-task").model_copy(
+    prefix = text_task("prefix-task", source="structure-closure").model_copy(
         update={
             "context": ConversationInput(
                 events=(TextMessage(role="user", content="Complete"), TextMessage(role="assistant", content='{"a":['))
@@ -177,8 +181,12 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
         }
     )
-    loaded = _load(tmp_path, (image, prefix))
-    assert [spec.task.id for spec in loaded] == ["image-task", "prefix-task"]
+    inputs = _load(tmp_path, (image, prefix))
+    assert [(item.metadata.task_id, item.metadata.subset_id) for item in inputs] == [
+        ("image-task", "competitive-coding"),
+        ("prefix-task", "structure-closure"),
+    ]
+    loaded = [item.spec for item in inputs]
     assert is_shell_harness(loaded[0].harness)
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
     for spec in loaded:
@@ -200,7 +208,7 @@ def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
     release = Source(dataset="published/release", revision="b" * 40, row="train.parquet:7", importer_revision="1")
     curated = structure_closure_task(RawRow("curated-id", release, {"lowered_task_spec": json.dumps(payload)})).task
 
-    spec = _load(tmp_path, (curated,))[0]
+    spec = _load(tmp_path, (curated,))[0].spec
 
     assert task_messages(spec)[-1] == {"role": "assistant", "content": '{"a":[1'}
     assert spec.harness == ASSISTANT_PREFIX_HARNESS

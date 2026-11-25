@@ -3,6 +3,8 @@
 
 """Admission for the two published evaluation cohorts."""
 
+import hashlib
+import json
 from dataclasses import asdict
 
 from evalrecords.eval_policy import (
@@ -78,3 +80,16 @@ def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
     config = _model().config
     assert config is not None
     assert "vllm_use_nccl_symm_mem" not in config.model_dump(mode="json")["serve"]
+
+
+def test_policy_accepts_historical_model_config_digest_without_request_deadline():
+    record = _model().model_dump(mode="json")
+    record["config"].pop("evaluation_request_timeout")
+    payload = json.dumps(record["config"], sort_keys=True, separators=(",", ":"))
+    record["config_digest"] = hashlib.sha256(payload.encode()).hexdigest()
+    model = ModelRef.model_validate_json(json.dumps(record))
+    evaluation = _math500(None, version=SEPTEMBER_16_VERSION)
+
+    assert policy_violations(SEPTEMBER_16_VERSION, model, evaluation) == ()
+    record["config"]["serve"]["max_model_len"] = 4096
+    assert policy_violations(SEPTEMBER_16_VERSION, ModelRef.model_validate(record), evaluation)

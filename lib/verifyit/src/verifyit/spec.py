@@ -93,10 +93,13 @@ class McqExtraction(StrEnum):
 
     ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
     reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    ``MEDMCQA_COT_REFERENCE`` reproduces lm-eval-harness's ``medmcqa_cot`` filter: the first
+    ``Final Answer: X``, where X must be a standalone letter.
     """
 
     ANSWER_LINE = "answer_line"
     SUPERGPQA_REFERENCE = "supergpqa_reference"
+    MEDMCQA_COT_REFERENCE = "medmcqa_cot_reference"
 
 
 @dataclass(frozen=True)

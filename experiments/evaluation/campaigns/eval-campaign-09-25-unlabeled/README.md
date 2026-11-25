@@ -95,5 +95,4 @@ The launcher writes generated effective configs beneath
 Credentials are operational inputs. Export `HF_TOKEN`, `TOGETHER_API_KEY`, and CoreWeave object-store
 credentials, or use the configured Google Secret Manager access. Set `EVAL_CAMPAIGN_SECRETS_ENV` only
 when reading Hugging Face or Together credentials from a local environment file.
-The agentic suites run their task machines on Daytona and require `DAYTONA_TARGET`, for example
-`export DAYTONA_TARGET=us`.
+The agentic suites run their task machines on Daytona.

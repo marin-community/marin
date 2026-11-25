@@ -18,7 +18,7 @@ def _projection(record: dict) -> dict:
 
 
 def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
-    client, _, _ = rl_progress_client
+    client, request, _ = rl_progress_client
     api = f"/a/{APPLET_ID}/api"
     record = progress_record()
     report = grader_report()
@@ -31,6 +31,24 @@ def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progre
     query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
     assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
     assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
+
+    # PostgreSQL accepts numeric report values beyond Python's finite float range.
+    # Listing runs must leave these reports in storage instead of decoding them.
+    request(
+        "http://localhost",
+        "POST",
+        f"/a/{APPLET_ID}/query",
+        json_body={
+            "sql": (
+                "UPDATE rl_runs SET record = jsonb_set(record, '{grader_report}', '{\"value\": 1e400}'::jsonb) "
+                "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+            ),
+            "parameters": query,
+        },
+    )
+    listing = client.get(f"{api}/runs").json()
+    assert listing["skipped_records"] == []
+    assert listing["runs"] == [first, second]
 
 
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
@@ -102,6 +120,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         ("test/bad-status", record | {"run_id": "test/bad-status", "attempt_id": "bad", "status": "unknown"}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
+        ("test/bad-scalar", "unexpected"),
         (
             "test/bad-result",
             record | {"run_id": "test/bad-result", "attempt_id": "bad", "gate_result": {"comparisons": "invalid"}},
@@ -155,6 +174,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert "status: literal_error" in skipped["test/bad-status"]
     assert set(skipped) == {
         "test/bad-shape",
+        "test/bad-scalar",
         "test/bad-result",
         "test/huge-extra",
         "test/huge-gate",

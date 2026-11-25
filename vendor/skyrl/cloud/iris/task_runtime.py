@@ -50,6 +50,7 @@ from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -84,8 +85,6 @@ from marinskyrl.environment_contract import (
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
-    HuggingFaceModelCache,
-    immutable_model_cache_key,
     validate_hf_model_weights,
 )
 from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -368,9 +367,7 @@ def stage_hugging_face_models(config: DictConfig) -> None:
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
-    return os.path.join(
-        tempfile.gettempdir(), "marinskyrl", "model_metadata", immutable_model_cache_key(source_uri, identity)
-    )
+    return str(Path(tempfile.gettempdir()) / model_metadata_relative_path(source_uri, identity))
 
 
 @dataclass(frozen=True)
@@ -487,7 +484,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
         return None
 
     revision = args.policy_tokenizer_revision
-    local_path = _metadata_path(tokenizer_path, revision or "main")
+    local_path = _metadata_path(tokenizer_path, revision or DEFAULT_TOKENIZER_REVISION)
     target = Path(local_path)
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)

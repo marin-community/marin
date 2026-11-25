@@ -1,5 +1,6 @@
 from datetime import timedelta
 from pathlib import Path
+import pickle
 import time
 
 from fsspec.implementations.local import LocalFileSystem
@@ -13,6 +14,7 @@ from torch.distributed._shard.sharded_tensor import Shard, init_from_local_shard
 import torch.multiprocessing as mp
 
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
+from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
 from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
 
@@ -164,3 +166,28 @@ def test_checkpoint_shares_masters_across_ranks_and_reshards_model_only(tmp_path
     load_checkpoint(path, restored)
     torch.testing.assert_close(restored[MODEL_KEY], master.bfloat16(), rtol=0, atol=0)
     torch.testing.assert_close(restored[master_key], master, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("optimizer_class", [torch.optim.AdamW, torch.optim.SGD])
+def test_checkpoint_metadata_restricts_optimizer_classes_to_the_restore_scope(tmp_path, optimizer_class):
+    checkpoint_path = tmp_path / "checkpoint"
+    checkpoint_path.mkdir()
+    common_file = checkpoint_path / "common.pt"
+    torch.save({"optimizer": {"defaults": {"cpu_optimizer_cls": optimizer_class}}, "step": 22}, common_file)
+    source_bytes = common_file.read_bytes()
+    with pytest.raises(pickle.UnpicklingError):
+        torch.load(common_file, weights_only=True)
+
+    with remote_checkpoint_metadata(str(checkpoint_path), optimizer_classes=(torch.optim.AdamW,)) as read_dir:
+        staged = Path(read_dir) / common_file.name
+        if optimizer_class is torch.optim.AdamW:
+            restored = torch.load(staged, weights_only=True)
+            assert restored["optimizer"]["defaults"]["cpu_optimizer_cls"] is torch.optim.AdamW
+            assert restored["step"] == 22
+        else:
+            with pytest.raises(pickle.UnpicklingError):
+                torch.load(staged, weights_only=True)
+
+    assert common_file.read_bytes() == source_bytes
+    with pytest.raises(pickle.UnpicklingError):
+        torch.load(common_file, weights_only=True)
