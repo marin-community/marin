@@ -104,7 +104,7 @@ def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mo
     endpoints = {}
 
     def register_endpoint(*, name, address, task_attempt, **_kwargs):
-        endpoint_id = task_attempt.task_id.to_wire()
+        endpoint_id = task_attempt.to_wire()
         endpoints[endpoint_id] = SimpleNamespace(name=name, address=address, endpoint_id=endpoint_id, metadata={})
         return endpoint_id
 
@@ -115,9 +115,9 @@ def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mo
     client = IrisClient(cluster)
     groups = {}
 
-    def run_task(job, rank):
+    def run_task(job, rank, attempt=0):
         previous = get_job_info()
-        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job])
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job], attempt_id=attempt)
         set_job_info(info)
         try:
             with iris_ctx_scope(IrisContext.from_job_info(info, client)):
@@ -129,11 +129,16 @@ def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mo
         info = get_job_info()
         assert info is not None
         job = info.job_id
-        groups[job, rank_offset] = (master_host, port)
-        if job == first_job:
-            run_task(second_job, 0)
-        elif rank_offset == 0:
+        groups[job, info.attempt_id, rank_offset] = (master_host, port)
+        if job == first_job and rank_offset == 0:
+            if info.attempt_id == 0:
+                run_task(second_job, 0)
+            else:
+                run_task(first_job, 1, attempt=1)
+        elif job == second_job and rank_offset == 0:
+            run_task(first_job, 1)
             run_task(second_job, 1)
+            run_task(first_job, 0, attempt=1)
         return {"pass": True, "ranks": [{"transports": ["NET/IB/0/GDRDMA"]}]}
 
     argv = ["probe", "--max-local-gpus", "1", "--variants", "baseline_default_env", *mode_args]
@@ -144,8 +149,9 @@ def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mo
     monkeypatch.setattr(probe, "collect_ib_port_inventory", lambda: [])
     run_task(first_job, 0)
 
-    assert groups[second_job, 1] == groups[second_job, 0]
-    assert groups[second_job, 1] != groups[first_job, 0]
+    for job, attempt in ((first_job, 0), (first_job, 1), (second_job, 0)):
+        assert groups[job, attempt, 1] == groups[job, attempt, 0]
+    assert len({address for (_, _, rank), address in groups.items() if rank == 0}) == 3
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):

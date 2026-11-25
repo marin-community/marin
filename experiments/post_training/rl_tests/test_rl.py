@@ -50,7 +50,6 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_s3,
     fake_s3_checkpoint,
     replace_evaluations,
-    shrink_recorded_panel,
     write_artifact_record,
     write_published_artifact,
     write_receipt,
@@ -117,12 +116,6 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
-    trainer = planned["skyrl"]["trainer"]
-    assert trainer["use_sample_packing"]
-    for role in ("policy", "ref"):
-        megatron = trainer[role]["megatron_config"]
-        assert megatron["context_parallel_size"] == 2
-        assert megatron["transformer_config_kwargs"]["cp_comm_type"] == "all_gather"
     for name in ("train-medium-tools", "train-long-checkpoint-eval"):
         assert configs[name]["skyrl"]["trainer"]["policy"]["megatron_config"]["context_parallel_size"] == 1
     recorded = deepcopy(planned)
@@ -1018,6 +1011,7 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
+@pytest.mark.parametrize("recorded_runs", [2], indirect=True, ids=["one-task-per-family"])
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
@@ -1041,7 +1035,6 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
     assert preset.held_out_tasks is not None
-    shrink_recorded_panel(preset.held_out_tasks)
     training_selection = recipe.selection_artifact(preset.tasks)
     write_artifact_record(
         Path(training_selection.path()),

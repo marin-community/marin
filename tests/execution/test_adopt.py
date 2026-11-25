@@ -31,6 +31,7 @@ def test_adopt_writes_a_pointer_only_when_registered(tmp_path, monkeypatch, read
     record = read_record(f"{tmp_path}/datasets/external/2026.06.28")
     if read_only:
         assert record is None
+        assert not (tmp_path / "datasets/external/2026.06.28").exists()
         assert not any(source.iterdir())
         return
     assert record is not None
@@ -43,6 +44,17 @@ def test_readopt_same_source_is_idempotent(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
     run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="src"))
     run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="src"))
+
+
+@pytest.mark.parametrize("read_only_first", [False, True])
+def test_read_only_input_cannot_share_a_scheduled_output(tmp_path, monkeypatch, read_only_first):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    (tmp_path / "external").mkdir()
+    output = ArtifactStep.adopt("datasets/x", "2026.06.28", source="external")
+    read_only = ArtifactStep.adopt("datasets/alias", "2026.06.28", source="datasets/x/2026.06.28", read_only=True)
+    ordered = (read_only, output) if read_only_first else (output, read_only)
+    with pytest.raises(ValueError, match="both a read-only input and a step output"):
+        run(*ordered)
 
 
 def test_readopt_different_source_warns(tmp_path, monkeypatch, caplog):

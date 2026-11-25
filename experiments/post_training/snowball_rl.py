@@ -250,9 +250,11 @@ _SPEED_GUARDS = (
     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
 )
 
+_REPORTING_REVISION = "2026.11.24.1"
+
 _snowball = partial(
     Preset,
-    revision="2026.11.24.1",
+    revision=_REPORTING_REVISION,
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     default_speculative_decoding=_DSPARK,
@@ -375,6 +377,7 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
+        revision=_REPORTING_REVISION,
         recipe=replace(_REPORTING_P40, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
@@ -406,6 +409,7 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
+        revision=_REPORTING_REVISION,
         recipe=replace(
             _REPORTING_P40,
             config=_REPORTING_P40.config.merge(
@@ -521,6 +525,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-checkpoint-eval",
+        revision=_REPORTING_REVISION,
         recipe=_REPORTING_P40,
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),

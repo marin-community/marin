@@ -131,7 +131,7 @@ def step_is_built(step: StepSpec) -> bool:
 
 def _expand_unseen(
     step: StepSpec,
-    seen: set[str],
+    seen: dict[str, bool],
     is_built: Callable[[StepSpec], bool] = lambda _s: False,
     pruned: set[str] | None = None,
 ) -> list[StepSpec]:
@@ -154,6 +154,8 @@ def _expand_unseen(
     def visit(s: StepSpec) -> None:
         path = s.output_path
         if path in seen:
+            if seen[path] != s.read_only:
+                raise ValueError(f"{path} is both a read-only input and a step output")
             return
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
@@ -164,7 +166,7 @@ def _expand_unseen(
             for dep in s.deps:
                 visit(dep)
         in_stack.remove(path)
-        seen.add(path)
+        seen[path] = s.read_only
         ordered.append(s)
 
     visit(step)
@@ -315,7 +317,7 @@ class StepRunner:
                     )
                 )
 
-        scheduled: set[str] = set()
+        scheduled: dict[str, bool] = {}
         for raw_step in steps:
             for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash

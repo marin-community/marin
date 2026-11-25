@@ -87,18 +87,6 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
-def shrink_recorded_panel(binding: str) -> None:
-    """Keep one task per fixture family in the panel, including its membership records."""
-    panel = Path(recipe.selection_artifact(binding).path())
-    for filename in (VALIDATION_FILENAME, TASK_MANIFEST_FILENAME):
-        path = panel / filename
-        pq.write_table(pq.read_table(path).slice(0, 2), path)
-    summary_path = panel / recipe.SUMMARY_FILENAME
-    summary = json.loads(summary_path.read_text())
-    summary.update(validation_rows=2, full_validation_rows=2)
-    write_json(summary_path, summary)
-
-
 def cache_native_compositions(monkeypatch) -> None:
     """Reuse successful compositions of equivalent launch documents within one test."""
     compose_configs = gate.compose_configs
@@ -413,9 +401,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
+    panel_size = getattr(request, "param", None)
     for binding in {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}:
         task_set = Path(recipe.selection_artifact(binding).path())
-        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(100)]
+        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(panel_size or 100)]
         rows = [
             SelectionTaskRow(
                 task_id=value.id,
@@ -428,14 +417,17 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             )
             for i, value in enumerate(tasks)
         ]
-        pq.write_table(
-            pa.table({"task_spec": [value.model_dump_json() for value in tasks]}), task_set / "validation.parquet"
-        )
+        validation = pa.table({"task_spec": [value.model_dump_json() for value in tasks]})
+        pq.write_table(validation, task_set / VALIDATION_FILENAME)
+        if panel_size is not None:
+            pq.write_table(validation, task_set / FULL_VALIDATION_FILENAME)
         pq.write_table(
             pa.Table.from_pylist([row.model_dump(mode="json") for row in rows], schema=arrow_schema(SelectionTaskRow)),
             task_set / TASK_MANIFEST_FILENAME,
         )
         summary = json.loads((task_set / "summary.json").read_text())
+        if panel_size is not None:
+            summary.update(validation_rows=validation.num_rows, full_validation_rows=validation.num_rows)
         summary["selection_strata"] = SelectionDefinition(
             name=recipe.selection_artifact(binding).name,
             version=recipe.selection_artifact(binding).version,
