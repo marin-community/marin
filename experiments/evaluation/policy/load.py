@@ -45,7 +45,9 @@ def load_policy(path: Path) -> EvalPolicy:
     catalog = models()
     if unknown := set(document["candidates"]) - catalog.keys():
         raise ValueError(f"{path}: no models {sorted(unknown)} in the model catalog")
-    candidates = {name: PolicyCandidate(model=catalog[name], **settings) for name, settings in document["candidates"].items()}
+    candidates = {
+        name: PolicyCandidate(model=catalog[name], **settings) for name, settings in document["candidates"].items()
+    }
     in_distribution = tuple(map(_evaluation, document["evaluations"]))
     evaluations = {evaluation.name: evaluation for evaluation in in_distribution}
     if unknown := {evaluation.benchmark for evaluation in in_distribution} - evaluation_benchmarks().keys():
