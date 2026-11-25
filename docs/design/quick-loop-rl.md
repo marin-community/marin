@@ -2792,19 +2792,33 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   throughput difference was smaller than the spread between repeats.
   Exact completions matched for 3 and 5 of 128 requests across modes
   and for 6 and 7 of 128 within each mode. Exact raw-score matches
-  numbered zero in both cross-mode comparisons. Use fixed batches and
-  teacher-forced continuations to isolate score and router differences. The AgentX
-  singleton path requires replay to be disabled.
+  numbered zero in both cross-mode comparisons. The AgentX singleton path
+  requires replay to be disabled.
+
+  Two four-H100 probes scored four frozen continuations at all 2,048
+  generated positions. Each learner produced identical scores
+  when it repeated the same fixed batch and routing mode. Captured routes
+  reduced mean absolute raw-logprob error relative to AgentX from 0.0209
+  to 0.0109 in Levanter and from 0.0219 to 0.0144 in Megatron. K3 KL fell
+  from 0.00104 to 0.000276 and from 0.00126 to 0.000556, respectively.
+  With captured routes, the largest errors were 0.396 and 0.445.
+  Megatron loaded a local HF export that preserved all 5,952 original
+  shard hashes on a Levanter round trip. Its R3 check aligned 26 layers
+  of expert IDs to response predictor positions. These forward probes
+  used one host per learner and left the multi-host update unmeasured.
 
   The separate 11-prompt tool-stop test kept route capture off. Stopping
   at the first complete tool call raised correct calls from 0 to 5 and
   reduced output from 5,632 to 1,912 tokens. Ten responses ended at a
   complete call. Three preserved the baseline token sequence through
-  the stop. Reconcile position and route fields against the selected
-  learner's replay input before evaluating reward.
+  the stop.
+
+  Two CPU serving replicas rejected stale policy IDs after installing the
+  same changed Levanter checkpoint. Their post-install tokens and raw
+  scores matched a cold server. The Megatron canary still requires a
+  receiver for live Megatron weights and a shared publication barrier.
   Use plain compiled vLLM for the backend comparison and vLLM with four
-  DSpark proposals for the cutover comparison. Gate the Megatron canary on
-  the live receiver, verified publication, and invalidation of old caches.
+  DSpark proposals for the cutover comparison.
   [Route-capable AgentX source][agentx-route-capable] ·
   [Native checkpoint publication][native-checkpoint-publication] ·
   [Megatron-to-Levanter handoff][megatron-levanter-handoff] ·
