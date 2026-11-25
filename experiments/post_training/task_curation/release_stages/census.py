@@ -27,6 +27,7 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import ActorCensusInput, OracleFiltrationEvidence, SourceDeclaration
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -336,6 +337,36 @@ def _resources(total_tasks: int) -> StageResources:
     return census_sizing(total_tasks)
 
 
+class _WorkerRegistry:
+    """The worker's source registry, built once per worker process.
+
+    The census runs at a frozen source revision: the receipts behind the registry
+    are write-once artifacts, so every source a worker measures resolves against
+    the same registry. One build per worker is faithful to the serial semantics
+    and keeps the per-source resolve cost from repeating 321 times.
+    """
+
+    def __init__(self, fn: Callable[[], dict]) -> None:
+        self._fn = fn
+        self._registry: dict | None = None
+
+    def __call__(self) -> dict:
+        if self._registry is None:
+            self._registry = self._fn()
+        return self._registry
+
+    def __reduce__(self):
+        # A fresh cache per worker process, even if the parent built one already.
+        return (_WorkerRegistry, (self._fn,))
+
+
+def _initialize_census_worker() -> None:
+    """One core per census worker: the job's cores are the workers, not their threads."""
+    configure_coreweave_s3()
+    pa.set_cpu_count(1)
+    pa.set_io_thread_count(1)
+
+
 def _measure_all(
     rows: list[CensusSourceRow],
     output_root: str,
@@ -371,12 +402,14 @@ def _measure_all(
         output_root=output_root,
         revision=revision,
         region_prefix=region_prefix,
-        sources_fn=sources_fn,
+        sources_fn=_WorkerRegistry(sources_fn),
         inventory_fn=inventory_fn,
     )
     # One source per dispatch: the per-source cost is heavy-tailed (the largest
     # source dominates any larger chunk), so single-source dispatches balance the tail.
-    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=get_context("spawn"), initializer=_initialize_census_worker
+    ) as pool:
         return list(pool.map(target, rows, chunksize=1))
 
 
