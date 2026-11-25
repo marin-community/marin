@@ -646,12 +646,14 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     launch_config = args.launch_config_bundle
     if not isinstance(launch_config, BundledLaunchConfig):
         raise RuntimeError("resolved launch config payload is missing")
+    single_domain = args.role_topology is not None and args.role_topology.locality.group_sizes == (args.num_nodes,)
     return [
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
         f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
         *(["--pynccl-init"] if args.runtime_profile.includes_vllm else []),
+        *(["--gate-single-nvlink-domain"] if single_domain else []),
     ]
 
 

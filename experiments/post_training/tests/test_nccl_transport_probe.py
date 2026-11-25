@@ -18,11 +18,11 @@ from iris.cluster.types import JobName
 from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
+    RankResult,
     WorkerProcess,
     all_to_all_element_count,
     collect_worker,
     gate_endpoint_name,
-    gate_variant_verdict,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
@@ -78,7 +78,7 @@ def test_parse_nccl_census_ignores_intra_node_p2p():
     assert parse_nccl_census(p2p_log) == NcclCensus(nccl_version="2.29.7", transports=[])
 
 
-def test_gate_verdict_fails_closed_on_sockets_and_failures():
+def test_gate_verdict_fails_closed_on_sockets_and_failures(tmp_path, monkeypatch):
     """Require positive interconnect evidence from a multi-node job."""
     assert gate_verdict(True, [["NET/IB/0/GDRDMA"]]) == "pass"
     assert gate_verdict(True, [[]]) == "missing_transport_evidence"
@@ -88,15 +88,41 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
-    census = parse_nccl_census(["NCCL INFO NVLS comm 0x1234 headRank -1 nHeads 32 nvlsRanks 60 buffSize 1048576"])
-    ranks = [{"nvls_rank_counts": census.nvls_rank_counts, "transports": []} for _ in range(4)]
-    result = {"pass": True, "world_size": 60, "ranks": ranks}
-    assert gate_variant_verdict(result) == "pass"
-    assert gate_variant_verdict(result | {"pass": False}) == "collective_failed"
-    ranks[0]["transports"] = ["NET/Socket/0"]
-    assert gate_variant_verdict(result) == "socket_transport"
-    ranks[0].update(transports=[], nvls_rank_counts=[4])
-    assert gate_variant_verdict(result) == "missing_transport_evidence"
+    full = "NCCL INFO NVLS comm 0x1234 headRank -1 nHeads 32 nvlsRanks 60 buffSize 1048576"
+    local = full.replace("nvlsRanks 60", "nvlsRanks 4")
+    socket = "NCCL INFO Channel 01 : 1[0] -> 4[0] via NET/Socket/0"
+    marker = probe.BENCHMARK_COMPLETE
+    streams = [[full, marker]] * 4
+    monkeypatch.setattr(probe, "spawn_worker", lambda _variant, rank, *_args, **_kwargs: rank)
+
+    def completed_rank(rank):
+        census = probe.read_worker_census(([], streams[rank]))
+        return RankResult("baseline", rank, True, 0, 1.0, [], {}, census)
+
+    monkeypatch.setattr(probe, "collect_worker", completed_rank)
+
+    def verdict(allow):
+        result = probe.run_variant(
+            probe.Variant("baseline"),
+            0,
+            4,
+            60,
+            "127.0.0.1",
+            1,
+            tmp_path,
+            pynccl_init=True,
+            allow_full_world_nvls=allow,
+        )
+        return result["interconnect_verdict"]
+
+    assert verdict(True) == "pass"
+    assert verdict(False) == "missing_transport_evidence"
+    streams[0] = [marker, full]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [local, marker, full]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [full, marker, socket]
+    assert verdict(True) == "socket_transport"
 
 
 def test_sibling_gpu_gangs_get_separate_gate_rendezvous():

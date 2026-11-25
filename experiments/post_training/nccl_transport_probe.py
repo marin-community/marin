@@ -77,6 +77,7 @@ MAX_LOCAL_GPUS = 2
 ERROR_TAIL_LINES = 12
 TRACEBACK_MAX_LINES = 80
 ENDPOINT_BASE_NAME = "nccl-probe"
+BENCHMARK_COMPLETE = "NCCL_PROBE_BENCHMARK_COMPLETE"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
@@ -253,6 +254,7 @@ def spawn_worker(
             "RANK": str(index),
             "LOCAL_RANK": str(local_rank),
             "NCCL_DEBUG": "INFO",
+            "NCCL_DEBUG_SUBSYS": "INIT,NET,NVLS,GRAPH,P2P",
             "PROBE_RESULT_FILE": str(result_path),
         }
     )
@@ -346,6 +348,17 @@ def worker_traceback(lines: list[str]) -> list[str]:
     return block[:TRACEBACK_MAX_LINES]
 
 
+def read_worker_census(streams: tuple[list[str], ...]) -> NcclCensus:
+    """Bind NVLS evidence to the benchmark's default NCCL communicator."""
+    all_lines = [line for stream in streams for line in stream]
+    benchmark_lines = [
+        line for stream in streams if BENCHMARK_COMPLETE in stream for line in stream[: stream.index(BENCHMARK_COMPLETE)]
+    ]
+    census = parse_nccl_census(all_lines)
+    benchmark = parse_nccl_census(benchmark_lines)
+    return NcclCensus(census.nccl_version, census.transports, census.ib_device_lines, benchmark.nvls_rank_counts)
+
+
 def collect_worker(handle: WorkerProcess) -> RankResult:
     """Wait for one spawned worker and parse its logs and result payload."""
     try:
@@ -358,9 +371,10 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     duration = time.time() - handle.started
     # NCCL writes its INFO output to stdout and traces to stderr depending on
     # build and NCCL_DEBUG_FILE, so the census parses both streams.
-    lines = handle.log_path.read_text(errors="replace").splitlines()
-    lines += handle.output_path.read_text(errors="replace").splitlines()
-    census = parse_nccl_census(lines)
+    stderr = handle.log_path.read_text(errors="replace").splitlines()
+    stdout = handle.output_path.read_text(errors="replace").splitlines()
+    lines = [*stderr, *stdout]
+    census = read_worker_census((stderr, stdout))
     payload, result_problem = parse_worker_result(
         handle.result_path, handle.rank, handle.variant_name, handle.world_size
     )
@@ -397,6 +411,7 @@ def run_variant(
     log_dir: Path,
     *,
     pynccl_init: bool,
+    allow_full_world_nvls: bool = False,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     handles = [
@@ -404,13 +419,22 @@ def run_variant(
         for local in range(local_gpus)
     ]
     ranks = [collect_worker(handle) for handle in handles]
+    full_world_nvls = (
+        allow_full_world_nvls
+        and 0 < local_gpus < world_size
+        and all(world_size in rank.census.nvls_rank_counts for rank in ranks)
+    )
+    passed = all(rank.passed for rank in ranks)
     return {
         "variant": variant.name,
         "env_overlay": variant.env,
-        "pass": all(rank.passed for rank in ranks),
+        "pass": passed,
         "world_size": world_size,
         "ranks": [asdict_without_worker_noise(rank) for rank in ranks],
         "transports": sorted({transport for rank in ranks for transport in rank.census.transports}),
+        "interconnect_verdict": gate_verdict(
+            passed, [rank.census.transports for rank in ranks], full_world_nvls=full_world_nvls
+        ),
     }
 
 
@@ -574,11 +598,9 @@ def run_gate(args: argparse.Namespace) -> None:
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
     endpoint_name = gate_endpoint_name(job_info)
-    gate_variants = [
-        variant
-        for variant in build_variants(extra_env=args.env_pairs or None)
-        if variant.name in ("baseline_default_env", "env_overlay")
-    ]
+    gate_variants = [Variant("baseline_default_env")]
+    if args.env_pairs:
+        gate_variants.append(Variant("env_overlay", args.env_pairs))
     if task_index == 0:
         base_port = allocate_port_block(len(gate_variants))
         master_host = job_info.advertise_host
@@ -603,11 +625,12 @@ def run_gate(args: argparse.Namespace) -> None:
                 base_port + offset,
                 log_dir,
                 pynccl_init=args.pynccl_init,
+                allow_full_world_nvls=args.gate_single_nvlink_domain,
             )
         )
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
-    verdicts = [gate_variant_verdict(result) for result in results]
+    verdicts = [result["interconnect_verdict"] for result in results]
     verdict = next((item for item in verdicts if item != "pass"), "pass")
     report = {
         "gate": {
@@ -678,13 +701,6 @@ def collect_ib_port_inventory() -> list[dict[str, str]]:
                     record[field_name] = value.read_text().strip()
             inventory.append(record)
     return inventory
-
-
-def gate_variant_verdict(result: dict) -> str:
-    ranks = result["ranks"]
-    world_size = result["world_size"]
-    full_world_nvls = 0 < len(ranks) < world_size and all(world_size in rank["nvls_rank_counts"] for rank in ranks)
-    return gate_verdict(result["pass"], [rank["transports"] for rank in ranks], full_world_nvls=full_world_nvls)
 
 
 def gate_verdict(passed: bool, rank_transports: list[list[str]], *, full_world_nvls: bool = False) -> str:
@@ -838,6 +854,9 @@ def run_worker_mode(args: argparse.Namespace) -> None:
 
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
     all_to_all_bandwidth = a2a_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
+    # PyNccl creates a separate communicator after both measured collectives.
+    print(BENCHMARK_COMPLETE, flush=True)
+    print(BENCHMARK_COMPLETE, file=sys.stderr, flush=True)
 
     payload = {
         "variant": args.variant,
@@ -891,6 +910,11 @@ def main() -> None:
         help="Gate mode: regional evidence prefix (rendezvous_dir/interconnect-gate) for the full report JSON",
     )
     parser.add_argument(
+        "--gate-single-nvlink-domain",
+        action="store_true",
+        help="Require NVLS evidence across the full communicator when a single NVLink domain replaces IB channels",
+    )
+    parser.add_argument(
         "--env",
         action="append",
         metavar="KEY=VALUE",
@@ -914,6 +938,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    if any("=" not in item or item.startswith("=") for item in args.env or ()):
+        parser.error("--env must be KEY=VALUE with a nonempty key")
     args.env_pairs = {key: value for key, _, value in (item.partition("=") for item in args.env or [])}
     if not args.env_pairs:
         args.env_pairs = None
