@@ -18,7 +18,13 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence, SourceUse
+from finestore.rl.curation import (
+    DatasetRelease,
+    LexicalContaminationEvidence,
+    OversightEvidence,
+    SourceUse,
+    require_lexical_qualification,
+)
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -33,7 +39,6 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, P
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"
@@ -41,7 +46,7 @@ RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()
 
 
 def _empty_evidence_table() -> pa.Table:
-    """The zero-row review/verify view: the readers project these columns on open."""
+    """Return the empty review and verify schema."""
     return pa.table(
         {
             "task_id": pa.array([], pa.string()),
@@ -194,13 +199,11 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    """Admit a verified subset through its existing qualification and fresh release gates.
+    """Admit a sealed retained subset through its existing qualification.
 
     The stage-0 license gate runs on the declaration's receipt. The consumer and
-    oracle admission checks are Atlas release gates: the receipts this reader
-    consumes were sealed through them upstream, and the binding in
-    ``datasets.atlas_retained_pins`` re-validated the lineage against the
-    declaration before this source became selectable.
+    oracle admission checks were sealed upstream, and the binding validates the
+    lineage before this source becomes selectable.
     """
     source.require_license()
     if options.mode is not SourceProcessingMode.QUICK:

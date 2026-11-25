@@ -12,14 +12,11 @@ this module commits only the immutable reference and binds each entry onto main'
 raw declaration at ``all_sources()`` time, so main's durable reference is the
 Atlas admitted version and selection runs the retained reader.
 
-The binding re-validates the lineage fail-closed: the declaration must be the
-exact conversion input the receipt sealed (id, dataset pin, converter version and
-pipeline reference), and the release must be the private open-athena TaskCompendium
-publication the lexical receipt qualifies. A declaration that drifted from its
-entry keeps its raw pin with a recorded note instead of blocking the catalog; the
-pin-parity test then fails on the drifted pin. A table that cannot be fetched
-(an offline run) binds nothing and leaves every declaration at its raw pin; a
-fetched table that fails its digest check fails closed.
+The binding checks the declaration's id, dataset pin and pipeline reference
+against the seal, and qualifies the private open-athena TaskCompendium release.
+Converter-version drift is recorded in the bound source's notes. Other lineage
+drift keeps the raw pin with a note, which the pin-parity test then flags.
+A fetched table that fails its digest check fails closed.
 
 Refresh ``retained_pins.json`` from an audit checkout that carries the
 receipt models (maintainer-run, reads the private registry)::
@@ -48,6 +45,7 @@ from finestore.rl.curation import (
     PipelineReference,
     SourceUse,
     huggingface_dataset_url,
+    require_lexical_qualification,
 )
 from finestore.rl.licenses import LicenseReceipt
 from huggingface_hub import HfApi, hf_hub_download
@@ -60,7 +58,6 @@ from experiments.post_training.task_curation.retained_release import (
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RECEIPTS_REPO = "open-athena/marin-rl-data-atlas-registry"
 PINS_REPO = "open-athena/atlas-source-pins"
@@ -101,11 +98,7 @@ def license_receipt_for(source_id, repo, revision):
     return receipt
 
 
-LEXICAL = lexical_measurements()
-
-
 def admits(evidence, repo, revision, use):
-    # The admission predicate the retained import runs at the released pin.
     if use is LexicalUse.TRAIN:
         return evidence.admission_blocker(repo, revision) is None
     receipt = evidence.receipt
@@ -291,7 +284,7 @@ class RetainedPin(BaseModel):
 
 
 def _fetch_pin_table() -> bytes | None:
-    """The pinned table bytes, or None when an offline run cannot fetch them."""
+    """Fetch the pinned table and verify its digest."""
     try:
         local = Path(
             hf_hub_download(repo_id=PINS_REPO, repo_type="dataset", revision=PINS_REVISION, filename=PINS_FILENAME)
@@ -306,12 +299,7 @@ def _fetch_pin_table() -> bytes | None:
 
 @cache
 def atlas_retained_pins() -> dict[str, RetainedPin] | None:
-    """The pinned pin table, validated entry by entry at first read.
-
-    ``None`` when the table cannot be fetched (an offline run): the caller binds
-    nothing and every declaration keeps its raw pin. A fetched table that fails
-    its digest check fails closed.
-    """
+    """The pinned pin table, validated entry by entry at first read."""
     raw = _fetch_pin_table()
     if raw is None:
         return None
@@ -327,8 +315,7 @@ def bind_retained_pins(sources: list[RlDataSource]) -> list[RlDataSource]:
 
     A declaration whose lineage does not match its entry keeps the raw pin with a
     recorded note; the parity test fails on the drifted pin, so the drift stays
-    visible instead of blocking every other binding. Without a fetchable table
-    the declarations bind nothing.
+    visible instead of blocking every other binding.
     """
     pins = atlas_retained_pins()
     if pins is None:

@@ -39,7 +39,7 @@ from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataS
 
 
 def require_runnable_grader(task: TaskSpec) -> None:
-    """Reject ungraded tasks and validate native Harbor packages."""
+    """Require a grader or a valid native Harbor package."""
     if not isinstance(task.grader, NoGrader):
         return
     if "harbor" in task.tags:
