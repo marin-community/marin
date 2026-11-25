@@ -4027,6 +4027,27 @@ Source-machine downloads used by root-delivery grading are archived under
 are removed. This retains the full original verifier output and exit code alongside
 the structured verdict.
 
+A conversion whose tasks require SHARED grading (workspace-state or opaque workspace
+verifiers, per `assess_grading_environment`) must bind the grader and its
+`RootDeliveryContract` into every TaskSpec before publication:
+
+- Construct the task's grader at conversion, for example `native_file_reward_grader(...)`,
+  and write it into the TaskSpec. A published SHARED task may carry `NoGrader` only when
+  its native `task.toml` declares that and the conversion binds the contract.
+- Derive the contract from the task's own pinned private verifier files: names, modes
+  and SHA-256s. A conversion that cannot derive it fails closed. It does not publish
+  contract-less SHARED rows.
+- The intake census must report `shared_missing_contract_tasks == 0` and
+  `absent_contract_tasks == 0` before the population enters controls.
+- Disclose later library changes to an embedded grader (for example the quiesce
+  script) in the declaration notes. Admission consumes the sealed release bytes.
+
+Binding at conversion keeps the oracle-filter and negative-control receipts byte-exact
+from controls through admission. Adding the contract after controls changes the task
+digests those receipts pin, and then the controls must be re-run over the repaired
+bytes; FACET-Terminal-Tasks-6k hit exactly this. The Endless conversion follows this
+rule.
+
 Changes to TaskSpec provisioning require the dedicated LOCAL regression below
 on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
 ext4 mount tools. It executes the frozen tau and language-mixing JudgeSpecs through the production
