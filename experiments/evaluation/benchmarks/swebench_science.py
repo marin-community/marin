@@ -69,25 +69,24 @@ REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
 VERSION = "2026.11.25.1"
 BENCHMARK = "swebench-science"
 TASK_COUNT = 118
+# The validation workspace accepts 10 GiB per solver. https://github.com/marin-community/marin/issues/12108
+SOLVER_DISK_MB = 10 * 1024
 PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
 PATCH = "/logs/artifacts/model.patch"
 
 
 def benchmark_rows(path: StoragePath, context: ConversionContext) -> Iterator[dict]:
-    # Task 019 requires permission to modify pycisTopic. See marin-community/marin#12108.
+    # Task 019 requires permission to modify pycisTopic (clause 10(i)).
+    # https://github.com/aertslab/pycisTopic/blob/cb5f54111d2affd89ad732c20c14dab6138026f0/LICENSE.txt#L19-L26
     if path.name != "task_019.tar.gz":
         yield from package_rows(path, context)
 
 
-def _offline_image(env: dict) -> str:
-    if (
-        env["allow_internet"]
-        or env["os"] != "linux"
-        or not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", env["docker_image"])
-    ):
+def _offline_image(image: str, *, os: str, allow_internet: bool) -> str:
+    if allow_internet or os != "linux" or not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image):
         raise ValueError("SWE-bench Science requires offline digest-pinned Linux images")
     # Skopeo accepts repository@digest, including registries with ports.
-    return re.sub(r":[^/:@]+(?=@)", "", env["docker_image"])
+    return re.sub(r":[^/:@]+(?=@)", "", image)
 
 
 def lower_package(directory: Path, row: RawRow) -> TaskSpec:
@@ -102,7 +101,11 @@ def lower_package(directory: Path, row: RawRow) -> TaskSpec:
     if any(role["network_mode"] != "no-network" for role in (agent, verifier)):
         raise ValueError("SWE-bench Science requires the native no-network protocol")
 
-    solver = LoweredSource(_offline_image(solver_env), None, solver_env["workdir"])
+    solver = LoweredSource(
+        _offline_image(solver_env["docker_image"], os=solver_env["os"], allow_internet=solver_env["allow_internet"]),
+        None,
+        solver_env["workdir"],
+    )
     solver = extend_source(solver, pi_install(PI))
     hook = (directory / "pre_artifacts.sh").read_text()
     command = f"cd {shlex.quote(solver_env['workdir'])} && sh -c {shlex.quote(hook)}"
@@ -111,7 +114,7 @@ def lower_package(directory: Path, row: RawRow) -> TaskSpec:
         verifier_timeout=verifier["timeout_sec"],
         cpus=solver_env["cpus"],
         memory_mb=solver_env["memory_mb"],
-        storage_mb=10240,
+        storage_mb=SOLVER_DISK_MB,
         network=NetworkPolicy.DENY,
     )
     return TaskSpec(
@@ -138,7 +141,11 @@ def lower_package(directory: Path, row: RawRow) -> TaskSpec:
             placement=GraderMachine(
                 environment=EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS,
-                    docker_image=_offline_image(verifier_env),
+                    docker_image=_offline_image(
+                        verifier_env["docker_image"],
+                        os=verifier_env["os"],
+                        allow_internet=verifier_env["allow_internet"],
+                    ),
                     working_directory=verifier_env["workdir"],
                     environment_variables={**verifier_env.get("env", {}), **verifier.get("env", {})},
                 ),

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.importers.harbor.dockerfile import dockerfile_images
-from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGrader, Source, TaskSpec
+from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGrader, Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
@@ -60,7 +60,6 @@ def test_corpus_sets_solver_disk_and_keeps_the_verifier_image(swebench_science_p
     )
     [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
-    assert isinstance(task, TaskSpec)
     build = task.environment_requirements.docker_build
     assert build is not None
     dockerfile = next(file for file in build.files if file.path == "Dockerfile")
@@ -103,7 +102,7 @@ def test_unexpected_patch_artifact_is_rejected(swebench_science_package):
     package = swebench_science_package
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="sole SWE-bench Science artifact"):
         swebench_science.lower_package(package, ROW)
 
 
