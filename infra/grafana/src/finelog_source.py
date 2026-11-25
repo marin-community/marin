@@ -62,7 +62,7 @@ def _classified_query(client: LogClient, sql: str, max_rows: int) -> pa.Table:
         raise FinelogUnavailableError(str(err)) from err
 
 
-def probe_health(source: MetricSource) -> FinelogHealth:
+def health_row(source: MetricSource) -> FinelogHealth:
     """Run a one-row query on ``source`` and return a dashboard-safe health row."""
     name = source.target.name
     started = time.monotonic()
@@ -141,7 +141,7 @@ class FinelogSource:
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""
-        return probe_health(self)
+        return health_row(self)
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         # Grafana is deployed from an independent lockfile, so this wire call cannot
@@ -198,7 +198,7 @@ class IapFinelogSource:
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""
-        return probe_health(self)
+        return health_row(self)
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         raise FinelogUnavailableError("relay status is not served through the local IAP route")
