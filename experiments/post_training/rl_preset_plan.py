@@ -5,8 +5,10 @@
 
 import json
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl import skyrl
@@ -65,16 +67,19 @@ def compose_configs(
 ) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
-    return run_native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        "compose",
-        *options,
-        "--",
-        *paths,
-        env=env,
-    )
+    with tempfile.TemporaryDirectory(prefix="rl-archive-config-") as directory:
+        return run_native_json(
+            "python",
+            "-I",
+            "-m",
+            "cloud.iris.config_cli",
+            "--checkout",
+            str(recipe.REPO_ROOT / "vendor/skyrl"),
+            "--progress-file",
+            str(Path(directory) / "stage"),
+            "compose",
+            *options,
+            "--",
+            *paths,
+            env=env,
+        )
