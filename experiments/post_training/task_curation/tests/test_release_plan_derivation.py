@@ -12,6 +12,7 @@ the injected boundaries (the release resolves the real ones at run time).
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,9 @@ from experiments.post_training.task_curation import atlas_deployment
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages import plan_derivation
+from experiments.post_training.task_curation.release_stages import (
+    snapshot_publication as snapshot_publication_stage,
+)
 from experiments.post_training.task_curation.release_stages.graph import (
     ReleasePlan,
     graph_nodes,
@@ -37,12 +41,17 @@ from experiments.post_training.task_curation.release_stages.plan_derivation impo
     read_prior_catalog_state,
     seal_derivation,
 )
+from experiments.post_training.task_curation.release_stages.preflight_slices import (
+    SliceSelection,
+    _snapshot_publication_witness,
+)
 from experiments.post_training.task_curation.release_stages.release_config import (
     ExcludedSource,
     PriorRelease,
     ReleaseConfig,
     RemovedSource,
 )
+from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 CLUSTER = "derivation-test-region"
@@ -492,3 +501,43 @@ def test_read_prior_catalog_state_refuses_a_moving_pointer(tmp_path, frozen_laye
     query = _applet_query("", PRIOR_CURRICULUM_LOAD_ID, panels=[], available=[])
     with pytest.raises(ValueError, match="no selected load"):
         read_prior_catalog_state(deployment.catalog_root, query, catalog_factory=_catalog_factory((RETAINED_ID,)))
+
+
+def test_snapshot_publication_witness_runs_the_real_check_path(tmp_path, frozen_layer, deployment, monkeypatch):
+    """The prior witness runs snapshot publication's real pre-upstream check path.
+
+    It verifies the repo state (the git-less-bundle bug class), extracts the
+    current declarations and checks prior drift against the digest-verified pin
+    — and it refuses drifted priors, the failure the release would hit later.
+    """
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    monkeypatch.setattr(snapshot_publication_stage, "all_sources", lambda: layer)
+    monkeypatch.setattr(snapshot_publication_stage, "require_catalog_declaration", lambda declaration: None)
+    plan = fixture_plan(release_root=str(tmp_path / "release"), slice_output_root=str(tmp_path / "slice"))
+    plan = plan.model_copy(
+        update={
+            # verify_repo_state is the real path: the pinned revision must be a
+            # revision the deriving checkout actually contains.
+            "source_revision": (
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+                ).stdout.strip()
+            ),
+            "targets": (TARGET_ID,),
+            "expected_source_count": 2,
+            "pins": plan.pins.model_copy(
+                update={"prior_declarations": _prior_pins(tmp_path, _declaration_dump(layer)).declarations}
+            ),
+        }
+    )
+    evidence = _snapshot_publication_witness(plan, SliceSelection(source=RETAINED_ID))
+    assert evidence["source_count"] == 2
+    assert evidence["witness"] == "check-only against the prior release's sealed state"
+
+    drifted = _declaration_dump(layer)
+    drifted[RETAINED_ID] = {**drifted[RETAINED_ID], "dataset_revision": "2"}
+    plan = plan.model_copy(
+        update={"pins": plan.pins.model_copy(update={"prior_declarations": _prior_pins(tmp_path, drifted).declarations})}
+    )
+    with pytest.raises(ValueError, match="non-target declaration drift"):
+        _snapshot_publication_witness(plan, SliceSelection(source=RETAINED_ID))

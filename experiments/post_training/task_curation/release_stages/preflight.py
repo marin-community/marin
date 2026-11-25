@@ -75,14 +75,14 @@ def input_digests(inputs: dict) -> dict[str, str]:
     return {"inputs": hashlib.sha256(document.encode()).hexdigest()}
 
 
-def receipt_path(output_root: str, stage: str) -> StoragePath:
-    return StoragePath(f"{output_root}/preflight/{stage}/{PREFLIGHT_RECEIPT_NAME}")
+def receipt_path(output_root: str, stage: str, name: str = PREFLIGHT_RECEIPT_NAME) -> StoragePath:
+    return StoragePath(f"{output_root}/preflight/{stage}/{name}")
 
 
-def write_receipt(output_root: str, receipt: PreflightReceipt) -> ArtifactRef:
+def write_receipt(output_root: str, receipt: PreflightReceipt, name: str = PREFLIGHT_RECEIPT_NAME) -> ArtifactRef:
     """Seal the receipt write-once; a rerun must use a fresh release prefix."""
     raw = (json.dumps(json.loads(receipt.model_dump_json()), indent=2, sort_keys=True) + "\n").encode()
-    path = receipt_path(output_root, receipt.stage)
+    path = receipt_path(output_root, receipt.stage, name)
     if path.exists():
         if path.read_bytes() != raw:
             raise ValueError(

@@ -175,8 +175,20 @@ def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, sta
     nodes = _selected_nodes(graph, stages)
     blocked: list[str] = []
     failed: list[str] = []
+    witnessed: list[str] = []
     for node in sorted(nodes):
         if node not in preflight_slices.RUNNABLE_NODES:
+            if node in preflight_slices.WITNESS_NODES:
+                try:
+                    receipt = preflight_slices.run_prior_witness(node, plan, selection)
+                except Exception as error:
+                    failed.append(node)
+                    print(f"FAIL {node}: {str(error)[:400]}")
+                    continue
+                evidence = json.dumps(receipt.slice_evidence, sort_keys=True)[:300]
+                print(f"WITNESS-OK {node}: {evidence}")
+                witnessed.append(node)
+                continue
             blocked.append(node)
             print(f"BLOCKED {node}: {_block_reason(node)}")
             continue
@@ -192,8 +204,8 @@ def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, sta
         print(f"PREFLIGHT {plan.release_id}: {len(failed)} failed, {len(blocked)} blocked")
         return 1
     print(
-        f"PREFLIGHT {plan.release_id}: {len(nodes) - len(blocked)} slices ok,"
-        f" {len(blocked)} blocked until their upstream stages run"
+        f"PREFLIGHT {plan.release_id}: {len(nodes) - len(blocked) - len(witnessed)} slices ok,"
+        f" {len(witnessed)} prior-witnessed, {len(blocked)} blocked until their upstream stages run"
     )
     return 0
 

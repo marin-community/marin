@@ -394,3 +394,46 @@ def test_release_mode_refuses_a_cluster_mismatch(tmp_path, monkeypatch, capsys):
     exit_code = entry_point.main(_release_argv(_release_config(tmp_path), "--cluster", "cw-us-west-01b", "--dry-run"))
     assert exit_code == 2
     assert "pins cluster" in capsys.readouterr().err
+
+
+def test_preflight_mode_runs_the_prior_witness(tmp_path, plan_document, monkeypatch, capsys):
+    """A blocked stage's prior witness runs its check path and seals its own receipt.
+
+    The witness receipt never satisfies the run-mode gate: it proves the code
+    path ran against the prior release's sealed state, not that upstreams exist.
+    """
+    monkeypatch.setattr(preflight_module, "type_check_module", lambda module, repo: "ok")
+    monkeypatch.setattr(
+        preflight_slices, "WITNESS_RUNNERS", {"snapshot_publication": lambda plan, selection: {"witness": True}}
+    )
+    exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "snapshot_publication"))
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "WITNESS-OK snapshot_publication:" in output
+    witness_path = StoragePath(f"{tmp_path / 'release'}/preflight/snapshot_publication/prior-witness-receipt.json")
+    receipt = json.loads(witness_path.read_text())
+    assert receipt["ok"] is True and receipt["mode"] == "prior-witness"
+    assert receipt["slice_evidence"] == {"witness": True}
+    # A second preflight serves the fresh witness without re-running it.
+    exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "snapshot_publication"))
+    assert exit_code == 0
+    assert capsys.readouterr().out.count("WITNESS-OK snapshot_publication:") == 1
+    # The run-mode gate still refuses the stage: the witness is not a run receipt.
+    plan = entry_point.load_plan(plan_document)
+    with pytest.raises(ValueError, match="slice is blocked"):
+        preflight_slices.ensure_preflight("snapshot_publication", plan)
+    # The run-gate receipt document was never written.
+    assert not StoragePath(f"{tmp_path / 'release'}/preflight/snapshot_publication/preflight-receipt.json").exists()
+
+
+def test_preflight_mode_reports_a_failed_witness_and_exits_nonzero(tmp_path, plan_document, monkeypatch, capsys):
+    monkeypatch.setattr(preflight_module, "type_check_module", lambda module, repo: "ok")
+
+    def failing_witness(plan, selection):
+        raise ValueError("prior drift found")
+
+    monkeypatch.setattr(preflight_slices, "WITNESS_RUNNERS", {"snapshot_publication": failing_witness})
+    exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "snapshot_publication"))
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "FAIL snapshot_publication:" in output and "prior drift found" in output

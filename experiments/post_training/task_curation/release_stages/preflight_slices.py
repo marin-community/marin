@@ -14,6 +14,14 @@ A slice runner is available only for stages whose real inputs exist without
 write-mode upstream receipts. The remaining stages are ``blocked``: their preflight
 waits until the real upstream stages have run (the submission gate refuses them
 until then, with the reason recorded here).
+
+A blocked stage whose *check-only* code path runs against the prior release's
+sealed state gets a ``prior witness``: the preflight mode runs the real check
+path on real prior documents before anything submits, so the audit's late-failure
+class (a bug that used to surface minutes after a three-hour census) surfaces in
+minutes instead. Witness receipts seal under their own document and never
+satisfy the run-mode gate — they prove the code path ran, not that upstreams
+exist.
 """
 
 import dataclasses
@@ -57,6 +65,9 @@ from experiments.post_training.task_curation.release_stages import (
 )
 from experiments.post_training.task_curation.release_stages import (
     qc_browse as qc_browse_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
+    snapshot_publication as snapshot_publication_stage,
 )
 from experiments.post_training.task_curation.release_stages.graph import (
     _STAGE_SPECS,
@@ -111,6 +122,15 @@ BLOCK_REASONS: dict[str, str] = {
 
 # The bounded text-scan slice the (blocked) regional scan would use.
 DEFAULT_MAX_FILES = 25
+
+WITNESS_RECEIPT_NAME = "prior-witness-receipt.json"
+
+# Blocked stages whose check-only code path runs against the prior release's
+# sealed state before anything submits. The preflight mode runs the witness; the
+# run-mode gate is unchanged (a witness receipt never satisfies it).
+WITNESS_NODES: dict[str, str] = {
+    "snapshot_publication": "check-only against the prior release's sealed state",
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -583,6 +603,130 @@ def _upstream_witness(node: str, plan: ReleasePlan) -> tuple[dict[str, str], dic
         digests[dep.name] = hashlib.sha256(raw).hexdigest()
         evidence[dep.name] = record.result_type or ""
     return digests, evidence
+
+
+def _witness_placeholder_ref(plan: ReleasePlan, name: str) -> ArtifactRef:
+    """A typed-input placeholder a check-only witness never reads.
+
+    The witness runs the stage's pre-upstream code path; typed fields the path
+    never touches still need a well-formed reference, and a witness-scoped URI
+    keeps it distinguishable from any sealed artifact.
+    """
+    return ArtifactRef(uri=f"{plan.release_root}/prior-witness/unused-{name}.json", sha256="0" * 64)
+
+
+def _snapshot_publication_witness(plan: ReleasePlan, selection: SliceSelection) -> dict:
+    """The snapshot publication's check-only path against the prior release's state.
+
+    Runs the repo-state check (the git-less-bundle bug class), the current
+    declarations extraction and the prior-drift check — the real pre-upstream
+    code path — against the plan's digest-verified prior-declarations pin. The
+    survey-coverage check is excluded deliberately: it legitimately needs the
+    release's own composed surveys, and identity_backend_compose's runnable
+    slice exercises it.
+    """
+    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415 — beside its only use
+
+    configure_coreweave_s3()
+    inputs = snapshot_publication_stage.SnapshotPublicationInputs(
+        release_id=plan.release_id,
+        snapshot_id=plan.snapshot_id,
+        prior_snapshot_id=plan.prior_snapshot_id,
+        source_revision=plan.source_revision,
+        catalog_root=plan.catalog_root,
+        release_root=plan.release_root,
+        targets=plan.targets,
+        expected_source_count=plan.expected_source_count,
+        expected_contract_count=plan.expected_contract_count,
+        expected_contract_tasks=plan.expected_contract_tasks,
+        census_receipt=_witness_placeholder_ref(plan, "census-receipt"),
+        identity_receipt=plan.pins.prior_identity,
+        backend_receipt=plan.pins.prior_backend,
+    )
+    revision = snapshot_publication_stage.verify_repo_state(REPO_ROOT, inputs)
+    current = snapshot_publication_stage.verify_current_declarations(inputs)
+    snapshot_publication_stage.verify_no_prior_drift(inputs, current, plan.pins.prior_declarations.uri)
+    return {
+        "witness": WITNESS_NODES["snapshot_publication"],
+        "source_count": len(current),
+        "source_revision": revision[:12],
+        "prior_declarations": plan.pins.prior_declarations.uri,
+    }
+
+
+WITNESS_RUNNERS: dict[str, Callable[[ReleasePlan, SliceSelection], dict]] = {
+    "snapshot_publication": _snapshot_publication_witness,
+}
+
+
+def witness_inputs(node: str, plan: ReleasePlan) -> dict:
+    """The digest-stable witness inputs a node's prior-witness receipt binds."""
+    inputs: dict = {"node": node, "witness": WITNESS_NODES.get(node, "unregistered")}
+    if node == "snapshot_publication":
+        inputs.update(
+            {
+                "source_revision": plan.source_revision,
+                "snapshot_id": plan.snapshot_id,
+                "prior_declarations": _ref_dict(plan.pins.prior_declarations),
+                "targets": list(plan.targets),
+                "expected_source_count": plan.expected_source_count,
+            }
+        )
+    return inputs
+
+
+def run_prior_witness(
+    node: str,
+    plan: ReleasePlan,
+    selection: SliceSelection,
+    *,
+    repo_root=REPO_ROOT,
+    output_root: str | None = None,
+) -> preflight_module.PreflightReceipt:
+    """Type-check the stage module, run its prior witness, and seal the receipt.
+
+    The receipt seals under its own document name so it can never satisfy the
+    run-mode gate (a witness proves the code path ran, not that upstreams exist).
+    """
+    runner = WITNESS_RUNNERS.get(node)
+    if runner is None:
+        raise ValueError(f"node {node!r} has no prior witness")
+    root = output_root or plan.release_root
+    inputs = witness_inputs(node, plan)
+    digests = preflight_module.input_digests(inputs)
+    stored = preflight_module.receipt_path(root, node, WITNESS_RECEIPT_NAME)
+    if stored.exists():
+        existing = preflight_module.PreflightReceipt.model_validate_json(stored.read_text())
+        if existing.mode == "prior-witness" and existing.input_digests == digests and existing.ok:
+            return existing
+    repo_sha = repo_head(repo_root)
+    now = datetime.now(tz=UTC).isoformat(timespec="seconds")
+    try:
+        preflight_module.type_check_module(module_path(node), repo_root)
+        evidence = runner(plan, selection)
+        receipt = preflight_module.PreflightReceipt(
+            stage=node,
+            mode="prior-witness",
+            repo_sha=repo_sha,
+            input_digests=digests,
+            ok=True,
+            checked_at=now,
+            slice_evidence=evidence if isinstance(evidence, dict) else {"result": str(evidence)[:500]},
+        )
+    except Exception as error:
+        receipt = preflight_module.PreflightReceipt(
+            stage=node,
+            mode="prior-witness",
+            repo_sha=repo_sha,
+            input_digests=digests,
+            ok=False,
+            error=str(error)[:2000],
+            checked_at=now,
+        )
+    preflight_module.write_receipt(root, receipt, name=WITNESS_RECEIPT_NAME)
+    if not receipt.ok:
+        raise ValueError(f"prior witness failed for {node}: {receipt.error}")
+    return receipt
 
 
 def ensure_preflight(
