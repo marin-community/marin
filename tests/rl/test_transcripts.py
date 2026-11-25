@@ -161,6 +161,25 @@ def test_length_stopped_record_reports_stop_reason() -> None:
     assert "- **stop reason:** length" in text
 
 
+def test_markdown_code_fence_outgrows_backtick_runs_in_tool_output() -> None:
+    record = {
+        "uid": "fence",
+        "attempt_id": "a",
+        "output_response": "done",
+        "messages": [
+            {"role": "user", "content": "cat the readme"},
+            {"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "bash", "arguments": "{}"}}]},
+            {"role": "tool", "content": "# Title\n```\nstray fence\n```", "tool_call_id": "c1"},
+        ],
+        "verification": {"status": "verified", "score": 1.0},
+    }
+    text = _markdown(record)
+    assert "````text" in text  # a 4-backtick fence closes past the stray ``` lines
+    ((_, blocks),) = list(render_documents(record))
+    html_page = to_html(blocks)
+    assert "<p><strong>Tool call: <code>bash</code></strong></p>" in html_page
+
+
 def test_tool_results_truncate_with_elision_marker() -> None:
     long_output = "x" * (DEFAULT_TRUNCATE_CHARS + 500)
     record = {

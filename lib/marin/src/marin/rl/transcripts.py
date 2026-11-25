@@ -7,10 +7,9 @@ Two real record shapes exist in Marin RL artifacts, with semantics mirroring the
 EvalDash sample adapter (`infra/marina/apps/evaldash` `skyrlTrajectory.ts`): the
 eval-dump trial row (flat, `uid` + `output_response` + `messages` + `verification`)
 and the SkyRL schema_v7 turn record (`response.messages`, `response.text`,
-`verification_result`, `trajectory.instance_id`). `render_documents` accepts one
-record, a list, or JSONL text; records sharing uid and repetition — plus the
-training step for turn records — form one cumulative transcript whose repeated
-message prefixes collapse.
+`verification_result`, `trajectory.instance_id`). Records sharing uid and
+repetition — plus the training step for turn records — form one cumulative
+transcript whose repeated message prefixes collapse.
 """
 
 from __future__ import annotations
@@ -25,13 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import fsspec
+
 from marin.rl.transcript_format import to_html, to_markdown
 
 DEFAULT_TRUNCATE_CHARS = 2_000
 THINK_START = "<|start_think|>"
 THINK_END = "<|end_think|>"
 TURN_RECORD_KIND = "turn-v7"
-EVAL_DUMP_KIND = "eval-dump"
 THINKING_SUMMARY = "Thinking"
 RAW_RESPONSE_HEADING = "assistant — raw response"
 
@@ -80,12 +80,12 @@ def _tool_calls(value: Any) -> list[ToolCall]:
     """Normalize OpenAI-style `tool_calls` entries to name plus parsed arguments."""
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
-    calls = []
+    calls: list[ToolCall] = []
     for call in value:
         if not isinstance(call, Mapping):
             continue
-        function = call.get("function")
-        function = function if isinstance(function, Mapping) else {}
+        fn = call.get("function")
+        function = fn if isinstance(fn, Mapping) else {}
         name = function.get("name")
         if not isinstance(name, str) or not name:
             continue
@@ -174,15 +174,14 @@ def is_turn_record(value: Any) -> bool:
 
 
 def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
-    step = record.get("ordinal") if isinstance(record.get("ordinal"), int) else record.get("step")
-    step = step if isinstance(step, int) else None
+    step = next((v for v in (record.get("ordinal"), record.get("step")) if isinstance(v, int)), None)
     score = record.get("score")
     score = [value for value in score if isinstance(value, (int, float))] if isinstance(score, Sequence) else None
     return Turn(
         uid=record["uid"],
         repetition=None,
         step=step,
-        kind=EVAL_DUMP_KIND,
+        kind="eval-dump",
         session=str(record.get("attempt_id") or ""),
         phase="eval",
         env_class=str(record.get("env_class") or ""),
@@ -323,7 +322,7 @@ def _turn_blocks(messages: Sequence[Message], *, truncate: int) -> list[Block]:
         elif text:
             blocks.append(("paragraph", text))
         for call in calls:
-            blocks.append(("paragraph", f"**Tool call: `{call.name}`**"))
+            blocks.append(("toolcall", call.name))
             blocks.append(("code", json.dumps(call.arguments, indent=2), "json"))
     return blocks
 
@@ -457,8 +456,10 @@ def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> 
         yield slug, _document_blocks(key, turns, truncate=truncate)
 
 
-def _parse_input(raw: str) -> Any:
-    """Decode one input file: a JSON document, or JSONL with one record or list per line."""
+def _read_input(path: str) -> Any:
+    """Read one input file through fsspec (local or object storage); JSON document or JSONL."""
+    with fsspec.open(path, "rt", encoding="utf-8") as handle:
+        raw = handle.read()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -479,7 +480,6 @@ def _write_documents(parsed: Any, out_dir: Path, *, html: bool, truncate: int, s
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI: render record JSON/JSONL files into Markdown (and optional HTML) documents."""
     parser = argparse.ArgumentParser(description="Render SkyRL rollout records as readable Markdown transcripts.")
     parser.add_argument("inputs", nargs="+", help="record .json (object or array) or .jsonl files")
     parser.add_argument("--out", required=True, help="directory to write rendered documents into")
@@ -489,7 +489,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir = Path(args.out)
     written = 0
     for path in args.inputs:
-        parsed = _parse_input(Path(path).read_text())
+        parsed = _read_input(path)
         written += _write_documents(parsed, out_dir, html=args.html, truncate=args.truncate, start_index=written)
     print(f"wrote {written} documents to {args.out}")
     return 0

@@ -9,7 +9,13 @@ A document is a sequence of tagged tuples: ("heading", level, text),
 """
 
 import html
+import re
 from collections.abc import Sequence
+
+
+def _longest_backtick_run(text: str) -> int:
+    """The longest run of backticks in `text`; a fence must be longer than it."""
+    return max((len(run) for run in re.split(r"[^`]+", text)), default=0)
 
 
 def to_markdown(blocks: Sequence[Sequence]) -> str:
@@ -24,8 +30,11 @@ def to_markdown(blocks: Sequence[Sequence]) -> str:
             case ("fields", entries):
                 lines += [f"- **{name}:** {value}" for name, value in entries if value != ""]
                 lines.append("")
+            case ("toolcall", name):
+                lines += [f"**Tool call: `{name}`**", ""]
             case ("code", text, language):
-                lines += [f"```{language}", text, "```", ""]
+                fence = "`" * max(3, _longest_backtick_run(text) + 1)
+                lines += [f"{fence}{language}", text, fence, ""]
             case ("details", summary, inner):
                 lines += ["<details>", f"<summary>{summary}</summary>", ""]
                 lines.append(to_markdown(inner))
@@ -40,14 +49,14 @@ def to_html(blocks: Sequence[Sequence]) -> str:
         parts: list[str] = []
         for block in inner:
             match block:
+                case ("toolcall", name):
+                    parts.append(f"<p><strong>Tool call: <code>{html.escape(name)}</code></strong></p>")
                 case ("heading", level, text):
                     parts.append(f"<h{level}>{html.escape(text)}</h{level}>")
                 case ("paragraph", text):
                     parts.append(f"<p>{html.escape(text)}</p>")
                 case ("fields", entries):
-                    rows = "".join(
-                        f"<tr><th>{html.escape(name)}</th><td>{html.escape(value)}</td></tr>" for name, value in entries
-                    )
+                    rows = "".join(f"<tr><th>{html.escape(n)}</th><td>{html.escape(v)}</td></tr>" for n, v in entries)
                     parts.append(f"<table>{rows}</table>")
                 case ("code", text, _):
                     parts.append(f"<pre><code>{html.escape(text)}</code></pre>")
