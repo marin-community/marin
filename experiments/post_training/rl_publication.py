@@ -234,7 +234,7 @@ def build_record(
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     gate_failure: bool = False,
-    pinned_commit: str | None = None,
+    control: bool = False,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
@@ -253,15 +253,6 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    base_commit = index.base_commit if index is not None else None
-    if (
-        base_commit is None
-        and pinned_commit is not None
-        and provenance.get("branch") == "main"
-        and provenance.get("dirty") is False
-        and provenance.get("base_commit") == pinned_commit
-    ):
-        base_commit = pinned_commit
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
@@ -288,8 +279,8 @@ def build_record(
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=True if pinned_commit is not None else index.is_control if index is not None else None,
-        base_commit=base_commit,
+        is_control=True if control else index.is_control if index is not None else None,
+        base_commit=index.base_commit if index is not None else None,
         base_preset_version=index.base_preset_version if index is not None else None,
         evaluation_data_identity=evaluation_data,
         user=index.user if index is not None else None,
@@ -438,7 +429,7 @@ def publish_runs(
     coordinator: str | None = None,
     interrupted: bool = False,
     gate_required: bool = False,
-    pinned_commit: str | None = None,
+    control: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     result = PublicationOutcome()
@@ -496,7 +487,7 @@ def publish_runs(
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     gate_failure=missing_gate,
-                    pinned_commit=pinned_commit,
+                    control=control,
                 )
                 if issue is not None:
                     assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
@@ -531,7 +522,7 @@ def publish_controls(
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,
-        pinned_commit=pin.commit,
+        control=True,
     )
     if result.unserved_records:
         result.retry = "Repeat the control publication command."

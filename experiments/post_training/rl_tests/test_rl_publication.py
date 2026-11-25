@@ -672,10 +672,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
-    for root in controls:
-        (root / RUN_INPUTS_FILENAME).unlink()
-    with edit_receipt(controls[0]) as receipt:
-        receipt["result"]["provenance"].update(branch="main", dirty=False, base_commit=pin.commit)
     command = CliRunner().invoke(
         publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
     )
@@ -688,12 +684,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     ]
     assert len(served_controls) == pin.replicates
     assert all(row["is_control"] for row in served_controls)
-    [main_control] = [row for row in served_controls if row.get("base_commit") is not None]
-    assert (main_control["branch"], main_control["base_commit"], main_control["commit"]) == (
-        "main",
-        pin.commit,
-        pin.commit,
-    )
+    assert all(row["base_commit"] is None for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

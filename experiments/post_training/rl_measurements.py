@@ -398,12 +398,7 @@ def _declared_evaluations(preset: presets.Preset) -> tuple[StoredEvaluation, ...
 def _recorded_evaluations(
     preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs
 ) -> tuple[StoredEvaluation, ...]:
-    declarations = inputs.evaluation_profiles
-    if declarations is None:
-        declarations = _declared_evaluations(preset)
-        primary_files = {source.relative_path for source in launch.validation_data}
-        if preset.evaluations and f"{preset.evaluations[0].file}.parquet" not in primary_files:
-            declarations = tuple(row for row in declarations if not row.primary)
+    declarations = inputs.evaluation_profiles or ()
     by_name = {profile.name: profile for profile in declarations if not profile.primary}
     profiles = []
     if launch.validation_data:
