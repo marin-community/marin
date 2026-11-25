@@ -14,6 +14,7 @@ from iris.resources.state import JobState
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import campaign_budget
+from experiments.post_training.task_curation.difficulty.campaign import identity_bundle
 from experiments.post_training.task_curation.difficulty.executor import (
     ATTEMPT_JOBS_PER_SOLVER,
     CONCURRENT_JOB_CAP,
@@ -21,8 +22,14 @@ from experiments.post_training.task_curation.difficulty.executor import (
     Job,
     collect_finished,
     execute_plan,
+    reconcile_once,
 )
-from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows, record_action_failure
+from experiments.post_training.task_curation.difficulty.ledger import (
+    append_rows,
+    digest,
+    read_rows,
+    record_action_failure,
+)
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
     RebuildEnvironmentArtifact,
@@ -231,3 +238,58 @@ def test_unreceipted_child_failure_never_claims_an_admission_receipt_is_missing(
     (failure,) = [row for row in additions if row.outcome == Outcome.ESCALATED]
     assert failure.reason == reason
     assert failure.error_identity == f"iris_child_{state}"
+
+
+def test_tpu_reconcile_uses_only_qualified_pools_and_admits_later_large(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    version = tmp_path / "ledger/v1"
+    (version / "imports").mkdir(parents=True)
+    (version / "imports/fixture.json").write_text("{}")
+    identity = identity_bundle()
+    (version / "campaign.json").write_text(json.dumps({"identity": identity, "campaign_id": digest(identity)}))
+    for solver, chips in ((Solver.SMALL, 64), (Solver.SNOWBALL, 64)):
+        (pools / (solver.value + ".json")).write_text(
+            json.dumps(
+                {
+                    "platform": "tpu",
+                    "chip_count": chips,
+                    "gpu_count": 0,
+                    "revision": "revision",
+                    "ready_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+        )
+    backend = JobStore(str(tmp_path / "jobs"))
+    ready = frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED})
+    reconcile_once(
+        ledger, [SOURCE], CoveragePolicy(), backend, EscalationLog(ledger), ready, frozenset(), None, str(pools)
+    )
+    submitted = [json.loads(p.read_text())["solver"] for p in (tmp_path / "jobs").glob("*.json")]
+    assert set(submitted) == {solver.value for solver in ready}
+    assert {row.solver for row in read_rows(ledger) if row.outcome == Outcome.COST} == {Solver.SMALL, Solver.SNOWBALL}
+    (pools / "large.json").write_text(
+        json.dumps(
+            {
+                "platform": "tpu",
+                "chip_count": 128,
+                "gpu_count": 0,
+                "revision": "revision",
+                "ready_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    reconcile_once(
+        ledger,
+        [SOURCE],
+        CoveragePolicy(),
+        backend,
+        EscalationLog(ledger),
+        frozenset(Solver),
+        frozenset(),
+        None,
+        str(pools),
+    )
+    submitted = [json.loads(p.read_text())["solver"] for p in (tmp_path / "jobs").glob("*.json")]
+    assert len(submitted) == 4 and set(submitted) == {solver.value for solver in Solver}

@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.difficulty.ledger import read_rows
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.runtime import solver_pool_record
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason, Outcome, TerminalRuling
+from experiments.post_training.task_curation.difficulty.tpu import CHIP_BUDGET, REGION, SHAPES
 from experiments.post_training.task_curation.difficulty_config import (
     SELF_HOSTED_SOLVERS,
     SOLVER_POOL_GPU_COUNT,
@@ -98,29 +99,20 @@ def run_controller(
         MARIN_DESKTOP_OAUTH_CLIENT.client_secret,
         require_secret("MARINA_IAP_REFRESH_TOKEN"),
     )
-    while serving_pool is not None:
+    while serving_pool is not None and campaign is None:
         if not all((StoragePath(serving_pool) / f"{solver.value}.json").exists() for solver in SELF_HOSTED_SOLVERS):
             LOGGER.info("DIFFICULTY_WAITING_FOR_MEASURED_SOLVER_POOLS %s", serving_pool)
             time.sleep(CONTROLLER_INTERVAL)
             continue
         pools = [solver_pool_record(solver, serving_pool) for solver in SELF_HOSTED_SOLVERS]
-        if campaign_record(ledger) is not None:
-            if any(pool.get("platform") != "tpu" or pool.get("region") != "us-central2" for pool in pools):
-                raise ValueError("TPU campaign has a non-regional or non-TPU solver pool")
-            chips = sum(pool["chip_count"] for pool in pools)
-            if chips < 256:
-                LOGGER.info("DIFFICULTY_WAITING_FOR_FULL_TPU_ALLOCATION chips=%d required=256", chips)
-                time.sleep(CONTROLLER_INTERVAL)
-                continue
-            if chips > 256:
-                raise ValueError("TPU campaign requires the measured 256-chip allocation")
-        elif sum(pool["gpu_count"] for pool in pools) != SOLVER_POOL_GPU_COUNT:
+        if sum(pool["gpu_count"] for pool in pools) != SOLVER_POOL_GPU_COUNT:
             raise ValueError("GPU solver pool allocation differs from the protocol's 64 GPUs")
         break
     reporting_started = datetime.now(UTC)
     if excluded_sources:
         LOGGER.warning("DIFFICULTY_SOURCE_QUARANTINE %s", json.dumps(sorted(excluded_sources)))
     while True:
+        qualified = qualified_tpu_solvers(serving_pool) if campaign is not None and serving_pool else None
         try:
             catalog = exclude_catalog_sources(
                 served_catalog(applet_id, token_provider=provider, ledger=ledger), excluded_sources
@@ -134,9 +126,13 @@ def run_controller(
         available = available_artifact_uris(cells)
         waiting = any(gap.reason == GapReason.PROVIDER_CAPACITY_WAIT for cell in cells for gap in cell.gaps)
         capacity = (
-            frozenset(Solver)
-            if serving_pool
-            else providers or (available_provider_solvers(ledger) if waiting else frozenset())
+            qualified
+            if qualified is not None
+            else (
+                frozenset(Solver)
+                if serving_pool
+                else providers or (available_provider_solvers(ledger) if waiting else frozenset())
+            )
         )
         result = reconcile_once(
             ledger, catalog, policy, backend, notifications, capacity, available, budget_gpu_hours, serving_pool
@@ -169,6 +165,28 @@ def run_controller(
             collect_finished(read_rows(ledger), backend.jobs(), ledger, notifications)
             return
         time.sleep(CONTROLLER_INTERVAL)
+
+
+def qualified_tpu_solvers(registry: str) -> frozenset[Solver]:
+    """Admit each solver only after its complete allocation publishes measured readiness."""
+    available = {Solver.HOSTED}
+    chips = 0
+    for solver, shape in SHAPES.items():
+        if not (StoragePath(registry) / f"{solver.value}.json").exists():
+            continue
+        pool = solver_pool_record(solver, registry)
+        if pool.get("platform") != "tpu" or pool.get("region") != REGION:
+            raise ValueError("TPU campaign has a non-regional or non-TPU solver pool")
+        target = shape.chips * shape.replicas
+        if pool["chip_count"] > target:
+            raise ValueError(f"TPU solver pool exceeds its measured allocation: {solver}")
+        chips += pool["chip_count"]
+        if pool["chip_count"] == target:
+            available.add(solver)
+    if chips > CHIP_BUDGET:
+        raise ValueError("TPU campaign exceeds the 256-chip allocation")
+    LOGGER.info("DIFFICULTY_QUALIFIED_SOLVERS %s", json.dumps(sorted(available)))
+    return frozenset(available)
 
 
 def controller_environment(secrets_env: Path | None) -> dict[str, str]:

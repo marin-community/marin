@@ -57,6 +57,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     LedgerRow,
     Outcome,
 )
+from experiments.post_training.task_curation.difficulty_config import SELF_HOSTED_SOLVERS
 
 CONCURRENT_JOB_CAP = 64
 REPAIR_JOB_SLOT_CAP = 8
@@ -276,12 +277,20 @@ def reconcile_once(
         with lease_refresh(lease):
             rows = read_rows(ledger)
             rows += collect_finished(rows, backend.jobs(), ledger, notifications)
+            tpu_campaign = campaign_record(ledger) is not None
             if serving_pool is not None:
-                rows += record_pool_cost(ledger, serving_pool, rows)
+                pools = available_providers if tpu_campaign else frozenset(SELF_HOSTED_SOLVERS)
+                rows += record_pool_cost(ledger, serving_pool, rows, solvers=pools)
             budget = campaign_budget(ledger, budget_limit_gpu_hours)
             cells = cells_for_catalog(rows, catalog, policy)
             actions = plan(cells, rows, available_providers, available_artifacts, ledger_root=ledger)
             if serving_pool is not None:
+                if tpu_campaign:
+                    actions = [
+                        action
+                        for action in actions
+                        if not isinstance(action, AttemptBatch) or action.solver in available_providers
+                    ]
                 for index, action in enumerate(actions):
                     if not isinstance(action, AttemptBatch):
                         continue

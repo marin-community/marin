@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
+from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.ledger import (
@@ -58,11 +59,17 @@ def campaign_budget(ledger: str, limit_gpu_hours: float | None) -> GpuBudget:
     return budget
 
 
-def record_pool_cost(ledger: str, registry: str, rows: Sequence[LedgerRow]) -> list[LedgerRow]:
+def record_pool_cost(
+    ledger: str,
+    registry: str,
+    rows: Sequence[LedgerRow],
+    *,
+    solvers: frozenset[Solver] = frozenset(SELF_HOSTED_SOLVERS),
+) -> list[LedgerRow]:
     """Account persistent allocation once, from warm readiness, across overlapping batches and restarts."""
     now = datetime.now(UTC)
     additions = []
-    for solver in SELF_HOSTED_SOLVERS:
+    for solver in sorted(solvers & frozenset(SELF_HOSTED_SOLVERS)):
         receipt_uri = str(StoragePath(registry) / f"{solver.value}.json")
         receipt = json.loads(StoragePath(receipt_uri).read_text())
         source = f"engine-pool:{solver.value}"

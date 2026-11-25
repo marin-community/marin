@@ -230,16 +230,22 @@ def test_launcher_loads_provider_credentials_from_explicit_file(tmp_path, monkey
     assert not any("file-" in argument for argument in command)
 
 
-def test_tpu_controller_waits_for_final_pool_allocation_before_submitting_work(tmp_path, monkeypatch):
+def test_tpu_controller_admits_ready_pools_then_large_after_its_full_receipt(tmp_path, monkeypatch):
     pools = tmp_path / "pools"
     pools.mkdir()
     for solver in controller.SELF_HOSTED_SOLVERS:
         (pools / (solver.value + ".json")).write_text("{}")
-    sleeps, reconciled = [], []
+    reconciled = []
 
     def pool(solver, registry):
-        chips = 128 if solver == Solver.LARGE and sleeps else 16 if solver == Solver.LARGE else 64
+        chips = 128 if solver == Solver.LARGE and reconciled else 32 if solver == Solver.LARGE else 64
         return {"platform": "tpu", "region": "us-central2", "chip_count": chips}
+
+    def reconcile(ledger, catalog, policy, backend, notifications, capacity, *args):
+        reconciled.append(capacity)
+        if len(reconciled) == 2:
+            raise StopIteration
+        return {}
 
     monkeypatch.setattr(controller, "iris_ctx", lambda: SimpleNamespace(client=None, job_id="fixture"))
     monkeypatch.setattr(controller, "IrisBackend", lambda *args: SimpleNamespace(jobs=lambda: []))
@@ -249,10 +255,10 @@ def test_tpu_controller_waits_for_final_pool_allocation_before_submitting_work(t
     monkeypatch.setattr(controller, "served_catalog", lambda *args, **kwargs: [])
     monkeypatch.setattr(controller, "read_rows", lambda ledger: [])
     monkeypatch.setattr(controller, "available_artifact_uris", lambda cells: frozenset())
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
-    monkeypatch.setattr(controller, "reconcile_once", lambda *args: reconciled.append(True) or {})
-    controller.run_controller(
-        str(tmp_path), "fixture", True, frozenset(), None, str(pools), excluded_sources=frozenset()
-    )
-    assert sleeps == [controller.CONTROLLER_INTERVAL]
-    assert reconciled == [True]
+    monkeypatch.setattr(controller.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(controller, "reconcile_once", reconcile)
+    with pytest.raises(StopIteration):
+        controller.run_controller(
+            str(tmp_path), "fixture", False, frozenset(), None, str(pools), excluded_sources=frozenset()
+        )
+    assert reconciled == [frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED}), frozenset(Solver)]
