@@ -14,6 +14,7 @@ rebuilt from those corpora.
 from dataclasses import dataclass
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metric,
@@ -39,7 +40,7 @@ from verifyit.modes.grade_judge import PAIRWISE_METRIC
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 INTERMEDIATE_REVISION = "bcd63e15ede5085f94fb14f5152f7daf1dc956a5"
 INTERMEDIATE_URL = f"https://huggingface.co/datasets/EconEvals/EconEvalsIntermediate/resolve/{INTERMEDIATE_REVISION}"
@@ -101,9 +102,12 @@ def econevals_source(
     rows = run.rows if per_category is None else per_category * run.categories
     return RlDataSource(
         info=SourceInfo(
-            id="EconEvals:" + run.run + suffix,
-            title=benchmark,
-            origin="EconEvals",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=run.run + suffix,
+            upstream_name=benchmark,
+            subset=None,
+            build_path="EconEvals",
+            origin=SourceOrigin.ECONEVALS,
             family="judged-preference",
             tags=("eval", "source:econevals", "single-turn", "benchmark", "llm-judge"),
             count=rows,

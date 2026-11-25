@@ -10,13 +10,14 @@ reasoning markup is well formed. The rows, one per benchmark task, were mined an
 on marin-logbooks branch ``codex/25-thoughtcrime`` (marin-community/marin-logbooks#25).
 """
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.pi_trajectory import prefix_row_task
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Controls, IntendedUse, Reply
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 REPOSITORY = "open-athena/Marin-Thoughtcrime"
 REVISION = "231751144c48b5553d5b921054b196e5e2d073f9"
@@ -43,9 +44,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id=SOURCE_ID,
-                title="Marin thoughtcrime: pi double-think prefixes",
-                origin="Marin",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="thoughtcrime",
+                upstream_name="thoughtcrime",
+                subset=None,
+                build_path="Marin",
+                origin=SourceOrigin.MARIN,
                 family=FAMILY,
                 tags=("eval", "single-turn", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl"),
                 count=328,

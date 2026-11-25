@@ -56,6 +56,14 @@ class PromptTokenizer(Protocol):
     async def __call__(self, payload: dict[str, Any]) -> Any: ...
 
 
+class PromptTokenizationError(RuntimeError):
+    """An unsuccessful tokenizer response from a direct model client."""
+
+    def __init__(self, status_code: int | None):
+        self.status_code = status_code
+        super().__init__(f"Policy tokenization failed (status {status_code})")
+
+
 def tokenize_url(api_base: str) -> str:
     """Return vLLM's server-root tokenization endpoint for an OpenAI API base."""
     base = api_base.rstrip("/")
@@ -157,7 +165,7 @@ class ModelRelay:
 
     complete: AgentCompletion
     tokenize: PromptTokenizer
-    upstream_failure: openai.APIError | None = field(default=None, init=False)
+    upstream_failure: Exception | None = field(default=None, init=False)
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
         if request.method != "POST" or request.path not in {CHAT_COMPLETIONS_PATH, TOKENIZE_PATH}:
@@ -195,12 +203,17 @@ class ModelRelay:
             if response is FAILED_RESPONSE:
                 self._record_failure(error)
             return response
+        except PromptTokenizationError as error:
+            response = upstream_error(error.status_code or 500, b"{}")
+            if response is FAILED_RESPONSE:
+                self._record_failure(error)
+            return response
         except openai.APIError as error:
             self._record_failure(error)
             return FAILED_RESPONSE
         return HttpResponse(200, json.dumps(tokens).encode())
 
-    def _record_failure(self, error: openai.APIError) -> None:
+    def _record_failure(self, error: Exception) -> None:
         if self.upstream_failure is None:
             self.upstream_failure = error
 

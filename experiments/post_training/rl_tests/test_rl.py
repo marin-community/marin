@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -121,6 +122,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
+    # Published train-long controls still contain defaults removed by the TaskSpec migration.
+    planned = configs["train-long"]
+    recorded = deepcopy(planned)
+    recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
+    del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
+    del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
+    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
+
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
     table = snowball_model.SNOWBALL
@@ -175,14 +184,8 @@ def test_plan_rejects_gated_preset_without_control_pin(selection):
             "trainer.train_batch_size=2",
             "lcm_dp_size=16",
         ),
-        (
-            "--plan",
-            ('terminal_bench={"harbor":{}}',),
-            "terminal_bench.harbor.eval_override_timeout_sec=180",
-            "Unknown Harbor task settings: ['eval_override_timeout_sec']",
-        ),
     ],
-    ids=["plan-batch-size", "run-batch-size", "plan-harbor-setting"],
+    ids=["plan-batch-size", "run-batch-size"],
 )
 def test_launcher_refuses_invalid_driver_settings(
     selection, preset_table, monkeypatch, capsys, mode, recipe_settings, override, reason
@@ -396,32 +399,19 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
-def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
     table = snowball_model.SNOWBALL
-    preset = table.by_name["train-long-harbor"]
-    with pytest.raises(click.BadParameter, match=r"Harbor evaluation requires generator\.enable_http_endpoint"):
-        snowball.build_experiment(preset, table=table, settings=("generator.enable_http_endpoint=false",))
-
-    wider_window = ("context_budget.serving_window_tokens=28672",)
-    paths = []
-    for index, (settings, output_cap) in enumerate((((), None), (wider_window, 4096), (wider_window, 28672))):
-        step = snowball.build_experiment(preset, table=table, settings=settings).runs[0]
-        path = tmp_path / f"harbor-{index}.yaml"
-        document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
-        if output_cap is not None:
-            callback = next(
-                row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
-            )
-            for cohort in callback["cohorts"]:
-                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = output_cap
-            if index == 1:
-                del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
-        path.write_text(yaml.safe_dump(document))
-        paths.append(str(path))
-    selected = run_native_test(
-        "cloud.iris.tests.native_harbor", paths, uv_options=("--isolated", "--group", "harbor-test")
-    )
-    assert selected == [True, False, False]
+    preset = table.by_name["train-long-checkpoint-eval"]
+    spec = recipe.run_spec(preset, name="checkpoint-evaluation-coverage", model_name=table.model)
+    step = recipe.run_step(preset, spec)
+    path = tmp_path / "checkpoint-evaluation.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+    results = run_native_test("cloud.iris.tests.native_checkpoint_coverage", [str(path)])
+    chosen, *rejected = results
+    assert chosen["attempted"] == 190
+    assert chosen["scored"] == 184
+    assert chosen["accuracy"] == pytest.approx(65.75 / 184)
+    assert rejected == [None] * 4
 
 
 @pytest.mark.parametrize(

@@ -191,7 +191,8 @@ _AGENTIC_LIMITS = agentic_limits(
     trial_timeout=14_400,
     agent_timeout=10_800,
     stall_timeout=28_800,
-).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
+    memory_mb=4096,
+)
 
 
 _TRAIN_LONG = Preset(
@@ -229,7 +230,7 @@ _TRAIN_MEDIUM = replace(
     evaluations=(),
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.7"
+    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.23.1"
 )
 
 MOCHI = ModelPresets(
@@ -238,7 +239,10 @@ MOCHI = ModelPresets(
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
-        agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
+        replace(
+            agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
+            revision=_TRAIN_LONG_AGENTIC.revision,
+        ),
         _TRAIN_LONG_AGENTIC,
         replace(
             agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),

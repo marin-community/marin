@@ -13,6 +13,7 @@ source has no controls and its kept rows are admitted without them.
 
 import tomllib
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -90,9 +91,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
-                title="laion/nemotron-gym-multichallenge-advanced-v4",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-multichallenge-advanced-v4",
+                upstream_name="laion/nemotron-gym-multichallenge-advanced-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
                 count=1068,

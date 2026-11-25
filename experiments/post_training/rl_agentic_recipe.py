@@ -6,12 +6,18 @@
 from dataclasses import replace
 from fractions import Fraction
 
-from rigging.task_errors import DEFAULT_RETRY_EXCLUSIONS
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
 
-from experiments.post_training.rl_presets import HARBOR_EVALUATION, BatchMix, Preset, Recipe
+from experiments.post_training.rl_presets import CHECKPOINT_EVALUATION, BatchMix, Preset, Recipe
+from experiments.post_training.task_curation.swesmith_training import (
+    SWESMITH_DATASET,
+    SWESMITH_MACHINE,
+    SWESMITH_PI_VERSION,
+    VERIFIER_TIMEOUT,
+)
 from experiments.post_training.task_curation.task_health import task_health_step
 
 # Gaps that a preset reports until it trains on the named tasks.
@@ -20,48 +26,31 @@ NO_IMAGE_SANDBOX = "no-image-sandbox"
 
 _BATCH_MIX = BatchMix({"agentic": Fraction(1, 2), "nonagentic": Fraction(1, 2)})
 _DAYTONA_RL_KEY = "DAYTONA_RL_API_KEY"
-_DAYTONA_EVAL_KEY = "DAYTONA_EVAL_API_KEY"
+_TRAINING_MACHINE_SLOTS = 256
 
 _AGENTIC_RECIPE = RecipePatch(
     environment=sections.Environment(
         task_sessions={
-            "daytona": {"api_key_env": _DAYTONA_RL_KEY, "eval_api_key_env": _DAYTONA_EVAL_KEY},
-            "task_spec": {"harness_by_dataset": {"long-loop-smartie-swesmith": "harbor_trial"}},
-        }
-    ),
-    terminal_bench={
-        "harbor": {
-            "environment_type": "daytona",
-            "daytona_api_key_env": _DAYTONA_RL_KEY,
-            "eval_daytona_api_key_env": _DAYTONA_EVAL_KEY,
-            "verifier_override_timeout_sec": 900,
-            "n_concurrent_trials": 256,
-            "max_retries": 1,
-            "enable_reward_shaping": False,
-            "exclude_exceptions": sorted(
-                DEFAULT_RETRY_EXCLUSIONS | {"AddTestsDirError", "DownloadVerifierDirError", "VerifierRuntimeError"}
-            ),
-        },
-        "installed_agent": {
-            "agent": {
-                "name": "pi",
-                "override_setup_timeout_sec": 360,
-                "kwargs": {
-                    "version": "0.87.0",
+            "daytona": {"api_key_env": _DAYTONA_RL_KEY},
+            "agent_harnesses": {
+                PI_HARNESS: {
+                    "version": SWESMITH_PI_VERSION,
                     "thinking": "high",
                     "thinking_format": "chat-template",
+                    "setup_timeout": 360,
                 },
             },
-            "setup_timeout": 1_800,
-            "cleanup_timeout": 120,
-            "service_startup_timeout": 60,
-            "service_shutdown_timeout": 60,
-        },
-    },
+            "task_spec": {"harness_by_dataset": {SWESMITH_DATASET: PI_HARNESS}},
+        }
+    ),
+    trajectory_runner=sections.TrajectoryRunner(max_concurrent_training_machine_tasks=_TRAINING_MACHINE_SLOTS),
 )
 
 
-def agentic_limits(*, trial_timeout: int, agent_timeout: int, stall_timeout: int) -> RecipePatch:
+def agentic_limits(
+    *, trial_timeout: int, agent_timeout: int, stall_timeout: int, memory_mb: int | None = None
+) -> RecipePatch:
+    machine = SWESMITH_MACHINE.model_copy(update={"memory_mb": memory_mb})
     return RecipePatch(
         environment=sections.Environment(
             task_sessions={
@@ -71,24 +60,15 @@ def agentic_limits(*, trial_timeout: int, agent_timeout: int, stall_timeout: int
                         "attempt_timeout": trial_timeout,
                         "total_turn_timeout": agent_timeout,
                         "model_turn_timeout": agent_timeout,
-                    }
+                        "verifier_timeout": VERIFIER_TIMEOUT,
+                    },
+                    "task_machine_by_dataset": {SWESMITH_DATASET: machine.model_dump(mode="json")},
                 },
             }
         ),
         trainer=sections.Trainer(
             algorithm=sections.Algorithm(group_admission=sections.GroupAdmission(stall_timeout=stall_timeout))
         ),
-        terminal_bench={
-            "harbor": {
-                "trial_attempt_timeout_sec": trial_timeout,
-                "override_timeout_sec": agent_timeout,
-                "eval_timeout_override_sec": agent_timeout,
-            },
-            "installed_agent": {
-                "agent": {"kwargs": {"http_idle_timeout": agent_timeout}},
-                "run_timeout": agent_timeout,
-            },
-        },
     )
 
 
@@ -109,7 +89,7 @@ def agentic_preset(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
         name=name,
         tasks_input="required",
         batch_mix=_BATCH_MIX,
-        harbor=HARBOR_EVALUATION if preset.evaluations else None,
+        checkpoint_evaluation=CHECKPOINT_EVALUATION if preset.evaluations else (),
         then=task_health_step,
         recipe=_task_recipe(preset.recipe, _AGENTIC_RECIPE, limits, max_turns=128),
     )
