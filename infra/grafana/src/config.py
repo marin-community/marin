@@ -270,6 +270,44 @@ class BridgeConfig:
         )
 
 
+# The cluster a local bridge serves: its IAP route is the marin controller's
+# finelog endpoint, the federation hub, which sees the whole fleet.
+LOCAL_FINELOG_CLUSTER = "marin"
+
+
+@dataclasses.dataclass(frozen=True)
+class LocalFinelog:
+    """A workstation bridge's route to finelog, in place of Direct VPC egress.
+
+    url is an ``iap+https://`` URL such as
+    ``iap+https://iris.oa.dev/proxy/system.log-server``; the IAP token comes from the
+    login ``iris --cluster marin login`` cached. max_concurrent_queries bounds the
+    queries in flight to finelog.
+    """
+
+    url: str
+    max_concurrent_queries: int
+
+
+def local_finelog_from_environment() -> LocalFinelog | None:
+    """Read the local finelog route, or None for the deployed (VPC) bridge.
+
+    Both variables are required together, so a local bridge always states its
+    concurrency bound.
+    """
+    url = os.environ.get("GRAFANA_BRIDGE_LOCAL_FINELOG_URL") or None
+    slots = os.environ.get("GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES") or None
+    if url is None and slots is None:
+        return None
+    if url is None or slots is None:
+        raise ValueError(
+            "GRAFANA_BRIDGE_LOCAL_FINELOG_URL and GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES are set together"
+        )
+    if not url.startswith("iap+https://"):
+        raise ValueError(f"GRAFANA_BRIDGE_LOCAL_FINELOG_URL must be an iap+https:// URL, got {url!r}")
+    return LocalFinelog(url=url, max_concurrent_queries=int(slots))
+
+
 def _github_app_credentials() -> GithubAppCredentials | None:
     """Resolve GitHub App credentials from the environment; fail fast on a partial set."""
     client_id = os.environ.get("GITHUB_APP_CLIENT_ID") or None

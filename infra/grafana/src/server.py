@@ -109,9 +109,11 @@ from config import (
     GITHUB_REPO,
     HERO_OPERATOR_BEHAVIOR,
     K8S_CLUSTERS,
+    LOCAL_FINELOG_CLUSTER,
     STORAGE_OPERATOR_BEHAVIOR,
     BridgeConfig,
     ClusterTarget,
+    local_finelog_from_environment,
 )
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -119,7 +121,7 @@ from dashboard_dataset import DashboardDataset, SourceQuery, project_dataset, va
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
-from finelog_source import FinelogSource, MetricSource
+from finelog_source import FinelogSource, IapFinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
@@ -1553,7 +1555,26 @@ def create_app(
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = BridgeConfig.from_environment()
-    finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    local_finelog = local_finelog_from_environment()
+    finelog_sources: dict[str, MetricSource]
+    if local_finelog is None:
+        finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    else:
+        target = next(c for c in CLUSTERS if c.name == LOCAL_FINELOG_CLUSTER)
+        finelog_sources = {
+            target.name: IapFinelogSource(
+                target,
+                local_finelog.url,
+                timeout_ms=config.query_timeout_ms,
+                max_concurrent_queries=local_finelog.max_concurrent_queries,
+            )
+        }
+        logger.info(
+            "local bridge: finelog %s through %s, at most %d queries in flight",
+            target.name,
+            local_finelog.url,
+            local_finelog.max_concurrent_queries,
+        )
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     if config.github_app_credentials is None:
         logger.warning("no GitHub App credentials; GitHub panels run unauthenticated and the build panel shows no data")

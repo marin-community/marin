@@ -1323,3 +1323,29 @@ def test_training_moe_health_queries_show_routing_signals():
     assert query("token_drops") == [(at, 0.04, 0.03, 0.02, 0.07)]
     assert query("router_health") == [(at, 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
     assert query("parameter_norms") == [(at, 4800.0, 200.0)]
+
+
+LOCAL_DASHBOARDS = DASHBOARDS / "local"
+
+
+def _finelog_sql(panel: dict) -> list[str]:
+    """The SQL of every target in ``panel`` that queries finelog through the bridge."""
+    sql = []
+    for target in panel.get("targets") or []:
+        if str(target.get("url", "")).startswith("/finelog/"):
+            params = target.get("url_options", {}).get("params", [])
+            sql += [param["value"] for param in params if param["key"] == "sql"]
+    return sql
+
+
+@pytest.mark.parametrize("path", sorted(LOCAL_DASHBOARDS.glob("*.json")), ids=lambda path: path.name)
+def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
+    """local/compose.yaml queries the production hub live, and a dashboard load fires
+    every panel at once: no auto-refresh, and every query bounded by the range."""
+    dashboard = json.loads(path.read_text())
+
+    assert dashboard.get("refresh", "") == ""
+    queries = [sql for panel in dashboard["panels"] for sql in _finelog_sql(panel)]
+    assert queries
+    for sql in queries:
+        assert "{{from}}" in sql and "{{to}}" in sql, sql

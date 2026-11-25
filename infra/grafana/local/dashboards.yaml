@@ -1,0 +1,18 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local replacement for provisioning/dashboards/marin.yaml (see compose.yaml): it
+# provisions only the dashboards under development, re-read every 10 s from the
+# worktree, so an edit to the JSON shows on the next reload.
+apiVersion: 1
+
+providers:
+  - name: marin-local
+    orgId: 1
+    folder: Local
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/dashboards-local

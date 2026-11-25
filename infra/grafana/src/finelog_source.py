@@ -25,6 +25,8 @@ from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 from google.api_core.retry import if_transient_error
 from relay_health import RelaySenderStatus, relay_sender_statuses
+from rigging.connect import IapAuth, connect
+from rigging.credentials import iap_provider_for
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,40 @@ class MetricSource(Protocol):
     def health(self) -> FinelogHealth: ...
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
+
+
+def probe_health(source: MetricSource) -> FinelogHealth:
+    """Run a one-row query on ``source`` and return a dashboard-safe health row."""
+    name = source.target.name
+    started = time.monotonic()
+    try:
+        source.query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+    except StatsError as err:
+        reported_error = err.__cause__ if isinstance(err, FinelogUnavailableError) else err
+        assert isinstance(reported_error, Exception)
+        logger.warning("finelog health query failed for %s: %s", name, reported_error)
+        return FinelogHealth(
+            cluster=name,
+            server=f"finelog-{name}",
+            role=FinelogRole.HUB,
+            responsive=False,
+            ready=0,
+            desired=1,
+            latency_ms=None,
+            error_class=type(reported_error).__name__,
+            error=str(reported_error),
+        )
+    return FinelogHealth(
+        cluster=name,
+        server=f"finelog-{name}",
+        role=FinelogRole.HUB,
+        responsive=True,
+        ready=1,
+        desired=1,
+        latency_ms=round((time.monotonic() - started) * 1000),
+        error_class="",
+        error="",
+    )
 
 
 class FinelogSource:
@@ -97,35 +133,7 @@ class FinelogSource:
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""
-        started = time.monotonic()
-        try:
-            self.query('SELECT * FROM "log" LIMIT 1', max_rows=1)
-        except StatsError as err:
-            reported_error = err.__cause__ if isinstance(err, FinelogUnavailableError) else err
-            assert isinstance(reported_error, Exception)
-            logger.warning("finelog health query failed for %s: %s", self._target.name, reported_error)
-            return FinelogHealth(
-                cluster=self._target.name,
-                server=f"finelog-{self._target.name}",
-                role=FinelogRole.HUB,
-                responsive=False,
-                ready=0,
-                desired=1,
-                latency_ms=None,
-                error_class=type(reported_error).__name__,
-                error=str(reported_error),
-            )
-        return FinelogHealth(
-            cluster=self._target.name,
-            server=f"finelog-{self._target.name}",
-            role=FinelogRole.HUB,
-            responsive=True,
-            ready=1,
-            desired=1,
-            latency_ms=round((time.monotonic() - started) * 1000),
-            error_class="",
-            error="",
-        )
+        return probe_health(self)
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         # Grafana is deployed from an independent lockfile, so this wire call cannot
@@ -145,3 +153,55 @@ class FinelogSource:
             if self._relay_address is None:
                 self._relay_address = self._resolve_address(self._target.name)
             return self._relay_address
+
+
+class IapFinelogSource:
+    """A query handle for a finelog reached through the Iris IAP proxy, for a local bridge.
+
+    The deployed bridge reaches finelog by internal IP over Direct VPC egress, which a
+    workstation cannot. This source takes the route ``uv run finelog query`` uses: an
+    ``iap+https://`` URL, with the IAP token minted per request from the login that
+    ``iris --cluster <name> login`` cached. The provider reads that login and never
+    writes it. ``max_concurrent_queries`` bounds the queries in flight to finelog, since
+    a dashboard load fires every panel at once.
+    """
+
+    def __init__(self, target: ClusterTarget, url: str, *, timeout_ms: int, max_concurrent_queries: int) -> None:
+        if max_concurrent_queries < 1:
+            raise ValueError(f"max_concurrent_queries must be at least 1, got {max_concurrent_queries}")
+        self._target = target
+        self._client = connect(
+            url,
+            lambda endpoint: LogClient.connect(endpoint.url, interceptors=endpoint.interceptors, timeout_ms=timeout_ms),
+            auth=IapAuth(iap_provider_for(target.name)),
+        )
+        self._slots = threading.BoundedSemaphore(max_concurrent_queries)
+
+    @property
+    def target(self) -> ClusterTarget:
+        return self._target
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        """Run SQL once a slot is free, classifying transport failures as retryable."""
+        with self._slots:
+            try:
+                return self._client.query(sql, max_rows=max_rows)
+            except StatsError as err:
+                cause = err.__cause__
+                if isinstance(cause, Exception) and is_retryable_error(cause):
+                    raise FinelogUnavailableError(str(err)) from err
+                raise
+            except OSError as err:
+                raise FinelogUnavailableError(str(err)) from err
+
+    def namespaces(self) -> frozenset[str]:
+        """Return the namespaces this deployment holds."""
+        with self._slots:
+            return frozenset(info.namespace for info in self._client.list_namespaces())
+
+    def health(self) -> FinelogHealth:
+        """Probe the query path and return a dashboard-safe health row."""
+        return probe_health(self)
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        raise FinelogUnavailableError("relay status is not served through the local IAP route")

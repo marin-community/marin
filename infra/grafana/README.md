@@ -840,6 +840,37 @@ curl -s 'http://localhost:3000/api/search?type=dash-db'
 curl -s http://localhost:3000/api/dashboards/uid/marin-accel
 ```
 
+### Run locally against prod
+
+To develop a dashboard against real data, `local/compose.yaml` runs the same image
+with the bridge reaching the prod `marin` finelog hub through the Iris IAP proxy,
+the route `uv run finelog query marin` takes:
+
+```bash
+uv run iris --cluster marin login            # once; caches the IAP login
+docker compose -f infra/grafana/local/compose.yaml up --build
+# → http://127.0.0.1:3000
+```
+
+The bridge mints the IAP token for each request from the cached login, which
+compose mounts read-only from `~/.config/marin/credentials/marin.json`. No other
+credential is involved. Setting `GRAFANA_BRIDGE_LOCAL_FINELOG_URL` (an
+`iap+https://` URL) and `GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES`
+together switches the bridge to this route; unset, it uses Direct VPC egress as
+deployed.
+
+Every panel query reaches the production hub, so the local setup holds the load down:
+
+- Only the `marin` hub is served, with at most one query in flight to it.
+- Alert rules load but never evaluate (`GF_UNIFIED_ALERTING_EXECUTE_ALERTS=false`).
+- Only the dashboards in `dashboards/local/` are provisioned, re-read every 10 s,
+  so opening Grafana does not fire the production dashboards' queries.
+- Grafana listens on 127.0.0.1 only. Anonymous users are Admin, so panels can be
+  edited and saved.
+
+Keep a dashboard under development on a short default range with auto-refresh
+off, and bound every query by the dashboard range.
+
 ## Deploy
 
 Pulumi owns the deploy: the runtime service account, Artifact Registry repo and image, the

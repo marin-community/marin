@@ -1,0 +1,43 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run the Marin Grafana image on a workstation against the prod `marin` finelog hub,
+# to develop dashboards. See "Run locally against prod" in ../README.md.
+#
+#   uv run iris --cluster marin login        # once; caches the IAP login
+#   docker compose -f infra/grafana/local/compose.yaml up --build
+#   open http://127.0.0.1:3000
+#
+# The bridge reaches finelog through the Iris IAP proxy, as `uv run finelog query
+# marin` does, with the IAP token minted from the cached login. The login file is
+# mounted read-only and nothing in this file holds a credential. Only the `marin`
+# hub is served, at most one query is in flight to it, alert rules load but never
+# evaluate, and only the dashboards in ../dashboards/local/ are provisioned, so
+# opening Grafana cannot fire the production dashboards' queries at the hub.
+name: marin-grafana-local
+
+services:
+  grafana:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marin-grafana:local
+    ports:
+      # Loopback only: the local Grafana has no login (anonymous Admin below).
+      - "127.0.0.1:3000:8080"
+    environment:
+      GRAFANA_BRIDGE_LOCAL_FINELOG_URL: iap+https://iris.oa.dev/proxy/system.log-server
+      GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES: "1"
+      # Local editing: anonymous users can change and save dashboards.
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_UNIFIED_ALERTING_EXECUTE_ALERTS: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards-local/topline.json
+    volumes:
+      - ${HOME}/.config/marin/credentials/marin.json:/home/grafana/.config/marin/credentials/marin.json:ro
+      - ./dashboards.yaml:/etc/grafana/provisioning/dashboards/marin.yaml:ro
+      - ../dashboards/local:/etc/grafana/dashboards-local:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  # Grafana's SQLite database (local users, stars, UI edits), kept across restarts.
+  grafana-data:

@@ -1,0 +1,580 @@
+{
+  "uid": "marin-topline",
+  "title": "Top line (prototype)",
+  "description": "Weekly top-line GPU numbers per cluster, prototype on live Finelog tables. Definitions: docs/references/compute-utilization.md (W3).",
+  "tags": [
+    "marin",
+    "prototype"
+  ],
+  "timezone": "utc",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "type": "custom",
+        "label": "Cluster",
+        "multi": true,
+        "includeAll": true,
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a",
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "GPU-hours held",
+      "description": "CoreWeave GPUs the node agent sees (hardware_inventory rows x 60 s), in the time range. Reads about 1% low: collections are 60.7 s apart, not 60 s.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 5
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^held_gpu_hours$/"
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "GPU-hours busy (SM-active)",
+      "description": "Each 60 s GPU sample weighted by gpu_sm_active_ratio (W3's top-line busy).",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 5
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^sm_active_gpu_hours$/"
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "GPU-hours tensor-active",
+      "description": "Each 60 s GPU sample weighted by gpu_tensor_active_ratio: an efficiency figure beside busy.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 5
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/^tensor_active_gpu_hours$/"
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Per cluster",
+      "description": "Held, busy and tensor-active GPU-hours per CoreWeave cluster in the time range, and busy as a share of held.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 5
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "cluster": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "held_gpu_hours": {
+                "aggregations": [
+                  "sum"
+                ],
+                "operation": "aggregate"
+              },
+              "sm_active_gpu_hours": {
+                "aggregations": [
+                  "sum"
+                ],
+                "operation": "aggregate"
+              },
+              "tensor_active_gpu_hours": {
+                "aggregations": [
+                  "sum"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "alias": "busy / held",
+            "binary": {
+              "left": "sm_active_gpu_hours (sum)",
+              "operator": "/",
+              "right": "held_gpu_hours (sum)"
+            },
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "held_gpu_hours (sum)": "held GPU-h",
+              "sm_active_gpu_hours (sum)": "busy (SM-active) GPU-h",
+              "tensor_active_gpu_hours (sum)": "tensor-active GPU-h"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "busy / held"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Held and busy GPUs per hour",
+      "description": "GPU-hours per hour bucket, per cluster: held (solid) and SM-active busy (dashed). This panel's query also feeds the stats and the per-cluster table.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT cluster, date_bin(INTERVAL '1 hour', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS hour, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60 / 3600.0 AS held_gpu_hours, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60 / 3600.0 AS sm_active_gpu_hours, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60 / 3600.0 AS tensor_active_gpu_hours FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY cluster, hour ORDER BY cluster, hour"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "hour",
+              "text": "hour",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "held_gpu_hours",
+              "text": "held_gpu_hours",
+              "type": "number"
+            },
+            {
+              "selector": "sm_active_gpu_hours",
+              "text": "sm_active_gpu_hours",
+              "type": "number"
+            },
+            {
+              "selector": "tensor_active_gpu_hours",
+              "text": "tensor_active_gpu_hours",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "pointSize": 5,
+            "showPoints": "always"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/sm_active/"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/tensor_active/"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Levanter training runs: MFU",
+      "description": "Runs that logged throughput_mfu to levanter.metrics in the time range: median MFU per run. Levanter training only (pretraining, SFT, DPO); RL and inference are not covered.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, job_id, run_id, median(value) AS median_mfu, count(DISTINCT step) AS steps, max(step) AS last_step FROM \"levanter.metrics\" WHERE name = 'throughput_mfu' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, job_id, run_id ORDER BY steps DESC LIMIT 200"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "job_id",
+              "text": "job_id",
+              "type": "string"
+            },
+            {
+              "selector": "run_id",
+              "text": "run_id",
+              "type": "string"
+            },
+            {
+              "selector": "median_mfu",
+              "text": "median_mfu",
+              "type": "number"
+            },
+            {
+              "selector": "steps",
+              "text": "steps",
+              "type": "number"
+            },
+            {
+              "selector": "last_step",
+              "text": "last_step",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 18,
+        "x": 6,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "median_mfu"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "steps",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Mean of per-run median MFU (unweighted)",
+      "description": "Unweighted: every Levanter run in the table counts once, whatever its size or GPU-hours.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 6
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 0,
+        "y": 20
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "mean"
+          ],
+          "fields": "/^median_mfu$/"
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "text",
+      "title": "Not on this dashboard yet",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "- **GPU-hours allocated** (and TPU chip-hours): needs a precomputed table. The live query must read weeks of `iris.controller_db__task_attempts` and `job_config` to catch long attempts, and even a 1-day lookback took 14 s on the hub.\n- **Weekly figures**: about one day of `node_agent` GPU rows per cluster is the most a query can scan in Finelog's 10 s.\n- **Use by category**: waits for the job tag column (W2).\n- **TPUs held**: not timed yet.\n\nThis dashboard queries the prod `marin` hub live: keep the range short (default 1 h) and leave auto-refresh off."
+      }
+    }
+  ]
+}

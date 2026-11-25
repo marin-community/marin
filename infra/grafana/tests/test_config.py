@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from config import BridgeConfig
+from config import BridgeConfig, LocalFinelog, local_finelog_from_environment
 
 LOOM_ENV = (
     "LOOM_ALERT_URL",
@@ -69,3 +69,40 @@ def test_a_secret_payload_with_a_trailing_newline_is_usable(monkeypatch):
     assert config.loom_alerts is not None
     assert config.loom_alerts.slack.bot_token == "xoxb-test"
     assert config.loom_alerts.slack.channel == "C0123ABCD"
+
+
+LOCAL_FINELOG_ENV = ("GRAFANA_BRIDGE_LOCAL_FINELOG_URL", "GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES")
+LOCAL_URL = "iap+https://iris.example.com/proxy/system.log-server"
+
+
+def test_the_deployed_bridge_has_no_local_finelog_route(monkeypatch):
+    for name in LOCAL_FINELOG_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    assert local_finelog_from_environment() is None
+
+
+def test_a_local_bridge_states_its_route_and_concurrency_bound(monkeypatch):
+    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_URL", LOCAL_URL)
+    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES", "2")
+
+    assert local_finelog_from_environment() == LocalFinelog(url=LOCAL_URL, max_concurrent_queries=2)
+
+
+@pytest.mark.parametrize("present", LOCAL_FINELOG_ENV)
+def test_a_half_configured_local_route_fails_fast(monkeypatch, present):
+    for name in LOCAL_FINELOG_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(present, LOCAL_URL if present.endswith("_URL") else "1")
+
+    with pytest.raises(ValueError, match="set together"):
+        local_finelog_from_environment()
+
+
+def test_a_local_route_must_go_through_iap(monkeypatch):
+    """A plain URL would send queries with no IAP token."""
+    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_URL", "https://iris.example.com/proxy/system.log-server")
+    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES", "1")
+
+    with pytest.raises(ValueError, match="iap"):
+        local_finelog_from_environment()
