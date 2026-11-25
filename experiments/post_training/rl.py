@@ -610,9 +610,11 @@ def _watch_publication(
             if is_job_finished(state):
                 break
             if time.monotonic() >= deadline:
-                raise click.ClickException(
-                    f"Timed out waiting for {watch.job}. Check its Iris state before resubmitting with --wait."
+                click.echo(
+                    f"Timed out waiting for {watch.job}. Check its Iris state before resubmitting with --wait.",
+                    err=True,
                 )
+                raise click.exceptions.Exit(EXIT_CODES[None])
             time.sleep(_PUBLICATION_POLL_SECONDS)
     gate_path = None
     try:
