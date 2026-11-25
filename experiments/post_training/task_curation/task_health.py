@@ -31,6 +31,7 @@ from marin.rl.skyrl_records import read_skyrl_launch_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from rigging.task_errors import setup_exit_is_task_failure
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
@@ -290,7 +291,7 @@ def publish_skip_list(
             row["phase"] == Phase.TASK_SETUP
             and row["setup_completed"] is False
             and (
-                0 < setup_exit_code < 128
+                setup_exit_is_task_failure(setup_exit_code)
                 if setup_exit_code is not None
                 else HARBOR_SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
             )
