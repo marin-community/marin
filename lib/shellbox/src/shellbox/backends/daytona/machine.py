@@ -428,21 +428,20 @@ class DaytonaMachine:
         prefix: str,
         pidfile: str,
         completed_path: str,
-        launch_requested: bool,
+        stop_command: bool,
         cancellation: asyncio.CancelledError,
     ) -> None:
         try:
-            if launch_requested:
+            if stop_command:
                 await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
-            # Cancellation during staging leaves only private files. Keeping the machine
-            # available lets the verifier grade work from commands that already finished.
+            # Keeping the machine available lets the verifier grade completed work.
             await finish_owned(own_cleanup(self._remove_command_files(prefix)))
         except BaseException as cleanup_error:
             cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
             try:
                 await finish_owned(own_cleanup(self._close_after(cleanup_error)))
             except BaseException as close_error:
-                cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+                cancellation.add_note(f"Daytona machine cleanup failed: {close_error!r}")
 
     @asynccontextmanager
     async def _provider_failures(self) -> AsyncIterator[None]:
@@ -600,7 +599,8 @@ class DaytonaMachine:
                 try:
                     await self._remove_command_files(prefix)
                 except asyncio.CancelledError as cancellation:
-                    await self._close_preserving_failure(cancellation)
+                    stop_needed = launch_requested and primary_error is not None and exit_code is None
+                    await self._cleanup_cancelled_command(prefix, pidfile, completed_path, stop_needed, cancellation)
                     raise
                 except Exception as error:
                     if primary_error is None:

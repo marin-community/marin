@@ -1275,6 +1275,44 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
 
 @pytest.mark.requires_host_setsid
+def test_daytona_cancellation_during_command_file_removal_preserves_machine(tmp_path):
+    removing = asyncio.Event()
+
+    class InterruptedRemoval(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.interrupted = False
+
+        async def exec(self, command, **kwargs):
+            if "rm -rf /tmp/.shellbox-" in command and not self.interrupted:
+                self.interrupted = True
+                await super().exec(command, **kwargs)
+                removing.set()
+                await asyncio.Future()
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = InterruptedRemoval()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            pending = asyncio.create_task(machine.run(Command(("sh", "-c", "echo 12 > answer"))))
+            await asyncio.wait_for(removing.wait(), timeout=5)
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError, match="agent deadline"):
+                await pending
+            graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.deleted and not client.closed
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
 def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
     output_error = TimeoutError("Provider output request timed out")
 
