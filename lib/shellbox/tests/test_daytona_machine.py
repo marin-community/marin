@@ -82,6 +82,27 @@ from shellbox.machine import (
 from yarl import URL
 
 
+def sandbox_json(sandbox_id: str, state: str, toolbox_url: str) -> dict:
+    """A Daytona API sandbox record named ``fixture``."""
+    return {
+        "id": sandbox_id,
+        "organizationId": "fixture",
+        "name": "fixture",
+        "user": "root",
+        "env": {},
+        "labels": {},
+        "public": False,
+        "networkBlockAll": False,
+        "target": "us",
+        "cpu": 2,
+        "gpu": 0,
+        "memory": 4,
+        "disk": 10,
+        "state": state,
+        "toolboxProxyUrl": toolbox_url,
+    }
+
+
 @pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
 def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
     async def scenario():
@@ -120,27 +141,11 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             ):
                 created = True
                 return web.json_response(
-                    {
-                        "id": "created-once",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "started",
-                        "toolboxProxyUrl": (
-                            ""
-                            if failure == "late_get" and request.method == "POST"
-                            else "https://fixture.invalid/toolbox"
-                        ),
-                    }
+                    sandbox_json(
+                        "created-once",
+                        "started",
+                        "" if failure == "late_get" and request.method == "POST" else "https://fixture.invalid/toolbox",
+                    )
                 )
             return web.json_response(
                 {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
@@ -193,25 +198,7 @@ def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailabl
     async def scenario():
         async def endpoint(request):
             if request.method == "POST":
-                return web.json_response(
-                    {
-                        "id": "removed",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "starting",
-                        "toolboxProxyUrl": "https://fixture.invalid/toolbox",
-                    }
-                )
+                return web.json_response(sandbox_json("removed", "starting", "https://fixture.invalid/toolbox"))
             return web.json_response({"message": "Sandbox with ID or name removed not found"}, status=404)
 
         app = web.Application()
