@@ -13,6 +13,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import DifficultySample
 from pydantic import BaseModel, ConfigDict, Field
 
+from experiments.post_training.task_curation.difficulty.resource_deviations import ResourceDeviation
 from experiments.post_training.task_curation.difficulty_config import (
     DECLARED_JUDGE_ENV_VAR,
     DECLARED_JUDGE_PINS,
@@ -60,6 +61,7 @@ class PreparedTask(BaseModel):
     backend: str
     reason: str | None
     judge_model: str | None
+    resource_deviation: ResourceDeviation | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class PreparedSource(BaseModel):

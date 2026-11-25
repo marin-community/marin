@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -138,6 +138,30 @@ def execute_task(
     source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
     task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = output / source_key / "attempts"
+    if task.resource_deviation is not None:
+        deviation_path = destination / task_key / "resource-deviation.json"
+        deviation_path.parent.mkdirs(exist_ok=True)
+        write_json_evidence(deviation_path, asdict(task.resource_deviation))
+        append_rows(
+            ledger,
+            [
+                LedgerRow(
+                    population_revision(source.sample.model_dump(mode="json")),
+                    source.sample.source_id,
+                    task.resource_deviation.task_sha256,
+                    config.solver,
+                    digest([str(deviation_path), task.resource_deviation.version]),
+                    Outcome.OBSERVATION,
+                    None,
+                    str(output.parent),
+                    0.0,
+                    datetime.now(UTC).isoformat(),
+                    task_id=task.task_id,
+                    evidence_uri=str(deviation_path),
+                    resource_deviation=task.resource_deviation,
+                )
+            ],
+        )
     meter.start(task_key)
     recorder = partial(
         record_attempt, source=source, config=config, output=output, ledger=ledger, meter=meter, task_key=task_key
@@ -190,6 +214,7 @@ def execute_task(
             capability=gap.capability,
             secondary_gaps=gaps[1:],
             evidence_uri=str(destination / task_key),
+            resource_deviation=task.resource_deviation,
         )
     append_rows(ledger, [row])
 

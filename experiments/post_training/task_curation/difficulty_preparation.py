@@ -27,6 +27,8 @@ from experiments.post_training.task_curation.difficulty.campaign import (
     record_judge_redeclaration,
     redeclare_judge,
 )
+from experiments.post_training.task_curation.difficulty.importer import population_revision
+from experiments.post_training.task_curation.difficulty.resource_deviations import prepare_resource_deviation
 from experiments.post_training.task_curation.difficulty_artifacts import restore_original_lock
 from experiments.post_training.task_curation.difficulty_config import (
     DECLARED_JUDGE_ENV_VAR,
@@ -207,6 +209,18 @@ def prepare_source(source: DifficultySource, root: Path, *, judge_version: str |
                 )
                 (directory / "original-judge-task.toml").write_text(original)
                 config_path.write_text(tomlkit.dumps(config))
+        deviation = (
+            prepare_resource_deviation(
+                source.sample.source_id,
+                population_revision(source.sample.model_dump(mode="json")),
+                task.id,
+                selected.task_sha256,
+                contract["runtime_sha256"],
+                directory,
+            )
+            if native and reason is None
+            else None
+        )
         prepared.append(
             PreparedTask(
                 task_id=task.id,
@@ -216,12 +230,17 @@ def prepare_source(source: DifficultySource, root: Path, *, judge_version: str |
                 # The frozen backend auto-chooses Daytona for static-safe sources; a source whose
                 # actor image exceeds the Daytona snapshot limit reruns on the LOCAL backend, and
                 # a grader that drops privileges to a fixed uid routes up to Daytona.
-                backend=grader_tier_backend(
-                    "local" if source.sample.source_id in LOCAL_ACTOR_SOURCES else source.backend,
-                    native=native,
-                    requires_multi_uid=grader_requires_multi_uid(task.model_dump(mode="json")),
+                backend=(
+                    "daytona"
+                    if deviation is not None
+                    else grader_tier_backend(
+                        "local" if source.sample.source_id in LOCAL_ACTOR_SOURCES else source.backend,
+                        native=native,
+                        requires_multi_uid=grader_requires_multi_uid(task.model_dump(mode="json")),
+                    )
                 ),
                 reason=reason,
+                resource_deviation=deviation,
                 judge_model=(served_judge if served_judge is not None else None if judge is None else judge.model),
             )
         )

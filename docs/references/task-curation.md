@@ -2708,6 +2708,16 @@ batch runs at most four grader workers. The required `device-type=cpu` constrain
 image extraction and workspace files off TPU hosts' boot disks. Serving remains
 on TPUs, with the frozen TaskSpecs and source deadlines preserved.
 
+The versioned `swe-rebench-daytona-cap-20261125-v1` exception runs the pinned
+SWE-rebench native tasks on Daytona at 4 vCPU, 8 GiB RAM and 10 GiB disk,
+instead of their declared 6/24/32 shape. Its immutable authority binds the
+frozen population and task hashes. Harbor receives explicit environment
+resource overrides; the original TaskSpecs, native files and phase deadlines
+stay unchanged. Each attempt receipt, difficulty ledger row and cell status
+report carries the declared and actual allocations, version and Daytona-cap
+cause. Other sources and populations do not receive this exception.
+
+
 The reconciler schedules `RecheckExecutabilityAdmission` for every
 `EXECUTABILITY_ADMISSION_PENDING` source/solver cell, regardless of capability
 detail text. Cells using the same frozen SAMPLE panel share one bounded CPU job.

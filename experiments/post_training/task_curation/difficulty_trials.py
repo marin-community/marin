@@ -678,6 +678,18 @@ def trial_environment_options(
     return options
 
 
+def trial_environment_config(task: PreparedTask, options: dict) -> EnvironmentConfig:
+    """Keep frozen native bytes while applying the authorized Daytona resource condition."""
+    overrides = {}
+    if task.resource_deviation is not None:
+        if task.path is None:
+            raise ValueError("A resource-deviated trial requires its original native package")
+        overrides = task.resource_deviation.environment_overrides(
+            Path(task.path), backend=task.backend, workload=task.workload
+        )
+    return EnvironmentConfig(type=task.backend, kwargs=options, env=trial_persistent_environment(task), **overrides)
+
+
 def run_task(
     task: PreparedTask,
     config: CandidateRun,
@@ -771,7 +783,7 @@ def run_task(
                 model_alias=f"openai/{config.api_model}",
                 kwargs=kwargs,
             ),
-            environment=EnvironmentConfig(type=task.backend, kwargs=options, env=trial_persistent_environment(task)),
+            environment=trial_environment_config(task, options),
             environment_build_timeout_multiplier=(
                 LOCAL_IMAGE_START_ALLOWANCE_SEC / HARBOR_DEFAULT_BUILD_TIMEOUT_SEC if task.backend == "local" else None
             ),
@@ -823,6 +835,11 @@ def run_task(
         copy(str(archive), str(archive_target), no_clobber=True)
         raw_receipt = {
             "task_id": task.task_id,
+            **(
+                {"resource_deviation": dataclasses.asdict(task.resource_deviation)}
+                if task.resource_deviation is not None
+                else {}
+            ),
             "result": result.model_dump(mode="json"),
             "archive": str(archive_target),
             "archive_sha256": file_sha256(StoragePath(str(archive))),

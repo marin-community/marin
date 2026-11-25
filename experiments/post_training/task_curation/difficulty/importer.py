@@ -11,6 +11,7 @@ from dataclasses import asdict, replace
 from functools import cache, partial
 
 from finestore.rl.difficulty import Solver
+from pydantic import TypeAdapter
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -23,6 +24,7 @@ from experiments.post_training.task_curation.difficulty.ledger import (
     read_rows,
 )
 from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, legacy_gaps
+from experiments.post_training.task_curation.difficulty.resource_deviations import ResourceDeviation
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, Gap, GapReason, LedgerRow, Outcome
 
 LOGGER = logging.getLogger(__name__)
@@ -107,6 +109,11 @@ def receipt_row(reference: dict, sample: dict, solver: Solver, run: str, recorde
         judge_temperature=gap.judge_temperature,
         error_identity=gap.error_identity,
         secondary_gaps=gaps[1:],
+        resource_deviation=(
+            TypeAdapter(ResourceDeviation).validate_python(attempt["resource_deviation"])
+            if attempt.get("resource_deviation") is not None
+            else None
+        ),
     )
 
 

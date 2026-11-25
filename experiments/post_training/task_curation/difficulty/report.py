@@ -81,6 +81,7 @@ def status_report(
                 "n_missing": cell.n_missing,
                 "gaps": [asdict(gap) for gap in cell.gaps],
                 "job_ids": cell.job_ids,
+                "resource_deviations": [asdict(deviation) for deviation in cell.resource_deviations],
                 "actions": by_cell[(cell.source.source_id, cell.solver)],
             }
             for cell in cells

@@ -10,6 +10,8 @@ from enum import StrEnum
 from finestore.rl.curation import SourceUse
 from finestore.rl.difficulty import Solver
 
+from experiments.post_training.task_curation.difficulty.resource_deviations import ResourceDeviation
+
 REPAIR_BLOCKED = "blocked"
 
 
@@ -106,6 +108,16 @@ class LedgerRow:
     error_identity: str | None = None
     secondary_gaps: tuple[Gap, ...] = ()
     queue_sha256: str | None = None
+    resource_deviation: ResourceDeviation | None = None
+
+    def __post_init__(self) -> None:
+        deviation = self.resource_deviation
+        if deviation is not None and (self.source_id, self.task_id, self.task_sha256) != (
+            deviation.source_id,
+            deviation.task_id,
+            deviation.task_sha256,
+        ):
+            raise ValueError("Ledger resource deviation belongs to another frozen task")
 
     @property
     def gap(self) -> Gap | None:
@@ -173,6 +185,7 @@ class CellState:
     gaps: tuple[Gap, ...]
     evidence_ids: tuple[str, ...]
     job_ids: tuple[str, ...] = ()
+    resource_deviations: tuple[ResourceDeviation, ...] = ()
 
     @property
     def n_missing(self) -> int:
@@ -193,6 +206,13 @@ def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solve
         and row.solver == solver
         and row.registry_revision == source.registry_revision
     }
+    conditions = {
+        row.resource_deviation.version if row.resource_deviation is not None else None
+        for row in rows.values()
+        if row.outcome == Outcome.SCORED and (row.task_id, row.task_sha256) in source.tasks
+    }
+    if len(conditions) > 1:
+        raise ValueError("A difficulty cell cannot mix scored execution-resource conditions")
     missing = []
     for task_id, sha in source.tasks:
         n = sum(
@@ -301,4 +321,14 @@ def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solve
             )
         ),
         jobs,
+        tuple(
+            sorted(
+                {
+                    row.resource_deviation
+                    for row in rows.values()
+                    if row.resource_deviation is not None and (row.task_id, row.task_sha256) in source.tasks
+                },
+                key=lambda deviation: (deviation.version, deviation.task_id),
+            )
+        ),
     )

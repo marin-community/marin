@@ -10,8 +10,10 @@ from dataclasses import asdict
 from functools import lru_cache
 
 from finestore.rl.difficulty import Solver
+from pydantic import TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.difficulty.resource_deviations import ResourceDeviation
 from experiments.post_training.task_curation.difficulty.state import (
     ActionFailure,
     ArtifactKind,
@@ -67,6 +69,14 @@ def repair_verification_sources(ledger: str) -> frozenset[str]:
     return frozenset(verified)
 
 
+def row_payload(row: LedgerRow) -> dict:
+    """Preserve the original wire bytes when an optional resource deviation is absent."""
+    payload = asdict(row)
+    if payload["resource_deviation"] is None:
+        del payload["resource_deviation"]
+    return payload
+
+
 def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
     """Return the immutable partition URI, or None for an empty batch.
 
@@ -77,7 +87,7 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
     if (StoragePath(root) / LEDGER_VERSION / "closed.json").exists():
         raise ValueError(f"Difficulty ledger is sealed: {root}")
     payload = "".join(
-        json.dumps(asdict(row), sort_keys=True) + "\n" for row in sorted(rows, key=lambda row: row.attempt_id)
+        json.dumps(row_payload(row), sort_keys=True) + "\n" for row in sorted(rows, key=lambda row: row.attempt_id)
     )
     key = hashlib.sha256(payload.encode()).hexdigest()
     path = StoragePath(root) / LEDGER_VERSION / "rows" / f"{key}.jsonl"
@@ -120,6 +130,8 @@ def decode_partition_rows(payload: bytes) -> tuple[LedgerRow, ...]:
             )
             for gap in value.get("secondary_gaps", [])
         )
+        if value.get("resource_deviation") is not None:
+            value["resource_deviation"] = TypeAdapter(ResourceDeviation).validate_python(value["resource_deviation"])
         row = LedgerRow(**value)
         decoded.append(row)
     return tuple(decoded)
