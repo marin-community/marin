@@ -606,16 +606,7 @@ class Checkpointer:
             self._manager.wait_until_finished()
             return
         if force and step == self._last_save_step and self.temporary_base_path is None:
-            # Promote the committed temporary save without rewriting its arrays or manifest.
-            self._manager.wait_until_finished()
-            # Match save_checkpoint's path so the temporary retention entry can be removed.
-            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
-            if jax.process_index() == 0:
-                metadata = load_checkpoint_metadata(checkpoint_path)
-                _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=metadata)
-                self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
-                self._prune_temporary_checkpoints(0)
-            self._last_save_permanent = True
+            self._promote_temporary_checkpoint(step)
             return
 
         my_should_save = force or requested_retention is not None
@@ -672,6 +663,17 @@ class Checkpointer:
                 base_path_override=save_base_path,
                 metadata=model.checkpoint_metadata() if isinstance(model, CheckpointMetadataProvider) else None,
             )
+
+    def _promote_temporary_checkpoint(self, step: int) -> None:
+        self._manager.wait_until_finished()
+        if jax.process_index() == 0:
+            # Match save_checkpoint's path so the temporary retention entry can be removed.
+            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
+            metadata = load_checkpoint_metadata(checkpoint_path)
+            _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=metadata)
+            self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
+            self._prune_temporary_checkpoints(0)
+        self._last_save_permanent = True
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
         """Request a checkpoint on the next step.
@@ -1146,7 +1148,7 @@ def load_checkpoint_or_initialize(
 def load_checkpoint_metadata(checkpoint_path, fs=None) -> dict[str, Any]:
     """Read a concrete checkpoint's ``metadata.json``: step, timestamp, retention, and application metadata."""
     if fs is None:
-        fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
+        return json.loads(StoragePath(prefix_join(str(checkpoint_path), CHECKPOINT_METADATA_FILENAME)).read_text())
     with fs.open(os.path.join(checkpoint_path, CHECKPOINT_METADATA_FILENAME)) as metadata_in:
         metadata = json.load(metadata_in)
     return metadata
