@@ -141,7 +141,6 @@ EVALS: dict[str, EvaluationSelection] = {
 JUDGES: dict[str, EvaluationOverrides] = {
     name: EvaluationOverrides.model_validate(entry) for name, entry in _CONFIG["judges"].items()
 }
-"""Hosted judges that evaluations above and eval policies share, each a deployment, endpoint and key."""
 
 
 def evaluation_for(name: str) -> EvaluationSelection:

@@ -39,15 +39,18 @@ def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe
 def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
     """Choose a server window for a resolved evaluation.
 
-    Benchmarks that enforce their own window, which ``resolve`` made the evaluation's context, request
-    ``served``, the candidate's window after the checkpoint clamps it; others request a server at the
-    evaluation's context.
+    A benchmark that runs at its own window requests ``served``, the candidate's window after the checkpoint
+    clamps it. An agent run below its input limit, and a benchmark with no window of its own, request a
+    server at the evaluation's context, which the agent's input then fills.
     """
     own = benchmark_window(item.evaluation, item.candidate)
-    if own is None:
-        return item.context
-    if served is None or served < own:
-        raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {own}")
+    if own is None or item.context < own.tokens:
+        window = item.context
+        if own is not None and (served is None or served < window):
+            raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {window}")
+        return window
+    if served is None or served < own.tokens:
+        raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {own.tokens}")
     return served
 
 
