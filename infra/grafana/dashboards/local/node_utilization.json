@@ -1,7 +1,7 @@
 {
   "uid": "marin-node-utilization",
   "title": "Node utilization (prototype)",
-  "description": "What ran on one node in the time range, what it asked for, and what the node and each attempt used. Three hub queries per load.",
+  "description": "What ran on one node in the time range, what it asked for, and what the node and each attempt used. Four hub queries per load: the node list and three panel queries.",
   "tags": [
     "marin",
     "prototype"
@@ -20,14 +20,80 @@
   "templating": {
     "list": [
       {
-        "name": "node",
-        "type": "textbox",
-        "label": "Node (Kubernetes node or GCP worker id)",
-        "query": "",
+        "name": "cluster",
+        "type": "custom",
+        "label": "Cluster",
+        "multi": true,
+        "includeAll": true,
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a",
         "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "node",
+        "label": "Node",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "description": "CoreWeave nodes that reported GPU inventory in the time range.",
+        "definition": "nodes with GPU inventory in the range",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-node",
+          "infinityQuery": {
+            "refId": "variable-node",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT node_name AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": false,
           "text": "",
           "value": ""
-        }
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "sort": 1,
+        "regex": "",
+        "hide": 0
       }
     ]
   },

@@ -1352,6 +1352,12 @@ def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
 
     assert dashboard.get("refresh", "") == ""
     queries = [sql for panel in dashboard["panels"] for sql in _finelog_sql(panel)]
+    for variable in dashboard.get("templating", {}).get("list", []):
+        if variable.get("type") == "query":
+            infinity = variable["query"]["infinityQuery"]
+            queries += _finelog_sql(
+                {"title": variable["name"], "datasource": variable["datasource"], "targets": [infinity]}
+            )
     assert queries
     for sql in queries:
         assert "{{from}}" in sql and "{{to}}" in sql, sql
