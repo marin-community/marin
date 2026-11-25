@@ -28,7 +28,7 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
   whose replies often hit their output cap or whose attempts often went unscored.
 - `verify` checks any run against the policy and names each field that differs.
 
-All three need `DAYTONA_TARGET` set (for the agentic evaluations) and CoreWeave credentials.
+All three need CoreWeave credentials.
 
 ## Candidates
 
