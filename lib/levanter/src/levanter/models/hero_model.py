@@ -565,10 +565,14 @@ class HeroTransformer(eqx.Module):
     def init(cfg: HeroConfig, *, key: PRNGKeyArray) -> "HeroTransformer":
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         return HeroTransformer(
-            token_embed=_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std, _EMBED_PARTITION_SPEC),
+            token_embed=_init_weight(
+                embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std, _EMBED_PARTITION_SPEC
+            ),
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
-            output_proj=_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std, _LM_HEAD_PARTITION_SPEC),
+            output_proj=_init_weight(
+                out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std, _LM_HEAD_PARTITION_SPEC
+            ),
             stacked_blocks=ArrayStacked.init(cfg.num_layers, HeroBlock)(cfg, key=jnp.stack(block_keys)),
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),

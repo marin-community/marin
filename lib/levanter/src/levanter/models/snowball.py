@@ -289,7 +289,8 @@ class SnowballConfig(HFCompatConfig):
 
     @classmethod
     def matches_hf_config(cls, hf_config: HfConfig) -> bool:
-        return getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, 1) == GRUG_MOE_ARTIFACT_SCHEMA_VERSION
+        schema = getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GRUG_MOE_ARTIFACT_SCHEMA_VERSION)
+        return hf_config.model_type == GRUG_MOE_MODEL_TYPE and schema == GRUG_MOE_ARTIFACT_SCHEMA_VERSION
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "SnowballConfig":

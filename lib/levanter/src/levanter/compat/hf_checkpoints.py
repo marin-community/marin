@@ -15,7 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -293,9 +293,9 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
     @classmethod
-    def matches_hf_config(cls, hf_config: HfConfig) -> bool:
-        """Disambiguate model recipes that share a Hugging Face configuration class."""
-        return True
+    def matches_hf_config(cls, hf_config: HfConfig) -> bool | None:
+        """Recognize an explicit checkpoint recipe, or defer to the converter when returning None."""
+        return None
 
     @abc.abstractmethod
     def hf_checkpoint_converter(cls) -> "HFCheckpointConverter":
@@ -586,43 +586,50 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
-        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
-        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
-        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
-        # needs those imports to have already run.
-        LmConfig.get_known_choices()
+        # Model plugins register custom Transformers config classes at import time.
+        known_configs = LmConfig.get_known_choices()
         with _patch_hf_hub_download():
             hf_config = AutoConfig.from_pretrained(
                 ref.model_name_or_path, revision=ref.revision, trust_remote_code=trust_remote_code
             )
-        config_class = type(hf_config)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
-        # TODO: this is very hacky, we should add another registry or something
-        # attempt to find the Levanter config class by checking the registry
-        # TODO: hacky hacky
-        for k, v in LmConfig.get_known_choices().items():
-            if issubclass(v, HFCompatConfig):
-                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
-                # requires max_seq_len; at runtime every registered choice is a concrete config
-                # that supplies a default, so the no-arg construction is safe.
-                instance = v()  # pyrefly: ignore[missing-argument]
-                # Inspect the serialized config directly. Constructing each candidate's
-                # converter would load unrelated reference tokenizers (including gated models).
-                candidate_config_class = type(instance.to_hf_config(hf_config.vocab_size))
-                if candidate_config_class is config_class and v.matches_hf_config(hf_config):
-                    LevConfigClass = v
-                    break
+        deferred = []
+        for candidate in known_configs.values():
+            if not issubclass(candidate, HFCompatConfig):
+                continue
+            matches = candidate.matches_hf_config(hf_config)
+            if matches:
+                config_class = candidate
+                break
+            if matches is None:
+                deferred.append(candidate)
         else:
-            raise ValueError(f"No Levanter config found for {config_class}")
+            config_class = HFCheckpointConverter._match_converter_config(hf_config, deferred)
 
         return HFCheckpointConverter(
-            LevConfigClass=LevConfigClass,
+            LevConfigClass=config_class,
             reference_checkpoint=ref,
-            HfConfigClass=config_class,
-            tokenizer=tokenizer,
+            HfConfigClass=type(hf_config),
             trust_remote_code=trust_remote_code,
         )
+
+    @staticmethod
+    def _match_converter_config(
+        hf_config: HfConfig, candidates: Sequence[type[HFCompatConfig]]
+    ) -> type[HFCompatConfig]:
+        """Match legacy recipes by the Transformers class declared by their converter."""
+        config_name = type(hf_config).__name__
+        for candidate in candidates:
+            # Defaults for other architectures can load gated tokenizers.
+            try:
+                instance = candidate()  # pyrefly: ignore[missing-argument]
+                candidate_config = instance.hf_checkpoint_converter().HfConfigClass
+            except Exception:
+                logger.debug("Skipping %s during HF config resolution", candidate.__name__, exc_info=True)
+                continue
+            if candidate_config.__name__ == config_name:
+                return candidate
+        raise ValueError(f"No Levanter config found for {type(hf_config)}")
 
     def replaced(
         self,

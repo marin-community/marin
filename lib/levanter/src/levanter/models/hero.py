@@ -14,7 +14,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.grug.attention import GrugAttentionImplementation, PagedAttentionImplementation, RotaryConfig
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.models.snowball import GrugMoeHfConfig
+from levanter.models.snowball import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GRUG_MOE_MODEL_TYPE, GrugMoeHfConfig
 
 
 _HERO_SCHEMA_VERSION = 2
@@ -110,11 +110,14 @@ class HeroConfig(HFCompatConfig):
 
     @classmethod
     def matches_hf_config(cls, hf_config: PretrainedConfig) -> bool:
-        return getattr(hf_config, "grugmoe_artifact_schema_version", None) == _HERO_SCHEMA_VERSION
+        return (
+            hf_config.model_type == GRUG_MOE_MODEL_TYPE
+            and getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, None) == _HERO_SCHEMA_VERSION
+        )
 
     @classmethod
     def from_hf_config(cls, hf_config: PretrainedConfig) -> "HeroConfig":
-        if hf_config.model_type != "grug_moe" or not cls.matches_hf_config(hf_config):
+        if not cls.matches_hf_config(hf_config):
             raise ValueError("Hero requires a grug_moe schema-v2 checkpoint")
         if getattr(hf_config, "grugmoe_attention_mode", None) != "production":
             raise ValueError("Hero requires production attention")
