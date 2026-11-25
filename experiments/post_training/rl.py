@@ -579,8 +579,7 @@ def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
             cli = Path(__file__).with_name("rl_preset_cli.py")
             shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
             native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            if not (path / native_cli).is_file():
-                shutil.copyfile(root / native_cli, path / native_cli)
+            shutil.copyfile(root / native_cli, path / native_cli)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
                 [

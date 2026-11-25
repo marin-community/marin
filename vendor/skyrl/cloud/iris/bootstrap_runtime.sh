@@ -41,7 +41,7 @@ else
   runtime_extras=(--extra "$profile" --extra vllm --extra telemetry)
 fi
 
-required_python_minor="3.12"
+required_python_minor="$(cat "$project_root/.python-version")"
 system_python="$(command -v "python$required_python_minor" || true)"
 if [[ -z "$system_python" ]]; then
   echo "required system interpreter python$required_python_minor is unavailable ($(uv --version))" >&2
@@ -67,13 +67,13 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
 
 python="$environment/bin/python"
 checks="$project_root/cloud/iris/runtime_checks.py"
-printf 'PATH=%s\0' "$environment/bin" > "$runtime_file"
+"$python" -I "$project_root/marinskyrl/environment_contract.py" write-task-runtime "$runtime_file" "$profile" "$project_root"
 if [[ "$profile" == hub-publish ]]; then
-  "$python" "$checks" hub-publish
+  "$python" -I "$checks" hub-publish
   exit 0
 fi
-"$python" "$project_root/marinskyrl/environment_contract.py" write-frozen-cuda-runtime "$runtime_file"
-source "$project_root/cloud/iris/load_runtime_environment.sh" "$runtime_file"
+source "$project_root/cloud/iris/load_runtime_environment.sh"
+load_runtime_environment "$runtime_file"
 # FlashInfer's CUDA 13 JIT still links through CUDA_HOME/lib64, while the
 # NVIDIA wheel installs its libraries in CUDA_HOME/lib.
 if [[ ! -e "$CUDA_HOME/lib64" ]]; then
@@ -95,13 +95,13 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-run_check flash-attention "$python" "$checks" flash-attention
-run_check megatron "$python" "$checks" megatron
+run_check flash-attention "$python" -I "$checks" flash-attention
+run_check megatron "$python" -I "$checks" megatron
 if [[ "$profile" == *-export ]]; then
-  run_check export "$python" "$checks" export
+  run_check export "$python" -I "$checks" export
 else
-  run_check agents "$python" "$checks" agents
-  run_check vllm "$python" "$checks" vllm
+  run_check agents "$python" -I "$checks" agents
+  run_check vllm "$python" -I "$checks" vllm
 fi
 
 check_status=0

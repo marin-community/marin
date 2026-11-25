@@ -28,6 +28,7 @@ from cloud.iris.rl_data import (
     compute_num_inference_engines,
     resolve_rl_train_data_with_sources,
 )
+from marinskyrl.environment_contract import skyrl_source_paths
 from marinskyrl.process_diagnostics import ProcessOutcomeKind, write_process_outcome
 from marinskyrl.resource_locator import is_cloud_uri, model_source_for_path
 from cloud.iris.launch_config import RunMode, load_launch_config
@@ -83,12 +84,10 @@ class LocalRLRunner:
         skyrl_home = os.environ.get("SKYRL_HOME")
         if skyrl_home and Path(skyrl_home).exists():
             print(f"SkyRL home: {skyrl_home}")
-            skyrl_train = os.path.join(skyrl_home, "skyrl-train")
-            if skyrl_train not in sys.path:
-                sys.path.insert(0, skyrl_train)
-            pythonpath = os.environ.get("PYTHONPATH", "")
-            if skyrl_train not in pythonpath:
-                os.environ["PYTHONPATH"] = f"{skyrl_train}:{pythonpath}"
+            source_paths = skyrl_source_paths(skyrl_home)
+            sys.path[:0] = [path for path in source_paths if path not in sys.path]
+            inherited = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+            os.environ["PYTHONPATH"] = os.pathsep.join(dict.fromkeys((*source_paths, *filter(None, inherited))))
         else:
             print("\nWARNING: SKYRL_HOME not found! Set SKYRL_HOME to the MarinSkyRL clone.")
 
@@ -174,18 +173,12 @@ class LocalRLRunner:
             self._write_resolved_config(launch_config)
             return self._run_skyrl(launch_config)
         self._resolve_data_inputs(str(launch_config.inputs.data_kind), launch_config.inputs.get("evaluation_data"))
-        terminal_bench_data = skyrl_config.get("data", {}).get("terminal_bench_data", ())
-        if terminal_bench_data:
-            terminal_bench_data = tuple(
-                resolve_rl_train_data_with_sources(list(terminal_bench_data), kind="tasks").paths
-            )
         self._setup_environment()
         skyrl_config = apply_task_local_values(
             skyrl_config,
             TaskLocalSkyRLValues(
                 train_data=tuple(self.config.train_data),
                 validation_data=tuple(self.config.val_data),
-                terminal_bench_data=terminal_bench_data,
                 evaluation_data=tuple(self._evaluation_data.items()),
             ),
         )

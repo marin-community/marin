@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import statistics
@@ -30,10 +31,11 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLSpec,
+    prepare_skyrl_cpu_python,
     read_skyrl_attempt,
-    skyrl_cpu_command,
-    skyrl_cpu_environment,
+    run_skyrl_cpu,
     skyrl_execution,
+    skyrl_project_root,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt, read_stored_skyrl_attempts
@@ -64,6 +66,11 @@ GATE_REVISION = "2026.11.25"
 CONTROL_COUNT = 5
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
+_NATIVE_PREPARATION_TIMEOUT = 300
+_NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
+_NATIVE_ERROR = "native configuration cannot be composed"
+
+logger = logging.getLogger(__name__)
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -520,6 +527,17 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     config = deepcopy(launch)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
         del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
+    data = config["skyrl"]["data"]
+    # Saved controls still record unused task-cache and source-binding defaults.
+    data.pop("task_cache_dir", None)
+    if data.get("terminal_bench_data") == []:
+        del data["terminal_bench_data"]
+    task_sessions = config["skyrl"].get("environment", {}).get("task_sessions", {})
+    if task_sessions.get("agent_harnesses") == {}:
+        del task_sessions["agent_harnesses"]
+    trajectory_runner = config["skyrl"].get("trajectory_runner", {})
+    if trajectory_runner.get("max_concurrent_training_machine_tasks") is None:
+        trajectory_runner.pop("max_concurrent_training_machine_tasks", None)
     inputs = launch["inputs"]
 
     def replace_alias(path, aliases, replacement):
@@ -704,39 +722,73 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_json(*command: str, timeout: int = 120):
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            env=skyrl_cpu_environment(),
-            text=True,
-            timeout=timeout,
+def _native_diagnostic(
+    error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired, progress: Path | None
+) -> str:
+    phase = progress.read_text().strip() if progress is not None and progress.exists() else ""
+    if isinstance(error, OSError):
+        cause, diagnostic = error.strerror or str(error), ""
+    else:
+        cause = (
+            f"timed out after {error.timeout:g} s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"exited with status {error.returncode}"
         )
-        result.check_returncode()
-        return json.loads(result.stdout.splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        diagnostic = next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), "")
+    context = " ".join(part for part in (phase, cause, diagnostic) if part)
+    return redact_string("".join(char for char in context if char.isprintable()))[:400]
+
+
+def _native_config(operation: str, *args: str, checkout: Path | None = None):
+    checkout = checkout or skyrl_project_root()
+    preparation = "Prepare SkyRL CPU environment"
+    started = monotonic()
+    try:
+        interpreter = prepare_skyrl_cpu_python(_NATIVE_PREPARATION_TIMEOUT, project_root=checkout)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise InvalidComparison(
+            f"{_NATIVE_ERROR}: {preparation} after {monotonic() - started:.2f} s. {_native_diagnostic(error, None)}"
+        ) from error
+    logger.info("%s took %.2f s", preparation, monotonic() - started)
+    with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
+        progress = Path(directory) / "stage"
+        command = [
+            str(interpreter),
+            "-I",
+            "-m",
+            _NATIVE_CONFIG_MODULE,
+            "--checkout",
+            str(checkout),
+            "--progress-file",
+            str(progress),
+            *args,
+        ]
+        started = monotonic()
+        try:
+            result = run_skyrl_cpu(command, timeout=120)
+            result.check_returncode()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise InvalidComparison(
+                f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. "
+                f"{_native_diagnostic(error, progress)}"
+            ) from error
+        logger.info("%s took %.2f s", operation, monotonic() - started)
+        output = result.stdout.strip()
+        if not output:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
+        try:
+            return json.loads(output.splitlines()[-1])
+        except ValueError as error:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
-    return _native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        "compose",
-        *options,
-        "--",
-        *paths,
-    )
+    return _native_config(f"Compose {len(paths)} native launch config(s)", "compose", *options, "--", *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:

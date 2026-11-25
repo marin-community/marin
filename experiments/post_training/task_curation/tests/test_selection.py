@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_manifest
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
@@ -187,6 +188,22 @@ def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "trai
 
 def read_tasks(path: Path) -> list[TaskSpec]:
     return [TaskSpec.model_validate_json(row["task_spec"]) for row in pq.read_table(path).to_pylist()]
+
+
+def test_a_selection_recipe_resolves_historical_source_ids(tmp_path: Path):
+    """Historical recipe keys resolve through the alias table at the selection boundary."""
+    settings = recipe(tmp_path).model_copy(
+        update={"sources": {"MarinSkyRL:eurus2_code": "calendar", "fixture:second": "calendar"}}
+    )
+    curated = {
+        "PRIME-RL:eurus2_code": admitted_source(
+            tmp_path / "first", [source_task(f"first-{index}") for index in range(2)]
+        ),
+        "fixture:second": admitted_source(tmp_path / "second", [source_task("second-only")]),
+    }
+    output = run(task_selection_step(curated, settings))[0]
+    tasks = read_tasks(Path(output.path) / TRAIN_FILENAME)
+    assert {task.id for task in tasks} <= {"first-0", "first-1", "second-only"}
 
 
 @pytest.mark.parametrize("mode", ["sample", "full"])
@@ -636,13 +653,17 @@ def test_grader_admission_preserves_published_selection_fingerprints():
 
     def curated(sources):
         return {
-            name: ArtifactStep.adopt(f"inputs/source-{index}", "2026.11.19.1", f"/fixtures/corpus/source-{index}")
+            canonical_source_id(name): ArtifactStep.adopt(
+                f"inputs/source-{index}", "2026.11.19.1", f"/fixtures/corpus/source-{index}"
+            )
             for index, name in enumerate(sorted(set(sources)))
         }
 
     training_sources = curated(training.sources)
     assert "released" not in training.model_dump(mode="json")
-    assert task_selection_step(training_sources, training).fingerprint() == "7fb51836"
+    # The recipe's historical source keys resolve through the alias table before the step
+    # fingerprints them, so the pinned shape is the canonicalized recipe's.
+    assert task_selection_step(training_sources, training).fingerprint() == "8df74822"
     explicit = training.model_copy(update={"admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE}})
     assert task_selection_step(training_sources, explicit).fingerprint() != "7fb51836"
     evaluation_sources = curated(part.source_id for part in evaluation.sources)
@@ -1048,8 +1069,8 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
     families = {task_id: row.family for task_id, row in annotations.items()}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
-    assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
-    assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
+    assert counts["Evalchemy:questions"]["overlap"] == counts["Nemotron:predicted-action"]["overlap"] == 1
+    assert counts["Nemotron:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
     assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
     saturated = fast[-1]
     measured_tasks = [task for task in full if task.id != saturated.id] + [saturated]
@@ -1170,7 +1191,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         publish_eval_lite(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
 
 
-LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: NeMo:predicted-action"
+LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: Nemotron:predicted-action"
 PROXY = ("eval", "tool-call-proxy")
 TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "judge": (

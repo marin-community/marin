@@ -15,7 +15,6 @@ from skyrlrecipe.ownership import LAUNCH_PATHS
 
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
-from cloud.iris.rl_data import resolve_rl_train_data_with_sources
 from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
@@ -28,7 +27,6 @@ FILL_WHEN_UNSET = frozenset(
         "trainer.placement.policy_num_nodes",
         "trainer.placement.ref_num_nodes",
         "generator.num_inference_engines",
-        "terminal_bench.installed_agent.output_path",
     }
 )
 
@@ -46,14 +44,12 @@ def leaves(document: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> Iterato
 def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
     source.write_text(
-        "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
+        "context_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
     )
     parsed = launcher.parse_rl_config(OmegaConf.load(source))
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
-    full["terminal_bench"] = full.pop("terminal_bench_config")
-    full["terminal_bench"]["installed_agent"] = {"output_path": "author-output"}
-    for path in OPEN | {"terminal_bench"}:
+    for path in OPEN:
         set_path(full, f"{path}.author_options", {"label": "authored", "items": ["authored", {"enabled": True}]})
     parameters = {
         "job_name": "ownership-launch",
@@ -83,21 +79,19 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else "author-B")
     for path in FILL_WHEN_UNSET | GPU_PATHS:
-        value = "author-B" if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"} else 4
+        value = "author-B" if path == "trainer.run_name" else 4
         set_path(seeded, path, value)
     section_values = {
         name: seeded[name]
-        for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
+        for name in ("trainer", "generator", "data", "environment", "trajectory_runner")
     }
     injected = replace(parsed, **section_values)
     filled = launcher._skyrl_config_sections(injected, parameters, SimpleNamespace(gpus_per_node=8))
-    data = resolve_rl_train_data_with_sources(injected.data["terminal_bench_data"], kind="tasks", verbose=False)
     staged = launcher.apply_task_local_values(
         OmegaConf.create(filled),
         launcher.TaskLocalSkyRLValues(
             train_data=tuple(parameters["train_data"]),
             validation_data=tuple(parameters["val_data"]),
-            terminal_bench_data=tuple(data.paths),
         ),
     )
     launch = OmegaConf.create(
@@ -114,7 +108,6 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         draft_model=None,
     )
     result = OmegaConf.to_container(OmegaConf.load(written).skyrl, resolve=False)
-    result["terminal_bench"] = result.pop("terminal_bench_config")
     changed = {
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
@@ -125,7 +118,6 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     for path in FILL_WHEN_UNSET:
         set_path(absent, path, None)
     defaults = launcher._skyrl_config_sections(replace(parsed, **absent), parameters, SimpleNamespace(gpus_per_node=8))
-    defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
 

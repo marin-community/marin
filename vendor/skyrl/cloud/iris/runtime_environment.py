@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from enum import StrEnum
 
 
@@ -20,6 +21,10 @@ class RuntimeProfile(StrEnum):
     MEGATRON = "megatron"
     MEGATRON_EXPORT = "megatron-export"
     HUB_PUBLISH = "hub-publish"
+
+    @property
+    def includes_vllm(self) -> bool:
+        return self is RuntimeProfile.MEGATRON
 
 
 class RuntimeMode(StrEnum):
@@ -43,4 +48,4 @@ def runtime_profile_for_strategy(
 
 def task_setup_command(profile: RuntimeProfile) -> str:
     """Return the Iris setup invocation for the selected frozen profile."""
-    return f"bash {MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh {profile.value}"
+    return shlex.join(("bash", f"{MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh", profile.value))

@@ -50,6 +50,8 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
                 "cloud.iris.config_cli",
                 "--checkout",
                 str(Path.cwd() / "vendor/skyrl"),
+                "--progress-file",
+                str(Path(directory) / "stage"),
                 "compose",
                 "--",
                 str(path),

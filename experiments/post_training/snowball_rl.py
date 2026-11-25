@@ -33,7 +33,7 @@ from experiments.post_training.rl_agentic_recipe import (
 )
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
-    HARBOR_EVALUATION,
+    CHECKPOINT_EVALUATION,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
@@ -350,7 +350,7 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
+        gaps=tuple(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS),
     ),
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
@@ -486,9 +486,9 @@ _PRESETS = (
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
-        name="train-long-harbor",
-        harbor=HARBOR_EVALUATION,
-        gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
+        name="train-long-checkpoint-eval",
+        checkpoint_evaluation=CHECKPOINT_EVALUATION,
+        gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,

@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
-source "$1" "$2"
+source "$1"
+load_runtime_environment "$2"
 command -v ninja
-printf '%s\n' "$LD_LIBRARY_PATH" "$PATH"
+printf '%s\n' "$LD_LIBRARY_PATH" "$LIBRARY_PATH" "$PATH"

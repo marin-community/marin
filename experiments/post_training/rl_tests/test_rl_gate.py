@@ -39,7 +39,7 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
@@ -209,7 +209,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
             cohort=cohort_from_fixtures(roots[0]),
         )
     )[0]
-    assert report.verdict == "fail" and report.effect == "regression"
+    assert report.verdict == "fail" and report.effect == "regression", report.reason
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
     assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 4) * math.sqrt(2.5) * math.sqrt(0.7))
@@ -598,6 +598,26 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     with pytest.raises(measurements.InvalidComparison, match="differs from the selected attempt record"):
         measurements.read_answers(evaluation, str(tmp_path), launch=old_launch)
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
+
+
+@pytest.mark.timeout(15)
+@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
+def test_native_failure_stops_build_child(tmp_path, exit_early):
+    lock = tmp_path / "build.lock"
+    lock.touch()
+    worker = Path(__file__).with_name("native_build_child.py")
+    deadline = monotonic() + 6
+    command = [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)]
+    if exit_early:
+        result = run_skyrl_cpu(command, timeout=2, stream_stderr=True)
+        assert result.returncode == 7
+        assert "build child ready" in result.stderr
+    else:
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2"):
+            run_skyrl_cpu(command, timeout=2)
+    with lock.open("r+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+    assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
 @pytest.mark.parametrize(

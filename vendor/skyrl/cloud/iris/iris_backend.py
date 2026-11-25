@@ -22,7 +22,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import yaml
@@ -41,21 +41,16 @@ from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
-    LocalRaySpillTarget,
     RaySpillBackend,
-    resolve_ray_spill_target,
 )
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
     RL_CONFIG_TASK_DIR,
 )
-from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
-from skyrlrecipe import RLEntrypoint
 from marinskyrl.resource_locator import (
     is_cloud_uri,
     join_resource_path,
 )
-from skyrl_train.rollouts.harbor_settings import EnvironmentType
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
 from marinskyrl.environment_contract import (
@@ -73,11 +68,6 @@ from cloud.iris.runtime_environment import (
     RuntimeProfile,
     task_setup_command,
 )
-
-DAYTONA_RL_SECRET_PROJECT = "hai-gcp-models"
-DAYTONA_RL_SECRET_NAME = "DAYTONA_RL_API_KEY"
-DAYTONA_RL_SECRET_VERSION = "1"
-
 
 AUTOMATIC_RESOURCE_REQUEST = "auto"
 MEMORY_RESOURCE = "memory"
@@ -581,67 +571,6 @@ def _load_cluster_config(cluster_config: str) -> dict[str, Any]:
     return loaded
 
 
-def _daytona_rl_api_key_from_secret_manager() -> Optional[str]:
-    """The pinned RL Daytona key from Secret Manager, or ``None`` if gcloud is
-    missing/denied or the secret is empty. Never logged."""
-    command = [
-        "gcloud",
-        "secrets",
-        "versions",
-        "access",
-        DAYTONA_RL_SECRET_VERSION,
-        f"--secret={DAYTONA_RL_SECRET_NAME}",
-        f"--project={DAYTONA_RL_SECRET_PROJECT}",
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None
-
-
-def _resolve_daytona_rl_api_key() -> str:
-    """Resolve the RL-org Daytona key from the launch environment or Secret Manager.
-
-    ``--secrets-env`` is loaded before this function runs. Keep its RL-specific name at
-    the launch boundary, then let the caller expose the resolved value as
-    ``DAYTONA_API_KEY`` because that is the name expected by Daytona and Harbor.
-    """
-    env_key = os.environ.get(DAYTONA_RL_SECRET_NAME)
-    if env_key:
-        print(
-            f"[rl-iris] Daytona: using {DAYTONA_RL_SECRET_NAME} from --secrets-env.",
-            flush=True,
-        )
-        return env_key
-    value = _daytona_rl_api_key_from_secret_manager()
-    if value:
-        print(
-            "[rl-iris] Daytona: agentic run uses canonical Google Secret Manager "
-            f"{DAYTONA_RL_SECRET_NAME} version {DAYTONA_RL_SECRET_VERSION}.",
-            flush=True,
-        )
-        return value
-    raise SystemExit(
-        "[rl-iris] no Daytona RL key available: provide DAYTONA_RL_API_KEY via --secrets-env "
-        "or authenticate gcloud for the Marin project, then retry."
-    )
-
-
-def _rl_config_uses_daytona(config: DictConfig) -> bool:
-    """Return whether the configured task backend requires Daytona credentials."""
-    uses_harbor = str(config.runtime.entrypoint) in {
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH],
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
-    } or bool(config.skyrl.get("data", {}).get("terminal_bench_data"))
-    backend = OmegaConf.select(
-        config,
-        "skyrl.terminal_bench_config.harbor.environment_type",
-        default=EnvironmentType.DAYTONA.value,
-    )
-    return uses_harbor and backend == EnvironmentType.DAYTONA.value
-
-
 def build_debug_launch_env(args: SimpleNamespace) -> dict[str, str]:
     """Resolve the effective debug preset after the job name and RL config exist."""
     trainer = args.config.skyrl.get("trainer", {})
@@ -678,14 +607,13 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
             v = int(v)
         out[str(k)] = str(v)
     if config.runtime.entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT:
-        for backend in ("remote_judge", "daytona"):
-            key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}.api_key_env")
+        for field in ("remote_judge.api_key_env", "daytona.api_key_env", "daytona.eval_api_key_env"):
+            key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{field}")
             if key_env is not None:
-                out[key_env] = os.environ[key_env]
-        for callback in OmegaConf.select(config, "skyrl.trainer.callbacks", default=[]) or []:
-            if callback.get("type") == "harbor_evaluation":
-                key_env = callback["daytona_api_key_env"]
-                out[key_env] = os.environ[key_env]
+                value = os.environ.get(key_env)
+                if not value:
+                    raise ValueError(f"Missing credential environment variable: {key_env}")
+                out[key_env] = value
     return out
 
 
@@ -718,14 +646,12 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     launch_config = args.launch_config_bundle
     if not isinstance(launch_config, BundledLaunchConfig):
         raise RuntimeError("resolved launch config payload is missing")
-    spill = resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir)
     return [
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
-        spill.location if isinstance(spill, LocalRaySpillTarget) else "",
         f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
-        *([] if _is_checkpoint_export(args) else ["--pynccl-init"]),
+        *(["--pynccl-init"] if args.runtime_profile.includes_vllm else []),
     ]
 
 
@@ -743,11 +669,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     if not args.job_name:
         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
 
-    if not _is_checkpoint_export(args) and _rl_config_uses_daytona(args.config):
-        daytona_api_key = _resolve_daytona_rl_api_key()
-        os.environ[DAYTONA_RL_SECRET_NAME] = daytona_api_key
-        os.environ["DAYTONA_API_KEY"] = daytona_api_key
-
+    config_extra_env = config_task_environment(args.config)
     command = build_config_task_command(args)
 
     # Per-task resources: one whole selected GPU node per task.
@@ -844,7 +766,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     env_vars: dict[str, str] = {}
     # Forward runtime.task_env; launcher-owned rendezvous and secret values below
     # win on collision.
-    config_extra_env = config_task_environment(args.config)
     if config_extra_env:
         env_vars.update(config_extra_env)
         print(f"[rl-iris] Config extra_env: {', '.join(sorted(config_extra_env))}", flush=True)
@@ -897,9 +818,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     # authentication. Iris bundles HF/W&B credentials as files; these provider
     # clients still consume explicitly forwarded environment values.
     for k in (
-        "DAYTONA_API_KEY",
-        "DAYTONA_JWT_TOKEN",
-        "DAYTONA_ORGANIZATION_ID",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
@@ -911,15 +829,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
             env_vars[k] = v
     env_vars.update(_forwarded_environment(forward_env))
     env_vars.update(wandb_launch_environment(entity=args.wandb_entity))
-    if not _is_checkpoint_export(args) and _rl_config_uses_daytona(args.config):
-        for field in ("daytona_api_key_env", "eval_daytona_api_key_env"):
-            name = OmegaConf.select(args.config, f"skyrl.terminal_bench_config.harbor.{field}")
-            if name is not None:
-                value = os.environ.get(name)
-                if not value:
-                    raise ValueError(f"Missing Daytona credential environment variable: {name}")
-                env_vars[name] = value
-
     with submission_client(
         args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace
     ) as (client, cluster_pin):

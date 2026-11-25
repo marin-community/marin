@@ -345,10 +345,8 @@ def compute_rloo_n_pbs_advantage(
     """Combine RLOO-N outcome advantage with potential-based token shaping.
 
     Combines RLOO-N's per-trajectory outcome advantage (computed exactly as
-    ``compute_rloo_n_outcome_advantage`` — the outcome term reads ``rewards``
-    ONLY and is left bit-for-bit intact) with the per-token potential-based
-    shaping channel ``token_level_shaping`` (the PBS test-delta credit scattered
-    onto the EDIT-token span by ``pbs_shaping.compute_pbs_token_shaping``).
+    ``compute_rloo_n_outcome_advantage``) with the per-token potential-based
+    shaping channel ``token_level_shaping`` supplied by the rollout.
 
     The two signals remain additive and separate:
 

@@ -21,4 +21,5 @@ bash "$repository_root/cloud/iris/bootstrap_runtime.sh" \
   "$RUNTIME_ENV_FILE" \
   "$runtime_profile" \
   "$install_mode"
-source "$repository_root/cloud/iris/load_runtime_environment.sh" "$RUNTIME_ENV_FILE"
+source "$repository_root/cloud/iris/load_runtime_environment.sh"
+load_runtime_environment "$RUNTIME_ENV_FILE"
