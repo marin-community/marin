@@ -56,6 +56,11 @@ _MANIFEST_LOCK = f"manifest.ocdbt{tensorstore_serialization._LOCK_FILE_SUFFIX}"
 # for which the commit must still be pending. A hang past it fails the test.
 _LOCK_CONTENTION_DEADLINE_SECONDS = 2.0
 _COMMIT_DEADLINE_SECONDS = 30.0
+# Process 0 writes this host leaf and its half of the shared array, so it spills past the budget.
+# The other process writes only its half, which fits, so the two processes take different paths.
+_UNEVEN_SHARED = 8
+_UNEVEN_HOST = 16
+_UNEVEN_BUDGET = 32
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
@@ -267,6 +272,45 @@ def _commit_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_pa
         committed = finished.wait(timeout=_COMMIT_DEADLINE_SECONDS)
         writer.join()
         return committed
+
+
+def _save_uneven_staged_bytes(
+    process_id: int, coordinator: str, checkpoint_path: str
+) -> tuple[np.ndarray, np.ndarray]:
+    with _distributed_process(process_id, coordinator):
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(_UNEVEN_SHARED, dtype=np.float32)
+        host = np.arange(_UNEVEN_HOST, dtype=np.float32)
+        source = {
+            "shared": jax.make_array_from_callback(values.shape, split, lambda index: values[index]),
+            "host": host,
+        }
+        with jax.set_mesh(mesh):
+            tree_serialize_leaves_tensorstore(
+                checkpoint_path,
+                source,
+                write_config=TensorStoreWriteConfig(max_staged_host_bytes=_UNEVEN_BUDGET),
+            )
+            restored = tree_deserialize_leaves_tensorstore(
+                checkpoint_path,
+                {
+                    "shared": jax.ShapeDtypeStruct(values.shape, values.dtype, sharding=split),
+                    "host": jax.ShapeDtypeStruct(host.shape, host.dtype, sharding=NamedSharding(mesh, P())),
+                },
+            )
+            shared = np.asarray(multihost_utils.process_allgather(restored["shared"], tiled=True))
+            return shared, np.asarray(restored["host"])
+
+
+def uneven_staged_bytes_save_across_processes() -> list[tuple[np.ndarray, np.ndarray]]:
+    """Save from two processes whose staged bytes fall on opposite sides of the budget.
+
+    Process 0 writes a host leaf the other process skips, so the two take different commit
+    paths. Both must reach the metadata barrier, or the save hangs.
+    """
+    with TemporaryDirectory() as tmpdir:
+        return _run_on_distributed_processes(_save_uneven_staged_bytes, f"{tmpdir}/step")
 
 
 def commit_waits_for_held_lock_across_processes() -> bool:

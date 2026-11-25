@@ -10,6 +10,19 @@ BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
 # The vendored LiveCodeBench scorer preloads NumPy and pandas for every submission.
 LIVECODEBENCH_GRADER = Environment(requirements=(*PYTHON_GRADER.requirements, "pandas==2.2.2"))
+TESTLIB_REVISION = "68f9f300b6abebec82d2a68d8ca04394f2664fb6"
+"""MikeMirzayanov/testlib 0.9.41 (MIT), the header the LiveCodeBench Pro judge compiles checkers against."""
+# Compiles replies and testlib checkers with the worker image's g++; testlib.h is installed at /srv/testlib.
+LIVECODEBENCH_PRO_GRADER = Environment(
+    apt=("build-essential",),
+    files={
+        "/srv/testlib/testlib.h": Archive(
+            f"https://github.com/MikeMirzayanov/testlib/archive/{TESTLIB_REVISION}.zip",
+            "017b7922992524abc86092d403562b45b1ae03bfcbcb5a3403f27f530a065505",
+            f"testlib-{TESTLIB_REVISION}/testlib.h",
+        )
+    },
+)
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(
