@@ -107,13 +107,8 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
     )
     computed = schema.RecipePatch(trainer=sections.Trainer(ckpt_interval=4))
     expected = base.merge(part, computed)
-    grouped = expected.with_settings(
-        ["config_groups.algorithm_recipe=grpo", "config_groups.terminal_bench_config=terminal_bench"]
-    )
-    assert grouped.to_skyrl()["config_groups"] == {
-        "terminal_bench_config": "terminal_bench",
-        "algorithm_recipe": "grpo",
-    }
+    grouped = expected.with_settings(["config_groups.algorithm_recipe=grpo"])
+    assert grouped.to_skyrl()["config_groups"] == {"algorithm_recipe": "grpo"}
     local = schema.RecipePatch(environment=sections.Environment(task_sessions={"local": {}}))
     for enabled in (
         base.merge(local),
@@ -166,8 +161,5 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
         with pytest.raises(ValueError) as setting_error:
             base.with_settings([f"{path}={{}}"])
         assert f"{path}: {message}" in str(setting_error.value)
-    removed = {"harbor": {"max_episodes": 1}}
-    with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
-        schema.RecipePatch(terminal_bench=removed)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
         base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])

@@ -28,6 +28,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "pdbthink": ("pdbthink.py",),
     "genomeqa": ("genomeqa.py",),
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
@@ -39,6 +40,7 @@ DEPENDENCIES = {
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),
+    "chembench": ("chembench.py",),
     "lexam_mcq": ("lexam.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
@@ -46,6 +48,7 @@ DEPENDENCIES = {
     "nupa": ("nupa.py", "nupa_preparation.py"),
     "jee": ("jee.py", "amc.py"),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),
+    "arc_agi": ("arc_agi.py",),
     "ifeval": ("instructions.py", "instruction_spec.py"),
     "ifbench": ("instructions.py", "instruction_spec.py"),
 }

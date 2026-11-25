@@ -1,0 +1,40 @@
+schema_version = "1.3"
+artifacts = ["/logs/artifacts/model.patch"]
+
+[task]
+name = "openmoss/swe-bench-science-002"
+description = "Repair an inconsistent reduced validation workflow"
+authors = []
+keywords = ["scientific-computing", "software-engineering"]
+
+[metadata]
+task_id = "002"
+language = "python"
+base_commit_hash = "f794ca5265d38906782506f1ac4e197b4e273fc4"
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 5400.0
+
+[environment]
+docker_image = "docker.io/kevinxulearning/swe-bench-science-environment-python-task-002:v0.1.0@sha256:13e8c428f486c685ec92b031e46f3520bac3d4e26b6bdd83fde9826a488b7761"
+os = "linux"
+allow_internet = false
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+workdir = "/app/task_002"
+
+[verifier]
+network_mode = "no-network"
+environment_mode = "separate"
+timeout_sec = 1800.0
+
+[verifier.environment]
+docker_image = "docker.io/kevinxulearning/swe-bench-science-verifier-python-task-002:v0.1.0@sha256:a863b98f920e1e9b1aede8bd0460d039628aab19a413cce3dad7417028e1bd1a"
+os = "linux"
+allow_internet = false
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+workdir = "/app/task_002"

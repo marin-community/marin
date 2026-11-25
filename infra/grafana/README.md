@@ -621,8 +621,17 @@ after twelve hours without a collection.
 80% current or projected quota use in `#marin-alerts` during the daily 15:00–16:00
 `America/Los_Angeles` window. Its 23-hour repeat interval permits a reminder
 the next afternoon across spring daylight saving time. The
+[CoreWeave viewer](https://cw-s3.oa.dev/?v=time) link in the alert shows bucket
+sizes and growth from its latest scan. The storage operator investigates growing
+prefixes and asks verified owners to review them in the alert thread. The
 [storage runbook](../../scripts/ops/storage/README.md#coreweave-storage-telemetry)
 describes sampling requirements and forecast limits.
+If Loom delivery fails, the bridge keeps returning an error so Grafana retries,
+but reports the failure only once in the alert thread until delivery recovers.
+The policy's five-minute group interval bounds each notification attempt; it
+does not impose a lifetime retry limit on a firing alert. The daily active
+window suppresses storage notifications outside 15:00–16:00 Pacific.
+
 `B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
 GPUs stay idle for 30 minutes; the thresholds are the constants in
 `src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an

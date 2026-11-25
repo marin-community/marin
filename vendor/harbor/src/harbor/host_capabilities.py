@@ -152,14 +152,10 @@ def host_capabilities_from_environment(
     # Shellbox is an optional Harbor extra; DaytonaConnection travels in its own
     # module so a Harbor install without the Daytona extra can still import this
     # core capability type.
-    from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+    from shellbox.backends.daytona.connection import DaytonaConnection
 
     return HostCapabilities(
-        daytona=DaytonaConnection(
-            api_key=environment.get("DAYTONA_API_KEY"),
-            api_url=environment.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
-            target=environment.get("DAYTONA_TARGET"),
-        ),
+        daytona=DaytonaConnection(api_key=environment.get("DAYTONA_API_KEY")),
         model_authentication=model_authentication,
         protected_values=protected_environment_values(environment)
         | frozenset(

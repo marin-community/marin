@@ -65,6 +65,10 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
+Default math references must parse as one whole LaTeX expression. Each member of a LIST
+reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
+such a row during conversion as `invalid_reference`.
+
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
 whether the parsed scalar expressions simplify to exactly the same value under those assumptions.
@@ -193,6 +197,8 @@ The rubric decides how the prepared answer is scored:
 - `whole`: the whole reply is the label.
 - `json`: the reply is a JSON object, optionally in a Markdown code fence, and its `label_field`
   member is the label. A boolean member is read as the label `true` or `false`.
+- `pattern`: the last match of the first `verdict_patterns` entry that matches is the label, so the
+  judge may name other labels while explaining its verdict.
 
 `label_case = "upper"` matches labels and pairwise verdicts case-insensitively.
 `strip_reasoning_blocks` removes reasoning blocks from the judge's reply before the label or verdict

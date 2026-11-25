@@ -100,7 +100,6 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     assert set(execution.required_env_vars) == {
         "DAYTONA_RL_API_KEY",
         "DAYTONA_EVAL_API_KEY",
-        "DAYTONA_TARGET",
         "WANDB_API_KEY",
     }
 
@@ -145,9 +144,9 @@ def test_batch_mix_refuses_invalid_counts(selection, shares, error):
         (
             "snowball",
             "train-medium-agentic",
-            ("terminal_bench.installed_agent.agent.kwargs.unused=true",),
+            ("environment.task_sessions.agent_harnesses.pi.unused=true",),
             None,
-            "unused",
+            None,
         ),
         (
             "snowball",
@@ -158,37 +157,50 @@ def test_batch_mix_refuses_invalid_counts(selection, shares, error):
         ),
     ],
     indirect=["table"],
-    ids=("installed-agent-kwargs", "disabled-route-capture"),
+    ids=("native-agent-option", "disabled-route-capture"),
 )
 def test_plan_print_rejects_invalid_native_config(table, name, settings, version, error, selection):
     options = tuple(arg for setting in settings for arg in ("--set", setting))
     result = plan(table, name, *options, version=version)
     assert result.exit_code == 4, (result.output, result.exception)
-    assert "native configuration cannot be composed" in result.output and error in result.output
+    issue = json.loads(result.stdout)
+    assert issue["verdict"] == "invalid"
+    if error is not None:
+        assert error in issue["reason"]
 
 
 @pytest.mark.parametrize(
-    ("dataset", "harness_override", "exit_code"),
+    ("dataset", "settings", "error"),
     [
-        ("long-loop-smartie-swesmith", None, 0),
-        ("fixture-unmapped", None, 4),
-        ("long-loop-smartie-swesmith", "shellbox", 4),
+        ("fixture-unmapped", (), "Unsupported training datasets with harness graders: fixture-unmapped"),
+        (
+            "long-loop-smartie-swesmith",
+            ("environment.task_sessions.task_spec.harness_by_dataset.long-loop-smartie-swesmith=shellbox",),
+            "SWESmith training requires the Pi harness and a task machine",
+        ),
     ],
 )
-def test_plan_requires_harness_grading_mapping(selection, dataset, harness_override, exit_code):
+def test_plan_refuses_a_wrapper_selection_without_native_conversion(selection, dataset, settings, error):
     summary_path = Path(selection.path()) / rl_compose.SUMMARY_FILENAME
     summary = json.loads(summary_path.read_text())
     summary["harness_graded_datasets"] = [dataset]
     summary_path.write_text(json.dumps(summary))
-    options = (
-        ("--set", f"environment.task_sessions.task_spec.harness_by_dataset.{dataset}={harness_override}")
-        if harness_override
-        else ()
-    )
-    result = plan(SNOWBALL, "train-medium-agentic", *options, version="dev")
-    assert result.exit_code == exit_code, (result.output, result.exception)
-    if exit_code:
-        assert "harbor_trial in harness_by_dataset" in result.output and dataset in result.output
+    preset = SNOWBALL.by_name["train-medium-agentic"]
+    with pytest.raises(click.BadParameter, match=error):
+        rl_compose.run_spec(preset, name="rejected-wrapper-selection", tasks=selection, settings=settings)
+
+
+def test_plan_binds_the_converted_swesmith_selection(selection, tmp_path):
+    summary_path = Path(selection.path()) / rl_compose.SUMMARY_FILENAME
+    summary = json.loads(summary_path.read_text())
+    summary["harness_graded_datasets"] = ["long-loop-smartie-swesmith"]
+    summary_path.write_text(json.dumps(summary))
+    preset = SNOWBALL.by_name["train-medium-agentic"]
+    spec = rl_compose.run_spec(preset, name="converted-wrapper-selection", tasks=selection)
+    config = yaml.safe_load(materialized_config(rl_compose.run_step(preset, spec), str(tmp_path)).launch_config_yaml)
+    (training,) = config["inputs"]["train_data"]
+    assert training["identity"].startswith(f"{selection.name}-pi@")
+    assert training["relative_path"] == "train.parquet"
 
 
 @pytest.fixture

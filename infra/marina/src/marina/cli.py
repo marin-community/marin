@@ -44,11 +44,13 @@ from marina.journeys import LOOPBACK, running_kernel
 from marina.local_postgres import docker_database
 from marina.preview import install_preview_sources
 from marina.releases import (
+    DEFAULT_RELEASE_BRANCH,
     RELEASE_METADATA,
     ReleaseSource,
     clean_frontend_build,
     release_source,
-    require_current_main,
+    require_forward_move,
+    require_release_checkout,
     require_tracked_package,
     source_status,
 )
@@ -293,6 +295,15 @@ def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | No
 @click.option(
     "--allow-dirty", is_flag=True, help="Release branch or uncommitted source without verified Git provenance."
 )
+@click.option(
+    "--release-branch",
+    "release_branch",
+    default=None,
+    help=(
+        "Cut the release from a clean checkout landed on this branch (e.g. an"
+        " integration branch) instead of origin main."
+    ),
+)
 @click.option("--json", "json_output", is_flag=True)
 def release(
     app_dir: Path,
@@ -303,6 +314,7 @@ def release(
     local: bool,
     dry_run: bool,
     allow_dirty: bool,
+    release_branch: str | None,
     json_output: bool,
 ) -> None:
     """Build and release one application to its declared stable UUID."""
@@ -310,13 +322,18 @@ def release(
         raise click.UsageError("--local cannot be combined with --dry-run")
     if not local and not dry_run and base_version is None:
         raise click.UsageError("Supply --base-version; use 0 for the first release")
+    if allow_dirty and release_branch is not None:
+        raise click.UsageError("--release-branch verifies a landed checkout; it cannot combine with --allow-dirty")
     publishing = not local and not dry_run
     try:
         manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
         guarded = publishing and manifest.applet_id is not None and not allow_dirty
+        release_branch_name = release_branch or DEFAULT_RELEASE_BRANCH
         source = release_source(app_dir, manifest.source_paths) if guarded else None
-        if guarded:
-            require_current_main(app_dir)
+        if guarded and source is not None:
+            require_release_checkout(app_dir, branch=release_branch_name)
+            if release_branch_name != DEFAULT_RELEASE_BRANCH:
+                source = replace(source, branch=release_branch_name)
         extra_files = {RELEASE_METADATA: json.dumps(asdict(source)).encode()} if source is not None else None
         build_context = clean_frontend_build(app_dir) if manifest.build_command is not None else nullcontext()
         with build_context:
@@ -352,8 +369,11 @@ def release(
             applet_id = str(uuid4())
         else:
             raise ValueError("Supply --id for updates, or declare applet_id in applet.toml")
-        if guarded and source is not None and require_current_main(app_dir) != source.commit:
-            raise RuntimeError("The checkout changed while building; retry the release.")
+        if guarded and source is not None:
+            if require_release_checkout(app_dir, branch=release_branch_name) != source.commit:
+                raise RuntimeError("The checkout changed while building; retry the release.")
+            if release_branch_name != DEFAULT_RELEASE_BRANCH:
+                _require_forward_release(app_dir, service_url, applet_id, base_version, source)
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version, mode=mode)
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
@@ -405,6 +425,38 @@ def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
 @cli.group()
 def apps() -> None:
     """Inspect and manage released apps."""
+
+
+def _require_forward_release(
+    app_dir: Path,
+    service_url: str,
+    applet_id: str,
+    base_version: int | None,
+    source: ReleaseSource,
+) -> None:
+    """Refuse a release that moves backward along its declared branch.
+
+    The landing check accepts any commit the branch contains, so a stale checkout
+    could republish older source over newer with verified-looking metadata. When
+    the live release declares the same branch, its commit must be an ancestor of
+    this checkout's. A first release or a live record without a declared branch
+    has no forward contract to enforce.
+    """
+    if base_version is None or base_version <= 0 or not source.branch:
+        return
+    try:
+        details = _applet_details(service_url, applet_id)
+        origin = _applet_origin(service_url, details)
+        metadata = marina_request(origin, "GET", f"/a/{applet_id}/v/{base_version}/marina-release.json")
+    except MarinaRequestError as error:
+        if error.status_code != 404:
+            raise
+        return
+    assert isinstance(metadata, dict)
+    live = ReleaseSource(**metadata)
+    if live.branch != source.branch:
+        return
+    require_forward_move(app_dir, branch=source.branch, live_commit=live.commit)
 
 
 def _applet_details(service_url: str, applet_id: str) -> dict[str, object]:

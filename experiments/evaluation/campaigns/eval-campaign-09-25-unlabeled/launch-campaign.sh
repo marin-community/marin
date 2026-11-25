@@ -22,7 +22,7 @@ Options:
   --help             Show this help.
 
 Environment:
-  MARIN_DIR, FEDERATED_CLUSTER, PRIORITY, HF_TOKEN, DAYTONA_TARGET (agentic suites)
+  MARIN_DIR, FEDERATED_CLUSTER, PRIORITY, HF_TOKEN
 EOF
 }
 
