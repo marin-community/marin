@@ -16,7 +16,6 @@ repeated message prefixes collapse.
 from __future__ import annotations
 
 import argparse
-import html
 import json
 import re
 import sys
@@ -26,15 +25,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from marin.rl.transcript_format import to_html, to_markdown
+
 DEFAULT_TRUNCATE_CHARS = 2_000
 THINK_START = "<|start_think|>"
 THINK_END = "<|end_think|>"
 TURN_RECORD_KIND = "turn-v7"
 EVAL_DUMP_KIND = "eval-dump"
+THINKING_SUMMARY = "Thinking"
+RAW_RESPONSE_HEADING = "assistant — raw response"
 
 # Document blocks are tagged tuples: ("heading", level, text), ("paragraph", text),
 # ("fields", entries), ("code", text, language), ("details", summary, inner).
 Block = tuple
+Message = Mapping[str, Any]
 
 
 class ToolCall(NamedTuple):
@@ -124,7 +128,7 @@ def _split_thinking(text: str) -> tuple[list[Block], list[Block]]:
     return thinking, answer
 
 
-def _drop_repeated_prefix(previous: Sequence[Any], nxt: Sequence[Any]) -> list[Any]:
+def _drop_repeated_prefix(previous: Sequence[Message], nxt: Sequence[Message]) -> list[Message]:
     """Drop the head of `nxt` that repeats `previous` verbatim (cumulative transcripts)."""
     if not previous or len(nxt) < len(previous):
         return list(nxt)
@@ -148,7 +152,7 @@ class Turn:
     model: str
     prompt_text: str
     response_text: str
-    messages: list[Mapping[str, Any]] | None
+    messages: list[Message] | None
     verification: Mapping[str, Any] | None
     stop_reason: str | None
     exception: str | None
@@ -174,12 +178,16 @@ def _is_record(value: Any) -> bool:
 
 def is_eval_dump_row(value: Any) -> bool:
     """The eval-dump trial row shape: `uid` plus a raw `output_response` string."""
-    return _is_record(value) and isinstance(value.get("uid"), str) and isinstance(value.get("output_response"), str)
+    return (
+        isinstance(value, Mapping)
+        and isinstance(value.get("uid"), str)
+        and isinstance(value.get("output_response"), str)
+    )
 
 
 def is_turn_record(value: Any) -> bool:
     """The SkyRL schema_v7 turn-record shape: `schema_version` 7 with a nested `response`."""
-    return _is_record(value) and value.get("schema_version") == 7 and _is_record(value.get("response"))
+    return isinstance(value, Mapping) and value.get("schema_version") == 7 and _is_record(value.get("response"))
 
 
 def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
@@ -200,7 +208,7 @@ def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
         prompt_text=str(record.get("input_prompt") or ""),
         response_text=str(record.get("output_response") or ""),
         messages=record.get("messages") if isinstance(record.get("messages"), Sequence) else None,
-        verification=record.get("verification") if _is_record(record.get("verification")) else None,
+        verification=record.get("verification") if isinstance(record.get("verification"), Mapping) else None,
         stop_reason=record.get("stop_reason") if isinstance(record.get("stop_reason"), str) else None,
         exception=record.get("exception_type") if isinstance(record.get("exception_type"), str) else None,
         metrics=_numeric_metrics(record.get("env_metrics")),
@@ -231,11 +239,13 @@ def _normalize_turn_record(record: Mapping[str, Any]) -> Turn:
         prompt_text="",
         response_text=str(response.get("text") or ""),
         messages=response.get("messages") if isinstance(response.get("messages"), Sequence) else None,
-        verification=record.get("verification_result") if _is_record(record.get("verification_result")) else None,
+        verification=(
+            record.get("verification_result") if isinstance(record.get("verification_result"), Mapping) else None
+        ),
         stop_reason=response.get("stop_reason") if isinstance(response.get("stop_reason"), str) else None,
         exception=disposition.get("exception_type") if isinstance(disposition.get("exception_type"), str) else None,
         metrics=_numeric_metrics(record.get("metrics")),
-        reward=record.get("reward") if _is_record(record.get("reward")) else None,
+        reward=record.get("reward") if isinstance(record.get("reward"), Mapping) else None,
         score=None,
     )
 
@@ -271,8 +281,20 @@ def _verification_fields(turn: Turn) -> list[tuple[str, str]]:
     return entries
 
 
-def _turn_blocks(messages: Sequence[Mapping[str, Any]], *, truncate: int) -> list[Block]:
-    blocks: list[Any] = []
+def _thinking_blocks(text: str, *, include_answer: bool) -> list[Block]:
+    """Render an assistant text as a Thinking details block plus its answer paragraphs."""
+    thinking, answer = _split_thinking(text)
+    blocks: list[Block] = []
+    if thinking:
+        blocks.append(("details", THINKING_SUMMARY, tuple(thinking)))
+    if include_answer:
+        blocks.extend(answer)
+    return blocks
+
+
+def _turn_blocks(messages: Sequence[Message], *, truncate: int) -> list[Block]:
+    """Build the turn sections for one record's fresh messages."""
+    blocks: list[Block] = []
     for message in messages:
         if not isinstance(message, Mapping):
             continue
@@ -292,10 +314,7 @@ def _turn_blocks(messages: Sequence[Mapping[str, Any]], *, truncate: int) -> lis
         if isinstance(reasoning, str) and reasoning.strip():
             blocks.append(("details", "Reasoning", (("paragraph", reasoning.strip()),)))
         if role == "assistant" and text:
-            thinking, answer = _split_thinking(text)
-            if thinking:
-                blocks.append(("details", "Thinking", tuple(thinking)))
-            blocks.extend(answer)
+            blocks.extend(_thinking_blocks(text, include_answer=True))
         elif text:
             blocks.append(("paragraph", text))
         for call in calls:
@@ -305,27 +324,21 @@ def _turn_blocks(messages: Sequence[Mapping[str, Any]], *, truncate: int) -> lis
 
 
 def _raw_response_blocks(turn: Turn) -> list[Block]:
-    """Render raw response thinking that the message turns do not already carry."""
+    """Render the raw response when the record has no message turns, else only its missing thinking."""
     if not turn.response_text:
         return []
     if turn.messages is None:
-        thinking, answer = _split_thinking(turn.response_text)
-        blocks: list[Any] = [("heading", 3, "assistant — raw response")]
-        if thinking:
-            blocks.append(("details", "Thinking", tuple(thinking)))
-        blocks.extend(answer)
-        return blocks
+        return [("heading", 3, RAW_RESPONSE_HEADING), *_thinking_blocks(turn.response_text, include_answer=True)]
     has_thinking = any(
         isinstance(message.get("content"), str) and THINK_START in message["content"] for message in turn.messages
     )
-    thinking, _ = _split_thinking(turn.response_text)
-    if has_thinking or not thinking:
+    if has_thinking or not _split_thinking(turn.response_text)[0]:
         return []
-    return [("heading", 3, "assistant — raw response"), ("details", "Thinking", tuple(thinking))]
+    return [("heading", 3, RAW_RESPONSE_HEADING), *_thinking_blocks(turn.response_text, include_answer=False)]
 
 
 def _outcome_entries(turn: Turn) -> list[tuple[str, str]]:
-    """The outcome facts shared by the document header and per-step outcome lines."""
+    """The record's stop reason, verifier verdict fields and exception as name/value entries."""
     entries: list[tuple[str, str]] = []
     if turn.stop_reason:
         entries.append(("stop reason", turn.stop_reason))
@@ -386,9 +399,8 @@ def _records_from_input(parsed: Any) -> list[Any]:
     return records
 
 
-def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> Iterator[tuple[str, list[Block]]]:
-    """Yield `(slug, blocks)` documents from one record, a list, or JSONL text."""
-    records = _records_from_input(parsed)
+def _grouped_turns(records: list[Any]) -> Iterator[tuple[GroupKey, list[Turn]]]:
+    """Group normalized records into transcripts and order each group by step."""
     groups: dict[GroupKey, list[Turn]] = defaultdict(list)
     for record in records:
         turn = normalize(record)
@@ -396,77 +408,59 @@ def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> 
             raise ValueError("record is not a SkyRL eval-dump row or schema_v7 turn record")
         groups[turn.group_key].append(turn)
     for key, group_turns in groups.items():
-        uid, repetition = key.uid, key.repetition
-        turns = sorted(group_turns, key=lambda turn: (turn.step is None, turn.step or 0))
-        blocks: list[Any] = [
-            ("heading", 1, f"Rollout {uid}" + (f" · repetition {repetition}" if repetition is not None else "")),
-            _header_fields(turns[-1]),
-        ]
-        blocks.append(("heading", 2, "Conversation"))
-        previous: list[Any] = []
-        for index, turn in enumerate(turns):
-            messages = turn.messages if turn.messages is not None else []
-            fresh = _drop_repeated_prefix(previous, messages) if index else list(messages)
-            previous = messages if turn.messages is not None else previous
-            if not fresh and turn.prompt_text:
-                fresh = [{"role": "user", "content": turn.prompt_text}]
-            blocks.extend(_turn_blocks(fresh, truncate=truncate))
-            blocks.extend(_raw_response_blocks(turn))
-            if len(turns) > 1 and (outcome := _turn_outcome_fields(turn))[1]:
-                blocks.append(outcome)
-        blocks.append(("heading", 2, "Verifier verdict"))
-        verdict = ("fields", tuple(_verification_fields(turns[-1])) or (("verifier status", "absent"),))
-        blocks.append(verdict)
-        yield _slug(uid) + (f"-r{repetition}" if repetition is not None else ""), blocks
+        yield key, sorted(group_turns, key=lambda turn: (turn.step is None, turn.step or 0))
 
 
-def to_markdown(blocks: Sequence[Any]) -> str:
-    """Serialize document blocks to Markdown."""
-    lines: list[str] = []
-    for block in blocks:
-        match block:
-            case ("heading", level, text):
-                lines += [f"{'#' * level} {text}", ""]
-            case ("paragraph", text):
-                lines += [text, ""]
-            case ("fields", entries):
-                lines += [f"- **{name}:** {value}" for name, value in entries if value != ""]
-                lines.append("")
-            case ("code", text, language):
-                lines += [f"```{language}", text, "```", ""]
-            case ("details", summary, inner):
-                lines += ["<details>", f"<summary>{summary}</summary>", ""]
-                lines.append(to_markdown(inner))
-                lines += ["</details>", ""]
-    return "\n".join(lines).replace("\n\n\n", "\n\n").strip() + "\n"
+def _document_blocks(key: GroupKey, turns: list[Turn], *, truncate: int) -> list[Block]:
+    """Assemble one transcript: header, cumulative conversation, per-step outcomes, verdict."""
+    uid, repetition = key.uid, key.repetition
+    blocks: list[Block] = [
+        ("heading", 1, f"Rollout {uid}" + (f" · repetition {repetition}" if repetition is not None else "")),
+        _header_fields(turns[-1]),
+        ("heading", 2, "Conversation"),
+    ]
+    previous: list[Message] = []
+    for index, turn in enumerate(turns):
+        messages = turn.messages if turn.messages is not None else []
+        fresh = _drop_repeated_prefix(previous, messages) if index else list(messages)
+        previous = messages if turn.messages is not None else previous
+        if not fresh and turn.prompt_text:
+            fresh = [{"role": "user", "content": turn.prompt_text}]
+        blocks.extend(_turn_blocks(fresh, truncate=truncate))
+        blocks.extend(_raw_response_blocks(turn))
+        if len(turns) > 1 and (outcome := _turn_outcome_fields(turn))[1]:
+            blocks.append(outcome)
+    blocks.append(("heading", 2, "Verifier verdict"))
+    blocks.append(("fields", tuple(_verification_fields(turns[-1])) or (("verifier status", "absent"),)))
+    return blocks
 
 
-def to_html(blocks: Sequence[Any]) -> str:
-    """Serialize document blocks to a standalone HTML page."""
+def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> Iterator[tuple[str, list[Block]]]:
+    """Yield `(slug, blocks)` documents from one record, a list, or JSONL text."""
+    for key, turns in _grouped_turns(_records_from_input(parsed)):
+        slug = _slug(key.uid) + (f"-r{key.repetition}" if key.repetition is not None else "")
+        yield slug, _document_blocks(key, turns, truncate=truncate)
 
-    def render(inner: Sequence[Any]) -> str:
-        parts: list[str] = []
-        for block in inner:
-            match block:
-                case ("heading", level, text):
-                    parts.append(f"<h{level}>{html.escape(text)}</h{level}>")
-                case ("paragraph", text):
-                    parts.append(f"<p>{html.escape(text)}</p>")
-                case ("fields", entries):
-                    rows = "".join(
-                        f"<tr><th>{html.escape(name)}</th><td>{html.escape(value)}</td></tr>" for name, value in entries
-                    )
-                    parts.append(f"<table>{rows}</table>")
-                case ("code", text, _):
-                    parts.append(f"<pre><code>{html.escape(text)}</code></pre>")
-                case ("details", summary, nested):
-                    parts.append(f"<details><summary>{html.escape(summary)}</summary>{render(nested)}</details>")
-        return "\n".join(parts)
 
-    return (
-        '<!DOCTYPE html>\n<html><head><meta charset="utf-8">'
-        "<title>SkyRL rollout transcript</title></head>\n<body>\n" + render(blocks) + "\n</body></html>\n"
-    )
+def _parse_input(raw: str) -> Any:
+    """Decode one input file: a JSON document, or JSONL with one record or list per line."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _write_documents(parsed: Any, out_dir: Path, *, html: bool, truncate: int) -> int:
+    """Write one Markdown file per document, optionally with a standalone HTML page."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for index, (slug, blocks) in enumerate(render_documents(parsed, truncate=truncate)):
+        name = f"{index:04d}-{slug}"
+        (out_dir / f"{name}.md").write_text(to_markdown(blocks))
+        if html:
+            (out_dir / f"{name}.html").write_text(to_html(blocks))
+        written += 1
+    return written
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -479,22 +473,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--truncate", type=int, default=DEFAULT_TRUNCATE_CHARS, help="tool-result truncation limit in chars"
     )
     args = parser.parse_args(argv)
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
-    for input_text in args.inputs:
-        raw = Path(input_text).read_text()
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = raw  # JSONL: one record or record list per line
-        for index, (slug, blocks) in enumerate(render_documents(parsed, truncate=args.truncate)):
-            name = f"{index:04d}-{slug}"
-            (out_dir / f"{name}.md").write_text(to_markdown(blocks))
-            if args.html:
-                (out_dir / f"{name}.html").write_text(to_html(blocks))
-            written += 1
-    print(f"wrote {written} documents to {out_dir}")
+    written = sum(
+        _write_documents(_parse_input(Path(path).read_text()), Path(args.out), html=args.html, truncate=args.truncate)
+        for path in args.inputs
+    )
+    print(f"wrote {written} documents to {args.out}")
     return 0
 
 

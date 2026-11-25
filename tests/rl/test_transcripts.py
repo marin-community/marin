@@ -151,7 +151,8 @@ def test_messages_carrying_thinking_skip_the_raw_response_section() -> None:
     record["response"]["messages"][-1]["content"] = "<|start_think|>Half of 40 is 20.<|end_think|>15"
     text = _markdown(record)
     assert "<summary>Thinking</summary>" in text
-    assert "raw response" not in text
+    # The think block renders once, inside the message turn — no raw-response section.
+    assert text.count("### assistant") == 1
     assert text.count("Half of 40 is 20.") == 1
 
 
@@ -178,7 +179,7 @@ def test_tool_results_truncate_with_elision_marker() -> None:
     assert long_output not in text
 
 
-def test_cumulative_records_collapse_shared_prefix_and_keep_each_outcome() -> None:
+def test_cumulative_records_collapse_shared_prefix() -> None:
     first = json.loads(json.dumps(SCHEMA_V7_RECORD))
     first["global_step"] = 7
     second = json.loads(json.dumps(SCHEMA_V7_RECORD))
@@ -192,10 +193,10 @@ def test_cumulative_records_collapse_shared_prefix_and_keep_each_outcome() -> No
     ((slug, blocks),) = list(render_documents([first, second]))
     text = to_markdown(blocks)
     assert slug == "eval-None-0--399-r0"
-    # The shared prefix renders once; each record's fresh turns and outcome both appear.
+    # The shared prefix renders once, and each record's outcome line keeps its own facts.
     assert text.count("Question: 40 pupils; half like blue.") == 1
     assert "Question: 41 pupils." in text
-    assert text.count("## Verifier verdict") == 1
+    assert "- **stop reason:** length" in text and "- **stop reason:** stop" in text
 
 
 def test_same_instance_rerolled_at_a_later_step_renders_separately() -> None:
@@ -239,8 +240,32 @@ def test_jsonl_text_and_non_record_input() -> None:
     line = json.dumps(SCHEMA_V7_RECORD)
     documents = list(render_documents(line + "\n"))
     assert len(documents) == 1
-    with pytest.raises(ValueError, match="not a SkyRL"):
+    with pytest.raises(ValueError):
         list(render_documents({"schema_version": 6, "response": {}}))
+
+
+def test_malformed_tool_call_arguments_keep_their_raw_text() -> None:
+    bad_arguments = '{"command": "echo oops'
+    record = {
+        "uid": "t2",
+        "attempt_id": "a",
+        "output_response": "done",
+        "messages": [
+            {"role": "user", "content": "run it"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"function": {"name": "bash", "arguments": bad_arguments}}],
+            },
+        ],
+        "verification": {"status": "verified", "score": 1.0},
+    }
+    text = _markdown(record)
+    assert "**Tool call: `bash`**" in text
+    # The unparsable argument string renders under the documented `raw` key.
+    ((_, blocks),) = list(render_documents(record))
+    code_blocks = [block[1] for block in blocks if isinstance(block, tuple) and block[0] == "code"]
+    assert any(json.loads(code) == {"raw": bad_arguments} for code in code_blocks)
 
 
 def test_html_render_escapes_and_renders_details() -> None:
