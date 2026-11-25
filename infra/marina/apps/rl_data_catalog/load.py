@@ -11,6 +11,7 @@ from typing import Any
 
 import click
 from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
+from finestore.rl.source_identity import canonical_source_id
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -68,6 +69,11 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
     return count
 
 
+def assessment_belongs_to_source(assessment_source_id: str, row_id: str) -> bool:
+    """A selected assessment may carry the source's historical published ID."""
+    return canonical_source_id(assessment_source_id) == canonical_source_id(row_id)
+
+
 def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
@@ -121,7 +127,7 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
         if key is None:
             continue
         assessment = catalog.assessment(key)
-        if assessment.source_id != source.id:
+        if not assessment_belongs_to_source(assessment.source_id, source.id):
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
         validate_items(populations, items)

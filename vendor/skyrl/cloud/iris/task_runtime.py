@@ -49,9 +49,11 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
@@ -102,7 +104,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
+from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1315,6 +1317,25 @@ def wait_for_nodes(
         ray.shutdown()
 
 
+def verify_role_placement(ray_address: str, topology: RoleTopology, report_directory: Path) -> None:
+    """Audit single-node and multi-node allocations before starting model actors."""
+    # Preserve this module's deferred Ray bootstrap; the audit connects here.
+    import ray  # noqa: PLC0415
+
+    ray.init(address=ray_address, ignore_reinit_error=True)
+    try:
+        nodes = ray.nodes()
+        rows = audit_role_nodes(nodes, topology=topology)
+        report = json.dumps(
+            {"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": [asdict(row) for row in rows]},
+            sort_keys=True,
+        )
+        (report_directory / "role-topology.json").write_text(report + "\n")
+        _log(f"Verified physical role placement before model actors: {report}")
+    finally:
+        ray.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Roles.
 # ---------------------------------------------------------------------------
@@ -1989,6 +2010,9 @@ def run_head(
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
+    if args.role_topology is not None:
+        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
+
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
         env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
@@ -2302,7 +2326,15 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        args.ray_labels = args.role_topology.node_labels(_rank())
+        args.ray_labels = {
+            **args.role_topology.node_labels(_rank()),
+            **node_physical_labels(
+                rank=_rank(),
+                gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
+                host=os.environ[IRIS_NODE_NAME_ENV],
+                fabric_info=probe_fabric_info(),
+            ),
+        }
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

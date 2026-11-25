@@ -16,6 +16,7 @@ from megatron.core.transformer.module import Float16Module
 from skyrl_train.distributed.megatron.model_utils import (
     from_parallel_logits_to_logprobs,
     from_parallel_logits_to_logprobs_packed_sequences,
+    packed_next_token_targets,
     vocab_parallel_entropy,
 )
 from skyrl_train.distributed.megatron.megatron_utils import get_model_config
@@ -34,6 +35,7 @@ from skyrl_train.objective.objective import (
 from skyrl_train.objective.reduction import policy_data_weights, step_counts
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.timing_observability import PhaseBreakdown
+from skyrl_train.projected_softmax import projected_token_statistics
 from skyrl_train.utils.importance_ratio_diagnostics import LogRatioMonitor, gather_ratio_tensor
 
 from skyrl_train.distributed.megatron.megatron_utils import (
@@ -116,6 +118,7 @@ class MegatronModelWrapper:
         policy_loss_fn: Optional[Callable] = None,
         logprob_chunk_size: Any = _UNSET,
         vocabulary_size: int | None = None,
+        output_projection_chunk_size: int | None = None,
     ):
         self.cfg = config
         self.vocabulary_size = vocabulary_size
@@ -136,11 +139,73 @@ class MegatronModelWrapper:
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             )
         self._logprob_chunk_size = logprob_chunk_size
+        self._output_projection_chunk_size = output_projection_chunk_size
 
         config = get_model_config(self.actor_module[0])
         # This is set to None by default: https://github.com/NVIDIA/Megatron-LM/blob/07b22a05136a3cb08ece05f7de38cf6aeeb165fb/megatron/core/model_parallel_config.py#L95
         # use the build in finalize_model_grads function to all reduce gradients across parallelism dimensions
         config.finalize_model_grads_func = finalize_model_grads
+
+    def _projection_targets(self, sequences, attention_mask, packed_seq_params, config):
+        if packed_seq_params is not None:
+            packed = pack_padded_tokens(sequences, attention_mask, packed_seq_params)
+            targets = packed_next_token_targets(
+                packed, packed_seq_params.cu_seqlens_q_padded, mpu.get_context_parallel_group()
+            )
+        else:
+            if config.context_parallel_size != 1:
+                raise ValueError("Chunked CP output projection requires sample packing")
+            targets = compact_left_padded_tokens(sequences, attention_mask).roll(-1, dims=-1)
+        return targets.transpose(0, 1).reshape(-1)
+
+    def _output_statistics(self, *, hidden_states, output_layer, output_weight, context, config, scale_logits, **_):
+        """Return per-token log probabilities and entropy in place of full vocabulary logits."""
+        sequences, attention_mask, packed_seq_params, temperature = context
+        if config.tensor_model_parallel_size != 1 or config.sequence_parallel:
+            raise ValueError("Chunked output projection currently requires TP1 without sequence parallelism")
+        if config.defer_embedding_wgrad_compute or config.delay_wgrad_compute:
+            raise ValueError("Chunked output projection requires immediate weight-gradient computation")
+        assert self._output_projection_chunk_size is not None
+        weight = output_layer.weight if output_weight is None else output_weight
+        target_rows = self._projection_targets(sequences, attention_mask, packed_seq_params, config)
+        flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
+        if target_rows.shape[0] != flat_hidden.shape[0]:
+            raise ValueError("Output projection target order does not match the decoder hidden states")
+
+        def project(chunk, parameter):
+            logits, bias = output_layer(chunk.unsqueeze(1), weight=parameter, runtime_gather_output=False)
+            if bias is not None:
+                raise ValueError("Chunked GPT output requires the native bias-free output projection")
+            return scale_logits(logits).squeeze(1)
+
+        statistics = projected_token_statistics(
+            flat_hidden,
+            weight,
+            target_rows,
+            chunk_size=self._output_projection_chunk_size,
+            temperature=temperature,
+            entropy_gradient=self.cfg.trainer.algorithm.use_entropy_loss,
+            project=project,
+            fused_weight_gradient=config.gradient_accumulation_fusion,
+        )
+        return statistics.reshape(*hidden_states.shape[:-1], 2).transpose(0, 1).contiguous()
+
+    def _unpack_statistics(self, statistics, attention_mask, packed_seq_params):
+        logprobs, entropy = statistics.unbind(-1)
+        if packed_seq_params is not None:
+            logprobs = unpack_packed_token_values(logprobs, packed_seq_params, attention_mask)
+            entropy = unpack_packed_token_values(entropy, packed_seq_params, attention_mask)
+            # A packed sequence's last token predicts its first token only to keep the
+            # kernel rectangular. The existing scoring path excludes that circular target.
+            for row in range(attention_mask.shape[0]):
+                positions = attention_mask[row].nonzero(as_tuple=False).flatten()
+                if positions.numel():
+                    logprobs[row, positions[-1]] = 0
+            return logprobs[:, :-1], entropy
+        return (
+            scatter_token_values(logprobs, attention_mask, drop_last=True),
+            scatter_token_values(entropy, attention_mask, drop_last=False),
+        )
 
     def train(self):
         [module.train() for module in self.actor_module]
@@ -302,6 +367,7 @@ class MegatronModelWrapper:
         probe_row_indices: Optional[torch.Tensor] = None,
         num_actions: Optional[int] = None,
         record_recompute: bool = False,
+        temperature: float = 1.0,
     ):
         """Run the shared packed or left-unpadded Megatron model boundary.
 
@@ -353,6 +419,11 @@ class MegatronModelWrapper:
             # module (equivalence experiments) already returns module-precision outputs.
             inner = model.module if isinstance(model, MegatronDDP) else model
             precision_kwargs = {"fp32_output": False} if isinstance(inner, Float16Module) else {}
+            if self._output_projection_chunk_size is not None:
+                precision_kwargs.update(
+                    output_processor=self._output_statistics,
+                    output_processor_context=(sequences, attention_mask, packed_seq_params, temperature),
+                )
             outputs = model(
                 model_sequences,
                 model_position_ids,
@@ -398,11 +469,16 @@ class MegatronModelWrapper:
         def collection_func(logits, data, packed_seq_params):
             sequences = data.sequences
             if data.ftpo_chosen_mask is not None:
+                if self._output_projection_chunk_size is not None:
+                    raise ValueError("FTPO boundary logits require the unchunked output projection")
                 boundary_logits = compact_boundary_logits(
                     logits[..., : self.vocabulary_size], data.attention_mask, data.ftpo_chosen_mask
                 )
                 return boundary_logits.new_zeros(()), {"scores": boundary_logits}
 
+            if self._output_projection_chunk_size is not None:
+                token_logprobs, _ = self._unpack_statistics(logits, data.attention_mask.to(bool), packed_seq_params)
+                return token_logprobs.new_zeros(()), {"scores": token_logprobs}
             if temperature != 1.0:
                 logits.div_(temperature)
 
@@ -419,6 +495,7 @@ class MegatronModelWrapper:
                 rollout_routed_experts=batch.rollout_routed_experts,
                 probe_row_indices=batch.probe_row_indices,
                 num_actions=batch.num_actions,
+                temperature=temperature,
             )
 
             return outputs, partial(collection_func, data=batch, packed_seq_params=packed_seq_params)
@@ -543,6 +620,8 @@ class MegatronModelWrapper:
             rollout_action_logprobs = data.rollout_action_logprobs
             response_span_tags = data.response_span_tags
 
+            if self._output_projection_chunk_size is not None and (data.ftpo is not None or data.distillation is not None):
+                raise ValueError("Chunked output projection currently supports PPO without FTPO or top-K distillation")
             ftpo_inputs = None
             if data.ftpo is not None:
                 assert ftpo_normalization is not None
@@ -555,10 +634,17 @@ class MegatronModelWrapper:
                     ftpo_normalization,
                 )
             # FTPO's logit margin and reference tether use unscaled model logits.
-            if data.ftpo is None and temperature != 1.0:
+            if self._output_projection_chunk_size is None and data.ftpo is None and temperature != 1.0:
                 logits.div_(temperature)
 
-            token_logprobs = self._token_logprobs(logits, sequences, data.attention_mask.to(bool), packed_seq_params)
+            if self._output_projection_chunk_size is not None:
+                token_logprobs, token_entropies = self._unpack_statistics(
+                    logits, data.attention_mask.to(bool), packed_seq_params
+                )
+                if not self.cfg.trainer.algorithm.use_entropy_loss:
+                    token_entropies = token_entropies.detach()
+            else:
+                token_logprobs = self._token_logprobs(logits, sequences, data.attention_mask.to(bool), packed_seq_params)
 
             action_log_probs = token_logprobs[:, -num_actions:]
 
@@ -576,8 +662,9 @@ class MegatronModelWrapper:
 
             # Without an entropy loss the entropy is a metric only. Computing it under no_grad
             # avoids saving two vocab-sized copies of the logits for backward on the last stage.
-            with torch.set_grad_enabled(self.cfg.trainer.algorithm.use_entropy_loss):
-                token_entropies = self._token_entropies(logits, data.attention_mask.to(bool), packed_seq_params)
+            if self._output_projection_chunk_size is None:
+                with torch.set_grad_enabled(self.cfg.trainer.algorithm.use_entropy_loss):
+                    token_entropies = self._token_entropies(logits, data.attention_mask.to(bool), packed_seq_params)
             teacher = None
             if data.distillation is not None:
                 assert sparse_student_logprobs is not None
@@ -645,6 +732,7 @@ class MegatronModelWrapper:
                     rollout_routed_experts=batch.rollout_routed_experts,
                     num_actions=batch.num_actions,
                     record_recompute=True,
+                    temperature=temperature,
                 )
 
             return outputs, partial(loss_func, data=batch, packed_seq_params=packed_seq_params)
