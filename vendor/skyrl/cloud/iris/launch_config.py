@@ -87,6 +87,7 @@ class RunConfig:
     id: str = MISSING
     attempt_id: str = MISSING
     coordinator_iris_job_id: str | None = None
+    index: dict[str, Any] | None = None
     seed: int = 42
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value

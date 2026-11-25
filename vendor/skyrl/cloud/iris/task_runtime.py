@@ -34,6 +34,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -99,7 +100,6 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -107,7 +107,7 @@ from cloud.iris.ray_storage import (
     validate_ray_spill_dir,
 )
 from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
-from finestore.rl.run_records import read_attempt
+from finestore.rl.run_records import RunIndexIdentity
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -1366,30 +1366,60 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     """
     if not rendezvous_dir:
         return
-    import subprocess as _sp
 
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
     ts = int(time.time())
+    errors = []
 
-    def _run(cmd: str, timeout: int = 7) -> str:
+    def run_tool(*argv: str, timeout: int = 7, include_stderr: bool = False) -> str:
         try:
-            return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            return f"<{cmd!r} failed: {exc}>"
+            return subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if include_stderr else subprocess.DEVNULL,
+                text=True,
+                timeout=timeout,
+            ).stdout
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"{argv[0]} failed: {type(error).__name__}")
+            return ""
+
+    paths = [
+        path
+        for pattern in ("/tmp/*", "/tmp/ray/session*/logs", "/tmp/ray/session*/*spill*")
+        for path in glob.glob(pattern)
+    ]
+    usage = run_tool("du", "-sk", "--", *paths, timeout=9).splitlines() if paths else []
+    disk = sorted(
+        (line for line in usage if line.partition("\t")[0].isdigit()),
+        key=lambda line: int(line.partition("\t")[0]),
+        reverse=True,
+    )[:25]
+    oom = [
+        line
+        for line in run_tool("dmesg").splitlines()
+        if re.search(r"oom|killed process|out of memory|Xid", line, re.IGNORECASE)
+    ][-10:]
 
     summary = "\n".join(
         [
             f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
             "--- df -h /tmp /dev/shm ---",
-            _run("df -h /tmp /dev/shm 2>&1"),
-            "--- top /tmp disk hogs (ephemeral-storage eviction cause) ---",
-            _run("du -sh /tmp/* /tmp/ray/session*/logs /tmp/ray/session*/*spill* 2>/dev/null | sort -rh | head -25", 9),
+            run_tool("df", "-h", "/tmp", "/dev/shm", include_stderr=True),
+            "--- top /tmp disk usage in KiB (ephemeral-storage eviction cause) ---",
+            "\n".join(disk),
             "--- nvidia-smi (VRAM OOM cause) ---",
-            _run("nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv 2>&1"),
+            run_tool(
+                "nvidia-smi",
+                "--query-gpu=index,memory.used,memory.total,utilization.gpu",
+                "--format=csv",
+                include_stderr=True,
+            ),
             "--- top RSS procs (host-RAM OOM cause) ---",
-            _run("ps -eo pid,rss,comm --sort=-rss 2>/dev/null | head -12"),
+            "\n".join(run_tool("ps", "-eo", "pid,rss,comm", "--sort=-rss").splitlines()[:12]),
             "--- dmesg OOM/kill tail ---",
-            _run("dmesg 2>/dev/null | grep -iE 'oom|killed process|out of memory|Xid' | tail -10"),
+            "\n".join(oom),
+            *errors,
         ]
     )
     try:
@@ -1809,6 +1839,7 @@ class DriverOutputActivity:
 
     last_progress_at: float = field(default_factory=time.monotonic)
     condition: threading.Condition = field(default_factory=threading.Condition)
+
     def record(self, line: bytes) -> None:
         if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
             return
@@ -2325,16 +2356,8 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    run_id = args.run_id
-    try:
-        attempt = read_attempt(str(launch_config.artifacts.export_root), str(launch_config.run.attempt_id))
-        if attempt is not None:
-            run_id = attempt.index_run_id
-    except Exception as error:
-        _log(
-            f"[telemetry] index unavailable for attempt {launch_config.run.attempt_id} "
-            f"({type(error).__name__}); using native run ID"
-        )
+    index = launch_config.run.get("index")
+    run_id = RunIndexIdentity.model_validate(dict(index)).run_id if index is not None else args.run_id
     export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.

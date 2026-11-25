@@ -10,7 +10,7 @@ import math
 import re
 import statistics
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
@@ -30,7 +30,6 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLSpec,
-    read_skyrl_attempt,
     skyrl_execution,
     skyrl_step,
 )
@@ -475,6 +474,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
+    config["run"].pop("index", None)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
         del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
     inputs = launch["inputs"]
@@ -565,7 +565,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
-    for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
+    for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id", "run_index"):
         runtime.pop(field, None)
     if checkpoint := inputs.get("starting_checkpoint"):
         for field, identity in (
@@ -578,6 +578,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         config["skyrl"].pop("runtime", None)
     # Grader reports are attempt diagnostics, like other launch-output destinations.
     trainer = config["skyrl"]["trainer"]
+    trainer.pop("project_name", None)
     trainer.pop("grader_report_dir", None)
     trainer.pop("dump_grader_report", None)
     for section in ("trainer", "checkpoint_export"):
@@ -755,6 +756,8 @@ def _write_gate(
     control_pin: ControlPin,
     inputs: RunInputs,
     output: str,
+    run_attempts: tuple[AttemptRecord | None, ...] = (),
+    control_attempts: tuple[AttemptRecord | None, ...] = (),
 ) -> GateReport:
     preset_name = preset.name
     metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
@@ -762,13 +765,18 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, effect, reason = Verdict.INVALID, None, None
     try:
-        receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
         metadata = metadata.model_copy(
-            update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
+            update={"attempt_ids": tuple(receipt.attempt_id for receipt in run_attempts if receipt is not None)}
         )
+        for paths, attempts in ((run_paths, run_attempts), (control_paths, control_attempts)):
+            for path, receipt in zip(paths, attempts, strict=True):
+                if receipt is None:
+                    raise InvalidComparison(f"no stored native attempt at {path}")
         runs = [
-            with_requirements(with_objectives(read_measurements(path, preset), preset), inputs.requirements)
-            for path in run_paths
+            with_requirements(
+                with_objectives(read_measurements(path, preset, inputs, attempt=receipt), preset), inputs.requirements
+            )
+            for path, receipt in zip(run_paths, run_attempts, strict=True)
         ]
         if runs:
             provenance_fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
@@ -785,7 +793,10 @@ def _write_gate(
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
-        controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
+        controls = [
+            with_objectives(read_measurements(path, preset, attempt=receipt), preset)
+            for path, receipt in zip(control_paths, control_attempts, strict=True)
+        ]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
         control = control.model_copy(
@@ -902,6 +913,7 @@ def _gate_artifact(
         config = step.build_config(ctx)
         if not ctx.is_fingerprint:
             config.update(ctx.runtime_arg("paths"))
+            config.update(ctx.runtime_arg("evidence"))
         return config
 
     return _gate_with_evidence(
@@ -919,53 +931,62 @@ def _gate_artifact(
     )
 
 
-def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateReport]:
+def _stored_attempt(path: str) -> AttemptRecord | None:
+    try:
+        return read_stored_skyrl_attempt(path)
+    except (FileNotFoundError, SkyRLReceiptLookupError):
+        return None
+
+
+def _gate_with_evidence(
+    step: ArtifactStep[GateReport], run_attempts: tuple[AttemptRecord | None, ...] | None = None
+) -> ArtifactStep[GateReport]:
     target = gate_target(step)
-    name = target.evidence_name(read_skyrl_attempt)
-    return replace(step, name=name)
+    if run_attempts is None:
+        run_attempts = tuple(map(_stored_attempt, target.outputs))
+    control_attempts = tuple(map(_stored_attempt, target.control_outputs))
+    return replace(
+        step,
+        name=target.evidence_name(run_attempts, control_attempts),
+        runtime_args={
+            **step.runtime_args,
+            "evidence": {"run_attempts": run_attempts, "control_attempts": control_attempts},
+        },
+    )
 
 
 class GateTarget(BaseModel):
-    """The fixed gate address and inputs committed at submission."""
+    """The gate and ordered input addresses fixed at submission."""
 
     name: str
     version: str
     candidates: tuple[str, ...]
     outputs: tuple[str, ...]
+    controls: tuple[str, ...]
+    control_outputs: tuple[str, ...]
 
-    def evidence_name(self, read_attempt: Callable[[str], AttemptRecord | None]) -> str:
-        return self.name + "-evidence-" + _gate_attempt_digest(self.candidates, self.outputs, read_attempt)
-
-    def stored_path(self, prefix: str) -> str:
-        return prefix_join(prefix, f"{self.evidence_name(read_stored_skyrl_attempt)}/{self.version}")
+    def evidence_name(
+        self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
+    ) -> str:
+        evidence = [
+            (identity, receipt.native.model_dump(mode="json") if receipt is not None else None)
+            for identities, receipts in ((self.candidates, candidates), (self.controls, controls))
+            for identity, receipt in zip(identities, receipts, strict=True)
+        ]
+        return self.name + "-evidence-" + fingerprint_hash(canonical_json(evidence))
 
 
 def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    paths = step.runtime_args["paths"]
     return GateTarget(
         name=step.runtime_args["name"],
         version=step.version,
         candidates=tuple(config["run_paths"]),
-        outputs=tuple(step.runtime_args["paths"]["run_paths"]),
+        outputs=tuple(paths["run_paths"]),
+        controls=tuple(config["control_paths"]),
+        control_outputs=tuple(paths["control_paths"]),
     )
-
-
-def _gate_attempt_digest(
-    candidates: Sequence[str],
-    run_paths: Sequence[str],
-    read_attempt: Callable[[str], AttemptRecord | None],
-) -> str:
-    attempts = []
-    for identity, path in zip(candidates, run_paths, strict=True):
-        try:
-            receipt = read_attempt(path)
-        except (FileNotFoundError, SkyRLReceiptLookupError):
-            state, attempt = "unresolved", None
-        else:
-            state = receipt.native.result.state if receipt else None
-            attempt = receipt.native.config["run"]["attempt_id"] if receipt else None
-        attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
-    return fingerprint_hash(canonical_json(attempts))
 
 
 def gate_step(
@@ -1061,6 +1082,8 @@ def command(table: ModelPresets) -> click.Command:
     return main
 
 
-def completed_gate(gate: ArtifactStep[GateReport] | None) -> ArtifactStep[GateReport] | None:
-    """Bind current native attempt evidence to the gate identity fixed at submission."""
-    return _gate_with_evidence(gate) if gate is not None else None
+def completed_gate(
+    gate: ArtifactStep[GateReport] | None, attempts: tuple[AttemptRecord | None, ...] | None = None
+) -> ArtifactStep[GateReport] | None:
+    """Bind native attempt evidence to the gate identity fixed at submission."""
+    return _gate_with_evidence(gate, attempts) if gate is not None else None

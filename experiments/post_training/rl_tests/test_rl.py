@@ -112,6 +112,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             pin = table.control_pins[preset.control_preset]
             assert status["control_pin"]["commit"] == pin.commit
             assert status["control_pin"]["version"] == pin.version
+            assert status["control_pin"]["current"] is None
         if preset.name == "eval-short":
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
@@ -786,20 +787,17 @@ def test_submission_exit_codes_and_publication_retries(
             assert_submission_link()
         for path, data in pending.items():
             path.write_bytes(data)
-        if case == "mixed-native-failed":
+        mixed_failure = case == "mixed-native-failed" and not phase["retry"]
+        if mixed_failure:
             receipt = json.loads((source / "terminal.json").read_text())
-            if not phase["retry"]:
-                receipt["result"]["state"] = "failed"
-                write_receipt(source, receipt)
-                (source / "terminal.json").unlink()
-                return SimpleNamespace(state=JobState.FAILED)
+            receipt["result"]["state"] = "failed"
+            write_receipt(source, receipt)
+            (source / "terminal.json").unlink()
+        elif case == "mixed-native-failed":
+            receipt = json.loads((source / "terminal.json").read_text())
             metrics = read_skyrl_metrics(str(source), attempt_id="native-0")
             receipt["config"]["run"]["attempt_id"] = "native-retry"
             write_receipt(source, receipt)
-            write_attempt(
-                str(source / "exports"),
-                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=73),
-            )
             copy_evaluations(source, "native-0", "native-retry")
             for row in metrics.values():
                 row["attempt_id"] = "native-retry"
@@ -808,8 +806,26 @@ def test_submission_exit_codes_and_publication_retries(
             (source / "terminal.json").unlink()
             (source / "resolved-launch.yaml").unlink()
             return SimpleNamespace(state=JobState.FAILED)
-        if case not in {"missing", "native-failed"} and built.gate is not None:
-            run(gate.completed_gate(built.gate))
+        selected = {}
+        for path in sources:
+            native = snowball.read_stored_skyrl_attempt(str(path))
+            selected[str(path)] = native.attempt_id if native is not None else None
+            if native is not None:
+                launch = native.native.config
+                launch["run"]["coordinator_iris_job_id"] = str(job)
+                write_attempt(
+                    str(path / "exports"),
+                    AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, config=launch),
+                )
+        gate_path = None
+        if not mixed_failure and case not in {"missing", "native-failed"} and built.gate is not None:
+            gate_path = run(gate.completed_gate(built.gate))[0].path
+        if sources:
+            snowball.rl_publication.store_coordinator_evidence(
+                str(sources[0]),
+                str(job),
+                snowball.rl_publication.CoordinatorEvidence(attempts=selected, gate_path=gate_path),
+            )
         if case == "changed-source":
             monkeypatch.setattr(
                 Provenance,
@@ -818,7 +834,7 @@ def test_submission_exit_codes_and_publication_retries(
                     "tree-edited-before-publication", "commit-one", True, "branch", "test"
                 ),
             )
-        return SimpleNamespace(state=JobState.FAILED if case in {"native-failed"} else JobState.SUCCEEDED)
+        return SimpleNamespace(state=JobState.FAILED if mixed_failure or case == "native-failed" else JobState.SUCCEEDED)
 
     client, job = fake_iris(monkeypatch, "dashboard-coordinator")
     client.job.return_value.state_only.side_effect = lambda: finish().state
@@ -863,13 +879,13 @@ def test_submission_exit_codes_and_publication_retries(
             with monkeypatch.context() as child:
                 for key, value in kwargs["environment"].env_vars.items():
                     child.setenv(key, value)
-                child.setenv("IRIS_TASK_ID", "/test-user/coordinator/0")
+                child.setenv("IRIS_TASK_ID", f"{job}/0")
                 child.setattr(client, "submit", lambda **kwargs: pytest.fail("Coordinator submitted another job"))
                 child.setattr(
                     "experiments.post_training.rl_publication.publish_result",
                     lambda *args: pytest.fail("Coordinator contacted Marina"),
                 )
-                info = JobInfo(task_id=JobName.from_wire("/test-user/coordinator/0"))
+                info = JobInfo(task_id=JobName.from_wire(f"{job}/0"))
                 with iris_ctx_scope(IrisContext.from_job_info(info)):
                     completed = CliRunner().invoke(selected, invoked)
                 assert completed.exit_code == 0, (completed.output, completed.exception)
@@ -1011,9 +1027,6 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     historical_launch = json.loads(json.dumps(launch))
     historical_launch["skyrl"]["trainer"]["max_steps"] += 1
     historical_version = gate.config_version(historical_launch)
-    if early_failure:
-        (source / "terminal.json").unlink()
-        (source / "resolved-launch.yaml").unlink()
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
@@ -1131,6 +1144,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         replayed = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
         assert replayed.exit_code == 0, (replayed.output, replayed.exception)
         assert publications[-1].failed_facts == ["coordinator_interrupted"]
+    assert {row.attempt_id for row in publications} == {"native-indexed"}
     running = [row for row in publications if row.status == "running"]
     assert [row.attempt_id for row in running] == ([] if outcome == "native-failure" else ["native-indexed"])
     terminal = next(row for row in publications if row.attempt_id == "native-indexed" and row.status != "running")
