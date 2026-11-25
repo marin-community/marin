@@ -134,8 +134,8 @@ def _expected_summary(run: ExpectedRun, release_commit: str | None) -> str:
 
 
 def _release_commit(policy: EvalPolicy) -> str | None:
-    """The commit a released policy's tag names, or None for a trial policy."""
-    if policy.release_tag is None:
+    """The commit a released policy's tag names, or None for a policy not released."""
+    if not policy.released:
         return None
     try:
         return git_output(["rev-parse", f"{policy.release_tag}^{{commit}}"], find_project_root())
@@ -211,6 +211,27 @@ def show(version: str, candidate_name: str | None) -> None:
                 click.echo(f"override: {override.evaluation.name} ({override.reason})")
 
 
+def _check_checkout(policy: EvalPolicy, *, recorded: str, smoke: bool) -> None:
+    """Refuse a launch whose records would not name the code that ran, or a release launched off its tag.
+
+    A smoke run of a policy not released may launch from a dirty checkout or another recorded commit.
+    """
+    root = find_project_root()
+    release = _release_commit(policy)
+    strict = not smoke or release is not None
+    if changes := git_output(["status", "--porcelain"], root):
+        if strict:
+            raise click.ClickException(f"commit or remove uncommitted changes before this launch:\n{changes}")
+        logger.warning("smoke run from a checkout with uncommitted changes; its records name only HEAD")
+    head = git_output(["rev-parse", "HEAD"], root)
+    if strict and recorded != head:
+        raise click.ClickException(
+            f"records would name commit {recorded}, not HEAD {head}; unset MARIN_GIT_SHA and GIT_COMMIT"
+        )
+    if release is not None and head != release:
+        raise click.ClickException(f"{policy.version} launches from its tag: git checkout {policy.release_tag}")
+
+
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @click.option("--candidate", "candidate_name", required=True, help="Candidate to evaluate.")
@@ -240,11 +261,6 @@ def launch(
     """
     policy = POLICIES[version]
     candidate = _candidate(policy, candidate_name)
-    release = _release_commit(policy)
-    if not dry_run and (changes := git_output(["status", "--porcelain"], find_project_root())):
-        if limit is None or release is not None:
-            raise click.ClickException(f"commit or remove uncommitted changes before a full launch:\n{changes}")
-        logger.warning("smoke run from a checkout with uncommitted changes; its records name only HEAD")
     names = None if evaluations is None else {name.strip() for name in evaluations.split(",") if name.strip()}
     try:
         specs = launch_specs(
@@ -258,13 +274,8 @@ def launch(
         batches = [prepare_evaluation_batch(spec) for spec in specs]
     except ValueError as error:
         raise click.ClickException(str(error)) from error
-    recorded, head = batches[0].provenance.git_sha, git_output(["rev-parse", "HEAD"], find_project_root())
-    if not dry_run and (limit is None or release is not None) and recorded != head:
-        raise click.ClickException(
-            f"records would name commit {recorded}, not HEAD {head}; unset MARIN_GIT_SHA and GIT_COMMIT"
-        )
-    if not dry_run and release is not None and head != release:
-        raise click.ClickException(f"{version} launches from its tag: git checkout {policy.release_tag}")
+    if not dry_run:
+        _check_checkout(policy, recorded=batches[0].provenance.git_sha, smoke=limit is not None)
     for batch in batches:
         require_coreweave_credentials(batch)
     _print_launch(policy, candidate, batches)

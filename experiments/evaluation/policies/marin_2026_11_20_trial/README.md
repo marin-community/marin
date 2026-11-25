@@ -24,13 +24,15 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
 - `launch` submits a candidate's evaluations. Re-running the same launch skips runs whose record
   succeeded and reruns ones that failed, so a run that succeeded but is invalid (for example, another
   server window) is not rerun; `status` says so for each such run.
-- `status` shows each evaluation's full and smoke run: valid, invalid, or not run. A ⚠ marks a run
+- `status` shows each evaluation's full and smoke run: valid, invalid, not run, or differing from
+  this checkout (run at another commit with other inputs). A ⚠ marks a run
   whose replies often hit their output cap or whose attempts often went unscored.
 - `verify` checks any run against the policy and names each field that differs.
 
-A released policy sets `release_tag`: it launches only from a clean checkout of that tag, and
-`status` and `verify` mark its runs from any other commit invalid. This trial policy sets none, so it
-launches from any commit.
+A policy marked `released` launches only from a clean checkout of its tag, `eval-policy-<version>`,
+and `status` and `verify` mark its runs from any other commit invalid. A fix to a released policy is
+a new version, so its runs get new paths. This trial policy is not released and launches from any
+commit.
 
 All three need CoreWeave credentials.
 

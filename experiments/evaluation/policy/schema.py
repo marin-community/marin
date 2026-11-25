@@ -95,8 +95,13 @@ class EvalPolicy:
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()
     overrides: tuple[PolicyOverride, ...] = ()
-    release_tag: str | None = None
-    """The git tag a released version launches from; every run of it must name that tag's commit."""
+    released: bool = False
+    """A released version launches only from its ``release_tag``, and every run of it must name that tag's commit."""
+
+    @property
+    def release_tag(self) -> str:
+        """The git tag a release of this version is cut as."""
+        return f"eval-policy-{self.version}"
 
     def __post_init__(self) -> None:
         exceptions = (*self.exclusions, *self.overrides)
