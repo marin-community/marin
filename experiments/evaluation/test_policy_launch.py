@@ -52,6 +52,11 @@ def test_a_smaller_unenforced_context_gets_a_server_of_exactly_that_window():
     }
 
 
+def test_an_agent_run_below_its_input_limit_gets_a_server_of_that_window():
+    # The agent's input is the smaller of its limit and the server's window, so the server sets it.
+    assert _windows(["swebench-verified"], **{"swebench-verified": 16_384}) == {(16_384, True, ("swebench-verified",))}
+
+
 def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
     specs = launch_specs(
         POLICY,

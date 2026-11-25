@@ -55,7 +55,32 @@ def test_an_unset_context_is_the_benchmarks_window_and_a_different_one_is_reject
     windowed = PolicyEvaluation("mrcr", protocol="32k")
     assert _settings(resolve(_policy(windowed), LARGE)) == {"mrcr-32k": (32_704, None, None)}
     with pytest.raises(ValueError, match="mrcr-32k"):
-        resolve(_policy(replace(windowed, context=CONTEXT)), LARGE)
+        resolve(_policy(replace(windowed, context=30_000)), LARGE)
+
+
+def test_an_override_may_run_an_agent_below_its_input_limit():
+    # The worker gives an agent the smaller of its input limit and the served window.
+    agent = PolicyEvaluation("ds-1000", protocol="terminus-2")
+    tiny = PolicyCandidate(model=ModelConfig(name="tiny", location="org/tiny", revision=REVISION), max_context=16_384)
+    policy = EvalPolicy(version="test", context=CONTEXT, candidates=(LARGE, tiny), in_distribution=(agent,))
+    with pytest.raises(ValueError, match="tiny on ds-1000"):
+        resolve(policy, tiny)
+
+    smaller = PolicyOverride(candidate=tiny, evaluation=agent, context=16_384, reason="its window")
+    assert _settings(resolve(replace(policy, overrides=(smaller,)), tiny)) == {
+        "ds-1000-terminus-2": (16_384, None, None)
+    }
+    above = PolicyOverride(candidate=LARGE, evaluation=agent, context=40_000, reason="more room")
+    with pytest.raises(ValueError, match="large on ds-1000"):
+        resolve(replace(policy, overrides=(above,)), LARGE)
+
+
+def test_a_candidate_too_small_for_a_protocol_window_must_be_excluded():
+    windowed = PolicyEvaluation("mrcr", protocol="65k")
+    with pytest.raises(ValueError, match="small on mrcr-65k"):
+        resolve(_policy(windowed), SMALL)
+    excluded = PolicyExclusion(candidate=SMALL, evaluation=windowed, reason="window too small")
+    assert _settings(resolve(_policy(windowed, exclusions=(excluded,)), SMALL)) == {}
 
 
 def test_context_beyond_the_candidate_window_needs_an_override():
