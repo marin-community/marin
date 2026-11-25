@@ -333,6 +333,8 @@ class RecoveryRound:
     cluster: str
     storage: RoundStorage
     resolved_plan: FilePin
+    pools: str
+    openresearcher_service: OpenResearcherService | None = None
 
 
 @dataclass(frozen=True)
@@ -497,7 +499,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
     if plan["rl"]["execution"]["cluster"] != spec.cluster:
         raise ValueError("Recovery round cluster differs from the pinned plan")
     # The pinned source plan stays immutable; only this active recipe omits the retired key.
-    plan["rl"]["config"]["trainer"]["algorithm"].pop("tis_splice")
+    plan["rl"]["config"]["trainer"]["algorithm"].pop("tis_splice", None)
     plan["marin_revision"] = source_revision
     plan["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], source_revision)
     plan["resolved_sha256"] = hashlib.sha256(
@@ -511,7 +513,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
         if record["fingerprint"] != pin["fingerprint"] or record["version"] != pin["version"]:
             raise ValueError(f"Recovery input completion changed: {label}")
         adopted[label] = ArtifactStep.adopt(f"{spec.name}/{suffix}", spec.version, pin["uri"], config=pin)
-    binding = POOLS["exp4-regional"]
+    binding = POOLS[spec.pools]
     pools = round_pools(binding)
     pinned = plan["datasets"]["pools"]
     if pinned["uri"] != pools.dataset["uri"] or pinned["composition"] != pools.dataset["composition"]:
@@ -523,6 +525,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
         data_artifacts=pools.artifacts,
         curriculum=pools.curriculum,
         completed_sft=CompletedSft(adopted["sft"], adopted["handoff"]),
+        openresearcher_service=spec.openresearcher_service,
     )
 
 

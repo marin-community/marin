@@ -1,0 +1,18 @@
+# Reuse the completed Exp6 SFT and handoff; this graph has no SFT training stage.
+schema: 1
+name: long-loop-exp6/round6
+version: 2026.11.24.158
+slug: mochi-exp6-rl-recovery
+cluster: cw-rno2a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp6
+  temporary_prefix: s3://marin-us-east-08a/tmp
+resolved_plan:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp6/config/2026.11.24.158/continuation-plan.json
+  sha256: 9e8285badcf5a089834be09819a4df1343c9811c118058798c49971be1f6a51c
+pools: exp5-prepared
+openresearcher_service:
+  dataset_id: open-athena/openresearcher-openresearcher-dataset-service-20261121-v1
+  dataset_revision: 0c4f39584d7f0121e97f6ad4f4761749add56fef
+  parquet_sha256: 346e892a7052d1f93ee31ae208100adccee06ff1918344efe2974fabc331226c
+  index_uri: s3://marin-rno2a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1

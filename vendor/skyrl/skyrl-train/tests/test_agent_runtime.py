@@ -68,6 +68,50 @@ class UnusedDecoder:
 
 
 @pytest.mark.asyncio
+async def test_original_trial_keeps_turn_limit_below_trajectory_budget(tmp_path, harbor_package):
+    settings = InstalledAgentSettings(
+        agent=AgentConfig(
+            name="pi",
+            kwargs={
+                "thinking_format": "chat-template",
+                "model_info": {"max_input_tokens": 131072, "max_output_tokens": 24576},
+                "compaction_reserve_tokens": 24576,
+            },
+        ),
+        output_path=str(tmp_path / "attempts"),
+        setup_timeout=360,
+        run_timeout=1800,
+        cleanup_timeout=120,
+        service_startup_timeout=60,
+        service_shutdown_timeout=60,
+    )
+    runtime = InstalledAgentRuntime(
+        settings,
+        AgentInferenceBackend("fixture", 131072, unexpected_model_request, UnusedDecoder()),
+        98304,
+        daytona_connection=DaytonaConnection(api_key="training-key"),
+        eval_daytona_connection=DaytonaConnection(api_key="evaluation-key"),
+    )
+    assert runtime.validate_agent()["model_info"]["max_output_tokens"] == 24576
+    assert runtime.limits.max_output_tokens == 24576
+    trial = await Trial.create(
+        TrialConfig(
+            task=TaskConfig(path=harbor_package),
+            agent=runtime.serving_agent_config(settings.agent, "http://127.0.0.1:1/v1"),
+            environment={"type": "daytona"},
+            trials_dir=tmp_path / "trials",
+            trial_name="turn-budget",
+        )
+    )
+    assert isinstance(trial.agent, Pi)
+    assert trial.agent.rollout_correlation_id is not None
+
+    settings.agent.kwargs["compaction_reserve_tokens"] = 16384
+    with pytest.raises(ValueError, match="compaction_reserve_tokens must be at least max_output_tokens"):
+        runtime.validate_agent()
+
+
+@pytest.mark.asyncio
 async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_credentials(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_JUDGE_KEY", "judge-key")
     monkeypatch.setenv("TEST_RL_KEY", "training-key")

@@ -110,7 +110,10 @@ class InstalledAgentRuntime:
         self.protected_values = frozenset(
             value for value in (daytona_connection.api_key, eval_daytona_connection.api_key) if value
         )
-        self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
+        # The runner budget covers the complete trajectory. The installed
+        # agent's declared output limit bounds each individual model turn.
+        turn_limit = settings.agent.kwargs.get("model_info", {}).get("max_output_tokens", max_output_tokens)
+        self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, min(max_output_tokens, turn_limit))
         self.resources = AsyncExitStack()
         self.port: int | None = None
 
@@ -135,6 +138,35 @@ class InstalledAgentRuntime:
         finally:
             self.port = None
             set_global_state(None, None)
+
+    def serving_agent_config(self, source: AgentConfig, api_base: str) -> AgentConfig:
+        """Bind an installed agent to the model relay without widening its turn limit."""
+        return source.model_copy(
+            update={
+                "model_name": source.model_name or f"hosted_vllm/{self.backend.model_name}",
+                "model_alias": f"hosted_vllm/{self.backend.model_name}",
+                "kwargs": {
+                    **source.kwargs,
+                    "api_base": api_base,
+                    "api_key": "EMPTY",
+                    "collect_rollout_details": True,
+                    "model_info": {
+                        **source.kwargs.get("model_info", {}),
+                        "max_input_tokens": self.backend.max_model_len,
+                        "max_output_tokens": self.limits.max_output_tokens,
+                    },
+                },
+            }
+        )
+
+    def validate_agent(self) -> dict:
+        """Construct the serving agent on CPU without starting a sandbox or relay."""
+        config = self.serving_agent_config(self.settings.agent, "http://127.0.0.1:1/v1")
+        with tempfile.TemporaryDirectory(prefix="skyrl-agent-preflight-") as logs:
+            agent = AgentFactory.create_agent_from_config(config, logs_dir=Path(logs))
+            if not isinstance(agent, BaseInstalledAgent) or agent.rollout_correlation_id is None:
+                raise ValueError("Harbor training requires an installed agent with rollout capture")
+        return {"agent": config.name, "model_info": config.kwargs["model_info"]}
 
     async def run(
         self,
@@ -327,22 +359,7 @@ class InstalledAgentRuntime:
         ):
             api_base = await endpoint.api_base(required_lifetime=capability_lifetime)
             source = self.settings.agent if agent is None else agent
-            yield source.model_copy(
-                update={
-                    "model_name": source.model_name or f"hosted_vllm/{self.backend.model_name}",
-                    "model_alias": f"hosted_vllm/{self.backend.model_name}",
-                    "kwargs": {
-                        **source.kwargs,
-                        "api_base": api_base,
-                        "api_key": "EMPTY",
-                        "collect_rollout_details": True,
-                        "model_info": {
-                            "max_input_tokens": self.backend.max_model_len,
-                            "max_output_tokens": self.limits.max_output_tokens,
-                        },
-                    },
-                }
-            )
+            yield self.serving_agent_config(source, api_base)
 
     async def _run_trial(
         self,

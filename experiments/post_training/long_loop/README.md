@@ -416,6 +416,11 @@ sampling and telemetry gaps remain documented there.
 
 ## RL-only continuation
 
+A recovery round pins its completed SFT and handoff artifacts and names its curriculum
+pools and retrieval service explicitly. It never rebuilds SFT. The CPU launch preflight
+also constructs the serving agent with its bound model limits: the per-turn output cap
+must remain separate from the total trajectory budget and fit the compaction reserve.
+
 After SFT commits, pin its selection, checkpoint metadata/manifest, consumed config,
 source lineage, and payload inventory in an `adopted_sft` file. Reference that file
 by path and SHA-256 in the run spec. Use a fresh runtime version. Missing or changed

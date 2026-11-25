@@ -3,6 +3,7 @@ name: long-loop-exp4/round4
 version: 2026.11.19.82
 slug: mochi-exp4-harbor-recovery
 cluster: cw-rno2a
+pools: exp4-regional
 storage:
   output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4
   temporary_prefix: s3://marin-us-east-08a/tmp

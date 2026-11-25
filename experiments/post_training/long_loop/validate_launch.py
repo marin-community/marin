@@ -178,6 +178,9 @@ async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) ->
         return {
             "worker_type": type(worker).__name__,
             "installed_agent": worker.installed_agents is not None,
+            "installed_agent_construction": (
+                None if worker.installed_agents is None else worker.installed_agents.validate_agent()
+            ),
             "judge_base_url": None if worker.judge_connection is None else worker.judge_connection.base_url,
             "inference_engines": 0,
             "source_tasks": validate_source_tasks(launch, worker) if check_task_inputs else [],
