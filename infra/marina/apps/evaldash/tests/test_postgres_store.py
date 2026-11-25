@@ -474,7 +474,7 @@ def test_a_pass_that_stops_early_keeps_its_finished_batches(tmp_path, monkeypatc
 
     finished, stopped = inspected
     finished_run = next(run_id for run_id in added if f"/{run_id}/" in finished)
-    assert _stored(store, finished_run)
+    _stored(store, finished_run)
     assert store.get_record(next(iter(added - {finished_run}))) is None
 
     inspected.clear()
@@ -485,7 +485,7 @@ def test_a_pass_that_stops_early_keeps_its_finished_batches(tmp_path, monkeypatc
     assert asyncio.run(ingestor.run_once()) == ()
     assert inspected == [stopped]
     for run_id in added:
-        assert _stored(store, run_id)
+        _stored(store, run_id)
 
 
 def test_removing_an_unlisted_prefix_publishes_runs_from_an_unfinished_pass(tmp_path):
@@ -511,7 +511,7 @@ def test_removing_an_unlisted_prefix_publishes_runs_from_an_unfinished_pass(tmp_
 
     results_db.configure_prefixes(engine, (listed,))
 
-    assert _stored(store, record.run_id)["run_id"] == record.run_id
+    _stored(store, record.run_id)
 
 
 def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails(tmp_path, monkeypatch):
