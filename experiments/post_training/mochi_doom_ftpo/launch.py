@@ -5,6 +5,7 @@
 
 import os
 from dataclasses import replace
+from fractions import Fraction
 
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy, SkyRLRolePlan
@@ -27,6 +28,7 @@ from experiments.post_training.mochi_doom_ftpo.constants import (
 )
 from experiments.post_training.rl_presets import (
     STOP_TOKEN_IDS,
+    BatchMix,
     Evaluation,
     Generation,
     Layout,
@@ -35,6 +37,12 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
 )
+
+QUALIFIED_VERSION = "2026.11.25.1"
+QUALIFIED_TASKS = f"{SELECTION_NAME}-targets@{QUALIFIED_VERSION}"
+# Frozen from the sealed baseline and recorded in the qualified selection recipe.
+TARGET_GROUPS = {"math": 21, "code32k": 11, "rgym32k": 11, "mcq32k": 11, "struct32k": 10}
+TARGET_BATCH_MIX = BatchMix({family: Fraction(count, TRAIN_BATCH_SIZE) for family, count in TARGET_GROUPS.items()})
 
 MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -303,7 +311,10 @@ RESERVE = replace(
 MATH = replace(
     BASELINE,
     name="doom-math",
-    tasks=f"{SELECTION_NAME}-math@{VERSION}",
+    revision=QUALIFIED_VERSION,
+    tasks=f"{SELECTION_NAME}-targets-math@{QUALIFIED_VERSION}",
+    held_out_tasks=QUALIFIED_TASKS,
+    batch_mix=BatchMix({"math": Fraction(1)}),
     recipe=Recipe(layout=TRAIN_LAYOUT, fixed_reply_tokens=None, config=training_config(16384, 3e-6)),
     updates=12,
     measured=range(1, 13),
@@ -333,15 +344,16 @@ SMOKE = replace(
     recipe=replace(MATH.recipe, config=training_config(32768, 3e-6)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
-MIXED = replace(MATH, name="doom-mixed", tasks=f"{SELECTION_NAME}@{VERSION}", tasks_input="required")
+MIXED = replace(MATH, name="doom-mixed", tasks=QUALIFIED_TASKS, tasks_input="required", batch_mix=TARGET_BATCH_MIX)
 LONG = replace(
     SMOKE,
     name="doom-long",
     checkpoints="best",
     export="best",
     additional_callbacks=MATH.additional_callbacks,
-    tasks=f"{SELECTION_NAME}@{VERSION}",
+    tasks=QUALIFIED_TASKS,
     tasks_input="required",
+    batch_mix=TARGET_BATCH_MIX,
     updates=4,
     measured=range(1, 5),
     recipe=replace(SMOKE.recipe, config=training_config(32768, 6e-7)),
@@ -353,13 +365,41 @@ LONG_16K = replace(
     recipe=replace(LONG.recipe, config=training_config(16384, 6e-7)),
     evaluations=(evaluation("pilot", "validation", 16384, every=1, at_start=True),),
 )
-EVAL = replace(BASELINE, name="doom-eval", recipe=replace(BASELINE.recipe, layout=EVAL_LAYOUT))
+EVAL = replace(
+    BASELINE,
+    name="doom-eval",
+    revision=QUALIFIED_VERSION,
+    tasks=QUALIFIED_TASKS,
+    held_out_tasks=QUALIFIED_TASKS,
+    recipe=replace(BASELINE.recipe, layout=EVAL_LAYOUT),
+)
 EVAL_GREEDY = replace(EVAL, name="doom-eval-greedy", evaluations=BASELINE.evaluations[:2])
+EVAL_SAMPLED = replace(EVAL, name="doom-eval-sampled", evaluations=BASELINE.evaluations[2:])
+CONFIRM = replace(EVAL, name="doom-confirm", recipe=replace(EVAL.recipe, layout=BASELINE_LAYOUT))
+CONFIRM_GREEDY = replace(CONFIRM, name="doom-confirm-greedy", evaluations=EVAL_GREEDY.evaluations)
+CONFIRM_SAMPLED = replace(CONFIRM, name="doom-confirm-sampled", evaluations=EVAL_SAMPLED.evaluations)
 MOCHI_DOOM = ModelPresets(
     model="mochi",
     namespace="mochi-doom-ftpo",
     control_pins={},
-    presets=(BASELINE, BASELINE_32K, SAMPLED, RESERVE, SMOKE, MATH, MIXED, LONG, LONG_PP16, LONG_16K, EVAL, EVAL_GREEDY),
+    presets=(
+        BASELINE,
+        BASELINE_32K,
+        SAMPLED,
+        RESERVE,
+        SMOKE,
+        MATH,
+        MIXED,
+        LONG,
+        LONG_PP16,
+        LONG_16K,
+        EVAL,
+        EVAL_GREEDY,
+        EVAL_SAMPLED,
+        CONFIRM,
+        CONFIRM_GREEDY,
+        CONFIRM_SAMPLED,
+    ),
     needs_completed_default_export=False,
 )
 
