@@ -143,6 +143,16 @@ def _release_commit(policy: EvalPolicy) -> str | None:
         raise click.ClickException(f"{policy.version} is released as {policy.release_tag}; fetch its tag") from error
 
 
+def _evaluation_names(_context: click.Context, _parameter: click.Parameter, value: str | None) -> frozenset[str] | None:
+    """Parse ``--evaluations``: None when it is absent, else the evaluations it names, at least one."""
+    if value is None:
+        return None
+    names = frozenset(name.strip() for name in value.split(",") if name.strip())
+    if not names:
+        raise click.BadParameter("name at least one evaluation")
+    return names
+
+
 @click.group()
 def cli() -> None:
     """Show, launch and check eval policies."""
@@ -241,7 +251,12 @@ def _check_checkout(policy: EvalPolicy, *, recorded: str, smoke: bool) -> None:
     type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
     help="Iris priority band for the orchestrator and serve jobs.",
 )
-@click.option("--evaluations", default=None, help="Comma-separated evaluation names; default every one.")
+@click.option(
+    "--evaluations",
+    default=None,
+    callback=_evaluation_names,
+    help="Comma-separated evaluation names; default every one.",
+)
 @click.option("--limit", type=click.IntRange(min=1), default=None, help="Cap items per task; marks a smoke run.")
 @click.option("--federated-cluster", default=None, help="GPU cluster to serve on; defaults to the fleet profile.")
 @click.option("--dry-run", is_flag=True, help="Resolve and print each server's launch without submitting.")
@@ -249,7 +264,7 @@ def launch(
     version: str,
     candidate_name: str,
     priority: str,
-    evaluations: str | None,
+    evaluations: frozenset[str] | None,
     limit: int | None,
     federated_cluster: str | None,
     dry_run: bool,
@@ -261,12 +276,11 @@ def launch(
     """
     policy = POLICIES[version]
     candidate = _candidate(policy, candidate_name)
-    names = None if evaluations is None else {name.strip() for name in evaluations.split(",") if name.strip()}
     try:
         specs = launch_specs(
             policy,
             candidate,
-            evaluations=names,
+            evaluations=evaluations,
             limit=limit,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
