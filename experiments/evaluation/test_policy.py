@@ -4,7 +4,7 @@
 from dataclasses import replace
 
 import pytest
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, ServeConfig
 
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import (
@@ -75,12 +75,29 @@ def test_an_override_may_run_an_agent_below_its_input_limit():
         resolve(replace(policy, overrides=(above,)), LARGE)
 
 
-def test_a_candidate_too_small_for_a_protocol_window_must_be_excluded():
-    windowed = PolicyEvaluation("mrcr", protocol="65k")
-    with pytest.raises(ValueError, match="small on mrcr-65k"):
-        resolve(_policy(windowed), SMALL)
-    excluded = PolicyExclusion(candidate=SMALL, evaluation=windowed, reason="window too small")
-    assert _settings(resolve(_policy(windowed, exclusions=(excluded,)), SMALL)) == {}
+def test_a_candidate_served_below_a_declared_window_must_be_excluded_or_overridden():
+    # A benchmark that declares its window runs on the candidate's served window, here 32,768 of a native 200,000.
+    served = PolicyCandidate(
+        model=ModelConfig(
+            name="served", location="org/served", revision=REVISION, serve=ServeConfig(max_model_len=32_768)
+        ),
+        max_context=200_000,
+    )
+    windowed, agent = PolicyEvaluation("mrcr", protocol="65k"), PolicyEvaluation(
+        "swebench-verified", protocol="mini-swe-agent"
+    )
+    policy = EvalPolicy(version="test", context=CONTEXT, candidates=(served,), in_distribution=(windowed, agent))
+    with pytest.raises(ValueError, match="served on mrcr-65k"):
+        resolve(policy, served)
+
+    excluded = replace(policy, exclusions=(PolicyExclusion(candidate=served, evaluation=windowed, reason="window"),))
+    assert _settings(resolve(excluded, served)) == {"swebench-verified-mini-swe-agent": (32_768, None, None)}
+
+
+def test_an_agent_without_an_input_limit_runs_at_the_policy_context():
+    assert _settings(resolve(_policy(PolicyEvaluation("terminal-bench-2.0")), LARGE)) == {
+        "terminal-bench-2.0": (CONTEXT, None, None)
+    }
 
 
 def test_context_beyond_the_candidate_window_needs_an_override():

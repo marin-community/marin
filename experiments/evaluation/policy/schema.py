@@ -13,8 +13,9 @@ from dataclasses import KW_ONLY, dataclass
 from evalrecords.records import EvaluationOverrides, EvaluationSelection, PromptFormat, TaskMachineSettings
 from marin.evaluation.model_config import ModelConfig
 
+from experiments.evaluation.judges import ApiJudge
+
 HF_COMMIT = re.compile(r"[0-9a-f]{40}")
-_JUDGE_FIELDS = frozenset({"judge", "judge_endpoint", "judge_api_key"})
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -60,28 +61,25 @@ class PolicyEvaluation:
     """None leaves output limited only by the context and the benchmark protocol."""
     seed: int | None = None
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
-    judge: EvaluationOverrides | None = None
-    """The judge deployment, endpoint and key that grade the benchmark, for benchmarks that need one."""
+    judge: ApiJudge | None = None
+    """The judge that grades the benchmark, for benchmarks that need one."""
     concurrency: int | None = None
     """The most attempts that run at once."""
     task_machine: TaskMachineSettings | None = None
     """The task machines agent episodes run on."""
 
-    def __post_init__(self) -> None:
-        if self.judge is not None and self.judge.model_dump(exclude=_JUDGE_FIELDS, exclude_defaults=True):
-            raise ValueError(f"{self.name}: a judge sets only {sorted(_JUDGE_FIELDS)}")
-
     @property
     def selection(self) -> EvaluationSelection:
-        """The catalog selection, with every run setting but ``max_output`` and ``seed``, which launches apply."""
-        judge = {} if self.judge is None else self.judge.model_dump(include=_JUDGE_FIELDS)
+        """The catalog selection with the evaluation's own run settings; a candidate's run adds its output
+        limit and seed (``ResolvedPolicyEvaluation.selection``)."""
+        run = EvaluationOverrides() if self.judge is None else self.judge.run_settings()
         return EvaluationSelection(
             benchmark=self.benchmark,
             label=self.label,
             protocol=self.protocol,
             num_fewshot=self.num_fewshot,
             prompt_format=self.prompt_format,
-            run=EvaluationOverrides(concurrency=self.concurrency, task_machine=self.task_machine, **judge),
+            run=run.model_copy(update={"concurrency": self.concurrency, "task_machine": self.task_machine}),
         )
 
     @property
