@@ -135,8 +135,21 @@ def native_task_toml(task: Mapping) -> bytes:
         if len(configurations) != 1:
             raise ValueError(f"{parsed.id}: expected one archived source task configuration")
         return resource_bytes(configurations[0])
-    resource = next(row for row in task["resources"]["verifier"] if row["path"] == "task.toml")
-    return resource_bytes(TaskResource.model_validate(resource))
+    delivered = [row for row in task["resources"]["verifier"] if row["path"] == "task.toml"]
+    if delivered:
+        return resource_bytes(TaskResource.model_validate(delivered[0]))
+    # A root-delivery repair archives the original package beside the delivered grader;
+    # the adapter accepts it only under the declared delivery contract.
+    if not any(row["path"] == ARCHIVED_SOURCE_CONFIG for row in task["resources"].get("verifier", ())):
+        raise ValueError(
+            "harbor-tagged task carries neither the delivered nor the archived source configuration: "
+            f"{task.get('id')}"
+        )
+    parsed = TaskSpec.model_validate_json(json.dumps(task))
+    configurations = source_task_configurations(parsed)
+    if len(configurations) != 1:
+        raise ValueError(f"{parsed.id}: expected one archived source task configuration")
+    return resource_bytes(configurations[0])
 
 
 def count_native_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
