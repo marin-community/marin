@@ -738,7 +738,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
+                    if "schema-defaults" in command:
                         if diagnostic == "timeout":
                             raise subprocess.TimeoutExpired(command, 120)
                         if diagnostic == "oserror":
