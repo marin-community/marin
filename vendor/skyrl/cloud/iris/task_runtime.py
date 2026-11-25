@@ -104,7 +104,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology, node_physical_labels, probe_fabric_info, validate_role_nodes
+from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1353,13 +1353,17 @@ def wait_for_nodes(
 
 def verify_role_placement(ray_address: str, topology: RoleTopology, report_directory: Path) -> None:
     """Audit single-node and multi-node allocations before starting model actors."""
-    import ray
+    # Preserve this module's deferred Ray bootstrap; the audit connects here.
+    import ray  # noqa: PLC0415
 
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         nodes = ray.nodes()
-        rows = validate_role_nodes(nodes, topology=topology)
-        report = json.dumps({"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": rows}, sort_keys=True)
+        rows = audit_role_nodes(nodes, topology=topology)
+        report = json.dumps(
+            {"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": [asdict(row) for row in rows]},
+            sort_keys=True,
+        )
         (report_directory / "role-topology.json").write_text(report + "\n")
         _log(f"Verified physical role placement before model actors: {report}")
     finally:

@@ -109,7 +109,7 @@ def probe_fabric_info() -> tuple[FabricSample, ...]:
 def node_physical_labels(
     *, rank: int, gpus_per_node: int, host: str, fabric_info: Sequence[FabricSample]
 ) -> dict[str, str]:
-    """Check the node's allocated GPU count and NVLink fabric health."""
+    """Return the node's physical Ray labels after checking GPU count and fabric health."""
     if len(fabric_info) != gpus_per_node:
         raise ValueError("Physical GPU count disagrees with the allocated node width")
     fabrics = set()
@@ -122,10 +122,18 @@ def node_physical_labels(
     return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
 
 
-def validate_role_nodes(
-    nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology
-) -> list[dict[str, Any]]:
-    """Require distinct hosts and one physical NVLink domain per locality group."""
+@dataclass(frozen=True)
+class RoleNodeRow:
+    """One node's verified physical placement, as persisted in the attempt report."""
+
+    rank: int
+    host: str
+    locality_group: int
+    fabric: str
+
+
+def audit_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology) -> list[RoleNodeRow]:
+    """Check observed Ray nodes against the plan and return each node's physical placement."""
     alive = [node for node in nodes if node["Alive"]]
     if len(alive) != topology.num_nodes:
         raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
@@ -144,7 +152,7 @@ def validate_role_nodes(
             raise ValueError(f"Ray locality label disagrees with Iris rank {rank}")
         fabric = labels[FABRIC_LABEL]
         fabrics.setdefault(group, set()).add(fabric)
-        rows.append({"rank": rank, "host": labels[HOST_LABEL], "locality_group": group, "fabric": fabric})
+        rows.append(RoleNodeRow(rank=rank, host=labels[HOST_LABEL], locality_group=group, fabric=fabric))
     if any(len(value) != 1 for value in fabrics.values()):
         raise ValueError(f"Each locality group must fit inside one physical NVLink domain: {fabrics}")
-    return sorted(rows, key=lambda row: row["rank"])
+    return sorted(rows, key=lambda row: row.rank)
