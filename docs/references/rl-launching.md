@@ -599,6 +599,12 @@ configuration, without loading model or optimizer plugins. Supply its `pack`,
 `measured_step_seconds`, and `timing_source` through `accounting_settings` when
 the original archive settings omit them; pin the native timing evidence in
 `additional_evidence`.
+The recovery plan may override `task_timeouts.accounting` and
+`task_timeouts.archive` in seconds without changing the adopted producers.
+Accounting saves an immutable sample prefix and `.pin.json` every 4,096 samples
+under `progress/`. After an interruption, supply the latest complete pin's JSON
+contents as `accounting_resume`; replay verifies both the consumed configuration and native
+checkpoint before continuing after that prefix.
 
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the

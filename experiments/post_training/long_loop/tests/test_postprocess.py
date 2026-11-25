@@ -29,6 +29,11 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
             (directory / "producer.txt").write_text(f"original-{key}")
             roots[key] = str(directory)
     calls = []
+    remote_timeouts = {}
+
+    def bind_remote(fn, **kwargs):
+        remote_timeouts[fn.__name__] = kwargs["timeout"]
+        return fn
 
     def merge(*, output, original, selection, **kwargs):
         assert not adopt_report
@@ -64,7 +69,7 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
     monkeypatch.setattr(postprocess, "write_report", report)
     monkeypatch.setattr(postprocess, "write_sft_accounting", accounting)
     monkeypatch.setattr(postprocess, "archive_recovered_run", archive)
-    monkeypatch.setattr(postprocess, "remote", lambda fn, **kwargs: fn)
+    monkeypatch.setattr(postprocess, "remote", bind_remote)
     resolved = {
         "name": "test/loop",
         "evaluation": {"expected_rollouts": 2},
@@ -95,8 +100,11 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
         "accepted_unscored_attempts": [],
         "sft_geometry": "Adopted native SFT step203",
         "recovery": {"uri": "original-answer-recovery", "manifest_sha256": "a" * 64},
+        "task_timeouts": {"accounting": 21600},
     }
     terminal = postprocess.build_postprocessing_graph(plan, resolved)
+    assert remote_timeouts["accounting"] == postprocess.Duration.from_seconds(21600)
+    assert remote_timeouts["archive"] == postprocess.Duration.from_seconds(5400)
     execute_local_graph(terminal)
     assert calls == (["accounting", "archive"] if adopt_report else ["merge", "report", "accounting", "archive"])
     assert Path(terminal.path(), "archive.txt").read_text() == "evidence archive"

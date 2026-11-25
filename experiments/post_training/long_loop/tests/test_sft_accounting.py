@@ -19,6 +19,7 @@ from levanter.utils.thread_utils import blocking_wait
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
+from experiments.post_training.long_loop import sft_accounting
 from experiments.post_training.long_loop.archive import seal_archive, verify_archive
 from experiments.post_training.long_loop.sft_accounting import (
     sequence_statistics,
@@ -29,7 +30,7 @@ from experiments.post_training.long_loop.sft_accounting import (
 
 @pytest.mark.parametrize("pack", [False, True])
 @pytest.mark.parametrize("concatenated", [False, True])
-def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_path, pack, concatenated):
+def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_path, monkeypatch, pack, concatenated):
     tokenizer_path = tmp_path / "tokenizer"
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({f"t{i}": i for i in range(128)}, unk_token="t0")),
@@ -102,6 +103,31 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         path.write_text(content)
         pins[name] = {"source": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     output = tmp_path / "accounting"
+    monkeypatch.setattr(sft_accounting, "ACCOUNTING_CHECKPOINT_SAMPLES", 37)
+    if not pack and not concatenated:
+        replay_rows = sft_accounting.sampled_rows
+
+        async def interrupted_rows(*args, **kwargs):
+            async for row in replay_rows(*args, **kwargs):
+                if row["global_index"] == 40:
+                    raise RuntimeError("accounting worker interrupted")
+                yield row
+
+        monkeypatch.setattr(sft_accounting, "sampled_rows", interrupted_rows)
+        with pytest.raises(RuntimeError, match="worker interrupted"):
+            write_sft_accounting(
+                output=str(output),
+                trained=str(native),
+                settings={
+                    "pinned_evidence": pins,
+                    "measured_step_seconds": 2.0,
+                    "timing_source": "tiny CPU fixture",
+                    "pack": pack,
+                },
+            )
+        assert (output / "progress/samples-000000037.jsonl.pin.json").is_file()
+        assert not (output / "receipt.json").exists()
+        monkeypatch.setattr(sft_accounting, "sampled_rows", replay_rows)
     write_sft_accounting(
         output=str(output),
         trained=str(native),
@@ -139,16 +165,12 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     replay = [row for row in rows if not row["is_sft"]]
     assert report["overall"]["replay"]["loss_tokens"] == sum(row["loss_tokens"] for row in replay)
     assert report["overall"]["replay"]["fraction_of_positions"] == len(replay) / len(rows)
-    prefix = tmp_path / "partial-samples.jsonl"
-    prefix.write_bytes(b"".join((output / "realized-samples.jsonl").read_bytes().splitlines(keepends=True)[:37]))
+    prefix = output / "progress/samples-000000037.jsonl"
+    assert prefix.read_bytes() == b"".join(
+        (output / "realized-samples.jsonl").read_bytes().splitlines(keepends=True)[:37]
+    )
     resumed = tmp_path / "resumed"
-    resume_pin = {
-        "source": str(prefix),
-        "sha256": hashlib.sha256(prefix.read_bytes()).hexdigest(),
-        "rows": 37,
-        "consumed_config_sha256": hashlib.sha256((native / "consumed-config.json").read_bytes()).hexdigest(),
-        "checkpoint_metadata_sha256": hashlib.sha256((checkpoint / "metadata.json").read_bytes()).hexdigest(),
-    }
+    resume_pin = json.loads(prefix.with_suffix(".jsonl.pin.json").read_bytes())
     write_sft_accounting(
         output=str(resumed),
         trained=str(native),

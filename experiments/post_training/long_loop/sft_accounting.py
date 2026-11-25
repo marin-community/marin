@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -32,6 +33,8 @@ from experiments.post_training.long_loop.archive import ArchiveInput, digest, wr
 from experiments.post_training.long_loop.source_loss import SourceLossMode, source_loss_metadata
 
 ACCOUNTING_READ_BATCH_SIZE = 256
+ACCOUNTING_CHECKPOINT_SAMPLES = 4096
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -219,6 +222,7 @@ async def sampled_rows(
         data_key = jax.random.PRNGKey(config.data_seed)
     length = config.sequence_length
     mixture = config.data.train_mixture(Axis("position", length), config.trainer.batch_schedule, key=data_key)
+    logger.info("Accounting loader ready; replaying samples %d through %d", start_index, total)
     if not isinstance(mixture, MixtureDataset):
         raise TypeError("SFT accounting requires the native mixture loader")
     if loss_modes is not None and set(loss_modes) != set(config.data.components):
@@ -318,6 +322,20 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
                 async for row in sampled_rows(config, steps, start_index=len(rows), loss_modes=modes):
                     stream.write(json.dumps(row, sort_keys=True) + "\n")
                     rows.append(row)
+                    if len(rows) % ACCOUNTING_CHECKPOINT_SAMPLES == 0:
+                        stream.flush()
+                        content = manifest.read_bytes()
+                        source = str(StoragePath(output) / f"progress/samples-{len(rows):09d}.jsonl")
+                        write_once(source, content)
+                        pin = {
+                            "source": source,
+                            "sha256": hashlib.sha256(content).hexdigest(),
+                            "rows": len(rows),
+                            "consumed_config_sha256": hashlib.sha256(consumed).hexdigest(),
+                            "checkpoint_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
+                        }
+                        write_once(source + ".pin.json", json.dumps(pin, sort_keys=True).encode())
+                        logger.info("Accounting saved %d committed samples: %s", len(rows), source)
 
         blocking_wait(collect())
         content = manifest.read_bytes()
