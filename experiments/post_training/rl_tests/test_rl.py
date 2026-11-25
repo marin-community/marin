@@ -129,7 +129,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
     del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
-    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
+    assert gate.config_version(recorded) == gate.config_version(planned)
 
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
@@ -664,7 +664,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ],
 )
 def test_submission_exit_codes_and_publication_retries(
-    recorded_runs, selection, tmp_path, monkeypatch, preset_table, case, expected
+    recorded_runs, selection, tmp_path, monkeypatch, preset_table, cache_native_compositions, case, expected
 ):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
@@ -678,7 +678,7 @@ def test_submission_exit_codes_and_publication_retries(
     }
     # The data-short case rewrites its validation data before launch.
     if publication_case and case != "data-short":
-        cache_native_compositions(monkeypatch)
+        cache_native_compositions()
     preset_name = "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if case == "child":
@@ -724,8 +724,10 @@ def test_submission_exit_codes_and_publication_retries(
     )
     source = sources[0] if sources else None
     if source is not None and preset.gated and not control:
+        cohort = cohort_from_fixtures(source)
+        monkeypatch.setattr(snowball, "_base_preset_version", lambda *_: cohort.version)
         built = replace(
-            built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort_from_fixtures(source))
+            built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort)
         )
     for index, root in enumerate(sources):
         native = read_attempt(str(root / "exports"), f"native-{index}")
@@ -1200,6 +1202,9 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
     if arguments == ("--require", "typo>=0"):
         record = request.getfixturevalue("recorded_runs")
         controls(record, preset_name)
+        source = record(preset_name, "tests/required-metric")
+        cohort = cohort_from_fixtures(source)
+        request.getfixturevalue("monkeypatch").setattr(snowball, "_base_preset_version", lambda *_: cohort.version)
         arguments = (*arguments, "--run")
     result = CliRunner().invoke(
         snowball.command(

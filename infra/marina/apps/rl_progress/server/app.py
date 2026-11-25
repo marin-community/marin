@@ -7,12 +7,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from finestore.rl.rl_progress import (
-    EVALUATION_PROTOCOL_DIFFERS,
-    GROUP_COMPARISON_INVARIANTS,
-    SHARED_TASKS_INVARIANT,
-    AttemptSummary,
-)
+from finestore.rl.rl_progress import AttemptSummary, completed_controls
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -23,13 +18,13 @@ _RETAINED_FIELDS = (
     "gate",
     "gate_result",
     "model",
-    "evaldash_run_ids",
     "grader_report",
-    "control",
     "evaluation_data_identity",
+    "evaluation_task_set",
     "evaluation_protocol_identity",
     "native_run_id",
     "base_preset_version",
+    "launch_config",
 )
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
@@ -149,12 +144,13 @@ def create_api(services):
     @api.get("/runs")
     def runs():
         records = []
+        summaries = []
         skipped = []
         with engine.connect() as connection:
             rows = connection.execute(
                 text(
                     """SELECT run_id, attempt_id,
-                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report'
+                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report' - 'launch_config'
                          ELSE record END AS record,
                     COALESCE(record -> 'grader_report' <> 'null'::jsonb, false) AS has_grader_report
                     FROM rl_runs ORDER BY run_id, attempt_id"""
@@ -182,15 +178,25 @@ def create_api(services):
                     continue
                 record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
-        return {
-            "runs": records,
-            "skipped_records": skipped,
-            "comparison_contract": {
-                "group_invariants": sorted(GROUP_COMPARISON_INVARIANTS),
-                "shared_tasks": SHARED_TASKS_INVARIANT,
-                "protocol_differs": EVALUATION_PROTOCOL_DIFFERS,
-            },
-        }
+                summaries.append(summary)
+        controls = {(summary.run_id, summary.attempt_id) for summary in completed_controls(summaries)}
+        for record in records:
+            record["is_main_control"] = (record["run_id"], record["attempt_id"]) in controls
+        return {"runs": records, "skipped_records": skipped}
+
+    @api.get("/configuration")
+    def configuration(run_id: str, attempt_id: str):
+        with engine.connect() as connection:
+            config = connection.execute(
+                text(
+                    "SELECT record -> 'launch_config' FROM rl_runs "
+                    "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                ),
+                {"run_id": run_id, "attempt_id": attempt_id},
+            ).scalar_one_or_none()
+        if config is None:
+            raise HTTPException(404, detail="No configuration recorded for this attempt")
+        return config
 
     @api.get("/graders")
     def graders(run_id: str, attempt_id: str):

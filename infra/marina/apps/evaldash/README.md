@@ -394,12 +394,6 @@ Release from clean current main by default. The release transaction applies appl
 migrations before selecting the package. `/evaldash/`, the `evaldash` schema and
 `EVALDASH_INGEST_JOB` stay stable. The scheduled base-image runner snapshots and
 executes the package's `ingest` module; running jobs keep their selected code.
-
-For RL attempt links, deploy a runtime and ingestion image that support
-`RLAttemptRef.step`, then release the EvalDash package before publishing
-checkpoint evaluations with step metadata. Inspect a stored record through
-the run API and verify its attempt link and checkpoint step. The EvalDash
-package release installs the view and filters separately from RL Progress.
 Marina deployment and restart do not publish EvalDash or run its migrations.
 
 Pass `--allow-dirty` to explicitly release branch or uncommitted source

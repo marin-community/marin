@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
@@ -71,8 +72,20 @@ class PublicationOutcome(BaseModel):
         return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
 
 
+def _visible_setting(text: str) -> str:
+    key, _, value = text.partition("=")
+    if is_sensitive_key_name(key):
+        return f"{key}={REDACTED_VALUE}"
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return f"{key}={redact_string(value)}"
+    redacted = redact_value(parsed)
+    return f"{key}={json.dumps(redacted)}" if redacted != parsed else text
+
+
 def run_label(inputs: RunInputs) -> str:
-    parts = [inputs.preset_name, *inputs.settings]
+    parts = [inputs.preset_name, *map(_visible_setting, inputs.settings)]
     if inputs.tasks:
         parts.append(f"tasks={inputs.tasks}")
     if inputs.init:
@@ -87,6 +100,7 @@ class _TerminalMeasurements:
     optimizer_steps: int | None = None
     elapsed_seconds: float | None = None
     elapsed_excluding_eval_seconds: float | None = None
+    evaluation_task_set: str | None = None
 
 
 def _terminal_measurements(
@@ -104,9 +118,11 @@ def _terminal_measurements(
     invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
+    evaluation_task_set = None
     if result.state == "succeeded" or attempt.metrics_started_at is not None:
         status = evaluation_status(run_output, preset, attempt, launch)
         evaluations = list(status.evaluations)
+        evaluation_task_set = status.evaluation_task_set
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
         if status.evaluation_error is not None:
             evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
@@ -133,7 +149,9 @@ def _terminal_measurements(
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
         evidence.append("Training time excluding evaluation is unknown for this checkpoint lineage.")
-    return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
+    return _TerminalMeasurements(
+        failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval, evaluation_task_set
+    )
 
 
 def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[str]) -> GraderReport | None:
@@ -195,7 +213,6 @@ def build_record(
     attempt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
-    evaldash_run_ids: tuple[str, ...] | None = None,
     gate_failure: bool = False,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
@@ -231,6 +248,8 @@ def build_record(
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
+    config = redact_value(attempt.native.config)
+    assert isinstance(config, dict)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
@@ -242,9 +261,13 @@ def build_record(
         is_control=index.is_control if index is not None else False,
         base_preset_version=index.base_preset_version if index is not None else None,
         evaluation_data_identity=evaluation_data,
+        evaluation_task_set=measured.evaluation_task_set,
         evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else None,
+        commit=index.source_revision if index is not None else provenance.get("base_commit"),
+        settings=list(map(_visible_setting, inputs.settings)),
+        launch_config=config,
         dirty=index.dirty if index is not None else None,
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
@@ -269,7 +292,6 @@ def build_record(
         evidence=evidence,
         status="failed" if failed else "succeeded" if terminal else "running",
         failed_facts=failed,
-        evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
         gate=gate_name,
         gate_result=_gate_result(report),
         elapsed_seconds=measured.elapsed_seconds,
@@ -384,41 +406,6 @@ def _read_publication_gate(
     return report
 
 
-def _with_evaldash_links(summary: AttemptSummary, service_url: str | None) -> AttemptSummary:
-    try:
-        from marina import client  # noqa: PLC0415
-
-        rows = client.marina_request(
-            service_url or client.DEFAULT_MARINA_URL,
-            "GET",
-            "/evaldash/api/runs",
-            params={
-                "rl_run": summary.run_id,
-                "rl_native_run": summary.native_run_id or summary.run_id,
-                "rl_attempt": summary.attempt_id,
-                "limit": 1000,
-            },
-            timeout=4,
-        )
-    except (ImportError, OSError, ValueError, RuntimeError) as error:
-        logger.debug("EvalDash lookup unavailable for %s (%s)", summary.attempt_id, type(error).__name__)
-        rows = None
-    if not isinstance(rows, list):
-        return summary.model_copy(update={"evidence": [*summary.evidence, "EvalDash catalog lookup was unavailable."]})
-    run_ids = (summary.run_id, summary.native_run_id or summary.run_id)
-    links = list(summary.evaldash_run_ids or ())
-    links.extend(
-        row["run_id"]
-        for row in rows
-        if isinstance(row, dict)
-        and row.get("rl_run_id") in run_ids
-        and row.get("rl_attempt_id") == summary.attempt_id
-        and isinstance(row.get("run_id"), str)
-        and row["run_id"]
-    )
-    return summary.model_copy(update={"evaldash_run_ids": list(dict.fromkeys(links))}) if links else summary
-
-
 def publish_runs(
     outputs: Sequence[str],
     preset: presets.Preset,
@@ -427,13 +414,10 @@ def publish_runs(
     gate_path: str | None = None,
     service_url: str | None = None,
     attempt_id: str | None = None,
-    evaldash_run_ids: tuple[str, ...] | None = None,
     issue: int | None = None,
     failed_coordinator: str | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
-    if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
-        raise ValueError("EvalDash run IDs require exactly one output and its explicit attempt ID")
     if issue is not None and (len(outputs) != 1 or attempt_id is None):
         raise ValueError("An issue requires exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
@@ -488,15 +472,12 @@ def publish_runs(
                     attempt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
-                    evaldash_run_ids=evaldash_run_ids,
                     gate_failure=missing_gate,
                 )
                 if issue is not None:
                     record = record.model_copy(
                         update={"issue": reserve_issue(recorded_launch(receipt).export_root, issue)}
                     )
-                if receipt.native.result.state.is_terminal and evaldash_run_ids is None:
-                    record = _with_evaldash_links(record, service_url)
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:
@@ -517,14 +498,12 @@ def command(table: presets.ModelPresets) -> click.Command:
     @click.option("--marina-url", "url", help="Marina origin (defaults to the Marina service).")
     @click.option("--run-output", required=True, help="Stored native run output.")
     @click.option("--attempt", required=True, help="Attempt ID within the stored native run.")
-    @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
     @click.option("--issue", type=click.IntRange(min=1), help="Associate an existing native attempt with an issue.")
     def command(
         preset_name: str,
         url: str | None,
         run_output: str,
         attempt: str,
-        evaldash_run_id: tuple[str, ...],
         issue: int | None,
     ) -> None:
         """Publish one stored native attempt."""
@@ -535,7 +514,6 @@ def command(table: presets.ModelPresets) -> click.Command:
             table=table,
             service_url=url,
             attempt_id=attempt,
-            evaldash_run_ids=evaldash_run_id or None,
             issue=issue,
         )
         if result.unserved_records:

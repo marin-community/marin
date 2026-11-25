@@ -68,7 +68,6 @@ def marina_request(
     params: dict[str, object] | None = None,
     session: requests.Session | None = None,
     token_provider: TokenProvider | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
 ) -> object | None:
     """Call Marina, optionally reusing a caller-owned transport and token provider."""
     service_url = service_url.rstrip("/")
@@ -86,7 +85,7 @@ def marina_request(
         json=json_body,
         data=payload,
         headers=headers,
-        timeout=timeout,
+        timeout=DEFAULT_TIMEOUT,
     )
     if response.status_code >= 400:
         detail = (

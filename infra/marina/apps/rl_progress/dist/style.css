@@ -24,6 +24,8 @@
 .progress-chart circle { fill: var(--series-color); }
 .history-chain { --series-color: var(--mark); stroke-width: 2.75; }
 .history-global { --series-color: #606577; stroke-width: 1.25; }
+.progress-chart line.history-global { stroke-dasharray: 5 3; }
+.dialog-scroll pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-branch { --series-color: #7c3d69; stroke-width: 1.5; }
 .history-marker { --series-color: var(--warn); stroke-dasharray: 3 4; }
 .progress-chart a:hover circle, .progress-chart a:focus-visible circle { stroke: var(--ink); stroke-width: 2; }

@@ -10,11 +10,6 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
-SHARED_TASKS_INVARIANT = "shared_tasks"
-SHARED_TASK_FRACTION_INVARIANT = "shared_task_fraction"
-EVALUATION_PROTOCOL_DIFFERS = "evaluation protocol differs"
-GROUP_COMPARISON_INVARIANTS = frozenset({SHARED_TASKS_INVARIANT, SHARED_TASK_FRACTION_INVARIANT})
-
 GRADER_REPORTS_DIR = "grader_reports"
 GRADER_REPORT_FILENAME = "grader_report.json"
 
@@ -146,15 +141,18 @@ class AttemptSummary(BaseModel):
     preset_version: Identity | None = None
     base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_task_set: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     is_control: bool = False
     user: Identity | None = None
     branch: str | None = None
+    commit: Identity | None = None
+    settings: list[str] = Field(default_factory=list)
+    launch_config: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     dirty: bool | None = None
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     cluster: Identity | None = None
     issue: StrictInt | None = None
-    evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None
@@ -205,7 +203,6 @@ class AttemptSummary(BaseModel):
                             for fact in gate.invariants
                             if not fact.holds
                             and fact.replicate == replicate
-                            and fact.name.rpartition("/")[2] not in GROUP_COMPARISON_INVARIANTS
                         ),
                     ]
                 )

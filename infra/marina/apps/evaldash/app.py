@@ -364,7 +364,6 @@ def record_to_row(record: EvalRunRecord) -> dict:
 
     The single definition of that shape, so the run list is identical whichever store produced it.
     """
-    attempt = record.rl_attempt
     return {
         "run_id": record.run_id,
         "group_id": record.group_id,
@@ -387,21 +386,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "error": record.error,
         "tasks": [task.name for task in record.evaluation.tasks],
         "jobs": dict(record.jobs),
-        "rl_run_id": attempt.run_id if attempt is not None else None,
-        "rl_attempt_id": attempt.attempt_id if attempt is not None else None,
-        "rl_step": attempt.step if attempt is not None else None,
     }
-
-
-def _matches_rl_attempt(record: EvalRunRecord, run_ids: tuple[str, ...], attempt_id: str | None) -> bool:
-    if not run_ids and attempt_id is None:
-        return True
-    ref = record.rl_attempt
-    return (
-        ref is not None
-        and (not run_ids or ref.run_id in run_ids)
-        and (attempt_id is None or ref.attempt_id == attempt_id)
-    )
 
 
 def _group_sibling_row(record: EvalRunRecord) -> dict:
@@ -488,12 +473,10 @@ class RecordStore:
         group: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
-        rl_runs: tuple[str, ...] = (),
-        rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         records, _by_id = self._snapshot()
-        rows = [record_to_row(record) for record in records if _matches_rl_attempt(record, rl_runs, rl_attempt)]
+        rows = [record_to_row(record) for record in records]
         rows = [
             row
             for row in rows
@@ -544,8 +527,6 @@ class RecordStore:
         status: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
-        rl_runs: tuple[str, ...] = (),
-        rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         """Runs collapsed into launches (one per ``group_id``), newest first.
@@ -558,8 +539,6 @@ class RecordStore:
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
             if (model and record.model.name != model) or (user and record.user != user):
-                continue
-            if not _matches_rl_attempt(record, rl_runs, rl_attempt):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -1178,8 +1157,6 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             group=params.get("group") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
-            rl_runs=tuple(filter(None, (params.get("rl_run"), params.get("rl_native_run")))),
-            rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(rows)
@@ -1341,8 +1318,6 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             status=params.get("status") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
-            rl_runs=tuple(filter(None, (params.get("rl_run"), params.get("rl_native_run")))),
-            rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(groups)

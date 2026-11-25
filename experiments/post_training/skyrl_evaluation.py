@@ -6,12 +6,9 @@
 from dataclasses import replace
 
 from evalrecords.records import RLAttemptRef
-from finestore.rl.run_records import read_attempt
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel
-from marin.rl.skyrl_records import EXPORTS_SUBDIRECTORY
-from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.evals import EvaluationDefinition
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
@@ -50,9 +47,7 @@ def evaluate_model(
         run = ctx.resolved(model.step)
         if run.run_id is None or run.attempt_id is None:
             return None
-        record = read_attempt(prefix_join(ctx.artifact_path(model.step), EXPORTS_SUBDIRECTORY), run.attempt_id)
-        run_id = record.index_run_id if record is not None and record.run_id == run.run_id else run.run_id
-        return RLAttemptRef(run_id=run_id, attempt_id=run.attempt_id, step=run.global_step)
+        return RLAttemptRef(run_id=run.run_id, attempt_id=run.attempt_id)
 
     return eval_step(
         serving,

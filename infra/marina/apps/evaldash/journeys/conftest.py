@@ -31,17 +31,11 @@ os.environ[evaldash_app.PREFIXES_ENV] = RECORDS_PREFIX
 def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
     """Fixture records on disk, reconciled into the app's schema; yields the records prefix."""
     prefix = RECORDS_PREFIX
-    records = fixtures.build_fixtures(prefix)
-    for path, run_id, attempt_id in zip(
-        records[:4],
-        ("native/fixture", "logical-fixture", "unrelated", "logical-fixture"),
-        ("wanted", "wanted", "wanted", "earlier"),
-        strict=True,
-    ):
-        record = read_record(path)
-        write_record(
-            record.model_copy(update={"rl_attempt": RLAttemptRef(run_id=run_id, attempt_id=attempt_id, step=0)}), prefix
-        )
+    first, *_ = fixtures.build_fixtures(prefix)
+    record = read_record(first)
+    write_record(
+        record.model_copy(update={"rl_attempt": RLAttemptRef(run_id="native/fixture", attempt_id="wanted")}), prefix
+    )
     fixtures.build_native_fixtures(prefix)
     engine = engine_for(marina_database, APP)
     try:

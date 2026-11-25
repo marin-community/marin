@@ -162,7 +162,6 @@ async function copyPath() {
         <p v-if="data.description" class="text-sm text-text-secondary">{{ data.description }}</p>
         <p v-if="data.rl_attempt && rlAttemptUrl" class="text-sm text-text-secondary">
           <a :href="rlAttemptUrl" class="text-accent hover:underline">RL attempt {{ data.rl_attempt.attempt_id }}</a>
-          <span v-if="data.rl_attempt.step != null"> · checkpoint step {{ data.rl_attempt.step }}</span>
         </p>
       </div>
 

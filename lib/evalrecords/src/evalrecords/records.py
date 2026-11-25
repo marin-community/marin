@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
@@ -738,7 +738,6 @@ class RLAttemptRef(BaseModel):
 
     run_id: str
     attempt_id: str
-    step: NonNegativeInt | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class EvalRunRecord(BaseModel):

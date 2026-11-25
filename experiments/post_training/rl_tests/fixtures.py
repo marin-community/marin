@@ -415,9 +415,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     indexed_controls: dict[tuple[str, str], AttemptSummary] = {}
     base_versions: dict[str, str] = {}
     monkeypatch.setattr(rl_index, "list_attempts", lambda _url=None: list(indexed_controls.values()))
-    monkeypatch.setattr(
-        runner, "_base_preset_version", lambda _module, index: base_versions.get(index.preset, index.preset_version)
-    )
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
