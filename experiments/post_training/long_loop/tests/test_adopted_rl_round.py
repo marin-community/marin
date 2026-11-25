@@ -8,13 +8,18 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
+from cloud.iris.launch_config import compose_launch_config
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
 from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_payload
 from marin.rl.skyrl import SkyRLRun
+from omegaconf import OmegaConf
+from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import create_callback_from_config
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.execution_policy import RL_TRAINING_BUDGET
@@ -233,6 +238,53 @@ def test_every_authored_rl_round_resolves_the_canonical_training_clock(local_rou
     assert len(budgets) == 1
     assert {key: budgets[0][key] for key in RL_TRAINING_BUDGET} == RL_TRAINING_BUDGET
     assert budgets[0]["groups_per_step"] == spec.rl.role_plan["train_batch_size"]
+    assert launch["iris"]["excluded_nvlink_domains"] == []
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+@pytest.mark.parametrize("round_name", ["mochi-v5-exp3-rl", "mochi-exp4-dspark-rl"])
+def test_mochi_compiled_budget_stops_learning_after_first_optimizer_clock(
+    local_round, tmp_path, monkeypatch, round_name
+):
+    authored = load_round(ROUND_DIR / f"{round_name}.yaml").rl
+    recipe = copy.deepcopy(authored.recipe)
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = dict(SOURCE_ROUTES)
+    spec = dataclasses.replace(
+        local_round,
+        rl=dataclasses.replace(
+            local_round.rl,
+            recipe=recipe,
+            role_plan=authored.role_plan,
+            megatron=authored.megatron,
+            execution=authored.execution,
+        ),
+    )
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    compiled = compose_launch_config(yaml.safe_load(terminal.build_config(context).launch_config_yaml))
+    budget = next(cb for cb in compiled.skyrl.trainer.callbacks if cb["type"] == "wall_time_budget")
+    callback = create_callback_from_config(budget)
+    trainer = SimpleNamespace(
+        cfg=OmegaConf.create({"trainer": {"export_path": str(tmp_path / "exports")}}),
+        first_optimizer_step_time=None,
+    )
+    control = TrainerControl()
+    callback.on_train_begin(TrainerState(0, 0, 100, 100), control)
+    clock = [100000.0]
+    monkeypatch.setattr("skyrl_train.callbacks.builtin.time.monotonic", lambda: clock[0])
+    callback.on_log(TrainerState(0, 0, 100, 100), control, logs={}, trainer=trainer)
+    assert not control.should_training_stop
+    trainer.first_optimizer_step_time = clock[0]
+    clock[0] += 43201
+    callback.on_log(TrainerState(25, 0, 100, 100), control, logs={}, trainer=trainer)
+    assert control.should_training_stop
+    report = json.loads((tmp_path / "exports" / "training-budget.json").read_text())
+    assert (report["budget_seconds"], report["drain_margin_seconds"]) == (43200, 1800)
+    assert report["elapsed_seconds"] == 43201
+    assert report["additional_updates_at_observed_rate"] == 0
 
 
 @pytest.mark.parametrize("profile", ["one-rack"])

@@ -60,8 +60,6 @@ rl:
     - MARIN_PREFIX
     container_profile: 4
     role_topology: nvlink.domain
-    excluded_nvlink_domains:
-    - dh1-r136-us-east-08a
   recipe:
     data:
       shuffle: true
@@ -147,6 +145,10 @@ rl:
       - type: inference_stats
         poll_interval_seconds: 5.0
         log_every_steps: 1
+      - type: wall_time_budget
+        seconds: 43200
+        drain_margin: 1800
+        groups_per_step: 64
       - type: hf_model_save
         save_steps: -1
         save_on_train_end: true

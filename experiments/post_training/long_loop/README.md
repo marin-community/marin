@@ -663,9 +663,11 @@ checkpoint is required and its absence fails closed.
 
 New Snowball and Mochi RL rounds share `RL_TRAINING_BUDGET` in
 `execution_policy.py`: 43,200 seconds of learning and a 1,800-second drain
-margin. Change that constant to change both models' budget. Round YAML files
-do not repeat the values; the builders bind the clock and reject conflicting
-learning or drain settings before allocation. Smoke runs retain their step
+margin. The builders bind this clock even when a round omits the callback,
+and reject conflicting learning or drain settings before allocation. The V5
+Exp3 and Exp4 DSpark YAMLs also record these canonical values explicitly so
+the authored plan shows its budget. Changing the shared constant requires
+updating those declarations; stale values fail validation. Smoke runs retain their step
 and outer-job caps and resolve the same training clock.
 
 The clock starts at the first optimizer completion and stops at a completed-step
@@ -679,6 +681,10 @@ Outer deadlines remain explicit in
 Frozen recovery plans and native resume accounting retain their recorded
 budget; the lost-time deadline-extension rule is unchanged. Updating the
 source constant does not change a running job.
+Long-loop round specs, serving presets and launch defaults allow all NVLink
+racks. Do not add rack exclusions. Existing jobs keep their submitted placement
+constraints and must not be restarted just to change rack eligibility.
+
 All new SFT rounds, including one-epoch runs, read the 20-hour
 `SFT_TRAINING_DURATION` from the same module. The standard finalization and update
 reserves are shared there too. Their YAML can specify reserves but does not repeat

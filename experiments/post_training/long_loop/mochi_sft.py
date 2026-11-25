@@ -207,7 +207,7 @@ def bind_mochi_sft_config(
     raw["stop_after_steps"] = start + updates
     raw["resources"]["replicas"] = controls.gpu_count // raw["resources"]["device"]["count"]
     raw["resources"]["target_cluster"] = None  # The canonical coordinator is already on 08a.
-    raw["resources"]["excluded_nvlink_domains"] = ["dh1-r136-us-east-08a"]
+    raw["resources"].pop("excluded_nvlink_domains", None)
     grug = raw["trainer"]
     if not fresh:
         grug["replica_axis_size"] = controls.gpu_count // 64

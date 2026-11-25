@@ -59,8 +59,6 @@ rl:
     - MARIN_PREFIX
     container_profile: 4
     role_topology: nvlink.domain
-    excluded_nvlink_domains:
-    - dh1-r136-us-east-08a
   recipe:
     data:
       shuffle: true

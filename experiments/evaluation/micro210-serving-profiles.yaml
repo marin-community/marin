@@ -10,8 +10,6 @@ mochi-gb200-cw-us-east-08a:
     gpus_per_node: 4
   execution:
     cluster: cw-us-east-08a
-    excluded_nvlink_domains:
-    - dh1-r136-us-east-08a
     cluster_config: lib/iris/config/cw-us-east-08a.yaml
     cpu: 120
     memory: 900GB
@@ -191,8 +189,6 @@ mochi-gb200-cw-us-east-08a-v2:
     gpus_per_node: 4
   execution:
     cluster: cw-us-east-08a
-    excluded_nvlink_domains:
-    - dh1-r136-us-east-08a
     cluster_config: lib/iris/config/cw-us-east-08a.yaml
     cpu: 120
     memory: 128GiB
