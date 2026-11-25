@@ -172,6 +172,17 @@ def test_resubmission_is_the_same_submit_command(tmp_path, plan_document, monkey
     assert captured == {"cluster": "cw-us-east-02a"}
 
 
+def test_submit_environment_carries_the_hf_login(monkeypatch, tmp_path):
+    """The private registry archive needs the submitter's HF token in the root job."""
+    monkeypatch.setattr(entry_point.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr(entry_point, "get_token", lambda: "hf-login")
+    assert entry_point._submit_environment()["HF_TOKEN"] == "hf-login"
+    monkeypatch.setattr(entry_point, "get_token", lambda: None)
+    with pytest.raises(ValueError, match="Hugging Face login"):
+        entry_point._submit_environment()
+
+
 def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):
     captured = {}
 

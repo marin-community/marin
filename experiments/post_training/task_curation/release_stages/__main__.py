@@ -49,6 +49,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+from huggingface_hub import get_token
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -431,6 +432,11 @@ def _submit_environment() -> dict[str, str]:
         value = os.environ.get(key)
         if value:
             env[key] = value
+    if "HF_TOKEN" not in env:
+        token = get_token()
+        if token is None:
+            raise ValueError("submit needs a Hugging Face login: the pinned Atlas registry archive is private")
+        env["HF_TOKEN"] = token
     record = Path.home() / ".config/marin/credentials/marin.json"
     if record.is_file():
         env["MARIN_IAP_CREDENTIAL_JSON"] = record.read_text()

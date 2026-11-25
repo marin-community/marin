@@ -700,6 +700,9 @@ STAGE_CHILD_ENV_KEYS = (
     "ATLAS_WATCHDOG_FEED",
     "CW_KEY_ID",
     "CW_KEY_SECRET",
+    # The pinned Atlas registry archive is a private HF dataset; a node's shared HF
+    # cache hides a missing token only until a pin moves to an uncached revision.
+    "HF_TOKEN",
     "MARIN_IAP_CREDENTIAL_JSON",
 )
 

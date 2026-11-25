@@ -634,11 +634,13 @@ def test_stage_child_env_forwards_the_attestation_and_credentials(monkeypatch):
     """Dispatched stage jobs carry the attestation and credentials, nothing else."""
     monkeypatch.setenv("ATLAS_RELEASE_SOURCE_REVISION", "a" * 40)
     monkeypatch.setenv("CW_KEY_SECRET", "s3cret")
+    monkeypatch.setenv("HF_TOKEN", "hf-tok")
     monkeypatch.delenv("CW_KEY_ID", raising=False)
     monkeypatch.setenv("UNRELATED_VAR", "noise")
     env = release_graph_module._stage_child_env()
     assert env["ATLAS_RELEASE_SOURCE_REVISION"] == "a" * 40
     assert env["CW_KEY_SECRET"] == "s3cret"
+    assert env["HF_TOKEN"] == "hf-tok"
     assert "CW_KEY_ID" not in env
     assert "UNRELATED_VAR" not in env
 
