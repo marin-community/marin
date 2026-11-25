@@ -56,3 +56,16 @@ def test_counterfactual_counts_native_full_credit_without_optional_pass_flag():
     report = summarize("tb2", [trial], suppressed, 3, 30)
     assert report["stopped_trials_with_passing_verdict"] == 1
     assert report["at_risk_passes_cut_before_their_last_turn"] == 1
+
+
+def test_hand_check_sample_identifies_the_selected_repetition_of_a_task():
+    identity = {"uid": "task-group", "attempt_id": "eval-attempt"}
+    short = {**row([assistant("cat a.txt"), user("same")] * 3), **identity, "ordinal": 0}
+    long = {**row([assistant("cat a.txt"), user("same")] * 6), **identity, "ordinal": 1}
+    simulations = [simulate_trial(saved, 3)[0] for saved in (short, long)]
+
+    report = summarize("tb2", simulations, 0, 3, 1)
+
+    selected = report["hand_check_sample"][0]
+    assert (selected["attempt_id"], selected["uid"], selected["ordinal"]) == ("eval-attempt", "task-group", 1)
+    assert report["hand_check_sample"][0]["cut_turns"] == 3

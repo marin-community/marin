@@ -71,6 +71,9 @@ def simulate_trial(row: Mapping[str, Any], batches: int) -> tuple[dict[str, Any]
             break
     fired = simulation.fire_index is not None
     trial = {
+        "uid": row.get("uid"),
+        "attempt_id": row.get("attempt_id"),
+        "ordinal": row.get("ordinal"),
         "task_id": row.get("task_id"),
         "turns": len(turns),
         "fired": fired,
@@ -114,7 +117,12 @@ def summarize(cohort: str, simulations: Sequence[Mapping[str, Any]], wait_suppre
         "at_risk_passes_cut_before_their_last_turn": len(at_risk),
         "wait_only_suppressed_windows": wait_suppressed,
         "hand_check_sample": [
-            {key: item[key] for key in ("task_id", "fire_index", "turns", "cut_turns", "verdict", "stop_reason")}
+            {
+                key: item[key]
+                for key in (
+                    "uid", "attempt_id", "ordinal", "task_id", "fire_index", "turns", "cut_turns", "verdict", "stop_reason"
+                )
+            }
             for item in sample_rows
         ],
     }
