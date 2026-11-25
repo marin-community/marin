@@ -250,15 +250,28 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
     return options
 
 
+def served_chat_template_kwargs(
+    protocol_kwargs: Mapping[str, bool | str],
+    model_kwargs: Mapping[str, bool | str],
+    thinking_off_kwargs: Mapping[str, bool | str],
+) -> dict[str, bool | str]:
+    """The chat template arguments a request sends: the model's, then the protocol's, with the model's own
+    thinking-off arguments in place of a protocol's ``enable_thinking: False``."""
+    kwargs = {**model_kwargs, **protocol_kwargs}
+    if protocol_kwargs.get("enable_thinking") is False and thinking_off_kwargs:
+        kwargs.pop("enable_thinking", None)
+        kwargs.update(thinking_off_kwargs)
+    return kwargs
+
+
 def effective_protocol(protocol: EvaluationProtocol, config: EvaluationRunConfig) -> EvaluationProtocol:
     """Use the same resolved chat policy for context admission and generation."""
     sampling = protocol.sampling
     if sampling is None or protocol.operation not in CHAT_OPERATIONS:
         return protocol
-    kwargs = {**config.chat_template_kwargs, **sampling.chat_template_kwargs}
-    if sampling.chat_template_kwargs.get("enable_thinking") is False and config.thinking_off_template_kwargs:
-        kwargs.pop("enable_thinking", None)
-        kwargs.update(config.thinking_off_template_kwargs)
+    kwargs = served_chat_template_kwargs(
+        sampling.chat_template_kwargs, config.chat_template_kwargs, config.thinking_off_template_kwargs
+    )
     return protocol.model_copy(update={"sampling": sampling.model_copy(update={"chat_template_kwargs": kwargs})})
 
 

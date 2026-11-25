@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.evaluation.evals import HarborDefinition
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import (
     EvalPolicy,
@@ -18,14 +16,18 @@ from experiments.evaluation.policy.schema import (
     PolicyOverride,
 )
 
-LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large"), max_context=200_000)
-SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small"), max_context=60_000)
+REVISION = "0" * 40
+LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", revision=REVISION), max_context=200_000)
+SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=60_000)
 
 CONTEXT = 50_000
-PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=0)
+PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)
 SEEDED = PolicyEvaluation(definition=EvaluationSelection(benchmark="seeded"), context=CONTEXT, max_output=None, seed=7)
 LONG = PolicyEvaluation(
-    definition=HarborDefinition(name="long", config_path=Path("long.yaml")), context=100_000, max_output=30_000, seed=0
+    definition=EvaluationSelection(benchmark="long"),
+    context=100_000,
+    max_output=30_000,
+    seed=None,
 )
 SMALL_LONG = PolicyOverride(
     candidate=SMALL, evaluation=LONG, context=60_000, max_output=10_000, reason="window too small"
@@ -36,15 +38,15 @@ def _policy(**exceptions) -> EvalPolicy:
     return EvalPolicy(version="test", candidates=(LARGE, SMALL), in_distribution=(PLAIN, SEEDED, LONG), **exceptions)
 
 
-def _settings(resolved: tuple[ResolvedPolicyEvaluation, ...]) -> dict[str, tuple[int, int | None, int]]:
+def _settings(resolved: tuple[ResolvedPolicyEvaluation, ...]) -> dict[str, tuple[int, int | None, int | None]]:
     return {item.evaluation.name: (item.context, item.max_output, item.seed) for item in resolved}
 
 
 def test_candidate_runs_every_evaluation_with_its_declared_settings():
     assert _settings(resolve(_policy(), LARGE)) == {
-        "plain": (50_000, None, 0),
+        "plain": (50_000, None, None),
         "seeded": (50_000, None, 7),
-        "long": (100_000, 30_000, 0),
+        "long": (100_000, 30_000, None),
     }
 
 
@@ -55,9 +57,9 @@ def test_context_beyond_the_candidate_window_needs_an_override():
         resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
 
     assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL)) == {
-        "plain": (50_000, None, 0),
+        "plain": (50_000, None, None),
         "seeded": (50_000, None, 7),
-        "long": (60_000, 10_000, 0),
+        "long": (60_000, 10_000, None),
     }
 
 
@@ -67,7 +69,7 @@ def test_exceptions_apply_only_to_the_named_candidate():
         overrides=(SMALL_LONG,),
     )
 
-    assert _settings(resolve(policy, SMALL)) == {"plain": (50_000, None, 0), "long": (60_000, 10_000, 0)}
+    assert _settings(resolve(policy, SMALL)) == {"plain": (50_000, None, None), "long": (60_000, 10_000, None)}
     assert _settings(resolve(policy, LARGE)) == _settings(resolve(_policy(), LARGE))
 
 
