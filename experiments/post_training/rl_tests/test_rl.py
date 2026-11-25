@@ -420,7 +420,7 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     step = recipe.run_step(preset, spec)
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-    results = run_native_test("cloud.iris.tests.native_checkpoint_eval", [str(path)])
+    results = run_native_test("cloud.iris.tests.native_checkpoint_coverage", [str(path)])
     chosen, *rejected = results
     assert chosen["attempted"] == 190
     assert chosen["scored"] == 184
