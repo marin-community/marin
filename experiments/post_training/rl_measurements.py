@@ -583,7 +583,7 @@ def read_measurements(
                                 (
                                     recorded_task_sets[evaluation.name].task_set_sha256,
                                     evaluation_protocol(launch, evaluation.name),
-                                    score_membership(session, statistic),
+                                    score_membership(session, statistic, scored_only=True),
                                 ),
                                 sort_keys=True,
                             ).encode()

@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow
 from finestore.rl.strata import MembershipState, SelectionManifest
 
@@ -133,17 +134,23 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
     return dict(groups)
 
 
-def score_membership(session: pa.Table, statistic: str) -> dict:
-    """Describe the stored task assignments consumed by an evaluation mean."""
+def score_membership(session: pa.Table, statistic: str, *, scored_only: bool = False) -> dict:
+    """Describe panel assignments, or the answers that contributed to a plotted score."""
     columns = {
         "family_mean": ("task_id", "family"),
         "aai_weighted_mean": ("task_id", "aai_category"),
     }.get(statistic, ("task_id",))
     if statistic.startswith("family/"):
         columns = ("task_id", "family")
+    if scored_only:
+        session = session.filter(session["scored"])
+        if statistic.startswith("family/"):
+            family = statistic.removeprefix("family/").removesuffix("/mean")
+            session = session.filter(pc.equal(session["family"], family))
+        columns = (*columns, "answer")
     members = {tuple(row[column] for column in columns) for row in session.select(columns).to_pylist()}
     return {
-        "members": sorted(members, key=lambda values: (values[0], tuple(value or "" for value in values[1:]))),
+        "members": sorted(members, key=lambda values: tuple("" if value is None else str(value) for value in values)),
         "weights": AAII_WEIGHTS if statistic == "aai_weighted_mean" else None,
     }
 
