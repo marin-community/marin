@@ -545,10 +545,8 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                         assert len(doc_ids) == 1, "We shouldn't have packed two examples together if one is too long."
 
                     # Use the global document index as the segment ID.
-                    segment_ids = []
-                    for doc_idx, (doc_start, doc_end) in zip(doc_ids, spans, strict=True):
-                        segment_ids.extend([doc_idx] * (doc_end - doc_start))
-                    out_segment_ids.append(np.array(segment_ids))
+                    segment_lengths = [doc_end - doc_start for doc_start, doc_end in spans]
+                    out_segment_ids.append(np.repeat(np.asarray(doc_ids, dtype=np.int64), segment_lengths))
 
                     if all(spans[i][1] == spans[i + 1][0] for i in range(len(spans) - 1)):
                         # Contiguous spans (the sequential packer's packs) read as one slice.
