@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import DockerfileSource, ImageArchitecture, RegistryImage, host_architecture
+from shellbox.image import DockerfileSource, ImageArchitecture, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
@@ -34,6 +34,8 @@ from shellbox.process_session import (
 )
 
 logger = logging.getLogger(__name__)
+IMAGE_PLATFORM = ImageArchitecture.AMD64.platform
+"""Docker trials pull and build amd64 images; an arm64 Docker host runs them under its emulation."""
 
 # The parent waits so setsid is not a process-group leader and cannot detach.
 # Keep stdin available because non-interactive shells redirect background jobs to /dev/null.
@@ -310,18 +312,12 @@ class DockerMachine:
 
 
 class DockerMachineFactory:
-    """Start a Docker image as a fresh trial container.
-
-    Registry pulls and Dockerfile builds select ``linux/<image_architecture>``, the host's by default.
-    Another architecture runs only where the Docker host has emulation (binfmt) registered.
-    A ``DockerImage`` already in the daemon runs as it is.
-    """
+    """Start a Docker image as a fresh trial container."""
 
     backend: Backend = Backend.DOCKER
 
-    def __init__(self, *, runtime: str | None = None, image_architecture: ImageArchitecture | None = None):
+    def __init__(self, *, runtime: str | None = None):
         self.runtime = runtime
-        self.image_platform = f"linux/{image_architecture or host_architecture()}"
 
     def _check_spec(self, spec: MachineSpec) -> DockerImage | RegistryImage | DockerfileSource:
         if not isinstance(spec.source, (DockerImage, RegistryImage, DockerfileSource)):
@@ -351,7 +347,7 @@ class DockerMachineFactory:
                 "build",
                 "--quiet",
                 "--platform",
-                self.image_platform,
+                IMAGE_PLATFORM,
                 "-f",
                 str(source.dockerfile),
                 str(source.context),
@@ -373,7 +369,7 @@ class DockerMachineFactory:
             "none" if spec.network is NetworkPolicy.DENY else "bridge",
         ]
         if pull == "missing":
-            args.extend(("--platform", self.image_platform))
+            args.extend(("--platform", IMAGE_PLATFORM))
         if spec.memory_mb is not None:
             args.extend(("--memory", f"{spec.memory_mb}m"))
         if spec.cpus is not None:

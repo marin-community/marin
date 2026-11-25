@@ -200,13 +200,20 @@ def test_registry_index_pin_prepares_each_architecture_separately(tmp_path, oci_
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", copy)
-    cache = ImageCache(tmp_path / "cache")
     source = RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}")
     for architecture in ImageArchitecture:
-        prepared = cache.prepare(source, architecture)
+        prepared = ImageCache(tmp_path / "cache").prepare(source, architecture)
         assert prepared.manifest_digest == platforms[architecture].manifest_digest
         assert prepared_image_config(prepared)["architecture"] == architecture
         assert prepared_image_workdir(prepared) == f"/{architecture}"
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("A later process must reuse the index pin's cached selection offline")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    for architecture in ImageArchitecture:
+        reused = ImageCache(tmp_path / "cache").prepare(source, architecture)
+        assert reused.manifest_digest == platforms[architecture].manifest_digest
 
 
 def test_single_platform_image_of_another_architecture_fails_before_use(tmp_path, oci_image, monkeypatch):

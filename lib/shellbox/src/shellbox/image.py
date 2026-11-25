@@ -27,6 +27,11 @@ class ImageArchitecture(StrEnum):
     AMD64 = "amd64"
     ARM64 = "arm64"
 
+    @property
+    def platform(self) -> str:
+        """The OCI platform string, such as ``linux/arm64``, that registries and builders select by."""
+        return f"linux/{self.value}"
+
 
 HOST_MACHINE_ARCHITECTURES = {
     "x86_64": ImageArchitecture.AMD64,
@@ -111,8 +116,10 @@ def prepared_image_config(image: PreparedImage) -> dict[str, Any]:
 def check_image_architecture(config: dict[str, Any], architecture: ImageArchitecture, image: str) -> None:
     """Raise ``ImageArchitectureMismatch`` unless an OCI image config is Linux on ``architecture``."""
     actual = f"{config.get('os')}/{config.get('architecture')}"
-    if actual != f"linux/{architecture}":
-        raise ImageArchitectureMismatch(f"Image {image} is {actual}, but this consumer runs only linux/{architecture}")
+    if actual != architecture.platform:
+        raise ImageArchitectureMismatch(
+            f"Image {image} is {actual}, but this consumer runs only {architecture.platform}"
+        )
 
 
 def prepared_image_workdir(image: PreparedImage) -> str:
@@ -225,7 +232,8 @@ def prepare_image(
 ) -> PreparedImage:
     """Copy or build an image for ``linux/<architecture>`` and retain that platform by manifest digest.
 
-    A reference to a multi-platform index selects the ``architecture`` manifest. A reference
+    A reference to a multi-platform index selects the ``architecture`` manifest; a link named for
+    the index digest and architecture lets later processes reuse that layout offline. A reference
     to a single-platform manifest of another architecture raises ``ImageArchitectureMismatch``,
     as does a cached layout of another architecture. A Dockerfile builds for ``architecture``;
     on a host of another architecture that needs the Docker builder's emulation.
@@ -242,11 +250,20 @@ def prepare_image(
         match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
         if match is not None:
             pinned_digest = match[1]
+    index_alias = None
+    if pinned_digest is not None:
+        # An index pin names no layout of its own; this link records which manifest it selected.
+        index_alias = cache / f"{pinned_digest.replace(':', '-')}-{architecture}"
     if pinned_digest is not None and policy is None:
         destination = cache / pinned_digest.replace(":", "-")
         if destination.exists():
             _manifest_digest(destination, architecture, source, expected=pinned_digest)
             return PreparedImage(destination, pinned_digest, source)
+        assert index_alias is not None
+        if index_alias.exists():
+            selected = "sha256:" + os.readlink(index_alias).removeprefix("sha256-")
+            _manifest_digest(index_alias, architecture, source, expected=selected)
+            return PreparedImage(cache / selected.replace(":", "-"), selected, source)
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
@@ -263,7 +280,7 @@ def prepare_image(
                     "docker",
                     "build",
                     "--platform",
-                    f"linux/{architecture}",
+                    architecture.platform,
                     "-f",
                     str(source.dockerfile),
                     "-t",
@@ -279,7 +296,7 @@ def prepare_image(
                 *skopeo_args,
                 source_ref,
                 f"oci:{layout}:{OCI_TAG}",
-                context=f" for {source.reference} on linux/{architecture}",
+                context=f" for {source.reference} on {architecture.platform}",
             )
         digest = _manifest_digest(layout, architecture, source)
         destination = cache / digest.replace(":", "-")
@@ -289,4 +306,9 @@ def prepare_image(
             except FileExistsError:
                 pass  # Another process published this content-addressed layout.
         _manifest_digest(destination, architecture, source, expected=digest)
+        if index_alias is not None and digest != pinned_digest:
+            try:
+                index_alias.symlink_to(destination.name)
+            except FileExistsError:
+                pass  # Another process recorded the same immutable selection.
         return PreparedImage(destination, digest, source)

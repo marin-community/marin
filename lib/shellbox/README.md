@@ -41,11 +41,11 @@ Shellbox prepares Linux images only. `ImageArchitecture` names the two it handle
 | --- | --- |
 | Local | The host's only. Bubblewrap is not a virtual machine and runs image programs natively, so `LocalMachineFactory` prepares every image for the host's architecture. |
 | QEMU | `amd64` only (`QEMU_GUEST_ARCHITECTURE`). Bundles carry `qemu-system-x86_64` and an amd64 kernel. Only amd64 hosts are tested. |
-| Docker, local gVisor | `DockerMachineFactory(image_architecture=...)`, the host's by default. It selects the platform for registry pulls and Dockerfile builds. Another architecture needs emulation (binfmt) on the Docker host. A local `DockerImage` runs as it is. |
+| Docker, local gVisor | `amd64` (`IMAGE_PLATFORM`) for registry pulls and Dockerfile builds. An arm64 Docker host runs them under its emulation. A local `DockerImage` runs as it is. |
 | Daytona | Whatever Daytona's runners run. Shellbox passes no platform. Our images are amd64. |
 | Iris | The architecture of the worker that runs the sandbox job. Shellbox passes no platform or node constraint. |
 
-`ImageCache.prepare(source, architecture)` and `prepare_image(..., architecture=...)` select `linux/<architecture>`. A reference to a multi-platform index resolves to that architecture's manifest, so one index digest serves hosts of both architectures. A single-platform manifest pins one architecture. Preparing it for another raises `ImageArchitectureMismatch` naming both architectures. A cached layout of another architecture raises the same error before any tool runs, and so does unpacking a `PreparedImage` of another architecture for the local backend. The cache keeps one entry per source and architecture.
+`ImageCache.prepare(source, architecture)` and `prepare_image(..., architecture=...)` select `linux/<architecture>`. A reference to a multi-platform index resolves to that architecture's manifest, so one index digest serves hosts of both architectures. A single-platform manifest pins one architecture. Preparing it for another raises `ImageArchitectureMismatch` naming both architectures. A cached layout of another architecture raises the same error before any tool runs, and so does unpacking a `PreparedImage` of another architecture for the local backend. The cache keeps one entry per source and architecture. After an index digest's first preparation, a link in the cache directory records the manifest it selected for each architecture, so later processes reuse the layout without the registry.
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
