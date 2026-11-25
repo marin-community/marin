@@ -192,7 +192,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
         control_commit=report.control.commit,
-        control_revision=report.control.revision,
+        control_version=report.control.version,
     )
 
 
@@ -251,7 +251,7 @@ def build_record(
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
-    if index is not None and index.base_preset_revision is None:
+    if index is not None and index.base_preset_version is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
@@ -262,8 +262,9 @@ def build_record(
         label=run_label(inputs),
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
-        preset_revision=index.preset_revision if index is not None else None,
-        base_preset_revision=index.base_preset_revision if index is not None else None,
+        preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
+        is_control=bool(control or inputs.control or (index and index.is_control)),
+        base_preset_version=index.base_preset_version if index is not None else None,
         control=control or inputs.control,
         control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
@@ -550,7 +551,7 @@ def publish_controls(
     configure_coreweave_s3()
     controls = {
         gate.control_path(preset, pin, index, table=table): ControlReplicate(
-            commit=pin.commit, revision=pin.revision, replicate=index
+            commit=pin.commit, version=pin.version, replicate=index
         )
         for index in range(pin.replicates)
     }

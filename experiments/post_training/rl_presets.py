@@ -417,7 +417,6 @@ class Preset:
     """
 
     name: str
-    revision: str
     recipe: Recipe
     updates: int
     measured: range
@@ -515,7 +514,7 @@ class Preset:
 class ControlPin:
     preset: str
     commit: str
-    revision: str
+    version: str
     replicates: int
 
 

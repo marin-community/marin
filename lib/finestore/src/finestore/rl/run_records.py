@@ -87,19 +87,20 @@ class RunIndexIdentity(BaseModel):
     run_id: Identity
     model: Identity
     preset: Identity
-    preset_revision: Identity
+    preset_version: Identity
+    is_control: bool = False
     user: Identity
     branch: str | None
     source_revision: Identity
     tree_hash: Identity | None = None
-    base_preset_revision: Identity | None = None
+    base_preset_version: Identity | None = None
     dirty: bool
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     submitted_at: str | None = None
 
     @property
     def wandb_tags(self) -> list[str]:
-        tags = [f"model:{self.model}", f"preset:{self.preset}", f"revision:{self.preset_revision}", f"user:{self.user}"]
+        tags = [f"model:{self.model}", f"preset:{self.preset}", f"version:{self.preset_version}", f"user:{self.user}"]
         if self.branch is not None:
             tags.append(f"branch:{self.branch}")
         return tags

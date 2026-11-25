@@ -238,7 +238,7 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
         effect=None,
         reason="Insufficient overlap",
         run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
-        control=gate.ControlMetadata(commit="abcd1234", revision=preset.revision, replicates=2),
+        control=gate.ControlMetadata(commit="abcd1234", version="1234abcd", replicates=2),
         invariants=(Invariant(name=f"eval_lite/{SHARED_TASKS_INVARIANT}", value=9, limit=18, holds=False),),
         comparisons=(),
         gaps=(),
@@ -309,7 +309,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -336,7 +336,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     report, first_gate = saved_gate()
     interrupted = {"once": True}
     logical_id = "snowball-learning-medium-tester-1234abcd"
-    native_id = f"tests/publication-0-{preset.revision}"
+    native_id = f"tests/publication-0-{recipe.RUN_ARTIFACT_VERSION}"
     automatic_links = ["linked-export", "native-export"]
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
@@ -371,11 +371,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         run_id=logical_id,
                         model=table.model,
                         preset=preset.name,
-                        preset_revision=preset.revision,
+                        preset_version="1234abcd",
                         user="tester",
                         branch="fixture",
                         source_revision="fixture",
-                        base_preset_revision=preset.revision,
+                        base_preset_version="1234abcd",
                         dirty=False,
                     )
                     if index == 0
@@ -443,7 +443,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
         "control_commit": pin.commit,
-        "control_revision": pin.revision,
+        "control_version": pin.version,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
@@ -693,14 +693,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }
-    stale_table = replace(
-        table,
-        presets=tuple(
-            replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets
-        ),
-    )
-    with pytest.raises(click.UsageError, match="control"):
-        publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
+    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
     after_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }

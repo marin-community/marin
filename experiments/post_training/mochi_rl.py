@@ -196,7 +196,6 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.4",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -227,9 +226,6 @@ _TRAIN_MEDIUM = replace(
     name="train-medium",
     evaluations=(),
 )
-_TRAIN_LONG_AGENTIC = replace(
-    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.7"
-)
 
 MOCHI = ModelPresets(
     model="mochi",
@@ -238,11 +234,8 @@ MOCHI = ModelPresets(
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
-        _TRAIN_LONG_AGENTIC,
-        replace(
-            agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
-            revision=_TRAIN_LONG_AGENTIC.revision,
-        ),
+        agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
+        agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
     control_pins={},

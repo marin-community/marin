@@ -23,8 +23,8 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
    They need an immutable recipe, the same development panel, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
-3. A default plan uses the declared control pin. Gated execution and planning with `--require`
-   need a pin at the preset's current revision. Controls are collected after merge. `--control`
+3. A default plan uses the declared control pin. Gated execution compares stored control receipts
+   with the current preset defaults. Controls are collected after merge. `--control`
    and train-long need no pin. Print the plan:
 
    ```bash
@@ -32,7 +32,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    ```
 
    Check inputs, allocation, guards, budget estimate and output paths.
-   `--version dev` satisfies the launcher; step versions use each preset's `revision`.
+   `--version dev` satisfies the launcher. The preset version fingerprints the composed configuration.
    Use the same plan and inputs to read status for a saved run.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
    either train-long preset or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
@@ -74,7 +74,7 @@ to associate a stored attempt with its issue.
 ## Inspect saved answers
 
 Read existing answers before launching another run. Controls are named by preset, `commit`
-and revision in `snowball_rl.SNOWBALL.control_pins`; use their configured output paths. Candidate status
+and artifact version in `snowball_rl.SNOWBALL.control_pins`. Use their configured output paths. Candidate status
 prints its output. Read the configured export root from the native resolved launch to locate answers.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries
@@ -90,7 +90,7 @@ For a linked issue, post one comment per result after the person's posting appro
 in order:
 
 - **Result** — verdict or status, key metrics, guards and report path.
-- **Preset** — name, revision, source and changed inputs.
+- **Preset** — name, version, source and changed inputs.
 - **Run / attempt** — IDs, Iris and Grafana links.
 - **W&B** — exact run link.
 - **Marina** — attempt link.
@@ -99,7 +99,7 @@ in order:
 ## Never
 
 - Stop or restart an Iris cluster, or cancel/resubmit unrelated jobs without authorization.
-- Collect controls or edit pins, a preset revision or `GATE_REVISION` unless asked in the current thread.
+- Collect controls or edit pins or `GATE_REVISION` unless asked in the current thread.
 - Edit a preset, guard or tolerance to make a candidate pass.
 - Set `generator.enforce_eager=true` without a request; CUDA graphs affect speed measurement.
 - Claim a speed gain from speed-short alone, or a learning gain from a speed preset.
