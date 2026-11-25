@@ -46,10 +46,10 @@ def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
 
 
 def _server_window(item: ResolvedPolicyEvaluation) -> int:
-    """The window a server must have for the run to see exactly the evaluation's context.
+    """Choose a server window from the declared benchmark window and policy context.
 
-    A benchmark that enforces its own window runs on the candidate's served window, which must hold it;
-    any other runs at the server's window, so it needs a server of exactly its context.
+    Benchmarks with a declared window request the candidate's served window; others request
+    a server at the policy context.
     """
     served = item.candidate.model.serve.max_model_len
     own = benchmark_window(item)
