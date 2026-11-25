@@ -88,9 +88,10 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     (native / "selected.json").write_text(
         json.dumps({"step": 7, "completed_updates": 8, "checkpoint": str(checkpoint), "format": "SFTSpec"})
     )
-    (native / "consumed-config.json").write_text(
-        json.dumps({"format": "SFTSpec", "train_config": draccus.encode(config)})
-    )
+    consumed = draccus.encode(config)
+    # Data replay must work in a fresh CPU process without the producer's optimizer plugins.
+    consumed["optimizer"] = {"type": "producer-only-optimizer"}
+    (native / "consumed-config.json").write_text(json.dumps({"format": "SFTSpec", "train_config": consumed}))
     pins = {}
     for name, content in {
         "truncation-census.json": '{"unique_sft_caches":1}',

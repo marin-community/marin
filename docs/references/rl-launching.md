@@ -593,6 +593,12 @@ from its rows, and reads only the completed evaluation attempt. It does not rely
 on the older `selection.json` preparation file or its historical attempt count.
 An explicitly recorded unscored attempt remains unscored and blocks native
 checkpoint cleanup; preserving it does not certify full evaluation coverage.
+To continue after a successful report, include its `report` and `eval_inputs`
+artifacts in the plan. Accounting replays only the consumed data and trainer
+configuration, without loading model or optimizer plugins. Supply its `pack`,
+`measured_step_seconds`, and `timing_source` through `accounting_settings` when
+the original archive settings omit them; pin the native timing evidence in
+`additional_evidence`.
 
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the

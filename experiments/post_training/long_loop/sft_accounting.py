@@ -17,8 +17,14 @@ from haliax import Axis
 from levanter.data.dataset import MappedAsyncDataset, PermutationDataset, SlicedAsyncDataset
 from levanter.data.mixture import ConcatDataset, MixtureDataset
 from levanter.data.packing import pack_documents
-from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset, _resolve_pack_config
-from levanter.main.train_lm import TrainLmConfig
+from levanter.data.text.datasets import (
+    CausalLmDataset,
+    LmDataConfig,
+    PackedTokenDataset,
+    TokenSeqDataset,
+    _resolve_pack_config,
+)
+from levanter.trainer import TrainerConfig
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
 
@@ -26,6 +32,16 @@ from experiments.post_training.long_loop.archive import ArchiveInput, digest, wr
 from experiments.post_training.long_loop.source_loss import SourceLossMode, source_loss_metadata
 
 ACCOUNTING_READ_BATCH_SIZE = 256
+
+
+@dataclass(frozen=True)
+class SftAccountingConfig:
+    """Loader inputs for replay, independent of the producer's model and optimizer plugins."""
+
+    data: LmDataConfig
+    trainer: TrainerConfig
+    sequence_length: int
+    data_seed: int | None
 
 
 @dataclass(frozen=True)
@@ -189,7 +205,7 @@ def sequence_statistics(
 
 
 async def sampled_rows(
-    config: TrainLmConfig, steps: int, *, start_index: int = 0, loss_modes: dict[str, SourceLossMode] | None = None
+    config: SftAccountingConfig, steps: int, *, start_index: int = 0, loss_modes: dict[str, SourceLossMode] | None = None
 ):
     """Replay precisely the global sample range consumed by committed native updates."""
     if config.data.prior_context_phases or config.data.mixture_start_step is not None:
@@ -201,7 +217,7 @@ async def sampled_rows(
     data_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed), 4)[0]
     if config.data_seed is not None:
         data_key = jax.random.PRNGKey(config.data_seed)
-    length = config.train_seq_len or config.model.max_seq_len
+    length = config.sequence_length
     mixture = config.data.train_mixture(Axis("position", length), config.trainer.batch_schedule, key=data_key)
     if not isinstance(mixture, MixtureDataset):
         raise TypeError("SFT accounting requires the native mixture loader")
@@ -247,7 +263,17 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     document = json.loads(consumed)
     if document["format"] != "SFTSpec":
         raise ValueError("SFT accounting requires the native SFTSpec producer")
-    config = draccus.decode(TrainLmConfig, document["train_config"])
+    train = document["train_config"]
+    config = SftAccountingConfig(
+        data=draccus.decode(LmDataConfig, train["data"]),
+        trainer=draccus.decode(TrainerConfig, train["trainer"]),
+        sequence_length=train["train_seq_len"] or train["model"]["max_seq_len"],
+        data_seed=train["data_seed"],
+    )
+    # Resolve report controls before replaying a potentially large dataset.
+    step_seconds = settings["measured_step_seconds"]
+    timing_source = settings["timing_source"]
+    pack = settings["pack"]
     modes = None
     if "source_loss_metadata" in settings:
         pin = settings["source_loss_metadata"]
@@ -257,7 +283,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     metadata = (StoragePath(selected["checkpoint"]) / "metadata.json").read_bytes()
     if json.loads(metadata)["step"] != selected["step"] or selected["step"] + 1 != steps:
         raise ValueError("SFT accounting checkpoint and selection disagree")
-    length = config.train_seq_len or config.model.max_seq_len
+    length = config.sequence_length
     batch = config.trainer.train_batch_size
     if not isinstance(batch, int):
         raise ValueError("SFT accounting requires the run's constant batch size")
@@ -297,7 +323,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         content = manifest.read_bytes()
     write_once(str(StoragePath(output) / "realized-samples.jsonl"), content)
     files.append({"name": "realized-samples.jsonl", "sha256": hashlib.sha256(content).hexdigest()})
-    max_segments, _ = _resolve_pack_config(settings["pack"])
+    max_segments, _ = _resolve_pack_config(pack)
     by_source = defaultdict(list)
     for row in rows:
         by_source[row["source"]].append(row)
@@ -312,8 +338,8 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         "consumed_config_sha256": hashlib.sha256(consumed).hexdigest(),
         "sequence_length": length,
         "batch_size": batch,
-        "step_seconds": settings["measured_step_seconds"],
-        "timing_source": settings["timing_source"],
+        "step_seconds": step_seconds,
+        "timing_source": timing_source,
         "resumed_prefix": resume,
         "limitations": (
             "Padding compute/MFU share assumes cost proportional to positions; not a hardware MFU measurement. "
@@ -321,19 +347,15 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
             "it does not preserve source-specific grouping or change the training data. Unpacking is also estimated. "
             "Replay loss is causal and is not labeled assistant loss."
         ),
-        "overall": sequence_statistics(
-            rows, length, batch, settings["measured_step_seconds"], max_segments=max_segments
-        ),
+        "overall": sequence_statistics(rows, length, batch, step_seconds, max_segments=max_segments),
         "per_source": {
-            name: sequence_statistics(items, length, batch, settings["measured_step_seconds"], max_segments=max_segments)
+            name: sequence_statistics(items, length, batch, step_seconds, max_segments=max_segments)
             for name, items in sorted(by_source.items())
         },
     }
     for statistics in report["per_source"].values():
-        statistics["positions_per_second"] = statistics["positions"] / (steps * settings["measured_step_seconds"])
-        statistics["estimated_real_tokens_per_second"] = statistics["real_tokens"] / (
-            steps * settings["measured_step_seconds"]
-        )
+        statistics["positions_per_second"] = statistics["positions"] / (steps * step_seconds)
+        statistics["estimated_real_tokens_per_second"] = statistics["real_tokens"] / (steps * step_seconds)
     content = json.dumps(report, indent=2, sort_keys=True).encode()
     write_once(str(StoragePath(output) / "realized-truncation-padding.json"), content)
     files.append({"name": "realized-truncation-padding.json", "sha256": hashlib.sha256(content).hexdigest()})
@@ -342,7 +364,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         json.dumps(
             {
                 "files": files,
-                "representation": {"sequence_length": length, "sft_packing": settings["pack"], "slice": "left"},
+                "representation": {"sequence_length": length, "sft_packing": pack, "slice": "left"},
                 "report": report,
             },
             sort_keys=True,

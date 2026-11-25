@@ -78,7 +78,7 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
         key: ArtifactStep.adopt(f"{name}/postprocess-source-{key}", version, uri)
         for key, uri in plan["artifacts"].items()
     }
-    if "recovery" not in plan and "recovered_eval" not in handles:
+    if "recovery" not in plan and "recovered_eval" not in handles and "report" not in handles:
         policy = read_micro210_policy(POLICY_REFERENCE)
         handles["eval_inputs"] = apply(
             f"{name}/evaluation-reporting-inputs",
@@ -96,8 +96,8 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
         "additional_evidence": [*resolved_spec["archive"]["additional_evidence"], *plan["additional_evidence"]],
     }
     accepted = plan["accepted_unscored_attempts"]
-    if "recovered_eval" in handles:
-        merged, report = handles["recovered_eval"], handles["report"]
+    if "report" in handles:
+        merged, report = handles.get("recovered_eval", handles["eval"]), handles["report"]
     else:
         merged = (
             apply(
@@ -158,7 +158,11 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
         version=version,
         output=OUT,
         trained=handles["sft"],
-        settings={**settings["sft_data_accounting"], "resume_samples": plan.get("accounting_resume")},
+        settings={
+            **settings["sft_data_accounting"],
+            **plan.get("accounting_settings", {}),
+            "resume_samples": plan.get("accounting_resume"),
+        },
     )
     accounting = replace(accounting, deps=(*accounting.deps, report))
     terminal = apply(
