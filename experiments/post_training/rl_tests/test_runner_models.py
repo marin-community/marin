@@ -146,6 +146,7 @@ def test_batch_mix_refuses_invalid_counts(selection, shares, error):
             "train-medium-agentic",
             ("environment.task_sessions.agent_harnesses.pi.unused=true",),
             None,
+            None,
         ),
         (
             "snowball",
@@ -163,6 +164,8 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
     assert result.exit_code == 4, (result.output, result.exception)
     issue = json.loads(result.stdout)
     assert issue["verdict"] == "invalid"
+    if error is not None:
+        assert error in issue["reason"]
 
 
 @pytest.mark.parametrize(

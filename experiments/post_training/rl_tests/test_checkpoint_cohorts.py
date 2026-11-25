@@ -4,7 +4,7 @@
 import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.models import TaskRolloutSpec
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import AgentMachine, ConversationInput, ScriptGrader, TextMessage
 
@@ -39,7 +39,7 @@ def test_checkpoint_task_artifact_preserves_cohort_and_caps_package_verifier_dea
     write_checkpoint_tasks(cohort=cohort, image_digests={IMAGE: DIGEST}, downloaded=str(downloaded), output=str(output))
 
     rows = pq.read_table(output / CHECKPOINT_TASKS_FILENAME).to_pylist()
-    specs = [TaskRolloutSpec.model_validate_json(row["task_rollout_spec"]) for row in rows]
+    specs = [TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN]) for row in rows]
     assert [spec.task.id for spec in specs] == [f"openthoughts_tblite/{package}" for package in cohort.packages]
     assert [spec.limits.verifier_timeout for spec in specs] == [3600, 180] * 15
     for spec, package in zip(specs, cohort.packages, strict=True):

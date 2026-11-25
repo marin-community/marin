@@ -47,6 +47,7 @@ def test_health_receipt_preserves_setup_exit_evidence(tmp_path, reason, exit_cod
 
     (stored_receipts,) = (tmp_path / ATTEMPT_RECEIPTS_DIRECTORY).glob("*.jsonl")
     stored = json.loads(stored_receipts.read_text())
+    assert stored["outcome"] == Outcome.INFRA_ERROR
     assert (stored["phase"], stored["setup_completed"], stored["setup_exit_code"]) == (
         Phase.TASK_SETUP,
         False,

@@ -158,10 +158,6 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
     return DAYTONA_EGRESS if Backend.DAYTONA in machine_backends(config) else ()
 
 
-def daytona_connection(api_key: str) -> DaytonaConnection:
-    return DaytonaConnection(api_key=api_key)
-
-
 class LazyMachineFactories(Mapping[str, MachineFactory]):
     """Build each backend factory on first lookup."""
 

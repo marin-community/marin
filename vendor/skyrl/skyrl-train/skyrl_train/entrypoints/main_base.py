@@ -202,7 +202,8 @@ def create_ray_wrapped_inference_engines_from_config(
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
         expert_parallel_size=cfg.generator.inference_engine_expert_parallel_size,
-        # Decode Context Parallelism partitions the existing TP GPUs; it adds no GPU allocation.
+        # Decode context parallelism uses the tensor-parallel GPUs. Pass values above 1
+        # as native vLLM engine arguments without changing placement.
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),
@@ -400,8 +401,7 @@ class BasePPOExp:
     def task_dataset(self, data_files):
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
 
-        cache_config = self.cfg.get("runtime", {}).get("prepared_task_cache")
-        prepared_cache = None if cache_config is None else PreparedTaskCacheSource(**cache_config)
+        prepared_cache = self.cfg.get("runtime", {}).get("prepared_task_cache")
         return SourceTaskDataset(
             datasets=data_files,
             environment_configs=OmegaConf.to_container(self.cfg.environment.task_sessions, resolve=True),
@@ -409,7 +409,7 @@ class BasePPOExp:
             max_prompt_length=self.cfg.trainer.max_prompt_length,
             num_workers=8,
             chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
-            prepared_cache=prepared_cache,
+            prepared_cache=None if prepared_cache is None else PreparedTaskCacheSource(**prepared_cache),
         )
 
     def get_eval_dataset(self, data_files: list[str] | None = None):

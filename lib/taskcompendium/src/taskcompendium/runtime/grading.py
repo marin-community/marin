@@ -76,7 +76,6 @@ JUDGE_RELAY_PORT = 8790
 JUDGE_RELAY_URL = f"http://127.0.0.1:{JUDGE_RELAY_PORT}/v1"
 JUDGE_RELAY_KEY = "machine-local-judge-relay"
 JUDGE_RELAY_ROUTES = MappingProxyType({"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"})
-JUDGE_RELAY_REQUEST_TIMEOUT = 120
 STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
@@ -583,16 +582,16 @@ def _grading_env(
     return env
 
 
-def _relay_script_judge(machine: Machine, connection: JudgeConnection | None) -> AbstractAsyncContextManager[None]:
-    if connection is None:
-        return nullcontext()
+def _relay_script_judge(
+    machine: Machine, connection: JudgeConnection, request_timeout: float
+) -> AbstractAsyncContextManager[None]:
     return forward_http_posts(
         machine,
         port=JUDGE_RELAY_PORT,
         upstream=connection.base_url,
         routes=JUDGE_RELAY_ROUTES,
         headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
-        timeout=JUDGE_RELAY_REQUEST_TIMEOUT,
+        timeout=request_timeout,
     )
 
 
@@ -692,6 +691,13 @@ async def _grade_staged(
     assert isinstance(placement, GraderMachine)
     environment = placement.environment
     files = _grading_files(task, attempt, grading, submissions)
+    judge = grading.grader.judge if isinstance(grading.grader, ScriptGrader) else None
+    relay_connection = judge_connection if judge is not None and factory.backend is Backend.DAYTONA else None
+    guest_connection = (
+        replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+        if relay_connection is not None
+        else judge_connection
+    )
     try:
         for command in placement.collect:
             assert task_machine is not None
@@ -748,7 +754,11 @@ async def _grade_staged(
                 prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
             try:
-                async with _relay_script_judge(machine, relay_connection):
+                async with (
+                    _relay_script_judge(machine, relay_connection, judge.request_timeout)
+                    if relay_connection is not None and judge is not None
+                    else nullcontext()
+                ):
                     setup_seconds = time.monotonic() - setup_started
                     result = await _grade_on(
                         machine,

@@ -68,7 +68,7 @@ class _UserProcessMachine(_UserMachine):
 
 
 def _verifier_view(machine: Machine) -> Machine:
-    """Return the underlying machine so trusted verification can select its own user."""
+    """Remove the agent's user override for the trusted verifier in a shared machine."""
     return machine.machine if isinstance(machine, _UserMachine) else machine
 
 

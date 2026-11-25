@@ -83,6 +83,11 @@ def error_category(exception_type: str, *, categories: Mapping[str, ErrorCategor
     return categories.get(exception_type, ErrorCategory.UNKNOWN)
 
 
+def setup_exit_is_task_failure(exit_code: int) -> bool:
+    """Identify a setup script failure below the shell's signal-exit range."""
+    return 0 < exit_code < 128
+
+
 def errors_by_category(category: ErrorCategory, *, categories: Mapping[str, ErrorCategory]) -> frozenset[str]:
     return frozenset(name for name, value in categories.items() if value == category)
 

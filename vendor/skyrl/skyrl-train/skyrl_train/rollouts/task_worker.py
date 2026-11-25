@@ -43,7 +43,6 @@ from rolloutengine.agents.model_relay import PromptTokenizationError
 from rolloutengine.harness.core import Harness
 from rolloutengine.machines import MachineSetupError
 from rolloutengine.models import (
-    CLEANUP_ERRORS_DIAGNOSTIC,
     GenerationLimitReached,
     ContextRejected,
     ContextWindowExceeded,
@@ -53,6 +52,7 @@ from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
     RolloutContractError,
+    CLEANUP_ERRORS_DIAGNOSTIC,
     RolloutOperation,
     TaskRolloutSpec,
 )
@@ -94,8 +94,8 @@ from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
     reject_malformed_reasoning,
-    training_rollout,
     rollout_with_verifier_failure,
+    training_rollout,
 )
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
@@ -108,11 +108,10 @@ from skyrl_train.trajectory_runners.types import (
     TaskRequestBatch,
 )
 
-
 async def _tokenize(
     inference: InferenceEngineClient, template_kwargs: Mapping[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Return the serving endpoint's tokenization response for an agent prompt."""
+    """Tokenize agent prompts on the same serving actors that sample replies."""
     body = {**payload, "model": inference.model_name}
     if "messages" in body and template_kwargs:
         body["chat_template_kwargs"] = {**template_kwargs, **body.get("chat_template_kwargs", {})}
@@ -206,6 +205,7 @@ async def _model_turn(
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
+
 
 
 def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
@@ -388,6 +388,7 @@ class TaskRolloutWorker:
         projection: WholeTaskProjection | StepTaskProjection,
         model_client: ModelClient,
         factories: Mapping[str, MachineFactory],
+        retry: RetrySettings,
         max_verifier_workers: int = 0,
         concurrent_tasks: int | None = None,
         retry_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -395,7 +396,6 @@ class TaskRolloutWorker:
         sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
-        retry: RetrySettings,
         concurrent_training_machine_tasks: int | None = None,
         agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
@@ -411,8 +411,8 @@ class TaskRolloutWorker:
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
         self.agents = agents
         self.task_health_export = task_health_export
-        self.retry = retry
         self.retry_wait = retry_wait
+        self.retry = retry
         self.group_graders = group_graders
         self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
         self.training_machine_slots = (
@@ -451,10 +451,7 @@ class TaskRolloutWorker:
         if lowered.harness in agents:
             return {lowered.harness: agents[lowered.harness]}
         harnesses = episode_harnesses(lowered, self.sessions)
-        if (
-            lowered.harness == ASSISTANT_PREFIX_HARNESS
-            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
-        ):
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
@@ -468,9 +465,7 @@ class TaskRolloutWorker:
             return await self._generate(request)
 
     async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
-        lowered_tasks = [
-            row.spec.model_copy(update={"judge_connection": self.judge_connection}) for row in request.rows
-        ]
+        lowered_tasks = [row.spec.model_copy(update={"judge_connection": self.judge_connection}) for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
         phase = "train" if metadata is None else metadata.training_phase
@@ -673,14 +668,12 @@ class TaskRolloutWorkerSpec:
             ),
             client,
             factories,
-            max_verifier_workers=int(task_sessions.max_verifier_workers),
             retry=RetrySettings.model_validate(OmegaConf.to_container(task_sessions.retry, resolve=True)),
+            max_verifier_workers=int(task_sessions.max_verifier_workers),
             concurrent_tasks=int(self.config.trajectory_runner.max_concurrent_tasks),
             sessions=self.sessions,
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
-            concurrent_training_machine_tasks=None
-            if machine_task_limit is None
-            else max(1, machine_task_limit // shard.count),
+            concurrent_training_machine_tasks=None if machine_task_limit is None else max(1, machine_task_limit // shard.count),
             agents=agents,
             judge_connection=judge,
             task_health_export=str(self.config.trainer.export_path) if agents is not None else None,

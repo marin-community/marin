@@ -1,9 +1,36 @@
 """Credential selection for task backends and remote graders."""
 
 import pytest
+from marinskyrl.task_machine_factories import task_machine_factories
 from omegaconf import OmegaConf
+from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory
+from shellbox.machine import Backend
+from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND
 
 import cloud.iris.iris_backend as launcher
+
+
+def test_evaluation_provisioning_can_share_training_credentials(monkeypatch):
+    monkeypatch.setenv("DAYTONA_RL_API_KEY", "shared-test-key")
+    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda connection: lambda: connection)
+    sessions = OmegaConf.create(
+        {
+            "daytona": {
+                "api_key_env": "DAYTONA_RL_API_KEY",
+                "ttl_minutes": 360,
+                "image_build": "snapshot",
+                "eval_image_build": "declarative",
+            }
+        }
+    )
+
+    factories = task_machine_factories(sessions)
+
+    training, evaluation = factories[Backend.DAYTONA], factories[DAYTONA_EVAL_BACKEND]
+    assert isinstance(training, DaytonaMachineFactory) and isinstance(evaluation, DaytonaMachineFactory)
+    assert (training.image_build, evaluation.image_build) == (DaytonaImageBuild.SNAPSHOT, DaytonaImageBuild.DECLARATIVE)
+    assert evaluation.client_factory().api_key == "shared-test-key"
 
 
 @pytest.mark.parametrize("export", [False, True])

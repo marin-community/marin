@@ -536,7 +536,7 @@ async def _run_harness(
     """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
-    # The harness or first turn arms the total deadline; each turn arms the tool deadline.
+    # The recorder arms the total deadline when turns begin and the tool deadline after each turn.
     total, tool = asyncio.timeout(None), asyncio.timeout(None)
     try:
         async with total, tool:

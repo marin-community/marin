@@ -27,18 +27,17 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
         factories[Backend.LOCAL] = LocalMachineFactory()
     daytona = task_sessions.get("daytona")
     if daytona is not None:
-        evaluation_key_env = daytona.get("eval_api_key_env")
-        if not evaluation_key_env and any(
-            daytona.get(option) is not None for option in ("eval_ttl_minutes", "eval_image_build")
-        ):
-            raise ValueError("Daytona evaluation provisioning overrides require eval_api_key_env")
+        api_key = os.environ[daytona.api_key_env]
         image_build = DaytonaImageBuild(daytona.get("image_build", DaytonaImageBuild.SNAPSHOT))
-        factories[Backend.DAYTONA] = _daytona_factory(
-            os.environ[daytona.api_key_env], int(daytona.ttl_minutes), image_build
-        )
-        if evaluation_key_env:
+        factories[Backend.DAYTONA] = _daytona_factory(api_key, int(daytona.ttl_minutes), image_build)
+        evaluation_key_env = daytona.get("eval_api_key_env")
+        if (
+            evaluation_key_env
+            or daytona.get("eval_image_build") is not None
+            or daytona.get("eval_ttl_minutes") is not None
+        ):
             factories[DAYTONA_EVAL_BACKEND] = _daytona_factory(
-                os.environ[evaluation_key_env],
+                os.environ[evaluation_key_env] if evaluation_key_env else api_key,
                 int(daytona.get("eval_ttl_minutes", daytona.ttl_minutes)),
                 DaytonaImageBuild(daytona.get("eval_image_build", image_build)),
             )

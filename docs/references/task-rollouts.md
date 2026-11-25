@@ -134,20 +134,11 @@ SkyRL reply text (`responses`, assistant content) never includes a trailing EOS 
 terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
 token, including the terminator.
 
-SkyRL's Harbor settings select Daytona image builds with `daytona_provisioning`
-(`snapshot` or `declarative`). `eval_daytona_provisioning` selects evaluation's
-mode separately; when omitted, evaluation uses the training setting. Both
-Shellbox tasks and original Harbor trials use that phase's mode. Declarative
-builds create no persistent snapshot and require an account that permits them.
-Evaluation provisioning overrides also apply when both phases share credentials.
-
-Installed-agent `judge_model` selects the model exposed to original Harbor tasks
-that declare model access. The worker passes its explicit remote-judge connection
-to the host relay; provider credentials stay on the host.
-Task-environment model callers receive runtime relay access; tasks that declare
-model access only for verification retain verifier-only access.
-Verifier model aliases and credential templates are rewritten to the guest relay
-after task-specific bindings are applied, without exposing them to the agent.
+SkyRL sets `environment.task_sessions.daytona.image_build` to `snapshot` or
+`declarative`. Tasks that select the `daytona-eval` backend can use a separate
+build mode through `eval_image_build`. They use the primary credential unless
+`eval_api_key_env` is set. Declarative builds create no persistent snapshot and
+require an account that permits them.
 
 ## Harnesses
 
