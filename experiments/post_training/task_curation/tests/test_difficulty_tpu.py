@@ -16,7 +16,8 @@ import httpx
 import pytest
 from finestore.rl.difficulty import SampleTask, Solver
 from iris.cli.job import run as iris_run_command
-from iris.cluster.types import EndpointAccess
+from iris.client.client import NamespacedEndpointRegistry
+from iris.cluster.types import EndpointAccess, Namespace, TaskAttempt
 from iris.rpc.proto_display import priority_band_value
 from marin.inference.config import EffectiveServing, ObjectStoreLoadMode, VllmCompilationCacheMode, VllmLauncherType
 from rigging.filesystem.storage_path import StoragePath
@@ -416,18 +417,25 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
         finally:
             lifecycle.append("slice_exit")
 
-    @contextmanager
-    def registered(name, address, metadata, *, access):
-        assert access == EndpointAccess.ENDPOINT_ACCESS_LINK
-        assert metadata == {"model": model}
-        lifecycle.append("register")
-        addresses[name] = address
-        if registry_failure:
-            raise EndOwner("registry unavailable")
-        try:
-            yield
-        finally:
+    class Cluster:
+        def register_endpoint(self, *, name, address, metadata, access, task_attempt):
+            assert access == EndpointAccess.ENDPOINT_ACCESS_LINK
+            assert metadata == {"model": model}
+            lifecycle.append("register")
+            if registry_failure:
+                raise EndOwner("registry unavailable")
+            addresses[name] = address
+            return name
+
+        def unregister_endpoint(self, endpoint_id):
+            del addresses[endpoint_id]
             lifecycle.append("unregister")
+
+    # Use the actual Iris namespace boundary. The receipt is consumed by sibling
+    # reconcile jobs, which cannot resolve an owner's unqualified local name.
+    registry = NamespacedEndpointRegistry(
+        Cluster(), Namespace("benfeuer/pool-owner"), TaskAttempt.from_wire("/benfeuer/pool-owner/0:0")
+    )
 
     async def warm(endpoint, model, chips, *, concurrency):
         sweeps.append(concurrency)
@@ -457,7 +465,7 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(resolve_endpoint=lambda name: endpoint.removesuffix("/v1")),
-            registry=SimpleNamespace(registered=registered),
+            registry=registry,
         ),
     )
     monkeypatch.setattr(tpu, "publish_pool_receipt", publish_then_exit)

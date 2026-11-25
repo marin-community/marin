@@ -323,7 +323,7 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
             context = iris_ctx()
             info = get_job_info()
             assert info is not None
-            name = f"atlas-difficulty-tpu-{solver.value}-{uuid.uuid4().hex}"
+            name = f"/serve/atlas-difficulty-tpu-{solver.value}-{uuid.uuid4().hex}"
             app = pool_router(receipt["endpoint_names"], context.client.resolve_endpoint)
             with bind_serving_socket(info.advertise_host, 0) as sock, serve_app_background(app, sock):
                 address = f"http://{info.advertise_host}:{sock.getsockname()[1]}"
