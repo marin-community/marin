@@ -35,7 +35,15 @@ from rolloutengine.models import (
 )
 from rolloutengine.test_support import ReplayModel, arithmetic_task, rollout_spec
 
-SCOPE = RolloutScope(run_id="experiment", run_attempt_id="a1", phase="eval", step=3)
+SCOPE = RolloutScope(
+    run_id="experiment",
+    run_attempt_id="a1",
+    phase="eval",
+    policy_step=3,
+    group_id="lease-7",
+    repetition_index=2,
+    retry_index=1,
+)
 ROLLOUT_ID = "experiment/eval/3/arithmetic_0"
 SYSTEM = {"role": "system", "content": "Answer with a number."}
 QUESTION = {"role": "user", "content": "What is six plus six? Antwort: zw\u00f6lf."}
@@ -135,8 +143,18 @@ async def test_rows_round_trip_through_a_finelog_server(finelog_client):
             ]
         )
     )
-    scope = ("experiment", "a1", "eval", 3, "arithmetic", ROLLOUT_ID)
-    columns = ("run_id", "run_attempt_id", "phase", "step", "task_id", "rollout_id")
+    scope = ("experiment", "a1", "eval", 3, "lease-7", 2, 1, "arithmetic", ROLLOUT_ID)
+    columns = (
+        "run_id",
+        "run_attempt_id",
+        "phase",
+        "policy_step",
+        "group_id",
+        "repetition_index",
+        "retry_index",
+        "task_id",
+        "rollout_id",
+    )
     assert {tuple(row[column] for column in columns) for row in [*events, *messages]} == {scope}
     assert all(started_ms <= row["timestamp_ms"] <= finished_ms for row in [*events, *messages])
 
