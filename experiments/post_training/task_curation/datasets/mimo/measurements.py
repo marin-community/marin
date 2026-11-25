@@ -23,6 +23,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
+from marin.execution.artifact import write_artifact
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -62,7 +63,7 @@ def prepare_population(output_path: str) -> SourceTextPopulation:
     files = write_text_population(documents(), output_path)
     if files.task_count != EXPECTED_TASKS:
         raise ValueError(f"the repaired population holds {files.task_count} tasks, expected {EXPECTED_TASKS}")
-    return SourceTextPopulation(
+    population = SourceTextPopulation(
         path=output_path,
         source_id=SOURCE_ID,
         dataset_id=INPUT_REPO,
@@ -78,6 +79,10 @@ def prepare_population(output_path: str) -> SourceTextPopulation:
         converter_rejections={},
         admission_rejections={},
     )
+    # The scan's DF steps re-load the population from its recorded path in their
+    # workers; the artifact record must exist there before the graph runs.
+    write_artifact(population, output_path)
+    return population
 
 
 def main() -> None:
