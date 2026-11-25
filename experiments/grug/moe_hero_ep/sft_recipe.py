@@ -42,7 +42,7 @@ from experiments.grug.moe_hero_ep.ops.export_cpu import (
 from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
-from experiments.sft.launcher import sft_child_resources
+from experiments.sft.launcher import PreparedData, sft_child_resources
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -67,6 +67,11 @@ class MochiSFT:
     stop_after_steps: int | None = None
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
+    prepared_data: PreparedData | None = None
+
+    def with_data_mix(self, data: PreparedData) -> "MochiSFT":
+        """Bind a versioned LM data manifest while retaining the training recipe."""
+        return replace(self, run_id=f"{self.run_id}-mix-{data.mix_name()}", prepared_data=data)
 
     def trained(
         self,
@@ -130,6 +135,7 @@ class MochiSFT:
             version=self.version,
             resources=resources,
             checkpoints=self.checkpoints,
+            prepared_data=self.prepared_data,
         )
         if prefix is None:
             return step
