@@ -22,8 +22,10 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.models.trial.result import TrialResult
+from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.verifier.result import VerifierResult
 from harbor.trial.trial import Trial
+from harbor.utils.env import validate_task_environment
 from harbor.verifier.verifier import Verifier
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
@@ -401,6 +403,96 @@ MODEL_NAME = "fixture-judge"
     assert requests[0].url == "https://judge.invalid/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer host-only-key"
     assert json.loads(requests[0].content)["model"] == "fixture-judge"
+
+
+@pytest.mark.asyncio
+async def test_original_trial_rebuild_keeps_placeholder_verifier_credentials(
+    tmp_path, monkeypatch, harbor_package
+):
+    """The rebuilt trial config must carry the projected placeholders, not their redaction.
+
+    ``run_original_trial`` rebuilds the trial config through ``model_dump()``. The
+    sensitive-env redactor runs in python mode too, so the relay placeholder
+    ``OPENAI_API_KEY="EMPTY"`` became the literal ``"****"`` and Harbor's
+    task-environment boundary rejected it before the verifier ran — every judged
+    Micro210 BixBench trial ended as unscored infrastructure.
+    """
+    package = harbor_package
+    with (package / "task.toml").open("a") as config_file:
+        config_file.write(
+            '\n[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+            'OPENAI_BASE_URL = "https://provider.invalid/v1"\nMODEL_NAME = "fixture-judge"\n'
+        )
+    # The judged launches carry the real judge credential as OPENAI_API_KEY on the
+    # worker (run_micro210 / run_judged), exactly like production.
+    monkeypatch.setenv("OPENAI_API_KEY", HOST_JUDGE_KEY)
+    task_spec = harbor_trial_task(
+        package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    )
+    lowered = lowered_task(task_spec, "harbor_trial", attempt_timeout=15, total_turn_timeout=5).model_copy(
+        update={"judge_connection": JudgeConnection("https://judge.invalid/v1", HOST_JUDGE_KEY)}
+    )
+    runtime = InstalledAgentRuntime(
+        InstalledAgentSettings(
+            agent=AgentConfig(name="pi"),
+            output_path=str(tmp_path / "attempts"),
+            setup_timeout=5,
+            run_timeout=5,
+            cleanup_timeout=5,
+            service_startup_timeout=5,
+            service_shutdown_timeout=5,
+        ),
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=DaytonaConnection(api_key="training-key", api_url="https://train.invalid/api", target="train-target"),
+        eval_daytona_connection=DaytonaConnection(api_key="evaluation-key", api_url="https://eval.invalid/api", target="eval-target"),
+    )
+    harness = runtime.original_harness(lowered, "session", HarborTaskSettings.from_config(OmegaConf.create({})), "eval")
+
+    captured: dict = {}
+    real_create = Trial.create
+
+    async def capturing_create(trial_config, **kwargs):
+        captured["trial_config"] = trial_config
+        return await real_create(trial_config, **kwargs)
+
+    async def scored_run_harbor_trial(trial, backend, complete, engine_dir, **kwargs):
+        return TrialResult(
+            trial_name=trial.config.trial_name,
+            task_name=trial.task.name,
+            task_id=trial.config.task.get_task_id(),
+            config=trial.config,
+            task_checksum=trial.task.checksum,
+            trial_uri="file:///tmp/unused",
+            agent_info=AgentInfo(name="pi", version="0"),
+            verifier_result=VerifierResult(rewards={"reward": 1.0}),
+        )
+
+    @asynccontextmanager
+    async def served_agent(trial_dir, run_timeout, *, capability_lifetime, agent=None):
+        yield AgentConfig(name="pi")
+
+    runtime.port = 1
+    monkeypatch.setattr(agent_runtime.Trial, "create", capturing_create)
+    monkeypatch.setattr(agent_runtime, "run_harbor_trial", scored_run_harbor_trial)
+    monkeypatch.setattr(runtime, "_served_agent", served_agent)
+    result = await harness.run_trial(unexpected_model_request)
+    assert result.verifier_result.rewards == {"reward": 1.0}
+
+    trial_config = captured["trial_config"]
+    assert trial_config.verifier.env["OPENAI_API_KEY"] == "EMPTY"
+    assert trial_config.verifier.env["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
+    assert HOST_JUDGE_KEY not in trial_config.verifier.env.values()
+
+    # Harbor's own task-environment boundary — the check that rejected the redacted
+    # literal in production (verifier.verify -> resolve_env_vars) — must accept the
+    # rebuilt verifier env merged with the package's declared env. The restored task
+    # bytes are the fixture package's; publish_attempt removed the evidence copy.
+    restored_task = Task(harbor_package)
+    merged_env = {**restored_task.config.verifier.env, **trial_config.verifier.env}
+    validate_task_environment(merged_env)
+    assert merged_env["OPENAI_API_KEY"] == "EMPTY"
+    assert merged_env["MODEL_NAME"] == "fixture-judge"
 
 
 def test_original_verifier_declaring_model_rejects_missing_connection(tmp_path, harbor_package):

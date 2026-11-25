@@ -322,6 +322,13 @@ class InstalledAgentRuntime:
                         "trial_name": attempt_id,
                         "agent": agent_config,
                         "environment": environment,
+                        # model_dump() runs the sensitive-env redactor even in python
+                        # mode, turning the relay placeholder OPENAI_API_KEY="EMPTY"
+                        # into the literal "****". Harbor's task-environment boundary
+                        # then rejects that literal before the verifier runs, so every
+                        # judged trial fails as unscored infrastructure. Carry the
+                        # in-memory verifier config through the rebuild instead.
+                        "verifier": config.verifier,
                     }
                 )
                 trial = await Trial.create(
