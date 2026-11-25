@@ -116,6 +116,21 @@ def local_environment_kwargs(workdir: Path) -> dict:
     return kwargs
 
 
+def verifier_shape(requirements: ExecutionRequirements, runtime: dict) -> ExecutionRequirements:
+    """The trial's derived verifier allocation: the initial shape bounded by the declared machine."""
+    from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS  # noqa: PLC0415
+
+    machine = (runtime or {}).get("verifier_machine") or {}
+    limits = {name: machine[name] for name in ("cpus", "memory_mb", "storage_mb") if machine.get(name) is not None}
+    return INITIAL_REQUIREMENTS.model_copy(
+        update={
+            **limits,
+            "agent_timeout_sec": requirements.agent_timeout_sec,
+            "verifier_timeout_sec": requirements.verifier_timeout_sec,
+        }
+    )
+
+
 def control_request(
     task: TaskSpec,
     runtime: dict,
@@ -154,7 +169,7 @@ def control_request(
             "runtime_sha256": canonical_sha256(runtime) if runtime else None,
             "task_checksum": task_checksum,
             "execution_requirements": requirements.model_dump(mode="json"),
-            "verifier_execution_requirements": None,
+            "verifier_execution_requirements": verifier_shape(requirements, runtime).model_dump(mode="json"),
         },
         "output_root": str(output_root),
         "native_setup": None,

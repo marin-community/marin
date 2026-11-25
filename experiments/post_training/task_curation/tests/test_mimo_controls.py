@@ -138,6 +138,9 @@ def test_control_request_carries_the_nop_agent_and_the_local_path(rows, tmp_path
     assert request["source"]["task_checksum"] == "c" * 64
     assert request["source"]["source_task_checksum"] == "d" * 64
     assert request["source"]["execution_requirements"] == requirements.model_dump(mode="json")
+    assert request["source"]["verifier_execution_requirements"] == mimo_controls.verifier_shape(
+        requirements, runtime
+    ).model_dump(mode="json")
     assert request["native_setup"] is None
 
 
