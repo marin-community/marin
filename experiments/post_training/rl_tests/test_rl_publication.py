@@ -683,7 +683,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     ]
     assert len(served_controls) == pin.replicates
     assert all(row["is_control"] for row in served_controls)
-    assert all(row["base_commit"] is None for row in served_controls)
+    assert all(row.get("base_commit") is None for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

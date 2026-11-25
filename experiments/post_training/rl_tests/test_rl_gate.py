@@ -276,9 +276,7 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
         expected = (
             "planned_updates"
             if fault == "updates"
-            else "finite_losses_and_gradients"
-            if fault in ("loss", "policy-loss")
-            else "grader_error_fraction"
+            else "finite_losses_and_gradients" if fault in ("loss", "policy-loss") else "grader_error_fraction"
         )
         assert not facts[expected].holds
 

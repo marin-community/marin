@@ -29,6 +29,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
+    SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
