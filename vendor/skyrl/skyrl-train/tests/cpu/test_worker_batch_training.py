@@ -59,6 +59,8 @@ def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator:
     shaping.loop.minimum_occurrences = 2
     shaping.reasoning_span.target = "marker"
     shaping.reasoning_span.penalty = 0.1
+    cfg.generator.sampling_params.ignore_eos = True
+    cfg.generator.sampling_params.temperature = 0.7
     return cfg
 
 
