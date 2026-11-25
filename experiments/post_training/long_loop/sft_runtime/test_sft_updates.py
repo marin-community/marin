@@ -16,8 +16,11 @@ from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_ke
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_cpu_devices
 
 from experiments.post_training.long_loop.sft_runtime.model import (
@@ -26,39 +29,76 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     resolve_attention_implementation,
 )
 from experiments.post_training.long_loop.sft_runtime.train import (
+    GrugEvalConfig,
     GrugTrainerConfig,
     _loss_and_grads,
     _make_train_step,
+    build_tagged_evaluator,
     initial_state,
     initialize_snowball_sft,
     reseed_lm_head,
 )
 
 
+def _tiny_grug_config() -> GrugModelConfig:
+    return GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        local_kv_heads=1,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=4.0,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+    )
+
+
+def test_tagged_eval_loss_is_invariant_to_uniform_weight_scaling():
+    with use_cpu_devices(1):
+        mesh = compact_grug_mesh(expert_axis_size=1)
+        config = _tiny_grug_config()
+        example = GrugLmExample.causal(jnp.arange(1, 9, dtype=jnp.int32))
+        data = LmDataConfig(
+            components={
+                "unit": DirectDatasetComponent({"validation": ListAsyncDataset([example])}),
+                "half": DirectDatasetComponent(
+                    {
+                        "validation": ListAsyncDataset(
+                            [dataclasses.replace(example, loss_weight=example.loss_weight * 0.5)]
+                        )
+                    }
+                ),
+            }
+        )
+        with jax.set_mesh(mesh):
+            model = Transformer.init(config, key=jax.random.key(1))
+            evaluator = build_tagged_evaluator(
+                data_config=data,
+                max_seq_len=config.max_seq_len,
+                mesh=mesh,
+                eval_cfg=GrugEvalConfig(eval_batch_size=1, compute_bpb=False),
+                mp=jmp.get_policy("float32"),
+            )
+            assert evaluator is not None
+            losses = evaluator.evaluate(model).tag_micro_losses
+        np.testing.assert_allclose(losses["half"], losses["unit"], rtol=1e-6)
+
+
 @pytest.mark.timeout(300)
 def test_sft_update_preserves_router_and_scales_selected_rows():
     with use_cpu_devices(1):
-        config = GrugModelConfig(
-            vocab_size=32,
-            hidden_dim=16,
-            intermediate_dim=8,
-            shared_expert_intermediate_dim=8,
-            num_shared_experts=1,
-            num_experts=4,
-            num_experts_per_token=2,
-            num_layers=2,
-            num_heads=2,
-            num_kv_heads=1,
-            local_kv_heads=1,
-            global_kv_heads=1,
-            head_dim=8,
-            max_seq_len=8,
-            sliding_window=4,
-            global_every=2,
-            capacity_factor=4.0,
-            attention_implementation="reference",
-            moe_implementation="fixed_all_to_all",
-        )
+        config = _tiny_grug_config()
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, 1, 1, 1, 1),
             ("replica_dcn", "data", "context", "expert", "model"),

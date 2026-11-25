@@ -697,10 +697,9 @@ def build_tagged_evaluator(
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
             batch.tokens,
-            batch.loss_weight,
+            None,  # TaggedEvaluator applies the per-position weights.
             mask=batch.attn_mask,
             reduction="none",
-            logsumexp_weight=None,
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)

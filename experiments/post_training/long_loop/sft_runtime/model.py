@@ -1425,7 +1425,7 @@ class Transformer(eqx.Module):
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
+        loss_weight: Float[Array, "B S"] | None,
         *,
         mask: AttentionMask | jax.Array | None = None,
         reduction: str = "mean",
@@ -1435,7 +1435,8 @@ class Transformer(eqx.Module):
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
-        loss_weight = loss_weight.astype(loss_dtype)
+        if loss_weight is not None:
+            loss_weight = loss_weight.astype(loss_dtype)
 
         # NOTE (2026-08-17): gradients from this loss differ from hero runs before
         # this date, and the difference is intentional. "xla_fast_bwd" keeps the
