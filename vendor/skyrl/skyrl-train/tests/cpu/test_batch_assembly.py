@@ -1,4 +1,3 @@
-from contextlib import nullcontext
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -305,46 +304,49 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         assert_batch_exact(actual, expected)
 
 
+@pytest.fixture
+def worker_config(tmp_path):
+    cfg = get_default_config()
+    cfg.trainer.logger = "console"
+    cfg.trainer.algorithm.use_kl_loss = False
+    cfg.trainer.placement.colocate_all = False
+    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
+    cfg.trainer.placement.policy_num_nodes = 1
+    cfg.trainer.placement.policy_num_gpus_per_node = 2
+    cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 2
+    cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1
+    cfg.generator.n_samples_per_prompt = 2
+    cfg.trainer.policy.model.path = str(tmp_path)
+    return cfg
+
+
 @pytest.mark.parametrize(
-    ("overrides", "refusal"),
+    ("overrides", "reason", "metadata"),
     [
-        ({}, (None, None)),
-        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, (None, "g0.*nonzero loop credit")),
-        ({"batch.teacher_evidence": [None] * 4}, (None, "g0.*teacher evidence")),
-        ({"batch.distillation": [None] * 4}, (None, "g0.*teacher evidence")),
-        ({"batch.student_topk_indices": [None] * 4}, (None, "g0.*teacher evidence")),
-        ({"batch.behavior_topk_logprobs": [None] * 4}, (None, "g0.*teacher evidence")),
-        ({"rows": 3}, (None, "g0.*rows requiring DP padding")),
-        (
-            {
-                "trainer.policy.megatron_config.moe_router_replay": True,
-                "generator.engine_init_kwargs.enable_return_routed_experts": True,
-                "batch.rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4,
-                "model_experts": 4,
-            },
-            (None, "g0.*route dtype without the model expert count"),
-        ),
+        ({}, None, None),
         (
             {
                 "trainer.policy.megatron_config.moe_router_replay": True,
                 "generator.engine_init_kwargs.enable_return_routed_experts": True,
             },
-            ("router replay without the model expert count", None),
+            "router replay without the model expert count",
+            {"model_type": "qwen2"},
         ),
-        ({"trainer.algorithm.use_kl_loss": True}, ("DPO and reference-model objectives", None)),
-        ({"trainer.algorithm.advantage_estimator": "reward"}, ("the configured loss and estimator", None)),
-        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, ("the configured loss and estimator", None)),
-        ({"trainer.placement.colocate_all": True}, ("colocated placement", None)),
-        ({"trainer.algorithm.distillation": {}}, ("distillation", None)),
-        ({"trainer.trajectory_selector.type": "best_of_n"}, ("trajectory selection", None)),
-        ({"trainer.step_wise_training": True}, ("step-wise training", None)),
-        ({"trainer.algorithm.advantage_batch_normalize": True}, ("advantage batch normalization", None)),
+        ({"trainer.algorithm.use_kl_loss": True}, "DPO and reference-model objectives", None),
+        ({"trainer.algorithm.advantage_estimator": "reward"}, "the configured loss and estimator", None),
+        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "the configured loss and estimator", None),
+        ({"trainer.placement.colocate_all": True}, "colocated placement", None),
+        ({"trainer.algorithm.distillation": {}}, "distillation", None),
+        ({"trainer.trajectory_selector.type": "best_of_n"}, "trajectory selection", None),
+        ({"trainer.step_wise_training": True}, "step-wise training", None),
+        ({"trainer.algorithm.advantage_batch_normalize": True}, "advantage batch normalization", None),
         (
             {
                 "generator.trajectory_reward_shaping.enabled": True,
                 "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token": 0.1,
             },
-            ("loop advantage credit", None),
+            "loop advantage credit",
+            None,
         ),
         (
             {
@@ -352,39 +354,42 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "generator.trajectory_reward_shaping.reasoning_span.target": "marker",
                 "generator.trajectory_reward_shaping.reasoning_span.penalty": 0.5,
             },
-            ("marker-target reasoning penalties", None),
+            "marker-target reasoning penalties",
+            None,
         ),
         (
-            {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2, "model_experts": 4},
-            ("ETP greater than one", None),
-        ),
-        (
-            {
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-                "model_experts": 4,
-            },
-            ("ETP greater than one", None),
-        ),
-        (
-            {
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-                "model_experts": 8,
-                "model_type": "grug_moe",
-            },
-            ("ETP greater than one", None),
+            {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2},
+            "ETP greater than one",
+            {"model_type": "qwen2_moe", "num_experts": 4},
         ),
         (
             {
                 "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
                 "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
             },
-            (None, None),
+            "ETP greater than one",
+            {"model_type": "qwen2_moe", "num_experts": 4},
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+            },
+            "ETP greater than one",
+            {"model_type": "grug_moe", "num_experts": 8},
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+            },
+            None,
+            {"model_type": "qwen2"},
         ),
         (
             {"trainer.train_batch_size": 3, "trainer.policy_mini_batch_size": 3, "generator.n_samples_per_prompt": 3},
-            ("rows requiring DP padding", None),
+            "rows requiring DP padding",
+            None,
         ),
         (
             {
@@ -395,90 +400,89 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "trainer.policy_mini_batch_size": 6,
                 "generator.n_samples_per_prompt": 2,
             },
-            (None, None),
-        ),
-        (
-            {
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "model_type": "unreadable",
-            },
-            ("model configuration unreadable", None),
+            None,
+            None,
         ),
         (
             {
                 "trainer.policy.megatron_config.moe_router_replay": True,
                 "generator.engine_init_kwargs.enable_return_routed_experts": True,
-                "model_experts": 4,
             },
-            (None, None),
+            None,
+            {"model_type": "qwen2_moe", "num_experts": 4},
         ),
-        ({"trainer.dump_data_batch": True}, ("dense batch dumping", None)),
+        ({"trainer.dump_data_batch": True}, "dense batch dumping", None),
     ],
 )
-def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_semantics(
-    tmp_path, overrides, refusal, monkeypatch
-):
-    cfg = get_default_config()
-    assert cfg.trainer.batch_builder == "auto"
-    cfg.trainer.logger = "console"
-    cfg.trainer.algorithm.use_kl_loss = False
-    cfg.trainer.placement.colocate_all = False
-    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
-    cfg.trainer.placement.policy_num_nodes = 1
-    cfg.trainer.placement.policy_num_gpus_per_node = 2
-    cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 2
-    cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1
-    cfg.generator.n_samples_per_prompt = 2
-    metadata = {"model_type": overrides.get("model_type", "qwen2_moe" if "model_experts" in overrides else "qwen2")}
-    if "model_experts" in overrides:
-        metadata["num_experts"] = overrides["model_experts"]
-    if metadata["model_type"] != "unreadable":
+def test_worker_batch_config_validation(worker_config, tmp_path, overrides, reason, metadata, monkeypatch):
+    cfg = worker_config
+    if metadata is not None:
         (tmp_path / "config.json").write_text(json.dumps(metadata))
-    cfg.trainer.policy.model.path = str(tmp_path)
-    batch = {
-        "prompt_token_ids": [[1]] * 4,
-        "response_ids": [[2, 3]] * 4,
-        "loss_masks": [[1, 1]] * 4,
-        "rewards": [[0.0, 1.0]] * 4,
-    }
+    monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
     for key, value in overrides.items():
-        if key.startswith("batch."):
-            batch[key.removeprefix("batch.")] = value
-        elif key not in {"rows", "model_experts", "model_type"}:
-            OmegaConf.update(cfg, key, value, merge=False, force_add=True)
-    if "rows" in overrides:
-        batch = {key: values[: overrides["rows"]] for key, values in batch.items()}
-
-    if metadata["model_type"] == "grug_moe":
-        monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
-
-    config_reason, batch_reason = refusal
-    assert worker_batch_refusal(cfg) == config_reason
-    if config_reason:
-        if config_reason == "router replay without the model expert count":
-            auto_cfg = deepcopy(cfg)
-            validate_cfg(auto_cfg, check_runtime_resources=False)
-            assert auto_cfg.trainer.batch_builder == "auto"
-            validate_cfg(auto_cfg)
-            assert auto_cfg.trainer.batch_builder == "driver"
+        OmegaConf.update(cfg, key, value, merge=False, force_add=True)
+    assert worker_batch_refusal(cfg) == reason
+    if reason is None:
+        validate_cfg(cfg)
+        assert cfg.trainer.batch_builder == "worker"
+    else:
         cfg.trainer.batch_builder = "worker"
-        if metadata["model_type"] == "unreadable":
-            assert worker_batch_refusal(cfg, check_runtime_resources=False) is None
-        match = "Unrecognized model" if metadata["model_type"] == "unreadable" else config_reason
-        with pytest.raises(ValueError, match=match):
+        with pytest.raises(ValueError, match=reason):
             validate_cfg(cfg)
-        return
 
+
+def test_auto_batch_builder_resolves_router_replay_after_planning(worker_config, tmp_path):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.moe_router_replay = True
+    cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
+    validate_cfg(cfg, check_runtime_resources=False)
+    assert cfg.trainer.batch_builder == "auto"
     validate_cfg(cfg)
-    assert cfg.trainer.batch_builder == "worker"
-    group = AdmittedRollout(
-        0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
-    )
-    match = (
-        rf"^Policy-worker batch assembly: .*{batch_reason}\. Set trainer\.batch_builder=driver to train these rows\.$"
-    )
-    with pytest.raises(ValueError, match=match) if batch_reason else nullcontext():
+    assert cfg.trainer.batch_builder == "driver"
+
+
+def test_unreadable_policy_config_falls_back_only_for_auto(worker_config):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.tensor_model_parallel_size = 2
+    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = None
+    validate_cfg(cfg)
+    assert cfg.trainer.batch_builder == "driver"
+    cfg.trainer.batch_builder = "worker"
+    assert worker_batch_refusal(cfg, check_runtime_resources=False) is None
+    with pytest.raises(ValueError, match="Unrecognized model"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("fields", "rows", "reason"),
+    [
+        ({"loop_advantages": [[0.0, 0.1]] * 4}, 4, "nonzero loop credit"),
+        ({"teacher_evidence": [None] * 4}, 4, "teacher evidence"),
+        ({"distillation": [None] * 4}, 4, "teacher evidence"),
+        ({"student_topk_indices": [None] * 4}, 4, "teacher evidence"),
+        ({"behavior_topk_logprobs": [None] * 4}, 4, "teacher evidence"),
+        ({}, 3, "rows requiring DP padding"),
+        (
+            {"rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4},
+            4,
+            "route dtype without the model expert count",
+        ),
+    ],
+)
+def test_worker_batch_rejects_incompatible_rows(worker_config, fields, rows, reason):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.moe_router_replay = True
+    batch = {
+        "prompt_token_ids": [[1]] * rows,
+        "response_ids": [[2, 3]] * rows,
+        "loss_masks": [[1, 1]] * rows,
+        "rewards": [[0.0, 1.0]] * rows,
+        **fields,
+    }
+    group = AdmittedRollout(0, "g0", 0, rows, sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch))
+    match = rf"^Policy-worker batch assembly: .*g0.*{reason}\. Set trainer\.batch_builder=driver to train these rows\.$"
+    with pytest.raises(ValueError, match=match):
         plan_worker_batch(cfg, (group,), global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None)
 
 
