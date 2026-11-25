@@ -80,8 +80,6 @@ def test_apply_rotary_pos_emb(test_seq_len):
 
 
 def test_yarn_rotary_embedding():
-    """Test that YarnRotaryEmbeddings can be created and used."""
-
     # Test configuration
     HeadSize = hax.Axis("HeadSize", 64)
     Pos = hax.Axis("Pos", 128)

@@ -1,9 +1,9 @@
 # Native model sharding
 
-Native Llama uses JAX arrays on a mesh with explicit axes. Its placement
-follows the configured batch axis, the `embed` parameter mapping for FSDP, and
-the `mlp` compute mapping for tensor parallelism. The tensor-parallel axis is
-distinct from the batch and FSDP axes. The FSDP axis can also shard the batch.
+Native Llama uses JAX arrays on a mesh. Callers pass
+`NativeLlamaSharding(batch_axes=..., fsdp_axis=..., model_axis=...)` to select
+batch, FSDP storage, and tensor-parallel placement. The FSDP axis can also
+shard the batch when it appears in `batch_axes`.
 
 | Tensor | Axis order | Storage sharding | Compute sharding |
 | --- | --- | --- | --- |

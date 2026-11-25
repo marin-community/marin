@@ -26,9 +26,7 @@ from levanter.layers.linear import INITIALIZER_TRUNCATION_BOUND, Linear
 from levanter.layers.rms_norm import RmsNorm
 from levanter.layers.rotary import (
     DefaultRotaryEmbeddingsConfig,
-    Llama3RotaryEmbeddingsConfig,
     RotaryEmbeddingsConfig,
-    YarnRotaryEmbeddingsConfig,
 )
 from levanter.layers.rotary_native import apply_rotary
 from levanter.layers.scan_checkpoint import ScanCheckpointSpec
@@ -144,10 +142,6 @@ class NativeLlamaConfig:
             raise ValueError("hidden_dim must be divisible by num_heads when head_dim is not set")
         if self.actual_head_dim % 2:
             raise ValueError("RoPE requires an even head dimension")
-        if not isinstance(
-            self.rope, (DefaultRotaryEmbeddingsConfig, Llama3RotaryEmbeddingsConfig, YarnRotaryEmbeddingsConfig)
-        ):
-            raise ValueError(f"Unsupported llama_native RoPE configuration: {type(self.rope).__name__}")
 
     @property
     def actual_head_dim(self) -> int:
