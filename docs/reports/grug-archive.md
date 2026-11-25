@@ -78,6 +78,14 @@ goes stale on the next commit.
 - Diff: https://marin-community.github.io/marin/grug-diffs/pr-9287/fast_track/index.html
 - Issue: https://github.com/marin-community/marin/pull/9287
 
+### amd-june-67b-a2b
+- Path: `experiments/amd/june_67b_a2b/`
+- Origin: `june_tpu_67b_a2b`
+- Introduced: (set when the PR merges)
+- Status: active
+- Purpose: MI355X selected configuration of the June 67B-A2B model: fused Pallas-Triton q/k norm + RoPE and add + RMSNorm + GatedNorm, `ring_filtered` MoE, routing statistics reduced after the layer scan, a fixed remat policy and a pipelined train loop, as straight code on June's unchanged config.
+- Diff: `uv run python scripts/ci/grug_dir_diff.py experiments/june_tpu_67b_a2b/moe experiments/amd/june_67b_a2b --out /tmp/grug-diff`
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
