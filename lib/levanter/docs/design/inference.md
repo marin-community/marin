@@ -57,7 +57,10 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
-- **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
+- **Response Schema**: Each choice reports `finish_reason`. A sampled EOS, a chat
+  turn-boundary token, or a matched stop sequence reports `stop` in OpenAI responses,
+  including on the final allowed token. Budget exhaustion reports `length`.
+  The corresponding gRPC enum values are `FINISH_REASON_STOP` and `FINISH_REASON_LENGTH`.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Exact-token gRPC generation

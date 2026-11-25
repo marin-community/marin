@@ -24,13 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"levanter/inference/inference.proto\x12\x15levanter.inference.v1\"\x8f\x02\n\x0fGenerateRequest\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12\x16\n\x0emax_new_tokens\x18\x02 \x01(\r\x12\x18\n\x0btemperature\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x12\n\x05top_p\x18\x04 \x01(\x02H\x01\x88\x01\x01\x12\x11\n\x04seed\x18\x05 \x01(\rH\x02\x88\x01\x01\x12<\n\x0estop_sequences\x18\x06 \x03(\x0b\x32$.levanter.inference.v1.TokenSequence\x12\x18\n\x0bnum_choices\x18\x07 \x01(\rH\x03\x88\x01\x01\x42\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x07\n\x05_seedB\x0e\n\x0c_num_choices\"\"\n\rTokenSequence\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\"\\\n\x10GenerateResponse\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12.\n\x07\x63hoices\x18\x02 \x03(\x0b\x32\x1d.levanter.inference.v1.Choice\"6\n\x06\x43hoice\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\x12\x19\n\x11\x62\x65havior_logprobs\x18\x02 \x03(\x02\x32h\n\tInference\x12[\n\x08Generate\x12&.levanter.inference.v1.GenerateRequest\x1a\'.levanter.inference.v1.GenerateResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"levanter/inference/inference.proto\x12\x15levanter.inference.v1\"\x8f\x02\n\x0fGenerateRequest\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12\x16\n\x0emax_new_tokens\x18\x02 \x01(\r\x12\x18\n\x0btemperature\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x12\n\x05top_p\x18\x04 \x01(\x02H\x01\x88\x01\x01\x12\x11\n\x04seed\x18\x05 \x01(\rH\x02\x88\x01\x01\x12<\n\x0estop_sequences\x18\x06 \x03(\x0b\x32$.levanter.inference.v1.TokenSequence\x12\x18\n\x0bnum_choices\x18\x07 \x01(\rH\x03\x88\x01\x01\x42\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x07\n\x05_seedB\x0e\n\x0c_num_choices\"\"\n\rTokenSequence\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\"\\\n\x10GenerateResponse\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12.\n\x07\x63hoices\x18\x02 \x03(\x0b\x32\x1d.levanter.inference.v1.Choice\"r\n\x06\x43hoice\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\x12\x19\n\x11\x62\x65havior_logprobs\x18\x02 \x03(\x02\x12:\n\rfinish_reason\x18\x03 \x01(\x0e\x32#.levanter.inference.v1.FinishReason*_\n\x0c\x46inishReason\x12\x1d\n\x19\x46INISH_REASON_UNSPECIFIED\x10\x00\x12\x16\n\x12\x46INISH_REASON_STOP\x10\x01\x12\x18\n\x14\x46INISH_REASON_LENGTH\x10\x02\x32h\n\tInference\x12[\n\x08Generate\x12&.levanter.inference.v1.GenerateRequest\x1a\'.levanter.inference.v1.GenerateResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'levanter.inference.inference_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_FINISHREASON']._serialized_start=581
+  _globals['_FINISHREASON']._serialized_end=676
   _globals['_GENERATEREQUEST']._serialized_start=62
   _globals['_GENERATEREQUEST']._serialized_end=333
   _globals['_TOKENSEQUENCE']._serialized_start=335
@@ -38,7 +40,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GENERATERESPONSE']._serialized_start=371
   _globals['_GENERATERESPONSE']._serialized_end=463
   _globals['_CHOICE']._serialized_start=465
-  _globals['_CHOICE']._serialized_end=519
-  _globals['_INFERENCE']._serialized_start=521
-  _globals['_INFERENCE']._serialized_end=625
+  _globals['_CHOICE']._serialized_end=579
+  _globals['_INFERENCE']._serialized_start=678
+  _globals['_INFERENCE']._serialized_end=782
 # @@protoc_insertion_point(module_scope)
