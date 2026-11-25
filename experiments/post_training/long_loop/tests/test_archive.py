@@ -520,6 +520,23 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         assert status["status"] == "scan_history_fallback_verified"
         assert "wandb" in manifest["provenance"]["missing_evidence"]
         assert manifest["provenance"]["cleanup_blockers"]
+    if not incomplete_wandb_history and rl_state == "succeeded" and not unscored and sft_format == "SFTSpec":
+        retained = tmp_path / "retention-rl/trace.zip"
+        for content in (None, b"wrong size"):
+            if content is None:
+                retained.unlink()
+            else:
+                retained.write_bytes(content)
+            with pytest.raises(ValueError, match="Retention archive size mismatch"):
+                derive_archive_plan(
+                    output=str(tmp_path / "archive"),
+                    settings=settings,
+                    resolved_spec=spec,
+                    artifacts=roots,
+                    trained=trained,
+                    evaluated=roots["eval"],
+                    completed_report=roots["report"],
+                )
 
 
 def test_wandb_export_propagates_unrelated_export_failure(tmp_path, monkeypatch):

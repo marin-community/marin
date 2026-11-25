@@ -536,15 +536,22 @@ def derive_archive_plan(
                 ledger_uri, prefix_join(stage, "retention-ledger.json"), "eval_trace" if stage == "eval" else "rl_trace"
             )
         )
+        retention_fs, retention_root = filesystem_for(prefix)
+        retained_objects = retention_fs.find(retention_root, detail=True)
         for path, item in sorted(ledger["archives"].items()):
             if StoragePath(path).scheme or ".." in StoragePath(path).segments or path.startswith("/"):
                 raise ValueError("Retention archive must be relative to the consumed retention root")
             uri = prefix_join(prefix, path)
-            fs, key = filesystem_for(uri)
-            if fs.size(key) != item["bytes"]:
+            key = prefix_join(retention_root, path)
+            info = retained_objects.get(key)
+            if info is None or info.get("type") != "file" or info["size"] != item["bytes"]:
                 raise ValueError(f"Retention archive size mismatch: {uri}")
             inputs.append(
-                _input(uri, prefix_join(stage + "/retention", path), "eval_trace" if stage == "eval" else "rl_trace")
+                {
+                    "source": uri,
+                    "name": prefix_join(stage + "/retention", path),
+                    "category": "eval_trace" if stage == "eval" else "rl_trace",
+                }
             )
         if stage == "eval" and not ledger["records"]:
             raise ValueError("Completed evaluation lacks retained trace records")
