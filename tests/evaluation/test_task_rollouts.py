@@ -46,7 +46,7 @@ from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
@@ -1952,3 +1952,30 @@ async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_c
         release()
 
     assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"
+
+
+@pytest.mark.asyncio
+async def test_an_episode_whose_command_output_is_lost_is_a_failed_submission(tmp_path, run_config):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
+
+    async def run_pi(context, complete):
+        raise CommandOutputLost("Failed to measure command output: /bin/sh: 1: cannot open /tmp/out: No such file")
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
+    )
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        harnesses={"pi": lambda _agent, _budget: AgentHarness(run_pi)},
+    )
+
+    finished = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in finished] == ["submission_failure"]

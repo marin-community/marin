@@ -62,7 +62,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.validation import task_machine_reason
-from shellbox.machine import MachineDiskFull, MachineFactory, MachineTerminated, NetworkPolicy
+from shellbox.machine import CommandOutputLost, MachineDiskFull, MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
 from taskcompendium.evaluation.response import completion_text
@@ -810,7 +810,7 @@ async def _score_rollout(
 
     failure_evidence = None
     permanent_error = None
-    agent_filled_disk = False
+    agent_broke_machine = False
     try:
         result = await engine.run_task(spec, policy_model)
         rollout, grade = result.rollout, result.grade
@@ -821,10 +821,13 @@ async def _score_rollout(
             failure_evidence = {"response": cause.response, "response_json": cause.response_json}
         elif isinstance(cause, APIError):
             failure_evidence = {"provider_error": cause.body}
-        agent_filled_disk = isinstance(cause, MachineDiskFull) and error.operation is not RolloutOperation.START
-        if agent_filled_disk:
-            # As Harbor scores a trial whose agent filled its machine's disk, the attempt is a failed submission.
-            grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"The task machine's disk is full: {cause}")
+        agent_broke_machine = (
+            isinstance(cause, MachineDiskFull | CommandOutputLost) and error.operation is not RolloutOperation.START
+        )
+        if agent_broke_machine:
+            # As Harbor scores a trial whose agent filled its machine's disk or removed what its commands need,
+            # the attempt is a failed submission.
+            grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"The task machine failed during the episode: {cause}")
         # Machine creation, setup and backend failures before the harness starts are retryable infrastructure.
         elif (
             cause is not None
@@ -832,7 +835,7 @@ async def _score_rollout(
             and (_permanent_api_error(cause) or not isinstance(cause, RETRYABLE_ERRORS))
         ):
             permanent_error = cause
-    if agent_filled_disk:
+    if agent_broke_machine:
         outcome = Outcome.SUBMISSION_FAILURE
     elif rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         outcome = Outcome.INFRA_ERROR
