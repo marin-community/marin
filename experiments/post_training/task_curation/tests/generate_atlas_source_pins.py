@@ -114,9 +114,9 @@ def main() -> int:
         scratch = Path(scratch_name)
         dump_side(args.audit_root, scratch / "audit.json")
         dump_side(args.main_root, scratch / "main.json")
-        audit = {row["id"]: row for row in json.load(open(scratch / "audit.json"))}
-        main = {row["id"]: row for row in json.load(open(scratch / "main.json"))}
-        r40 = json.load(open(args.audit_root / R40_PLAN))
+        audit = json.loads((scratch / "audit.json").read_text())
+        main = json.loads((scratch / "main.json").read_text())
+        r40 = json.loads((args.audit_root / R40_PLAN).read_text())
 
     required = {row["id"]: {"source": "atlas-admitted"} for row in audit.values() if row["status"] == "Available"}
     for target in r40["targets"]:
