@@ -88,8 +88,9 @@ def verify_checkout(repo_root: Path, source_revision: str) -> str:
         attested_revision,
     )
 
-    if attested_revision() is not None:
-        return attested_revision()
+    attested = attested_revision()
+    if attested is not None:
+        return attested
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
