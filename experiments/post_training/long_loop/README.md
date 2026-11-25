@@ -1586,13 +1586,25 @@ reported. Neither signal is a correctness grade.
 ## Mochi DSpark serving gate
 
 `rounds/mochi-exp4-dspark-rl.yaml` prepares Exp4 RL from the regional Mochi SFT
-step-400407 export and the interleaved two-layer 766M draft from
+V5 SFT step-2100 export and the unchanged interleaved two-layer 766M draft from
 [PR12239](https://github.com/marin-community/marin/pull/12239). It keeps the
 128-GB200 layout (48 trainer and 80 rollout GPUs), TP1/BF16, batch64×8,
 priority drain, rolling route quotas, and the normalized Mochi context and
-optimizer. The Exp4 curriculum derives 22 agentic and 42 nonagentic groups.
+optimizer. The source inputs are the original Snowball Exp4 `.71` agentic and nonagentic
+pools, pinned through the `exp4-recovery82-plan.json` record, parent curriculum
+`long-loop/exp4-rl@2026.11.18:cde16ecb`. The preparer
+`experiments.post_training.long_loop.exp4_control_data` preserves every original
+serialized task and source entry, draws200 prompts with seed20261020, removes
+them from training and publishes a new curriculum identity. The new holdout contains200 prompts and requires at least180 valid scores for
+best-checkpoint selection. It replaces Snowball Exp4's original120/seed20261109
+validation; that
+split and the200 removed training prompts are known comparison differences.
+The later `.22.2/c34a2771` pools are not used: they repair Reasoning Gym scorers,
+use Nemotron recipe2 and exclude191Codeio rows. The derived route quotas are
+22 agentic and42 nonagentic groups.
 Four proposals use vLLM memory fraction0.775 and the Nov24 ShortConv-fixed
-wheel. The draft's verifier is step400407; it is not fitted to V5 step2100.
+wheel. The draft was fitted to step400407; this experiment deliberately uses it
+as-is on V5 step2100, without refitting or changing the initializer.
 
 Prepare the complete RL/best-and-distinct-final evaluation graph without
 submitting it:
@@ -1600,7 +1612,7 @@ submitting it:
 ```sh
 uv run python -m experiments.post_training.long_loop.round_runner \
   --round experiments/post_training/long_loop/rounds/mochi-exp4-dspark-rl.yaml \
-  --version 2026.11.25.130 --source-revision <landed-sha> \
+  --version 2026.11.25.131 --source-revision <landed-sha> \
   --validation-output /tmp/mochi-exp4-dspark-validation --through eval
 ```
 
@@ -1610,14 +1622,32 @@ workload and is not a speed prediction for this round. Its trainer/rollout
 mismatch means do not replace the sampled-prefix check below.
 
 `experiments.post_training.mochi_dspark_gate` runs one TP1/BF16 EP16 gang.
-It applies the EAGLE3 harness's frozen probability, routed-expert and sampled
-distribution bounds to independent plain controls, then DSpark, then a plain
-teacher rescore. Any failure stops the gate before performance measurement.
+It keeps the EAGLE3 harness's frozen probability, routed-expert and sampled
+distribution limits. Independent plain V5 decoding supplies the checkpoint-matched
+reference, followed by DSpark and a fresh plain V5 teacher rescore. The teacher
+rescores the exact sampled-token prefixes from both arms and compares their
+returned token logprobs under the unchanged numerical limits. Any failure stops the gate before performance measurement.
 Use `--purpose qualification` to stop after the plain, DSpark and independent
 plain-rescore checks; `--purpose benchmark` also measures performance after
 all correctness checks pass. The spec pins the flat draft's verified-copy
 manifest and the runtime script. The script uses the published Nov24 wheel
-without source patches, in an isolated environment.
+without source patches, in an isolated environment. Run the serving-only gate
+inside its registered 08a Iris gang with the published spec and landed source:
+
+```sh
+python -m experiments.post_training.mochi_dspark_gate \
+  --spec <regional-gate-spec-uri> --source-revision <landed-sha> \
+  --purpose qualification
+```
+
+The inference-stats callback records cumulative draft/accepted-token counts,
+acceptance rate and mean acceptance length at each training step. Use per-engine
+counter differences between updates for each update's acceptance; account for
+process resets and do not sum forwarded counter snapshots. A zero draft-token
+denominator leaves acceptance unavailable. Full `Training step completed` durations and native
+`phase_duration_seconds` observations record update wall time, including admission
+and synchronization. Optimizer time alone is not the full update time. No training
+acceptance or update-time result exists before the user authorizes RL.
 
 After correctness passes, `mochi_decode_window` measures exact token arrivals
 after every rank-pinned stream has prefetched. Each plain/DSpark cell requires

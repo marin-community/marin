@@ -4,16 +4,16 @@ storage:
   output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop
   temporary_prefix: s3://marin-us-east-08a/tmp
 adopted_model:
-  name: mochi-long-loop/adopted-sft
-  version: 2026.11.19.110
-  uri: s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
-  export_manifest_sha256: 1a7886b05df25338a12642b25f25525c0eb6c5551384934a2f089d7ec5b4a88d
+  name: mochi-long-loop/v5-sft2100
+  version: 2026.11.24.128
+  uri: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop/long-loop-mochi-sft-exp3-v5-bankadam-128/sft/2026.11.24.128/exports/step-2100
+  export_manifest_sha256: b4b8316a9b74556543e2eb4ed433436e31dd0d9b93c1f888d3ee0cd3b2ee01b1
   config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
-  checkpoint_step: 400407
+  checkpoint_step: 2100
   tokenizer_uri: marin-community/marin-tokenizer-tools
   tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
 name: long-loop/mochi-exp4-dspark-rl
-version: 2026.11.25.130
+version: 2026.11.25.131
 slug: mochi-exp4-dspark-rl
 rl:
   role_plan:
@@ -115,7 +115,7 @@ rl:
         eval_drain: priority
         source_routes:
           PRIME-RL/Eurus-2-RL-Data: nonagentic
-          Reasoning Gym:reasoning_gym: nonagentic
+          https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl: nonagentic
           long-loop-smartie-swesmith: agentic
           nemotron_if: nonagentic
           nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
@@ -331,7 +331,8 @@ rl:
   max_steps: 10000
   selection_eligibility: covered
   pools:
-    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.2
+    manifest_sha256: 5535bb0d5170bf44f91c35f0e57d41fe3be850bb28e069358e6fd57bb33b4994
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/mochi-exp4-dspark/long-loop/mochi-exp4-original-rl-pools/2026.11.25.131
   export_hf: true
   retained_checkpoints: 1
   draft: mochi-interleaved-766m-step400407

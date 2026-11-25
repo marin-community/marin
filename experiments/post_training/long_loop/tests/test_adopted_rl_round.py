@@ -365,9 +365,20 @@ def test_exp4_dspark_round_keeps_normalized_training_and_derives_curriculum_quot
     model, data = round_inputs
     authored = load_round(ROUND_DIR / "mochi-exp4-dspark-rl.yaml")
     draft = round_draft(authored)
-    assert draft.trained_for_initializer == authored.adopted_model.uri
-    assert authored.adopted_model.checkpoint_step == 400407
+    baseline = load_round(ROUND_DIR / "mochi-v5-exp3-rl.yaml")
+    assert authored.adopted_model == baseline.adopted_model
+    assert authored.adopted_model.checkpoint_step == 2100
+    assert draft.trained_for_initializer != authored.adopted_model.uri
+    assert "step-400407/" in draft.trained_for_initializer
     assert authored.evaluation_checkpoints == "best_and_final"
+    manifest_path = model / "export-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    fixture_checkpoint = "s3://source/checkpoints/step-" + str(authored.adopted_model.checkpoint_step)
+    manifest["request"]["config"]["checkpoint"] = fixture_checkpoint
+    manifest_path.write_text(json.dumps(manifest))
+    recipe = copy.deepcopy(authored.rl.recipe)
+    fixture_manifest = json.loads((data / "manifest.json").read_text())
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = fixture_manifest["routes"]
     spec = dataclasses.replace(
         authored,
         adopted_model=dataclasses.replace(
@@ -376,7 +387,7 @@ def test_exp4_dspark_round_keeps_normalized_training_and_derives_curriculum_quot
             config_sha256=hashlib.sha256((model / "config.json").read_bytes()).hexdigest(),
             export_manifest_sha256=hashlib.sha256((model / "export-manifest.json").read_bytes()).hexdigest(),
         ),
-        rl=dataclasses.replace(authored.rl, pools={"uri": str(data)}),
+        rl=dataclasses.replace(authored.rl, pools={"uri": str(data)}, recipe=recipe),
     )
     training = adopted_round_rl(spec)
     context = StepContext.for_run(
@@ -408,6 +419,8 @@ def test_exp4_dspark_round_keeps_normalized_training_and_derives_curriculum_quot
     assert (optimizer["optimizer"], optimizer["lr"], optimizer["max_grad_norm"]) == ("MuonH", 1e-5, 0.5)
     assert optimizer["optimizer_kwargs"]["offload_momentum"]
     callbacks = {cb["type"]: cb for cb in trainer["callbacks"]}
+    assert "inference_stats" in callbacks
+    assert authored.rl.recipe["trainer"]["training_metrics"]
     assert (callbacks["best_checkpoint"]["expected_tasks"], callbacks["best_checkpoint"]["minimum_scored_tasks"]) == (
         200,
         180,
