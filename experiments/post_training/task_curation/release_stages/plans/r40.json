@@ -449,7 +449,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "12d18f580c746f3db8f03d0e5c53b68dcb1aa201",
+  "source_revision": "2fe9f9db9e",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k",
