@@ -8,9 +8,9 @@ import hashlib
 import io
 import json
 import subprocess
-import sys
 
 import pyarrow.parquet as pq
+from marin.rl.skyrl import skyrl_cpu_command
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
@@ -62,14 +62,14 @@ def main() -> None:
     manifest_path = str(output / "resolved-manifest.json")
     (output / "resolved-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     pattern = str(StoragePath(args.run_output) / "exports/dumped_evals/*/eval_only/*.jsonl")
-    command = [
-        sys.executable,
+    command = skyrl_cpu_command(
+        "python",
         "vendor/skyrl/scripts/loop_audit.py",
         "--manifest",
         manifest_path,
         "--output",
         str(output / "audit.json"),
-    ]
+    )
     for cohort in manifest["cohorts"]:
         command.extend(("--input", f"{cohort}={pattern}"))
     if args.baseline:
