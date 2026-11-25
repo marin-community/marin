@@ -64,6 +64,7 @@ from taskforge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     shellsim_factory,
 )
+from taskforge.resources.sandbox.metered import MachineMeter, metered
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
 from taskforge.stages.rules import default_review
@@ -125,6 +126,8 @@ def install(ctx: Context, resources: Resources) -> None:
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.emit
+    if resources.meter is not None:
+        resources.meter.notify = ctx.emit
     for event, execute, resource in (
         (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
         (SolverRollout, partial(run_rollout, notify=ctx.emit), rollouts),
@@ -327,10 +330,14 @@ async def runtime(
     if not controller:
         raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
     container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
-    factories: dict[str, MachineFactory] = {
-        container.backend.value: container,
-        "shellsim": shellsim_factory(output_budget_mb=policy.setting("sandbox.output_budget_mb", int)),
-    }
+    meter = MachineMeter()
+    factories = metered(
+        {
+            container.backend.value: container,
+            "shellsim": shellsim_factory(output_budget_mb=policy.setting("sandbox.output_budget_mb", int)),
+        },
+        meter,
+    )
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}
@@ -357,4 +364,5 @@ async def runtime(
         http = await owned.enter_async_context(
             httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
-        yield build_config(policy, arm, factories), build_resources(policy, clients, factories, ParallelWeb(http))
+        resources = replace(build_resources(policy, clients, factories, ParallelWeb(http)), meter=meter)
+        yield build_config(policy, arm, factories), resources

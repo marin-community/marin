@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
@@ -115,3 +116,22 @@ class StageCompleted(Event[None]):
     exit: str
     round: int = 0
     terminal: Terminal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkpieceStarted(Event[None]):
+    """A driver process starting or resuming a workpiece, with what the run was configured with.
+
+    Attributes:
+        input: The proposal or source task file the workpiece came from.
+        arm: The experiment arm.
+        settings: The policy's settings, after overlays; prompts are left out.
+        prompts_digest: The sha256 of the policy's prompt templates.
+        job: The Iris task running the driver, or empty outside Iris.
+    """
+
+    input: str
+    arm: str
+    settings: Mapping[str, bool | int | float | str | tuple[str, ...]]
+    prompts_digest: str
+    job: str

@@ -16,7 +16,7 @@ from enum import StrEnum
 
 from rolloutengine.models import GradedRollout
 
-from taskforge.effects.events import Note, Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.effects.events import Note, Resolved, ScopeEntered, ScopeExited, StageCompleted, WorkpieceStarted
 from taskforge.effects.log import Record, Status
 from taskforge.model.llm import Usage
 from taskforge.model.review import ValidationResult
@@ -25,6 +25,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.resources.env import TIMEOUT_EXIT_CODE, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.sandbox.metered import MachineStarted
 from taskforge.stages.author import AUTHOR_IMAGE_FALLBACK
 from taskforge.stages.rules import solved_trials
 
@@ -62,6 +63,9 @@ class WorkpieceMetrics:
         tokens: Token usage by role, from events at or after the caller's cutoff.
         stage_seconds: Durations of stage scopes that ended at or after the cutoff.
         event_gaps: Seconds since the previous event, keyed by request type, for latency proxies.
+        arm: The experiment arm the latest driver process ran, or ``None`` for a log from before drivers
+            recorded it.
+        machines: Sandbox starts, including failed ones, at or after the cutoff.
     """
 
     id: str
@@ -79,6 +83,8 @@ class WorkpieceMetrics:
     tokens: Mapping[Role, Usage]
     stage_seconds: Mapping[Stage, tuple[float, ...]]
     event_gaps: Mapping[str, tuple[float, ...]]
+    arm: str | None
+    machines: tuple[MachineStarted, ...]
 
 
 def reason_class(reason: str) -> str:
@@ -180,6 +186,7 @@ def workpiece_metrics(
     events = [(record.event, record.wall_time) for record in records]
     completed = [(event, stamp) for event, stamp in events if isinstance(event, StageCompleted)]
     accepted = [stamp for event, stamp in completed if event.terminal is Terminal.ACCEPTED]
+    arms = [event.arm for event, _ in events if isinstance(event, WorkpieceStarted)]
     used = spend(records, since)
     return WorkpieceMetrics(
         id=workpiece.id,
@@ -207,4 +214,6 @@ def workpiece_metrics(
         tokens=used.tokens,
         stage_seconds=used.stage_seconds,
         event_gaps=used.event_gaps,
+        arm=arms[-1] if arms else None,
+        machines=tuple(event for event, stamp in events if isinstance(event, MachineStarted) and stamp >= since),
     )

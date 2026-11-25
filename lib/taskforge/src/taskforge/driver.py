@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+from iris.cluster.client import get_job_info
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -26,7 +27,7 @@ from taskcompendium.models import TaskSpec
 
 from taskforge.checkpoint import CheckpointSink
 from taskforge.coordinator import reasons, run_workpiece
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import StageCompleted, WorkpieceStarted
 from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Status, fold
 from taskforge.lowering import check_candidates
@@ -245,6 +246,16 @@ async def one(args: argparse.Namespace) -> None:
         checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
         log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
         async with checkpoints.running():
+            job = get_job_info()
+            await log.record(
+                WorkpieceStarted(
+                    args.proposals,
+                    args.arm,
+                    policy.settings(),
+                    policy.prompts_digest(),
+                    "" if job is None else job.task_id.to_wire(),
+                )
+            )
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
                 os.environ.get("GLM_RELAY_JOB"),

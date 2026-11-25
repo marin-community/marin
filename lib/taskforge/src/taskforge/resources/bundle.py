@@ -15,6 +15,7 @@ from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
 from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import RolloutResource
+from taskforge.resources.sandbox.metered import MachineMeter
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import WebClient
 
@@ -32,6 +33,7 @@ class Resources:
     role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
 
     verifiers: RoundVerifier | None = None
+    meter: MachineMeter | None = None
 
     async def close_round(self) -> None:
         if self.verifiers is not None:
