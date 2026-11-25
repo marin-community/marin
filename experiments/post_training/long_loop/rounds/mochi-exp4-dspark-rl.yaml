@@ -114,19 +114,14 @@ rl:
       rollout_buffer:
         eval_drain: priority
         source_routes:
-          agentic: agentic
-          nonagentic: nonagentic
-          long-loop-smartie-swesmith: agentic
           PRIME-RL/Eurus-2-RL-Data: nonagentic
+          Reasoning Gym:reasoning_gym: nonagentic
+          long-loop-smartie-swesmith: agentic
+          nemotron_if: nonagentic
           nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
           nvidia/OpenScience: nonagentic
-          ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
-          : nonagentic
           open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
           open-thoughts/TaskTrove: nonagentic
-          Reasoning Gym:reasoning_gym: nonagentic
-          nemotron_if: nonagentic
-          allenai/IF_multi_constraints_upto5: nonagentic
         max_staleness_steps: 3
         batch_policy: rolling
         max_in_flight: 1024

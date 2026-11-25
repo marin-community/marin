@@ -344,6 +344,7 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
     assert buffer["max_staleness_steps"] == 3
     assert buffer["consumed_route_quotas"] == {"agentic": 22, "nonagentic": 42}
+    assert buffer["source_routes"]["allenai/IF_multi_constraints_upto5"] == "nonagentic"
     assert buffer["max_in_flight"] >= 4 * trainer["train_batch_size"]
     two_batches = 2 * trainer["train_batch_size"] * generator["n_samples_per_prompt"]
     slots = (
