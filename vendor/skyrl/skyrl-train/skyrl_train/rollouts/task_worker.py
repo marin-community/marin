@@ -703,17 +703,22 @@ class TaskRolloutWorkerSpec:
                 daytona_connection=daytona_connection,
                 eval_daytona_connection=replace(
                     daytona_connection,
-                    api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
+                    api_key=(
+                        os.environ.get(daytona_options["eval_api_key_env"])
+                        if daytona_options.get("eval_api_key_env")
+                        else daytona_connection.api_key
+                    ),
                 ),
+                judge=judge,
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:
             if harbor.environment.type != EnvironmentType.DOCKER:
                 factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()
-                if harbor.environment.kwargs.get("eval_api_key_env"):
-                    factories[HARBOR_EVAL_MACHINE_BACKEND] = harbor.machine_factory(phase="eval")
+                factories[HARBOR_EVAL_MACHINE_BACKEND] = harbor.machine_factory(phase="eval")
             elif Backend.DOCKER in factories:
                 factories[HARBOR_MACHINE_BACKEND] = factories[Backend.DOCKER]
+                factories[HARBOR_EVAL_MACHINE_BACKEND] = factories[Backend.DOCKER]
         return TaskRolloutWorker(
             runner_config,
             (
