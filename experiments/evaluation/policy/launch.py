@@ -73,8 +73,6 @@ def launch_specs(
     commit for a released policy, and each run's identity.
     """
     if evaluations is not None:
-        if not evaluations:
-            raise ValueError("no evaluations named")
         unknown = set(evaluations) - {evaluation.name for evaluation in policy.in_distribution}
         if unknown:
             raise ValueError(f"{policy.version} has no evaluations {sorted(unknown)}")
