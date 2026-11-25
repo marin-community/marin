@@ -548,19 +548,25 @@ def _agent_from_json(payload: Mapping[str, Any]) -> AgentIncidence:
 
 
 def _markdown(document: Mapping[str, Any], results: Mapping[str, Mapping[str, Any]]) -> str:
-    columns = ("N", "confirmed", "unassessed", "UB", "passes", "unavailable", "errors", "length_stop", "open_think")
+    columns = (
+        ("N", "N"), ("tail_confirmed", "confirmed"), ("unassessed", "unassessed"), ("tail_UB", "UB"),
+        ("passes", "passes"), ("unavailable", "unavailable"), ("errors", "errors"),
+        ("length_stop", "length_stop"), ("open_think", "open_think"),
+    )
     agent_columns = (
+        "agent_confirmed", "agent_UB",
         "trial_share", "trial_share_ub", "repeat_turn_share", "dup_frac_median", "dup_frac_p90",
         "interrupt_trial_share", "interrupt_repeat_share", "mean_reward",
     )
     lines = [
-        "| Cohort | " + " | ".join(columns) + " | " + " | ".join(agent_columns) + " |",
+        "| Cohort | " + " | ".join(label for label, _ in columns) + " | " + " | ".join(agent_columns) + " |",
         "| --- | " + " | ".join(["---:"] * (len(columns) + len(agent_columns))) + " |",
     ]
     for name, row in results.items():
         incidence, agent = row["incidence"], row["agent"]
-        values = [str(incidence[key]) for key in columns]
+        values = [str(incidence[key]) for _, key in columns]
         values += [
+            str(agent["loop_trials"]), str(agent["loop_trials"] + incidence["unassessed"]),
             _share(agent["trial_share"]), _share(agent["trial_share_ub"]), _share(agent["repeat_turn_share"]),
             _fraction(agent["dup_tool_call_frac_median"]), _fraction(agent["dup_tool_call_frac_p90"]),
             _share(agent["interrupt_trial_share"]), _share(agent["interrupt_repeat_share"]),
@@ -574,7 +580,8 @@ def _markdown(document: Mapping[str, Any], results: Mapping[str, Mapping[str, An
         if count
     )
     return (
-        "UB is the loop upper bound: confirmed + unassessed. An agent loop is any of "
+        "Agent UB is the action-loop upper bound: agent_confirmed + unassessed. Tail columns are report-only. "
+        "An agent loop is any of "
         + ", ".join(AGENT_RULES)
         + ".\n\n"
         + "\n".join(lines)
