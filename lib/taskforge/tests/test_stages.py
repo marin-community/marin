@@ -263,8 +263,8 @@ class SetupFails(Engine):
     """A task whose environment's setup command fails on every machine, for rollouts and grades alike."""
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        error = RolloutInterrupted(Rollout(run_id or "setup", (), "interrupted"), RolloutOperation.START)
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+        error = RolloutInterrupted(Rollout(rollout_id or "setup", (), "interrupted"), RolloutOperation.START)
         raise error from MachineSetupError(
             "git clone", Result(128, b"", b"fatal: could not read from remote", False, False, ExitReason.EXITED)
         )
@@ -396,9 +396,9 @@ async def test_validate_restart_joins_adversary_before_replay(
 
     original = bundle.rollouts.engine.run_task
 
-    async def solver(spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def solver(spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
         await started.wait()
-        return await original(spec, model, run_id=run_id)
+        return await original(spec, model, rollout_id=rollout_id)
 
     monkeypatch.setattr(harness, "run", blocked)
     monkeypatch.setattr(bundle.rollouts.engine, "run_task", solver)

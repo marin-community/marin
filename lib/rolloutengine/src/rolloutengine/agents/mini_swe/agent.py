@@ -155,7 +155,7 @@ async def run_mini_swe(
     while True:
         turn = await query(options, tokenize, complete, messages)
         if turn is None:
-            logger.warning("mini-swe-agent ran out of context in attempt %s; grading its work", context.run_id)
+            logger.warning("mini-swe-agent ran out of context in attempt %s; grading its work", context.rollout_id)
             return
         message = served_message(turn)
         try:

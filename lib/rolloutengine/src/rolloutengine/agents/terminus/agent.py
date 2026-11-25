@@ -148,7 +148,7 @@ async def run_terminus(options: TerminusOptions, context: HarnessContext, comple
         raise ValueError("Terminus requires a task machine")
     session = TmuxSession(
         session_name=SESSION_NAME,
-        environment=MachineEnvironment(context.machine, context.run_id),
+        environment=MachineEnvironment(context.machine, context.rollout_id),
         pane_width=options.tmux_pane_width,
         pane_height=options.tmux_pane_height,
     )
@@ -163,23 +163,23 @@ async def run_terminus(options: TerminusOptions, context: HarnessContext, comple
         await Terminus2(options, complete, session).run(events[0].content)
     except ContextLengthExceededError as error:
         # As in Harbor, an agent out of context ends its attempt, and the engine grades the work it left.
-        logger.warning("Terminus ran out of context in attempt %s; grading its work: %s", context.run_id, error)
+        logger.warning("Terminus ran out of context in attempt %s; grading its work: %s", context.rollout_id, error)
     except OutputLengthExceededError as error:
         # Terminus recovers a cut reply in its turn loop, so one escapes only from context recovery: the agent
         # could not continue after its context ran out. Harbor leaves such a trial unscored; the engine grades
         # its work, as it does when the context runs out.
         logger.warning(
             "Terminus reached the output limit while recovering its context in attempt %s; grading its work: %s",
-            context.run_id,
+            context.rollout_id,
             error,
         )
     except ModelInitiatedTmuxFailure as error:
         # As in Harbor, a model that ends its own terminal ends its attempt, and the engine grades its work.
-        logger.warning("The model ended its terminal in attempt %s; grading its work: %s", context.run_id, error)
+        logger.warning("The model ended its terminal in attempt %s; grading its work: %s", context.rollout_id, error)
     except MalformedModelResponseError as error:
         # As in Harbor, keystrokes that cannot be sent to the terminal end the attempt, and the engine grades its work.
         logger.warning(
-            "The model sent unencodable keystrokes in attempt %s; grading its work: %s", context.run_id, error
+            "The model sent unencodable keystrokes in attempt %s; grading its work: %s", context.rollout_id, error
         )
 
 

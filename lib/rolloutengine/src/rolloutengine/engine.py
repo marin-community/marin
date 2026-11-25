@@ -6,6 +6,7 @@
 import asyncio
 import time
 import uuid
+import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
@@ -66,7 +67,7 @@ class _Attempt:
 
     spec: TaskRolloutSpec
     harness: Harness
-    run_id: str
+    rollout_id: str
     recorder: _Recorder
     cleanup: _Cleanup
     events: _EventDelivery
@@ -109,27 +110,34 @@ class RolloutEngine:
         spec: TaskRolloutSpec,
         model: Model,
         *,
-        run_id: str | None = None,
+        rollout_id: str | None = None,
         verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+        run_id: str | None = None,
     ) -> GradedRollout:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
-        The events of the attempt and ``Rollout.run_id`` carry ``run_id``, a new random ID unless the caller gives
-        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. A given ID
-        must be new for each call, a retry included, because ``(run_id, index)`` identifies an event. Queued
+        The events of the attempt and ``Rollout.rollout_id`` carry ``rollout_id``, a new random ID unless the caller
+        gives one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. A
+        given ID must be new for each call, a retry included, because ``(rollout_id, index)`` identifies an event. Queued
         events go to the observer within the cleanup deadline after the attempt releases its resources, and
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
         ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
+        ``run_id`` is a deprecated alias of ``rollout_id``.
         """
+        if run_id is not None:
+            if rollout_id is not None:
+                raise TypeError("Pass rollout_id, not both rollout_id and its deprecated alias run_id")
+            warnings.warn("run_task(run_id=...) is deprecated; pass rollout_id", DeprecationWarning, stacklevel=2)
+            rollout_id = run_id
         self.check(spec)
         harness = self.harnesses[spec.harness]
-        run_id = uuid.uuid4().hex if run_id is None else run_id
-        events = _EventDelivery(self.observer, run_id, spec.task.id)
+        rollout_id = uuid.uuid4().hex if rollout_id is None else rollout_id
+        events = _EventDelivery(self.observer, rollout_id, spec.task.id)
         attempt = _Attempt(
             spec,
             harness,
-            run_id,
+            rollout_id,
             _Recorder(model, spec.limits, spec.trace, events, context_recovery=harness.context_recovery),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
@@ -150,7 +158,7 @@ class RolloutEngine:
             delivery = await events.close(spec.limits.cleanup_timeout)
         finally:
             events.cancel()
-        rollout = attempt.recorder.rollout(run_id, attempt.outputs)
+        rollout = attempt.recorder.rollout(rollout_id, attempt.outputs)
         metrics = {**rollout.metrics, **delivery}
         if spec.task_machine is not None:
             metrics[SETUP_COMPLETED_METRIC] = float(attempt.setup_seconds is not None)
@@ -213,7 +221,9 @@ class RolloutEngine:
         await resources.enter_async_context(stopped)
         cleanup = _CleanupScope(stopped, released, attempt.cleanup)
         recorder = attempt.recorder
-        context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id, recorder.begin_turn_budget)
+        context = HarnessContext(
+            task, spec.limits, machine, events, cleanup, attempt.rollout_id, recorder.begin_turn_budget
+        )
         failure = await _run_harness(attempt.harness, context, recorder, attempt_deadline=deadline)
         # Stop the agent before it can race output capture or grading. Services it left on the task machine
         # stay available to the grader until the machine is released.

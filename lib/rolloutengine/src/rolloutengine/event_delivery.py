@@ -18,7 +18,7 @@ EVENT_QUEUE_CAPACITY = 1024
 class _EventDelivery:
     """Queue one attempt's events and deliver them in order from a single task.
 
-    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_id`` and ``task_id``, the
+    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``rollout_id`` and ``task_id``, the
     event's index and the time of the emit, and never blocks. Every emitted event takes an index, also one
     that is not delivered, so the indexes that the observer receives show the gaps. When the queue is
     full, the event is dropped and counted. An observer exception is logged and ends delivery for the
@@ -26,8 +26,8 @@ class _EventDelivery:
     the counts of events the observer did not receive, keyed for ``Rollout.metrics``.
     """
 
-    def __init__(self, observer: RolloutObserver | None, run_id: str, task_id: str):
-        self.run_id = run_id
+    def __init__(self, observer: RolloutObserver | None, rollout_id: str, task_id: str):
+        self.rollout_id = rollout_id
         self.task_id = task_id
         self.queue: asyncio.Queue[RolloutEvent] = asyncio.Queue(EVENT_QUEUE_CAPACITY)
         self.emitted = 0
@@ -45,7 +45,7 @@ class _EventDelivery:
         if self.failed:
             return
         try:
-            self.queue.put_nowait(RolloutEvent(self.run_id, self.task_id, index, time.time(), payload))
+            self.queue.put_nowait(RolloutEvent(self.rollout_id, self.task_id, index, time.time(), payload))
         except asyncio.QueueFull:
             self.dropped += 1
 

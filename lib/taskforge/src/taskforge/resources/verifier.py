@@ -39,11 +39,13 @@ class RoundVerifier:
         if machine is not None:
             await close_resource(machine.close, self.notify, timeout=self.cleanup_timeout)
 
-    async def leased(self, spec: TaskRolloutSpec, model: Model, run_id: str | None, *, locked: bool) -> GradedRollout:
+    async def leased(
+        self, spec: TaskRolloutSpec, model: Model, rollout_id: str | None, *, locked: bool
+    ) -> GradedRollout:
         """Run ``spec`` on the shared verifier; ``locked`` means the caller already holds ``lock``."""
         selection = spec.verifier_machine
         if selection is None:
-            return await self.engine.run_task(spec, model, run_id=run_id)
+            return await self.engine.run_task(spec, model, rollout_id=rollout_id)
         leased = False
         lease = 0
 
@@ -71,7 +73,7 @@ class RoundVerifier:
             return self.machine
 
         try:
-            result = await self.engine.run_task(spec, model, run_id=run_id, verifier=acquire)
+            result = await self.engine.run_task(spec, model, rollout_id=rollout_id, verifier=acquire)
         except BaseException:
             if leased:
                 await self.close()
@@ -90,8 +92,8 @@ class LeaseAtGrade:
 
     verifier: RoundVerifier
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        return await self.verifier.leased(spec, model, run_id, locked=False)
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+        return await self.verifier.leased(spec, model, rollout_id, locked=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +102,8 @@ class LeaseFirst:
 
     verifier: RoundVerifier
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
         if spec.verifier_machine is None:
-            return await self.verifier.engine.run_task(spec, model, run_id=run_id)
+            return await self.verifier.engine.run_task(spec, model, rollout_id=rollout_id)
         async with self.verifier.lock:
-            return await self.verifier.leased(spec, model, run_id, locked=True)
+            return await self.verifier.leased(spec, model, rollout_id, locked=True)

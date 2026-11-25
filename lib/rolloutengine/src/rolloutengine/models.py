@@ -4,6 +4,7 @@
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
 import json
+import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -204,7 +205,7 @@ class Rollout:
     each conversation as a sample, or only the last one.
     """
 
-    run_id: str
+    rollout_id: str
     """The ID of the attempt, the same as in its events."""
     conversations: tuple[ConversationRecord, ...]
     """One record for each conversation that the harness started, in order."""
@@ -216,6 +217,12 @@ class Rollout:
     """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the harness ends."""
     failure: RolloutFailure | None = None
     """For an interrupted attempt: the exception type and the operation that failed."""
+
+    @property
+    def run_id(self) -> str:
+        """Deprecated alias of ``rollout_id``."""
+        warnings.warn("Rollout.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
+        return self.rollout_id
 
 
 @dataclass(frozen=True)
@@ -445,20 +452,26 @@ RolloutEventPayload = (
 
 @dataclass(frozen=True)
 class RolloutEvent:
-    """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``.
+    """One event of the attempt that ``RolloutEngine.run_task`` started with ``rollout_id`` for task ``task_id``.
 
     ``index`` is the event's position in the attempt, counted when the engine emits it, so a missing index
-    is an event that the observer did not receive. ``(run_id, index)`` identifies the event, because each
-    ``run_task`` call has its own ``run_id``. The last events of an attempt can be lost without a gap,
+    is an event that the observer did not receive. ``(rollout_id, index)`` identifies the event, because each
+    ``run_task`` call has its own ``rollout_id``. The last events of an attempt can be lost without a gap,
     so the events are complete when ``AttemptEnded`` is among them and every lower index is present.
     ``emitted_at`` is the wall-clock time of the emit in seconds since the epoch, because delivery is later.
     """
 
-    run_id: str
+    rollout_id: str
     task_id: str
     index: int
     emitted_at: float
     payload: RolloutEventPayload
+
+    @property
+    def run_id(self) -> str:
+        """Deprecated alias of ``rollout_id``."""
+        warnings.warn("RolloutEvent.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
+        return self.rollout_id
 
 
 class RolloutObserver(Protocol):

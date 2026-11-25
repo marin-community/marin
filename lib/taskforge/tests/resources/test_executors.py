@@ -66,7 +66,7 @@ class StartingEngine(Engine):
         self.starting = True
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
         if self.starting:
             self.starting = False
             raise RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.START)

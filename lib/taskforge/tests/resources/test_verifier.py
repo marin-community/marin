@@ -290,7 +290,7 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     )
     await ctx.drain()
     assert not finding.met and finding.grade is not None and finding.grade.reward == 0
-    assert len(shared.run_ids) == len(fresh.run_ids) == 1
+    assert len(shared.rollout_ids) == len(fresh.rollout_ids) == 1
 
 
 async def test_candidate_files_and_staged_roots_are_replaced_between_grades() -> None:

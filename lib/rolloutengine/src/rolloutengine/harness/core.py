@@ -8,6 +8,7 @@ through its ``ModelSession``, which records the exact tokens and applies the tur
 The harness does not grade: the engine grades the rollout with the task's grader after the harness ends.
 """
 
+import warnings
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -52,7 +53,7 @@ class HarnessContext:
 
     ``limits`` are the attempt's limits, for example to tell the model that one turn is left. ``machine`` is
     the prepared task machine, or ``None`` when the attempt has none. A harness may report its own events,
-    such as tool calls, to ``events``, and registers the close of its resources with ``cleanup``. ``run_id``
+    such as tool calls, to ``events``, and registers the close of its resources with ``cleanup``. ``rollout_id``
     identifies the attempt.
     """
 
@@ -61,9 +62,15 @@ class HarnessContext:
     machine: Machine | None
     events: EventSink
     cleanup: HarnessCleanup
-    run_id: str
+    rollout_id: str
     begin_turn_budget: Callable[[], None]
     """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
+
+    @property
+    def run_id(self) -> str:
+        """Deprecated alias of ``rollout_id``."""
+        warnings.warn("HarnessContext.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
+        return self.rollout_id
 
 
 class ModelSession(Protocol):

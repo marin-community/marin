@@ -111,7 +111,7 @@ class GradingResource:
         engine = self.fresh_engine if event.fresh_verifier and self.fresh_engine is not None else self.engine
         for attempt in range(2):
             try:
-                result = await engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
+                result = await engine.run_task(spec, model, rollout_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
             if result.grade.failure not in (GradingFailure.TIMEOUT, GradingFailure.GRADER_TIMEOUT) or attempt == 1:
