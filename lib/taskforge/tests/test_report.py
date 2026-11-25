@@ -19,7 +19,7 @@ from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Generated, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
@@ -84,7 +84,7 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
         directory.mkdir()
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
         (directory / "workpiece.json").write_bytes(
-            WORKPIECE.dump_json(Workpiece(name, proposal, terminal=terminal, decisions=decisions))
+            WORKPIECE.dump_json(Workpiece(name, Generated(proposal), terminal=terminal, decisions=decisions))
         )
         (directory / "status.json").write_text(json.dumps({"terminal": terminal}))
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
@@ -110,8 +110,8 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
         "event_gap=WriteFile n=1 p50=3.000 p90=3.000",
     ):
         assert f"origin=all {line}" in lines
-        assert f"origin=proposal {line}" in lines
-    assert not any(line.startswith("origin=source") for line in lines)
+        assert f"origin=generated {line}" in lines
+    assert not any(line.startswith("origin=repaired") for line in lines)
     assert "origin=all terminal=accepted count=1" in await report(str(tmp_path), 1)
 
 

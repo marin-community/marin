@@ -26,7 +26,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Generated, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, Prompt
 
 
@@ -49,7 +49,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
     )
     return Workpiece(
         "w1",
-        proposal,
+        Generated(proposal),
         session=session,
         submission=Submission(task, controls, "authored"),
         evidence=(evidence,),

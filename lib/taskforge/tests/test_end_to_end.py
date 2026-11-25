@@ -35,7 +35,7 @@ from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Abandon, Accept, BandRules, Budget, Cause, Decision, Incomplete, Modify, Retry
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Generated, Repaired, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.clock import Clock
@@ -133,7 +133,11 @@ def config(arm: str) -> TaskforgeConfig:
 async def test_both_arms_accept_and_record_stage_sequence(proposal: TaskProposal, arm: str) -> None:
     log = EventLog()
     wp = await run_workpiece(
-        Workpiece(proposal.header.id, proposal), config(arm), resources(Envs(), script(arm)), log, install=install
+        Workpiece(proposal.header.id, Generated(proposal)),
+        config(arm),
+        resources(Envs(), script(arm)),
+        log,
+        install=install,
     )
     assert wp.terminal == Terminal.ACCEPTED
     stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
@@ -148,13 +152,17 @@ async def test_crash_resume_replays_commands_without_repeating_inference(proposa
     first = EventLog(sink=sink)
     broken = resources(Envs(fail=True), script("S"))
     assert (
-        await run_workpiece(Workpiece(proposal.header.id, proposal), config("S"), broken, first, install=install)
+        await run_workpiece(
+            Workpiece(proposal.header.id, Generated(proposal)), config("S"), broken, first, install=install
+        )
     ).terminal == Terminal.HELD
     assert isinstance(broken.inference, FakeInference)
     assert len(broken.inference.requests) == 2
     resumed = resources(Envs(), script("S")[2:])
     log = EventLog(replay_from=await sink.read(), sink=sink)
-    wp = await run_workpiece(Workpiece(proposal.header.id, proposal), config("S"), resumed, log, install=install)
+    wp = await run_workpiece(
+        Workpiece(proposal.header.id, Generated(proposal)), config("S"), resumed, log, install=install
+    )
     assert wp.terminal == Terminal.ACCEPTED
     assert isinstance(resumed.inference, FakeInference)
     assert isinstance(resumed.envs, Envs)
@@ -181,7 +189,7 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
     pool = RoundPool()
     settings = replace(config("S"), review=needs_revision)
     wp = await run_workpiece(
-        Workpiece(proposal.header.id, proposal),
+        Workpiece(proposal.header.id, Generated(proposal)),
         settings,
         replace(resources(Envs(), (*script("S"), *script("S"))), verifiers=pool),
         EventLog(),
@@ -201,9 +209,10 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
 
 async def test_source_task_gets_as_many_author_sessions_as_a_proposal(proposal: TaskProposal) -> None:
     settings = replace(config("S"), review=needs_revision)
-    source = Workpiece("source", submission=Submission(arithmetic_task(), (), "source task"))
+    task = Submission(arithmetic_task(), (), "source task")
+    source = Workpiece("source", Repaired(task), submission=task)
     runs = {}
-    for name, seed in (("proposal", Workpiece(proposal.header.id, proposal)), ("source", source)):
+    for name, seed in (("proposal", Workpiece(proposal.header.id, Generated(proposal))), ("source", source)):
         log = EventLog()
         bundle = resources(Envs(), (*script("S"), *script("S")))
         wp = await run_workpiece(seed, settings, bundle, log, install=install)
@@ -226,7 +235,7 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
     bundle = resources(Envs(), script("S"))
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
     log = EventLog()
-    wp = await run_workpiece(Workpiece(proposal.header.id, proposal), settings, bundle, log, install=install)
+    wp = await run_workpiece(Workpiece(proposal.header.id, Generated(proposal)), settings, bundle, log, install=install)
     assert wp.terminal == Terminal.HELD
     assert len(wp.decisions) == settings.budget.max_validation_retries + 1
     stages = [r.event.stage for r in log.records if isinstance(r.event, StageCompleted)]
@@ -248,7 +257,7 @@ async def test_unavailable_control_grade_is_regraded_on_validation_retry(proposa
     without_grade_tool = tuple(c for c in script("S") if c.tool_calls[0].name != "grade")
     bundle = replace(resources(Envs(), without_grade_tool), grading=GradingResource(OnceUnavailable(), "grader"))
     wp = await run_workpiece(
-        Workpiece(proposal.header.id, proposal),
+        Workpiece(proposal.header.id, Generated(proposal)),
         config("S"),
         bundle,
         EventLog(replayable=replayable_grade),
@@ -285,7 +294,7 @@ async def test_stage_replay_budget_restarts_after_each_completed_stage(proposal:
     bundle = resources(Envs(), script("S"))
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=solver))
     wp = await run_workpiece(
-        Workpiece(proposal.header.id, proposal),
+        Workpiece(proposal.header.id, Generated(proposal)),
         replace(config("S"), review=retry_once),
         bundle,
         EventLog(),
@@ -423,7 +432,7 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason:
     edge = settings.transitions[(Stage.AUTHOR, Stopped)]
     assert edge[0] is None
     previous = Modify(("prior review",))
-    wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
+    wp = Workpiece(proposal.header.id, Generated(proposal)).with_(decisions=(previous,))
     session = Conversation((), ())
     stopped = edge[1](wp, Stopped(reason, session))
     published = WORKPIECE.validate_json(WORKPIECE.dump_json(stopped))
@@ -445,7 +454,7 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     envs = Recovers(fail=True)
     resource = resources(envs, script("S"))
     result = await run_workpiece(
-        Workpiece(proposal.header.id, proposal), config("S"), resource, EventLog(), install=install
+        Workpiece(proposal.header.id, Generated(proposal)), config("S"), resource, EventLog(), install=install
     )
     assert result.terminal == Terminal.ACCEPTED
     assert len(envs.created) == 2
@@ -458,7 +467,7 @@ async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: Tas
     envs = Envs(fail=True)
     resource = resources(envs, script("S"))
     result = await run_workpiece(
-        Workpiece(proposal.header.id, proposal), config("S"), resource, EventLog(), install=install
+        Workpiece(proposal.header.id, Generated(proposal)), config("S"), resource, EventLog(), install=install
     )
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
@@ -776,7 +785,7 @@ async def test_driver_repairs_source_task_without_proposal(
     destination = tmp_path / "out" / driver.input_key(str(source))
     wp = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert wp.terminal == Terminal.ACCEPTED
-    assert wp.proposal is None
+    assert isinstance(wp.origin, Repaired)
     first, second = wp.decisions
     # SolverEngine solves even-numbered trials, so the source task measures 1 of 2 before any author touches it.
     intake = (NO_CONTROLS, "1 of 2 trials solved: in_band")

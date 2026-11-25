@@ -12,7 +12,7 @@ from taskforge.harness.tools.validate import ValidateRequest
 from taskforge.model.llm import Message, Role, ToolCall
 from taskforge.model.review import Abandon, Accept, BandOutcome, Budget, Incomplete, Modify, Reject, Retry
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import Conversation, Generated, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.summary import validation_path, validation_summary
@@ -68,13 +68,13 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
         case Modify(findings):
             previous = wp.session
             if previous is None:
-                if wp.proposal is not None:
+                if isinstance(wp.origin, Generated):
                     raise ValueError("Cannot revise without an author session")
                 # A task from another source has had no author yet; the author stage opens one from these findings.
                 session = None
             else:
                 system = tuple(message for message in previous.messages if message.role == "system")
-                key = "author.revision" if wp.proposal is not None else "author.repair"
+                key = "author.revision" if isinstance(wp.origin, Generated) else "author.repair"
                 prompt = policy.prompt(key).render(kind="review", detail="\n".join(findings))
                 session = Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas)
             return wp.with_(
