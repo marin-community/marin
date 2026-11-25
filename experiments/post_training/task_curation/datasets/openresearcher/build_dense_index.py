@@ -72,11 +72,13 @@ class DenseIndexConfig:
     output_path: str
 
 
-def stage_embedding(config: DenseIndexConfig, work: Path) -> tuple[EmbeddingShards, list[dict]]:
+def stage_embedding(
+    config: DenseIndexConfig, work: Path, expected_documents: int = EXPECTED_DOCUMENTS
+) -> tuple[EmbeddingShards, list[dict]]:
     embedding = EmbeddingShards.model_validate_json(
         pinned_document(config.embedding_receipt_uri, config.embedding_receipt_sha256)
     )
-    if embedding.corpus_revision != CORPUS_REVISION or embedding.document_count != EXPECTED_DOCUMENTS:
+    if embedding.corpus_revision != CORPUS_REVISION or embedding.document_count != expected_documents:
         raise ValueError("Embedding artifact differs from the approved complete corpus")
     if embedding.embedding_dim != EMBEDDING_DIM:
         raise ValueError("Embedding dimension differs from the dense index contract")
@@ -116,13 +118,13 @@ def corpus_docids(staged: RegionalInputs, shard_name: str) -> list[str]:
         ]
 
 
-def build_index(config: DenseIndexConfig) -> DenseIndex:
+def build_index(config: DenseIndexConfig, expected_documents: int = EXPECTED_DOCUMENTS) -> DenseIndex:
     import faiss  # noqa: PLC0415  # optional dependency, present in the regional build job
 
     if not os.environ.get("IRIS_TASK_ID"):
         raise RuntimeError("The dense index must be built inside the regional Iris CPU job")
     staged = RegionalInputs.model_validate_json(pinned_document(config.stage_receipt_uri, config.stage_receipt_sha256))
-    embedding, manifest = stage_embedding(config, Path(config.workdir))
+    embedding, manifest = stage_embedding(config, Path(config.workdir), expected_documents)
     work = Path(config.workdir)
     manifest.sort(key=lambda entry: (entry["shard"], entry["chunk"]))
     by_shard: dict[str, list[dict]] = {}
@@ -150,7 +152,7 @@ def build_index(config: DenseIndexConfig) -> DenseIndex:
         shard_prefixes[shard_name] = len(ordered_docids)
         ordered_docids.extend(shard_docids)
         logger.info("Added %s: %d rows (total %d)", shard_name, len(shard_docids), index.ntotal)
-    if index.ntotal != EXPECTED_DOCUMENTS or len(ordered_docids) != EXPECTED_DOCUMENTS:
+    if index.ntotal != expected_documents or len(ordered_docids) != expected_documents:
         raise ValueError("Dense index row count differs from the approved corpus")
     chunk_offsets: list[tuple[dict, int]] = []
     for shard_name in sorted(by_shard):
@@ -158,7 +160,7 @@ def build_index(config: DenseIndexConfig) -> DenseIndex:
         for entry in by_shard[shard_name]:
             chunk_offsets.append((entry, consumed))
             consumed += entry["documents"]
-    for number in range(0, EXPECTED_DOCUMENTS, SPOT_CHECK_STRIDE):
+    for number in range(0, expected_documents, SPOT_CHECK_STRIDE):
         entry, global_start = next(
             offset for offset in chunk_offsets if offset[1] <= number < offset[1] + offset[0]["documents"]
         )
