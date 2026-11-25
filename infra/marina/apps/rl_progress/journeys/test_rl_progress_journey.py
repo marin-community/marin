@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from copy import deepcopy
 from urllib.parse import urlencode
 
-from finestore.rl.rl_progress import Comparison
+from finestore.rl.rl_progress import Comparison, EvaluationScore
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -59,6 +60,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "href", f"https://github.com/marin-community/marin/issues/{record['issue']}"
     )
     native_route = urlencode({"run": record["native_run_id"], "attempt": record["attempt_id"]})
+    journey.page.goto("about:blank")
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{native_route}", wait_until="domcontentloaded")
     expect(dialog.get_by_text("Learning fixture", exact=True)).to_be_visible()
     expect(journey.page.get_by_role("cell", name="snowball", exact=True)).to_be_visible()
@@ -126,7 +128,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     metric = "eval_lite/family_mean"
 
-    def attempt(name, day, raw):
+    def attempt(name, day, raw, *, comparable="tasks-a/grader-a", final=True):
         return progress_record() | {
             "run_id": name,
             "attempt_id": name,
@@ -135,26 +137,41 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
             "branch": "main",
             "dirty": False,
             "is_control": True,
+            "commit": f"{day:040x}",
+            "base_commit": f"{day:040x}",
             "preset_version": f"bbbbbbb{day}",
             "artifact_uri": f"s3://example/runs/{name}",
             "started_at": f"2026-11-0{day}T00:00:00Z",
             "completed_at": f"2026-11-0{day}T01:00:00Z",
             "gate_result": None,
             "evaluations": [
-                Comparison(metric="eval_lite@25/family_mean", role="slice", run=raw, n_run=1, n_control=0).model_dump(
-                    mode="json"
-                )
+                Comparison(
+                    metric="eval_lite@25/family_mean",
+                    role="slice",
+                    run=raw,
+                    n_run=1,
+                    n_control=0,
+                    evaluation_score=EvaluationScore(
+                        profile="eval_lite",
+                        step=25 if final else 0,
+                        statistic="family_mean",
+                        final=final,
+                        comparability=comparable,
+                    ),
+                ).model_dump(mode="json")
             ],
         }
 
     controls = [
-        attempt(f"control-{i}", i + 1, raw)
+        attempt(f"control-{i}", i + 1, raw, comparable=identity)
         | {
             "evaluation_data_identity": f"panel@selection-v{i}",
             "evaluation_task_set": "tasks-a" if i < 2 else "tasks-b",
             "evaluation_protocol_identity": "grader-a" if i < 3 else "grader-b",
         }
-        for i, raw in enumerate((0.5, 0.4, 0.7, 0.75))
+        for i, (raw, identity) in enumerate(
+            ((0.5, "tasks-a/grader-a"), (0.4, "tasks-a/grader-a"), (0.7, "tasks-b/grader-a"), (0.75, "tasks-b/grader-b"))
+        )
     ]
     branch = attempt("branch-at-first-preset", 5, 0.55) | {
         "branch": "experiment",
@@ -167,7 +184,13 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?var-run=fixture",
         "gate_result": progress_record()["gate_result"],
     }
-    for record in (*controls, branch):
+    superseded = attempt("superseded", 1, 0.15) | {
+        "artifact_uri": controls[0]["artifact_uri"],
+        "completed_at": "2026-11-01T00:30:00Z",
+    }
+    early_only = attempt("early-only", 6, 0.2, final=False)
+    unpushed_main = attempt("unpushed-main", 7, 0.65) | {"base_commit": controls[0]["base_commit"]}
+    for record in (*controls, branch, superseded, early_only, unpushed_main):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
@@ -175,9 +198,16 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · learning-medium")
     chart = journey.page.get_by_role("group", name=metric, exact=True)
     expect(chart.locator("line.history-global")).to_have_count(3)
-    expect(chart.locator("line.history-chain")).to_have_count(1)
+    chain = chart.locator("line.history-chain")
+    expect(chain).to_have_count(1)
+    expect(chain).to_have_attribute("data-from-attempt", "control-0")
+    expect(chain).to_have_attribute("data-to-attempt", "control-1")
     expect(chart.locator("line.history-marker")).to_have_count(2)
+    for attempt_id in ("control-2", "control-3"):
+        expect(chart.locator(f'line.history-marker[data-attempt="{attempt_id}"]')).to_have_count(1)
     expect(chart.get_by_role("link")).to_have_count(4)
+    for name in ("superseded", "early-only", "unpushed-main"):
+        expect(chart.get_by_role("link", name=re.compile(f"^{name}"))).to_have_count(0)
     journey.shoot("preset-main-controls")
 
     toggle = journey.page.get_by_role("checkbox", name="Show branch runs")

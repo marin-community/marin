@@ -6,7 +6,6 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from marinskyrl.agent_harnesses import PI_HARNESS
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.validation import validate_spec
@@ -20,10 +19,10 @@ from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.task_inputs import TaskInput, task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
-    GraderMachine,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -34,6 +33,8 @@ from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
+
+from marinskyrl.agent_harnesses import PI_HARNESS
 
 
 class LocalAdmissionFactory:
@@ -82,9 +83,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
     simulated = text_task("simulated-task", source="mixed").model_copy(
         update={"environment_requirements": SHELL_ENVIRONMENT}
     )
-    linux = text_task("linux-task", source="mixed").model_copy(
-        update={"environment_requirements": NATIVE_ENVIRONMENT}
-    )
+    linux = text_task("linux-task", source="mixed").model_copy(update={"environment_requirements": NATIVE_ENVIRONMENT})
     reply = text_task("reply-task", source="mixed")
     shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
     inputs = _load(
@@ -127,11 +126,13 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             "labels": {"subset_id": "competitive-coding"},
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                placement=GraderMachine(environment=EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS,
-                    docker_image="fixture@sha256:" + "0" * 64,
-                )),
-            )
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        docker_image="fixture@sha256:" + "0" * 64,
+                    )
+                ),
+            ),
         }
     )
     prefix = text_task("prefix-task", source="structure-closure").model_copy(
@@ -141,10 +142,12 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
             "grader": ScriptGrader(
                 argv=("python", "/tests/grade.py"),
-                placement=GraderMachine(environment=EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS,
-                    packages_lock="s3://fixture/grader.lock",
-                )),
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                        packages_lock="s3://fixture/grader.lock",
+                    )
+                ),
             ),
         }
     )

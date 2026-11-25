@@ -31,7 +31,6 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-from finestore.rl.run_records import wandb_project
 from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
@@ -40,6 +39,7 @@ from finestore.rl.run_records import (
     write_attempt,
     CheckpointReference,
     MetricRow,
+    RunIndexIdentity,
     read_attempt,
     register_run_tables,
     run_records_root,
@@ -134,13 +134,9 @@ class Tracking:
         if "wandb" in backends:
             import wandb
 
-            attempt = (
-                read_attempt(str(config.trainer.export_path), tracking_config["attempt_id"])
-                if config is not None
-                else None
-            )
-            index = attempt.index if attempt is not None else None
-            project = wandb_project(index, project_name)
+            raw_index = runtime.get("run_index")
+            index = RunIndexIdentity.model_validate(raw_index) if raw_index is not None else None
+            project = index.wandb_project if index is not None else project_name
             wandb_name = index.run_id if index is not None else experiment_name
             wandb_group = index.run_id if index is not None else tracking_config["run_id"]
             if index is not None:

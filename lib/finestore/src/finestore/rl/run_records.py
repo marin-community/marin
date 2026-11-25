@@ -89,10 +89,12 @@ class RunIndexIdentity(BaseModel):
     preset: Identity
     preset_version: Identity
     is_control: bool = False
+    wandb_project: Identity = RL_WANDB_PROJECT
     user: Identity
     branch: str | None
     source_revision: Identity
     tree_hash: Identity | None = None
+    base_commit: Identity | None = None
     base_preset_version: Identity | None = None
     dirty: bool
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
@@ -104,11 +106,6 @@ class RunIndexIdentity(BaseModel):
         if self.branch is not None:
             tags.append(f"branch:{self.branch}")
         return tags
-
-
-def wandb_project(index: RunIndexIdentity | None, default: str) -> str:
-    """Select the project for a run's stored tracking identity."""
-    return RL_WANDB_PROJECT if index is not None else default
 
 
 class AttemptRecord(BaseModel):

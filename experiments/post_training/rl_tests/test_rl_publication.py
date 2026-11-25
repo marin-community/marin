@@ -299,7 +299,15 @@ def test_nightly_fills_only_the_current_main_control_cohort(monkeypatch):
     base = AttemptSummary.model_validate_json(
         json.dumps(
             progress_record()
-            | {"model": "snowball", "preset_version": "current", "is_control": True, "dirty": False, "branch": "main"}
+            | {
+                "model": "snowball",
+                "preset_version": "current",
+                "is_control": True,
+                "dirty": False,
+                "branch": "main",
+                "commit": "main-source",
+                "base_commit": "main-source",
+            }
         )
     )
     controls = [base.model_copy(update={"native_run_id": f"control-{i}", "attempt_id": f"first-{i}"}) for i in range(5)]

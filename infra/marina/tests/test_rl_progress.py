@@ -90,11 +90,20 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         dirty=False,
         is_control=True,
         preset_version="current",
+        commit="main-source",
+        base_commit="main-source",
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
     config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
     assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
+    legacy_link = changed | {"evaldash_run_ids": ["existing-evaluation"]}
+    assert publish(legacy_link) == changed
+    control_member = {"commit": "control-commit", "version": "control-version", "replicate": 0}
+    control_row = changed | {"control": control_member, "is_control": True}
+    assert publish(control_row) == control_row
+    assert publish(changed) == control_row
+    changed = control_row
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
         for field in ("issue", "gate", "gate_result", "model", "launch_config"):

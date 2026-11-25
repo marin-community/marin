@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import hashlib
+import json
+from dataclasses import replace
 from itertools import permutations
 from types import SimpleNamespace
-from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,13 +13,7 @@ import pytest
 from finestore.rl.run_records import read_evaluations
 from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
 from omegaconf import OmegaConf
-from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
-from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
-
 from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
@@ -35,6 +29,12 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import AutoTokenizer
+
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task, write_selection_panel
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
@@ -63,9 +63,18 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         else:
             write_tasks(path, [lowered_task(task)])
         write_selection_panel(
-            path.parent, [task], path.parent.name, "1",
-            lambda _: {"family": path.parent.name, "source": "declared-source",
-                       "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
+            path.parent,
+            [task],
+            path.parent.name,
+            "1",
+            lambda _: {
+                "family": path.parent.name,
+                "source": "declared-source",
+                "aai_category": "general",
+                "topic": "algebra",
+                "difficulty": "hard",
+                "agentic": True,
+            },
         )
     config.data.val_data = [str(primary)]
     manifest_path = primary.parent / "summary.json"
@@ -137,9 +146,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
     with pytest.raises(ValueError, match="task content differs from selection manifest"):
         experiment.get_eval_dataset([str(primary)])
-    mismatched = original.set_column(
-        original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
-    )
+    mismatched = original.set_column(original.schema.get_field_index("family"), "family", pa.array(["wrong-family"]))
     membership_path = primary.parent / "validation.parquet"
     membership = pq.read_table(membership_path)
     changed_task = json.loads(membership["task_spec"][0].as_py())
@@ -187,9 +194,7 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     task = text_task("validation-task")
     row = task_input(lowered_task(task), metric_class="script", data_source="validation")
     identity = TaskEvaluationIdentity(strata=TaskStrata(family="math", source="fixture"))
-    row = replace(
-        row, metadata=replace(row.metadata, evaluation_identity=identity, task_id=task.id, subset_id="math")
-    )
+    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity, task_id=task.id, subset_id="math"))
     loader = StatefulDataLoader([{"input": row}], collate_fn=list)
     tokenizer = SimpleNamespace(eos_token_id=2, decode=lambda _tokens: "answer")
     projection = WholeTaskProjection(config.generator, tokenizer)
@@ -225,8 +230,7 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     assert set(report["evaluation"]) == {"0", "named/0"}
     assert report["evaluation"]["named/0"][0]["subset_id"] == "math"
     assert {
-        key: [(row["task_id"], row["success_rate"]) for row in rows]
-        for key, rows in report["evaluation_tasks"].items()
+        key: [(row["task_id"], row["success_rate"]) for row in rows] for key, rows in report["evaluation_tasks"].items()
     } == {"0": [(task.id, 1.0)], "named/0": [(task.id, 1.0)]}
 
 

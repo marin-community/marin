@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import cast
 
 import click
@@ -67,6 +68,7 @@ class PublicationOutcome(BaseModel):
     unserved_records: list[tuple[str, str] | str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
+    attempts: dict[str, AttemptRecord] = Field(default_factory=dict, exclude=True)
     retry: str | None = None
 
     def to_dict(self) -> dict:
@@ -105,7 +107,12 @@ class _TerminalMeasurements:
 
 
 def _terminal_measurements(
-    run_output: str, preset: presets.Preset, attempt: AttemptRecord, launch: RecordedLaunch, evidence: list[str]
+    run_output: str,
+    preset: presets.Preset,
+    attempt: AttemptRecord,
+    launch: RecordedLaunch,
+    evidence: list[str],
+    inputs: RunInputs,
 ) -> _TerminalMeasurements:
     attempt_id = launch.attempt_id
     result = attempt.native.result
@@ -125,7 +132,7 @@ def _terminal_measurements(
     )
     if attempt.index is not None and attempt.index.is_control and result.state == "succeeded":
         try:
-            control = gate.read_control_measurements(run_output, preset, attempt)
+            control = gate.read_control_measurements(run_output, preset, attempt, inputs)
         except (InvalidComparison, FileNotFoundError) as error:
             failed.append("control_measurements")
             evidence.append(str(error))
@@ -134,7 +141,7 @@ def _terminal_measurements(
             evaluation_task_set = control.evaluation_task_set
             failed = [fact.name for fact in control.invariants if not fact.holds]
     elif has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
-        status = evaluation_status(run_output, preset, attempt, launch)
+        status = evaluation_status(run_output, preset, attempt, launch, inputs=inputs)
         evaluations = list(status.evaluations)
         evaluation_task_set = status.evaluation_task_set
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
@@ -251,7 +258,9 @@ def build_record(
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
-        _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
+        _terminal_measurements(run_output, preset, attempt, launch, evidence, inputs)
+        if terminal
+        else _TerminalMeasurements()
     )
     failed = list(measured.failed_facts)
     if interrupted:
@@ -273,6 +282,7 @@ def build_record(
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
         is_control=index.is_control if index is not None else False,
+        base_commit=index.base_commit if index is not None else None,
         base_preset_version=index.base_preset_version if index is not None else None,
         evaluation_data_identity=evaluation_data,
         evaluation_task_set=measured.evaluation_task_set,
@@ -358,9 +368,7 @@ def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecor
     return {
         key: attempt
         for key, attempt in read_attempts(export_root).items()
-        if attempt.index is not None
-        and attempt.config is not None
-        and attempt.config["run"].get("coordinator_iris_job_id") == coordinator
+        if attempt.config is not None and attempt.config["run"].get("coordinator_iris_job_id") == coordinator
     }
 
 
@@ -391,23 +399,68 @@ class _OutputAttempts:
     records: dict[str, AttemptRecord]
 
 
-def _prepare_publication_attempts(path: str, failed_coordinator: str | None) -> _OutputAttempts:
-    current, attempts = read_stored_skyrl_attempts(path)
-    if failed_coordinator is not None:
-        for key, record in _coordinator_attempts(path, failed_coordinator).items():
-            record = attempts.get(key, record)
-            if not record.native.result.state.is_terminal and record.interruption is None:
-                export_root = recorded_launch(record).export_root
-                write_attempt(
-                    export_root,
-                    AttemptRecord(run_id=record.run_id, attempt_id=key, interruption="coordinator_terminated"),
-                )
-                record = read_attempt(export_root, key) or record.model_copy(
-                    update={"interruption": "coordinator_terminated"}
-                )
-            attempts[key] = record
-            if current is None:
-                current = key
+class CoordinatorEvidence(BaseModel):
+    """The successful native artifacts and gate selected by one coordinator."""
+
+    attempts: dict[str, str | None]
+    gate_path: str | None
+
+
+def _coordinator_evidence_path(path: str, coordinator: str) -> StoragePath:
+    key = sha256(coordinator.encode()).hexdigest()
+    return StoragePath(path) / "coordinators" / f"{key}.json"
+
+
+def store_coordinator_evidence(path: str, coordinator: str, evidence: CoordinatorEvidence) -> None:
+    target = _coordinator_evidence_path(path, coordinator)
+    target.parent.mkdirs()
+    target.write_text(evidence.model_dump_json())
+
+
+def read_coordinator_evidence(path: str, coordinator: str) -> CoordinatorEvidence | None:
+    target = _coordinator_evidence_path(path, coordinator)
+    try:
+        return CoordinatorEvidence.model_validate_json(target.read_text())
+    except FileNotFoundError:
+        return None
+
+
+def completed_artifact_attempt(path: str, attempt_id: str | None) -> AttemptRecord | None:
+    """Read the exact native receipt, with a fallback for artifacts without an attempt ID."""
+    current, records = read_stored_skyrl_attempts(path)
+    receipt = records.get(attempt_id or current)
+    return receipt if receipt is not None and receipt.native.result.state == "succeeded" else None
+
+
+def _prepare_publication_attempts(
+    path: str,
+    coordinator: str | None,
+    evidence: CoordinatorEvidence | None,
+    interrupted: bool,
+) -> _OutputAttempts:
+    if coordinator is None:
+        current, attempts = read_stored_skyrl_attempts(path)
+        return _OutputAttempts(current, attempts)
+    attempts = _coordinator_attempts(path, coordinator)
+    current = evidence.attempts[path] if evidence is not None else None
+    if current is not None and current not in attempts:
+        _, stored = read_stored_skyrl_attempts(path)
+        if current in stored:
+            attempts[current] = stored[current]
+    elif evidence is None and len(attempts) == 1:
+        current = next(iter(attempts))
+    if interrupted:
+        for key, record in attempts.items():
+            if record.native.result.state.is_terminal or record.interruption is not None:
+                continue
+            export_root = recorded_launch(record).export_root
+            write_attempt(
+                export_root,
+                AttemptRecord(run_id=record.run_id, attempt_id=key, interruption="coordinator_terminated"),
+            )
+            attempts[key] = read_attempt(export_root, key) or record.model_copy(
+                update={"interruption": "coordinator_terminated"}
+            )
     return _OutputAttempts(current, attempts)
 
 
@@ -429,16 +482,19 @@ def publish_runs(
     service_url: str | None = None,
     attempt_id: str | None = None,
     issue: int | None = None,
-    failed_coordinator: str | None = None,
+    coordinator: str | None = None,
+    evidence: CoordinatorEvidence | None = None,
+    interrupted: bool = False,
+    gate_required: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
-    if issue is not None and (len(outputs) != 1 or attempt_id is None):
+    if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
         raise ValueError("An issue requires exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
     snapshots = {}
     for path in outputs:
         try:
-            snapshots[path] = _prepare_publication_attempts(path, failed_coordinator)
+            snapshots[path] = _prepare_publication_attempts(path, coordinator, evidence, interrupted)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
@@ -452,6 +508,8 @@ def publish_runs(
         report_error = str(error)
     for path, snapshot in snapshots.items():
         current_id, attempts = snapshot.current, snapshot.records
+        if current_id in attempts:
+            result.attempts[path] = attempts[current_id]
         if attempt_id is None and current_id not in attempts:
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
@@ -470,12 +528,12 @@ def publish_runs(
                     raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
-                    gate_path is not None
+                    (gate_required or gate_path is not None)
                     and selected_id == current_id
                     and receipt.native.result.state == "succeeded"
                     and current_report is None
                 )
-                if missing_gate and failed_coordinator is None:
+                if missing_gate and not interrupted:
                     raise ValueError(
                         report_error or "Gate report missing for this attempt; repeat the original command with --wait"
                     )

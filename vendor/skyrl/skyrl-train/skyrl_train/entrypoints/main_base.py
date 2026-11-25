@@ -188,7 +188,9 @@ def create_ray_wrapped_inference_engines_from_config(
         ).values()
     )
     requested_logprobs = [
-        value + 1 for value in requested_logprobs if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        value + 1
+        for value in requested_logprobs
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
     ]
     # Chat capture requests K+1 candidates so the sampled token cannot displace
     # a token from the natural top K. Reserve the actual request width in vLLM.
@@ -647,12 +649,16 @@ class BasePPOExp:
         return trainer
 
     def run(self):
+        from contextlib import nullcontext
+
+        from skyrl_train.grader_reporting import grader_report_session  # noqa: PLC0415
         from skyrl_train.telemetry import TRAINER_ROLE, process_telemetry
         from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
 
         configure_progress(self.cfg.trainer.progress)
 
-        with process_telemetry(TRAINER_ROLE):
+        report = grader_report_session() if self.cfg.trainer.get("dump_grader_report", False) else nullcontext()
+        with process_telemetry(TRAINER_ROLE), report:
             return self._run()
 
     def _run(self):

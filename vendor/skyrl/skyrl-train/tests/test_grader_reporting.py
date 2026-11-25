@@ -6,10 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from skyrl_gym.verification import VerificationResult
-from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
-
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
-from skyrl_train.grader_reporting import GraderStats, write_grader_report
+from skyrl_train.grader_reporting import GraderStats, grader_report_session, write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
@@ -21,6 +19,7 @@ from skyrl_train.rollouts.buffer import (
 )
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):
@@ -36,9 +35,7 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
             VerificationResult.verified(1.0, passed=True),
             VerificationResult.verified(1.0, passed=True, diagnostics={GRADING_DURATION_SECONDS: 1.0}),
             VerificationResult.verified(0.7, passed=False, diagnostics={GRADING_DURATION_SECONDS: 3.0}),
-            VerificationResult.error(
-                "timeout", diagnostics={GRADING_DURATION_SECONDS: 9.0, GRADING_FAILURE: "timeout"}
-            ),
+            VerificationResult.error("timeout", diagnostics={GRADING_DURATION_SECONDS: 9.0, GRADING_FAILURE: "timeout"}),
             VerificationResult.error("no response", diagnostics={"operation": "model"}),
             VerificationResult.error(
                 "worker error", diagnostics={GRADING_DURATION_SECONDS: 2.0, GRADING_FAILURE: "execution"}
@@ -56,11 +53,14 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
         [math_b],
     )
     summary = final.summary()
-    write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
+    with grader_report_session():
+        write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
+        write_grader_report(export_path, "25", {"evaluation_duration_seconds": 11.0})
 
     report = json.loads((tmp_path / "grader_report.json").read_text())
     evaluations = report["evaluation"]
     code, math = evaluations["0"]
+    assert report["evaluation_duration_seconds"] == {"25": 11.0}
     assert code["subset_id"] == "code"
     assert code["success_rate"] is None
     assert code["grading_failures"] == {"execution": 1}
