@@ -4,13 +4,19 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-Full-model run `2026.11.24.5` at frozen source `21409c1ef4` completed one
-finite, changed update on all four native learner processes, then failed the
-five-second process-exit check before checkpoint restore. The compilation-cache
-cleanup in that source passed a one-H100 tiny Snowball save/resume run but did
-not resolve full-model shutdown. Run `2026.11.24.5` retained no native C++ stack
-identifying the remaining cause. Full-model restore, update two, updated-policy
-publication and generation, and the matched 25-update comparison remain open. The integrated
+At runtime source `634a4baa9c`, the production observer-OFF tiny Snowball
+workload passed two finite updates, exact checkpoint restoration and the original
+five-second native-exit contract on one H100. The latest full-model attempt,
+`2026.11.25.8`, completed one finite, changed update on all four native learner
+processes, then failed the unchanged five-second post-ACK exit wait before
+restore. A separately read 321-byte checkpoint marker records step 1 and policy
+version 1; checkpoint arrays were not decoded. The shape-cache ownership fix did
+not resolve full-model shutdown. Both Iris jobs failed, all five GPU Pods are
+absent and all coordinator containers are terminal; no hardware remains active.
+A subsequent eight-H100 synthetic teardown diagnostic was cancelled without
+execution; it produced no GPU result.
+Current-source full-model restore, update two, updated-policy publication and
+generation, and the matched 25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
 
@@ -581,6 +587,112 @@ exactly before and after the change in the four-device Snowball control. The
 eight-CPU Haliax suite passed 427 tests, with 37 skipped. The previous cleanup
 already released the CPU client and mesh, so this result does not identify the
 GPU shutdown cause.
+
+At runtime source `634a4baa9c`, the production observer-OFF one-H100 tiny
+Snowball run passed all 24 independent terminal checks with the deterministic
+compiler profile. Its genuine Ray `HostWorker` completed two finite updates;
+model, Adam, RNG and step fingerprints changed with preserved schemas and
+layouts. Independent decoding covered all 137 arrays in the saved step-one
+checkpoint, totaling 333,140,240 bytes, and matched the restored state exactly.
+All four frozen FP32 policy scores matched byte-for-byte, with zero maximum
+absolute error and zero ULP difference. Both native processes exited naturally
+with code zero under the unchanged five-second post-ACK limit. Final public
+close took 2.931 seconds, the Ray owner retired, and all four Pod containers
+exited zero without restarts. Model averaging was absent. Step-two state was
+verified through runtime fingerprints, finite receipts and the frozen control
+flow; a separate full step-two checkpoint was not serialized or decoded. This
+qualifies the tiny lifecycle only, with the observer disabled.
+[Current-source production-OFF qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-shape-cache-off-20261124-1)
+
+The observer-ON tiny run at the same source failed observer retirement at
+`stop_requested` after its original native learner had already exited naturally
+with code zero. It did not fail the learner's five-second native-exit wait.
+The failed diagnostic and its durable forensic handoff remain separate from the
+production-OFF pass; observer qualification was not waived.
+[Current-source observer-ON failure](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-shape-cache-20261124-1)
+
+Full-model attempt `2026.11.24.6` used `634a4baa9c` with the observer disabled,
+requesting 32 learner and eight vLLM H100s at BATCH priority, a two-hour execution
+cap and zero automatic retries. All five GPU Pods remained Pending with no node
+assignment behind Kueue admission and topology gates. A fresh check at
+23:52:23 UTC confirmed that none had started; the coordinator was cancelled at
+the reviewed 900-second queue guard. Both Iris jobs became `KILLED`, and the
+coordinator and five GPU Pod names were verified absent at 23:55 UTC. Pod absence
+does not establish exit code zero. No full-model learner update, restore or
+shutdown result was produced. Full-model restore, update two, updated-policy
+publication and generation at current source, and the matched 25-update
+comparison remain unqualified. R6 produced no scientific full-model result;
+the subsequent R8 result is recorded below.
+[Full attempt R6](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.6-coordinator-7ee9eb5d)
+
+Full-model attempt `2026.11.25.7` at the same runtime source failed in the
+CPU coordinator before any GPU child was created. The regional adapter replaced
+`build_config` after `expected_fingerprint` had been pinned. The production
+`ArtifactStep.lower()` guard raised `FingerprintMismatchError` before step
+execution; configuration rendering and SDK/Pod checks had not exercised this
+hard-pin check. The independent audit reproduced the mismatch through the actual
+production lowering API and distinguished it from a learner or GPU shutdown
+failure. Iris reported one failure and no preemptions. All four coordinator
+containers terminated: task exit 1, three helper exits zero. R7 has no active
+job or GPU allocation. The subsequent R8 launcher repair and terminal
+full-model result are recorded below; R7 provides no
+learner or GPU shutdown verdict. Full-model continuation and the matched
+25-update comparison remain open.
+[Full attempt R7 CPU bootstrap failure](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.7-coordinator-3e5503f2)
+
+Full-model attempt `2026.11.25.8` was submitted on November 25 at 01:16 UTC
+with the same `634a4baa9c` runtime source. The launcher now pins the completed
+regional configuration before calling production lowering. The actual lowering
+check passes with that non-null pin and rejects a later learning-rate change;
+the failed R7 assembly remains rejected. The coordinator created an actual GPU
+child, discovered through its exact parent relationship. Both accepted bundles
+match all 4,640 frozen source files; the GPU bundle adds only the reviewed flat
+coordinator and its identical AtomicWriter alias. The coordinator and five GPU
+Pod profiles match the pinned task image, resources, privileged containers,
+private PID namespaces and explicit `02a` artifact prefix.
+
+All five GPU Pods were running by 02:13 UTC on November 25. Both Iris jobs
+were `FAILED` by 02:19 UTC, without preemption. Independent audit of the durable
+initial and step-one receipts confirms finite state on all four native learner
+processes. Model, Adam, RNG and step fingerprints changed, with schemas and
+layouts preserved; model averaging was absent. Actual resolved configuration
+retained all 286 scientific numeric types and values. The separately read
+321-byte checkpoint commit marker records step 1, policy version 1 and the
+original Datakit-SFT source identity. This marker proves neither checkpoint
+array contents nor restoration; no checkpoint arrays were decoded.
+
+During checkpoint validation, a native learner acknowledged shutdown and then
+exceeded the unchanged five-second `subprocess.wait` deadline before restore.
+The source shape-cache ownership fix therefore did not resolve full-model
+shutdown. The production observer was disabled, and no current native C++ stack
+identifies an owner or establishes the cause. All five exact GPU Pods were
+verified absent; all four coordinator containers are terminal, with task exit 1
+and three helper exits zero. No job or hardware remains active. Canonical
+archive advertisements were empty or absent; no archive URI was guessed.
+
+R8 is now the latest full-model scientific result. Full-model exact restore,
+update two, updated-policy publication and subsequent generation, and the
+matched 25-update comparison remain unqualified. The one-H100 production-OFF
+pass retains its narrower scope. No native-exit deadline or numerical tolerance
+has been relaxed.
+
+The subsequent eight-H100 synthetic VMM teardown diagnostic, with canonical
+pageable device-to-host fingerprinting, was submitted as
+`native-large-vmm-exit-rno-20261125-1` and then cancelled without execution.
+The original attempt never had an observed GPU node assignment. Iris is
+`KILLED`, the exact Pod is absent and no hardware remains active; Pod absence
+does not prove process exit zero. No probe output or allocator-teardown result
+was produced, so R8 remains the latest full-model scientific result.
+
+The reviewed manual 900-second unstarted-job guard was missed: cancellation was
+requested 1,969.5 seconds after its deadline. The SDK's configured 900-second
+scheduling timeout did not stop the Kueue-gated `BUILDING` task. These are
+operational guard failures, not learner or allocator measurements. The next work
+is source-only deadline-guard and admission investigation; no automatic retry or
+new hardware job is implied.
+[Unexecuted VMM diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-large-vmm-exit-rno-20261125-1)
+[R8 coordinator](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9)
+· [Actual R8 GPU child](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-aa7e6e4857ca)
 
 The native server stages and installs weights inside one runtime. The Levanter
 learner bridge accepts a version-bound native route payload per trajectory and
