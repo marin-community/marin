@@ -823,12 +823,16 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 @pytest.mark.parametrize("task_index", [0, 1])
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
+@pytest.mark.parametrize("load_mode", [ObjectStoreLoadMode.STREAM, ObjectStoreLoadMode.STAGE_LOCAL])
 def test_pipeline_service_endpoint_and_shutdown_lifecycle(
-    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+    monkeypatch, tmp_path, task_index, fail, tensor_parallel_size, data_parallel_size, load_mode
 ):
     events = []
     endpoints = []
     argv = []
+    served_paths = []
+    weights = StoragePath(f"memory://pipeline-models/{tmp_path.name}")
+    (weights / "config.json").write_text('{"model_type": "fake"}')
     coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
     if task_index == 0:
         coordinator.follower_stopped(1)
@@ -870,6 +874,11 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     @contextmanager
     def process(**kwargs):
         argv.extend(kwargs["extra_args"])
+        served_path = kwargs["model"].path
+        served_paths.append(served_path)
+        if load_mode is ObjectStoreLoadMode.STAGE_LOCAL:
+            # Each task serves its own local copy, already complete when vLLM starts.
+            assert Path(served_path, "config.json").read_text() == '{"model_type": "fake"}'
         events.append("started")
         try:
             yield SimpleNamespace(
@@ -884,10 +893,11 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", process)
     service = IrisServiceConfig(
         model=ServedModelConfig(
-            weights="org/model",
+            weights=str(weights),
             tensor_parallel_size=tensor_parallel_size,
             max_model_len=4096,
             chat_template_content="{{ messages }}",
+            object_store_load_mode=load_mode,
         ),
         engine=VllmEngineConfig(extra_args=("--enable-prefix-caching",)),
         iris=IrisConfig(
@@ -931,6 +941,10 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     assert options.node_rank == task_index
     assert options.data_parallel_start_rank == (0 if data_parallel_size > 1 else None)
     assert options.headless == (task_index == 1)
+    if load_mode is ObjectStoreLoadMode.STAGE_LOCAL:
+        assert not Path(served_paths[0]).exists()
+    else:
+        assert served_paths == [str(weights)]
     if fail:
         assert events == ["started", "stopped"]
         assert not coordinator.shutdown_requested()

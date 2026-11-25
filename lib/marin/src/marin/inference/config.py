@@ -577,7 +577,5 @@ class RemoteInferenceConfig:
                 validate_serving_geometry_args(self.engine.extra_args)
         else:
             return
-        if native_group and self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
-            raise ValueError("multi-task GPU serving requires shared weights with stream loading")
         if self.instances != 1 or self.broker is not None:
             raise ValueError("native GPU serving requires one instance and no broker")

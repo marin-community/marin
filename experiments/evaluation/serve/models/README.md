@@ -38,6 +38,7 @@ serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
   pipeline_parallel_size: 1
+  pipeline_layer_partition: []  # VLLM_PP_LAYER_PARTITION; layers per pipeline stage, e.g. [35, 37]
   gpu_memory_utilization: null
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
@@ -131,6 +132,10 @@ Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM servi
 Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
 `tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
 requests 16 GPUs across two tasks and exposes one endpoint.
+
+vLLM splits layers evenly across pipeline stages by default. A model whose layers share KV caches across
+a stage boundary fails at startup and needs an explicit split: set `serve.pipeline_layer_partition` to
+one layer count per stage, which Marin passes to vLLM as `VLLM_PP_LAYER_PARTITION`.
 
 Multi-node serving requires the vLLM backend, an explicit GPU resource hint, and an explicit
 tensor parallel size. Tensor parallel size times data parallel size must equal GPUs per task.

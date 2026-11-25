@@ -180,6 +180,7 @@ class ModelServeConfig(BaseModel):
     tensor_parallel_size: int | None
     data_parallel_size: int | None
     pipeline_parallel_size: int = 1
+    pipeline_layer_partition: tuple[int, ...] = Field(default=(), exclude_if=lambda value: not value)
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None
