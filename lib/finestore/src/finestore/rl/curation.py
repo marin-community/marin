@@ -873,7 +873,6 @@ class SourceDeclaration(CatalogRecord):
     origin: str
     family: str
     tags: list[str]
-    task_count: int | None
     notes: str
     dataset_id: str | None
     dataset_revision: str | None
@@ -883,6 +882,19 @@ class SourceDeclaration(CatalogRecord):
     is_benchmark: bool
     kind: str
     status: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_declared_count(cls, value: Any) -> Any:
+        """Rows published before the measured count carried a hand-written count on the declaration.
+
+        That value was never a measurement; dropping it on read keeps every legacy
+        row readable while it publishes as not measured.
+        """
+        if isinstance(value, dict):
+            value.pop("task_count", None)
+        return value
+
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
     # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
@@ -1183,6 +1195,14 @@ class SnapshotSource(CatalogRecord):
     latest_attempt_status: AssessmentStatus
     reason: str | None
     curation: CurationSummary | None = None
+    measured_task_count: int | None = None
+    """The raw population a COMPLETE attempt measured at this row's dataset pin.
+
+    Publication fills it only when the attempt's curation document names the
+    same dataset revision and recipe version the declaration publishes. Rows
+    published before the measured count carry ``None``: a legacy declaration's
+    hand-written count is not a measurement and never publishes as one.
+    """
     diagnostics: list[ArchivedFile] = Field(default_factory=list)
 
 

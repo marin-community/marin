@@ -95,7 +95,11 @@ def published_task_count(
     attempt: AssessmentAttempt | None,
     prior: SnapshotSource | None,
 ) -> int | None:
-    """Use a COMPLETE attempt's count or carry the prior count at the same pin and recipe."""
+    """Publish a COMPLETE attempt's measured count, or the prior row's measurement at the same pin and recipe.
+
+    A legacy prior row carries no measurement, so its hand-written count never
+    publishes as one.
+    """
     if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
         measured = measured_task_count(declaration, summary)
         if measured is not None:
@@ -107,7 +111,7 @@ def published_task_count(
         or prior.declaration.dataset_revision != declaration.dataset_revision
     ):
         return None
-    return prior.declaration.task_count
+    return prior.measured_task_count
 
 
 def archive_files(store: DataStore, root: str, prefix: str, patterns: tuple[str, ...]) -> list[ArchivedFile]:
@@ -321,14 +325,15 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                     SnapshotSource(
                         snapshot_id=run_id,
                         id=declaration.id,
-                        # The published row's task count is the measurement that identifies
+                        # The published row's measured count is the measurement that identifies
                         # this declaration; an unmeasured declaration publishes an empty count.
-                        declaration=declaration.model_copy(update={"task_count": measured}),
+                        declaration=declaration,
                         assessment_key=key,
                         latest_attempt_key=latest,
                         latest_attempt_status=status,
                         reason=reason,
                         curation=summary,
+                        measured_task_count=measured,
                         diagnostics=diagnostics,
                     )
                 )

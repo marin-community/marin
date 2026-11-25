@@ -245,13 +245,47 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
     assert rows[second.info.id].assessment_key == "second"
 
 
+def test_a_legacy_declared_count_publishes_as_not_measured(tmp_path):
+    """A prior row's hand-written declaration count never publishes as a measurement."""
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    declaration = source.declaration.model_dump(mode="json")
+    declaration["task_count"] = 2205
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        store.table(RUNS, primary_key=("run_id",)).append(
+            {"run_id": "next", "status": "completed", "source_count": 0, "started_at": "2026-10-16T11:00:00Z"}
+        )
+        store.table(SNAPSHOTS, primary_key=("snapshot_id",)).append(
+            {"snapshot_id": "legacy", "created_at": "2026-10-16T10:00:00Z", "source_count": 1}
+        )
+        store.table(INVENTORY, primary_key=("snapshot_id", "id")).append(
+            {
+                "snapshot_id": "legacy",
+                "id": source.info.id,
+                "declaration": declaration,
+                "assessment_key": None,
+                "latest_attempt_key": None,
+                "latest_attempt_status": "skipped",
+                "reason": "No conversion pipeline",
+                "curation": None,
+            }
+        )
+        store.table(CURRENT, primary_key=("name",)).append({"name": "latest", "snapshot_id": "legacy"})
+    publish_catalog(root, "next", [source])
+    carried = selected_sources(root)[source.info.id]
+    assert carried.measured_task_count is None
+    # The stored declaration no longer exposes the hand-written count as a field.
+    assert "task_count" not in carried.declaration.model_dump()
+
+
 def test_a_complete_attempt_publishes_its_measured_task_count(tmp_path):
     root = str(tmp_path / "production")
     source = number_source(tmp_path / "input")
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [source])
     row = selected_sources(root)[source.info.id]
-    assert row.declaration.task_count == 1
+    assert row.measured_task_count == 1
 
 
 def test_an_unmeasured_or_moved_declaration_publishes_an_empty_count(tmp_path):
@@ -260,7 +294,7 @@ def test_an_unmeasured_or_moved_declaration_publishes_an_empty_count(tmp_path):
     record_attempt(root, source, "failed", "2026-10-16T10:00:00Z", "key-a", AssessmentStatus.FAILED)
     publish_catalog(root, "failed", [source])
     row = selected_sources(root)[source.info.id]
-    assert row.declaration.task_count is None
+    assert row.measured_task_count is None
     record_attempt(root, source, "first", "2026-10-16T11:00:00Z", "key-b")
     publish_catalog(root, "first", [source])
     moved_pin = replace(source, config=replace(source.config, dataset=replace(source.dataset, revision="new-pin")))
@@ -269,13 +303,13 @@ def test_an_unmeasured_or_moved_declaration_publishes_an_empty_count(tmp_path):
     row = selected_sources(root)[source.info.id]
     assert row.declaration.dataset_revision == "new-pin"
     assert row.assessment_key == "key-c"
-    assert row.declaration.task_count is None
+    assert row.measured_task_count is None
     bumped = replace(source, config=replace(source.config, version="2"))
     record_attempt(root, source, "third", "2026-10-16T13:00:00Z", "key-d")
     publish_catalog(root, "third", [bumped])
     row = selected_sources(root)[source.info.id]
     assert row.declaration.pipeline.version == "2"
-    assert row.declaration.task_count is None
+    assert row.measured_task_count is None
 
 
 def test_a_failed_attempt_keeps_the_measured_count_at_its_pin(tmp_path):
@@ -287,7 +321,7 @@ def test_a_failed_attempt_keeps_the_measured_count_at_its_pin(tmp_path):
     publish_catalog(root, "failed", [source])
     row = selected_sources(root)[source.info.id]
     assert row.assessment_key is None
-    assert row.declaration.task_count == 1
+    assert row.measured_task_count == 1
 
 
 def test_republication_refreshes_an_inventory_only_declaration(tmp_path):

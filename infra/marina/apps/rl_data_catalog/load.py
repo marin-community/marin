@@ -21,7 +21,7 @@ DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
-        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB"
+        "latest_attempt_status TEXT, reason TEXT, curation JSONB, measured_task_count BIGINT, diagnostics JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "

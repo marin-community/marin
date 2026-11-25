@@ -303,7 +303,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             origin=info.origin,
             family=info.family,
             tags=list(tags),
-            task_count=None,
             notes=info.notes,
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,

@@ -129,8 +129,8 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     assert published.curation.processed_rows == 2
     assert published.curation.raw_population_count == 2
     # A QUICK run records a SKIPPED assessment, so its measured population stays in the
-    # curation summary while the published task count stays empty.
-    assert published.declaration.task_count is None
+    # curation summary while the published measured count stays empty.
+    assert published.measured_task_count is None
     assert published.declaration.type == "eval"
 
 
