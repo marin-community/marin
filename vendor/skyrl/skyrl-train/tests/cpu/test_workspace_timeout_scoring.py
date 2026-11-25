@@ -1,5 +1,6 @@
 """A workspace timeout retains the final verifier verdict and exact model tokens."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 from skyrl_train.trajectory_runners.model_clients import ModelServerError
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.utils.harbor_errors import ErrorHandlingConfig, inherited_harbor_error_handling
 from tests.cpu.task_specs import lowered_task, task_input, text_task
 from omegaconf import OmegaConf
 
@@ -141,5 +142,89 @@ async def test_completed_harbor_trial_without_model_turn_keeps_actual_verdict(re
             assert metrics["eval/SWE/num_scored"] == 1
             assert metrics["eval/SWE/avg_verifier_score"] == reward
             assert metrics["eval/SWE/pass_at_1"] == reward
+    finally:
+        await worker.shutdown()
+
+
+def test_harbor_error_policy_inherits_only_undeclared_generator_fields():
+    """Harbor configs keep declared classification fields and inherit the omitted ones."""
+    generator = ErrorHandlingConfig(enable_error_classification=True, default_error_treatment=ErrorTreatment.MASK)
+    undeclared = HarborTaskSettings.from_config(OmegaConf.create({}))
+    assert undeclared.declared_error_handling_fields == frozenset()
+    assert inherited_harbor_error_handling(
+        undeclared.error_handling, undeclared.declared_error_handling_fields, generator
+    ) == replace(
+        undeclared.error_handling,
+        enable_error_classification=True,
+        default_error_treatment=ErrorTreatment.MASK,
+    )
+    declared = HarborTaskSettings.from_config(
+        OmegaConf.create({"harbor": {"enable_error_classification": False, "default_error_treatment": "zero"}})
+    )
+    assert declared.declared_error_handling_fields == frozenset(
+        {"enable_error_classification", "default_error_treatment"}
+    )
+    assert inherited_harbor_error_handling(
+        declared.error_handling, declared.declared_error_handling_fields, generator
+    ) == declared.error_handling
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exception_type", ["ContextLengthExceededError", "ValueError", "AgentTimeoutError"])
+async def test_harbor_rows_score_under_the_inherited_generator_policy(exception_type):
+    """A harbor-tagged CLE row keeps its scored verdict; unnamed errors stay masked."""
+    config = get_default_config().generator
+    config.sampling_params.logprobs = 0
+    projection = WholeTaskProjection(config, SimpleNamespace(eos_token_id=0))
+    task = text_task().model_copy(update={"tags": ("harbor",)})
+    spec = lowered_task(task, "harbor_trial")
+
+    async def completed_trial(complete):
+        # External trial boundary: Harbor classified the failure but still ran
+        # the workspace verifier, so the verdict is available either way.
+        return TrialResult(
+            task_name="workspace", trial_name="policy", trial_uri="/tmp/policy",
+            task_id=TaskConfig(path=Path("/tmp/task")).get_task_id(), task_checksum="fixture",
+            agent_info=AgentInfo(name="pi", version="0.87.0"),
+            config=TrialConfig(task=TaskConfig(path=Path("/tmp/task")), agent=AgentConfig(name="pi")),
+            verifier_result=VerifierResult(rewards={"reward": 1.0}),
+            exception_info=ExceptionInfo(
+                exception_type=exception_type, exception_message="Terminal agent failure",
+                exception_traceback="", occurred_at=datetime.now(timezone.utc),
+            ),
+        )
+
+    async def shutdown():
+        pass
+
+    async def failed_generation(request):
+        raise ModelServerError(category="server_error", request_id="request", status_code=503)
+
+    worker = TaskRolloutWorker(
+        config, projection, SimpleNamespace(generate=failed_generation), {}, shutdown_timeout=5,
+        harbor=HarborTaskSettings.from_config(OmegaConf.create({})),
+        installed_agents=SimpleNamespace(
+            original_harness=lambda *_: HarborTrialHarness(completed_trial, "reward"), shutdown=shutdown,
+        ),
+    )
+    request = TaskRequestBatch((task_input(spec),))
+    try:
+        rollouts = await worker.generate(request)
+        batch = worker.projection.project(rollouts, request)
+        metrics = _calculate_eval_metrics(batch, ["task"], ["SWE"], 1)
+        assert rollouts[0].failure.exception_type == exception_type
+        if exception_type == "ValueError":
+            # Unnamed errors keep the generator's masking default.
+            assert batch["exclude_from_baseline"] == [True]
+            assert metrics["eval/SWE/num_scored"] == 0
+        else:
+            # The verified verdict survives the failure and stays scored.
+            assert batch["exclude_from_baseline"] == [False]
+            assert batch["verification_results"][0].status is VerificationStatus.VERIFIED
+            assert metrics["eval/SWE/num_scored"] == 1
+            assert metrics["eval/SWE/avg_verifier_score"] == 1.0
+            # Agent timeouts pass the optimization reward through; CLE zeroes it
+            # while remaining in the baseline with its verdict.
+            assert metrics["eval/SWE/avg_score"] == (1.0 if exception_type == "AgentTimeoutError" else 0.0)
     finally:
         await worker.shutdown()

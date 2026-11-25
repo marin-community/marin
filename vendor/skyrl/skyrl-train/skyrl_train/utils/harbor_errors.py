@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -207,3 +207,28 @@ def passthrough_logprob_error_type(
     if treatment is not ErrorTreatment.PASSTHROUGH or not rollout_logprobs_required or has_rollout_logprobs:
         return None
     return PASSTHROUGH_WITHOUT_LOGPROBS_ERROR
+
+
+# Classification fields Harbor rows inherit from the generator when its config
+# does not declare them explicitly. The schema YAML keys match these names.
+GENERATOR_ERROR_POLICY_FIELDS = ("enable_error_classification", "default_error_treatment")
+
+
+def inherited_harbor_error_handling(
+    harbor: ErrorHandlingConfig,
+    declared_fields: Iterable[str],
+    generator: ErrorHandlingConfig,
+) -> ErrorHandlingConfig:
+    """Merge the generator's declared error policy into the Harbor policy.
+
+    A Harbor config that declares a classification field keeps its value; the
+    fields it omits inherit the generator policy so Harbor-tagged rows score
+    like Gym rows under the shared taxonomy instead of falling back to the
+    unclassified defaults.
+    """
+    overrides = {
+        name: getattr(generator, name)
+        for name in GENERATOR_ERROR_POLICY_FIELDS
+        if name not in frozenset(declared_fields)
+    }
+    return replace(harbor, **overrides)

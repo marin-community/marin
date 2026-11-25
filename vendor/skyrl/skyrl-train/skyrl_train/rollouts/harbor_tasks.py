@@ -59,6 +59,9 @@ class HarborTaskSettings:
     reward_shaping: dict
     retry: RetryConfig
     attempt_timeout: float | None
+    # ErrorHandlingConfig fields the Harbor config declares explicitly. The
+    # worker inherits undeclared classification fields from the generator.
+    declared_error_handling_fields: frozenset[str] = frozenset()
 
     @classmethod
     def from_config(cls, config: DictConfig):
@@ -78,6 +81,7 @@ class HarborTaskSettings:
             builder.get_reward_shaping_config(),
             builder.build_retry_config(),
             trial.get("trial_attempt_timeout_sec"),
+            declared_error_handling_fields=builder.declared_error_handling_fields(),
         )
 
     def retry_delay(self, failure: RolloutFailure | None, retries: int) -> float | None:

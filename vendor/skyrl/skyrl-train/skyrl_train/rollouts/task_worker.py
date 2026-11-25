@@ -87,7 +87,7 @@ from skyrl_train.rollouts.training_record import (
     reject_malformed_reasoning,
     training_rollout,
 )
-from skyrl_train.utils.harbor_errors import AGENT_TIMEOUT_ERROR, ErrorHandlingConfig
+from skyrl_train.utils.harbor_errors import AGENT_TIMEOUT_ERROR, ErrorHandlingConfig, inherited_harbor_error_handling
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -481,10 +481,20 @@ class TaskRolloutWorker:
             )
         )
         self.error_handling = ErrorHandlingConfig.from_mapping(trajectory_runner_cfg.get("error_handling", {}))
+        # Harbor rows inherit the generator's declared classification policy for
+        # fields its config omits, so a Harbor-tagged failure is scored under the
+        # shared taxonomy instead of falling back to the unclassified defaults.
+        self.harbor_error_handling = (
+            None
+            if harbor is None
+            else inherited_harbor_error_handling(
+                harbor.error_handling, harbor.declared_error_handling_fields, self.error_handling
+            )
+        )
         self.projection = replace(
             projection,
             error_handling=self.error_handling,
-            harbor_error_handling=None if harbor is None else harbor.error_handling,
+            harbor_error_handling=self.harbor_error_handling,
         )
         self.verifier_executor = (
             ThreadPoolExecutor(max_workers=max_verifier_workers, thread_name_prefix="task-verifier")
@@ -602,7 +612,11 @@ class TaskRolloutWorker:
         ]
         lowered_tasks = [item.spec for item in prepared]
         harbor_settings = [item.harbor for item in prepared]
-        policies = [self.error_handling if harbor is None else harbor.error_handling for harbor in harbor_settings]
+        # Per-task Harbor settings are either None or self.harbor, so the
+        # inherited policy covers every harbor-tagged row here.
+        policies = [
+            self.error_handling if harbor is None else self.harbor_error_handling for harbor in harbor_settings
+        ]
         engines = [item.engine for item in prepared]
         tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(

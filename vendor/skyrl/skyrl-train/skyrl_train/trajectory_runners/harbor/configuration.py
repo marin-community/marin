@@ -480,6 +480,14 @@ class HarborConfigBuilder:
 
         return ErrorHandlingConfig.from_mapping(config)
 
+    def declared_error_handling_fields(self) -> frozenset[str]:
+        """Return the error-handling fields this config declares explicitly.
+
+        The schema YAML keys match the ErrorHandlingConfig field names, so the
+        worker can inherit only the classification fields the campaign omitted.
+        """
+        return frozenset(key for key in ERROR_HANDLING_SCHEMA.fields if key in self._harbor_cfg)
+
     def get_eval_timeout_override_sec(self) -> int | None:
         """Return the eval override, preserving explicit null as no override."""
         value = self._get_field_value("eval_timeout_override_sec", EVAL_SCHEMA.fields["eval_timeout_override_sec"])
