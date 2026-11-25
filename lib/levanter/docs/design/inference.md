@@ -57,6 +57,13 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
+- **Exact-token completions** accept one sequence of token IDs or a batch of sequences
+  in `prompt`. Set `return_token_ids: true` for each choice's sampled IDs, `policy_id`,
+  and `model_version`. With `echo` disabled, `logprobs: 0` returns a sampled score per
+  token, including an empty array for a choice aborted before sampling. `ignore_eos`
+  skips automatic tokenizer stop tokens. Explicit `stop` strings and `stop_token_ids`
+  still end the choice. Post chat `messages` to `/tokenize` to render a prompt with
+  the serving tokenizer and get its IDs.
 - **Response Schema**: Each choice reports `finish_reason` in OpenAI completion responses
   and in the metadata from `POST /v1/levanter/generate`. A sampled EOS, a chat
   turn-boundary token, or a matched stop sequence reports `stop`, including on
@@ -69,8 +76,10 @@ The inference server is built around a `GenerationService` that encapsulates:
   `/pause_generation` to abort active requests and discard queued work. The
   server clears its cache state before returning. Requests received while
   paused return zero completion tokens with reason `abort`. Post to
-  `/resume_generation` to reopen admission. A binary client can append returned
-  token IDs to the prompt and request the rest of its token budget.
+  `/resume_generation` to reopen admission. Append returned token IDs to the
+  prompt and request the rest of its token budget to continue generation.
+- **Policy identity**: Supply `expected_policy_id` on an OpenAI completion or binary
+  generation request. The server returns HTTP 409 for a stale policy.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations

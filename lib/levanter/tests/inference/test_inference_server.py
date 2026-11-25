@@ -368,8 +368,10 @@ class _FakeCompletionContext:
         echo_logprobs_top_k: int | None = None,
         *,
         abort_event: Event | None = None,
+        expected_policy_id: str | None = None,
+        ignore_eos: bool = False,
     ) -> str:
-        del abort_event
+        del abort_event, expected_policy_id, ignore_eos
         if (
             prompt_tokens != [0, 1]
             or max_tokens != 1
@@ -884,6 +886,57 @@ def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(greedy_c
             np.testing.assert_array_equal(stopped_tensors[key], limited_tensors[key])
 
 
+def test_openai_token_batch_returns_exact_choices_and_sampled_scores(greedy_client):
+    prompts = [[18, 7, 3, 18], [7, 18]]
+    options = {"max_tokens": 2, "temperature": 0, "seed": 17}
+    response = greedy_client.post(
+        "/v1/completions",
+        json={"model": TEST_MODEL_NAME, "prompt": prompts, "return_token_ids": True, "logprobs": 0, **options},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["usage"]["prompt_tokens"] == sum(map(len, prompts))
+    assert [choice["index"] for choice in payload["choices"]] == [0, 1]
+    for prompt, choice in zip(prompts, payload["choices"], strict=True):
+        binary = greedy_client.post(
+            GENERATE_PATH,
+            content=encode_frame(options, {PROMPT_TOKEN_IDS: np.asarray(prompt, dtype=np.int32)}),
+            headers={"content-type": MEDIA_TYPE},
+        )
+        assert binary.status_code == 200, binary.text
+        _, expected = decode_frame(binary.content)
+        assert choice["token_ids"] == expected["choice.0.token_ids"].tolist()
+        assert choice["logprobs"]["token_logprobs"] == expected["choice.0.behavior_logprobs"].tolist()
+        assert choice["finish_reason"] == "length"
+
+
+def test_tokenize_renders_serving_chat_template(greedy_client, local_gpt2_tokenizer):
+    messages = [{"role": "user", "content": "Hello"}]
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+    for add_generation_prompt in (False, True):
+        response = greedy_client.post(
+            "/tokenize",
+            json={"model": TEST_MODEL_NAME, "messages": messages, "add_generation_prompt": add_generation_prompt},
+        )
+        assert response.status_code == 200, response.text
+        expected = tokenizer.apply_chat_template(messages, add_generation_prompt=add_generation_prompt)
+        assert response.json() == {"tokens": expected, "count": len(expected), "max_model_len": TEST_MAX_SEQ_LEN}
+
+    continued = greedy_client.post(
+        "/tokenize",
+        json={
+            "model": TEST_MODEL_NAME,
+            "messages": [*messages, {"role": "assistant", "content": "Hello"}],
+            "add_generation_prompt": False,
+            "continue_final_message": True,
+        },
+    )
+    assert continued.status_code == 200, continued.text
+    full_text = tokenizer.apply_chat_template([*messages, {"role": "assistant", "content": "Hello"}], tokenize=False)
+    assert isinstance(full_text, str)
+    assert continued.json()["tokens"] == tokenizer.encode(full_text[: full_text.rindex("Hello") + len("Hello")])
+
+
 PREFILL_GATE_TIMEOUT = 30
 ADMISSION_TIMEOUT = 5
 
@@ -1030,7 +1083,16 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
         {"max_tokens": 4, "temperature": 0},
         {PROMPT_TOKEN_IDS: np.array([18, 7, 3, 18], dtype=np.int32)},
     )
-    completion = {"model": TEST_MODEL_NAME, "prompt": "A B", "temperature": 0, "max_tokens": 2, "stream": stream}
+    completion = {
+        "model": TEST_MODEL_NAME,
+        "prompt": [18, 7, 3, 18],
+        "temperature": 0,
+        "max_tokens": 2,
+        "stream": stream,
+        "logprobs": 0,
+        "return_token_ids": True,
+        "expected_policy_id": "policy-0",
+    }
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
             running = pool.submit(client.post, GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
@@ -1047,11 +1109,17 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
                 payload = json.loads(data)
             else:
                 payload = response.json()
-            assert payload["choices"][0]["finish_reason"] == "abort"
-            assert payload["choices"][0]["text"] == ""
+            (choice,) = payload["choices"]
+            assert choice["finish_reason"] == "abort"
+            assert choice["text"] == ""
+            assert choice["token_ids"] == []
+            assert choice["logprobs"]["token_logprobs"] == []
+            assert choice["policy_id"] == "policy-0"
         finally:
             release.set()
         assert running.result(timeout=30).status_code == 200
+    stale = client.post("/v1/completions", json={**completion, "expected_policy_id": "stale"})
+    assert stale.status_code == 409, stale.text
 
 
 def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_binary_server):
@@ -1132,5 +1200,41 @@ def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inferenc
         assert response.status_code == 200, response.text
         assert response.json()["choices"][0]["finish_reason"] == "stop"
         assert response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.shutdown()
+
+
+def test_openai_ignore_eos_applies_to_each_choice_and_preserves_explicit_stops(
+    inference_server_config, local_gpt2_tokenizer, fixed_token_model
+):
+    tokenizer = local_gpt2_tokenizer
+    eos = tokenizer.eos_token_id
+    assert eos is not None
+    model = fixed_token_model(len(tokenizer), eos)
+    service = dataclasses.replace(inference_server_config.service, max_pages=32)
+    config = dataclasses.replace(inference_server_config, service=service)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
+    payload = {
+        "model": TEST_MODEL_NAME,
+        "prompt": [18, 7],
+        "temperature": 0,
+        "max_tokens": 3,
+        "n": 2,
+        "return_token_ids": True,
+    }
+    try:
+        with TestClient(server.app) as client:
+            for extra, reason, expected in (
+                ({"ignore_eos": True}, "length", [eos] * 3),
+                ({}, "stop", [eos]),
+                ({"ignore_eos": True, "stop_token_ids": [eos]}, "stop", [eos]),
+            ):
+                response = client.post("/v1/completions", json={**payload, **extra})
+                assert response.status_code == 200, response.text
+                assert [(choice["finish_reason"], choice["token_ids"]) for choice in response.json()["choices"]] == [
+                    (reason, expected),
+                    (reason, expected),
+                ]
     finally:
         server.shutdown()

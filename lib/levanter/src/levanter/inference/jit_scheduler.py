@@ -67,6 +67,7 @@ class SeqDecodingParams(eqx.Module):
     temperature: jnp.ndarray
     top_p: jnp.ndarray
     key: jaxtyping.PRNGKeyArray
+    ignore_eos: jax.Array | bool = False
 
     @staticmethod
     def default() -> "SeqDecodingParams":
@@ -591,6 +592,7 @@ class DecodeState(eqx.Module):
     """temperature for sampling. 0 means greedy sampling"""
     top_p: ht.Float[NamedArray, "seq"]
     """Nucleus-sampling threshold. 1 means sampling over the full distribution."""
+    ignore_eos: ht.bool_[NamedArray, "seq"]
     prng_keys: jaxtyping.PRNGKeyArray
     """one per sequence, used for sampling. This is a JAX PRNG key, so it can be split to get new keys."""
 
@@ -653,6 +655,7 @@ class DecodeState(eqx.Module):
             ),
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             top_p=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
+            ignore_eos=hax.zeros({"seq": max_seqs}, dtype=jnp.bool_),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
             finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
@@ -843,6 +846,7 @@ class DecodeState(eqx.Module):
                 max_num_tokens=new_state.max_num_tokens.at["seq", local_slot_id].set(seq_params.max_num_tokens),
                 temperature=new_state.temperature.at["seq", local_slot_id].set(seq_params.temperature),
                 top_p=new_state.top_p.at["seq", local_slot_id].set(seq_params.top_p),
+                ignore_eos=new_state.ignore_eos.at["seq", local_slot_id].set(seq_params.ignore_eos),
                 prng_keys=self.prng_keys.at[local_slot_id].set(seq_params.key),  # type: ignore[name-defined]
             )
             match (new_state.stop_tokens, seq_params.stop_tokens):
@@ -906,7 +910,8 @@ class DecodeState(eqx.Module):
                 max_allowed = self.max_num_tokens["seq", sid].scalar()
                 len_done = (pos + 1) >= max_allowed
                 stop_done = (
-                    jnp.any(
+                    ~self.ignore_eos["seq", sid].scalar()
+                    & jnp.any(
                         new_tokens["position", i].scalar() == jnp.asarray(self.generation_stop_ids, dtype=jnp.int32)
                     )
                     if self.generation_stop_ids

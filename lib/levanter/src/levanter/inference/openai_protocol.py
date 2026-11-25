@@ -5,7 +5,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 
 class ChatMessage(BaseModel):
@@ -50,7 +50,10 @@ class CompletionRequest(BaseModel):
     """Request model for text completions endpoint."""
 
     model: str
-    prompt: str | list[str]
+    prompt: str | list[str] | list[StrictInt] | list[list[StrictInt]]
+    return_token_ids: bool = False
+    expected_policy_id: str | None = None
+    ignore_eos: bool = False
     best_of: int | None = None
     echo: bool | None = None
     frequency_penalty: float | None = None
@@ -61,12 +64,30 @@ class CompletionRequest(BaseModel):
     presence_penalty: float | None = None
     seed: int | None = None
     stop: str | list[str] | None = None
+    stop_token_ids: list[StrictInt] | None = None
     stream: bool | None = None
     stream_options: dict[str, object] | None = None
     suffix: str | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")
     top_p: float | None = None
     user: str | None = None
+
+
+class ChatTokenizeRequest(BaseModel):
+    """Render chat messages with the serving tokenizer."""
+
+    model: str
+    messages: list[ChatMessage]
+    tools: list[dict[str, object]] | None = None
+    chat_template_kwargs: dict[str, object] | None = None
+    add_generation_prompt: bool = True
+    continue_final_message: bool = False
+
+
+class ChatTokenizeResponse(BaseModel):
+    tokens: list[int]
+    count: int
+    max_model_len: int
 
 
 class TokensRequest(BaseModel):
