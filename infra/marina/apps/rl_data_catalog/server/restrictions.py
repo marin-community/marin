@@ -202,6 +202,7 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "judge_no_reference_count",
         "grading_environment",
         "actor_census_input",
+        "consumer_runtime_commit",
         "consumer_receipt",
         "consumer_decision",
         "consumer_requirements",

@@ -13,6 +13,7 @@ population, conversion pipeline or schema change.
 import argparse
 import json
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -235,6 +236,28 @@ def require_typed_rows(rows: list[dict[str, Any]]) -> None:
             member(SourceMethod, tag, source_id, "method")
 
 
+def consumer_inputs(sources: Iterable[RlDataSource]) -> dict[str, dict[str, Any]]:
+    """Freeze source runtime selection and consumer evidence for the serving app."""
+    return {
+        source.info.id: {
+            **(
+                {"consumer_runtime_commit": source.info.consumer_runtime_commit}
+                if source.info.consumer_runtime_commit is not None
+                else {}
+            ),
+            "consumer_requirements": [need.value for need in source.info.consumer_requirements],
+            "consumer_receipt": (
+                source.info.consumer_receipt.model_dump(mode="json") if source.info.consumer_receipt else None
+            ),
+            "consumer_decision": (
+                source.info.consumer_decision.model_dump(mode="json") if source.info.consumer_decision else None
+            ),
+        }
+        for source in sources
+        if source.info.consumer_requirements
+    }
+
+
 def status_extras() -> dict[str, Any]:
     """The full static extras artifact for the status page.
 
@@ -250,19 +273,7 @@ def status_extras() -> dict[str, Any]:
     metadata = metadata_rows()
     require_typed_rows([*pending, *remediation, *metadata])
     return {
-        "consumer_inputs": {
-            source.info.id: {
-                "consumer_requirements": [need.value for need in source.info.consumer_requirements],
-                "consumer_receipt": (
-                    source.info.consumer_receipt.model_dump(mode="json") if source.info.consumer_receipt else None
-                ),
-                "consumer_decision": (
-                    source.info.consumer_decision.model_dump(mode="json") if source.info.consumer_decision else None
-                ),
-            }
-            for source in all_sources().values()
-            if source.info.consumer_requirements
-        },
+        "consumer_inputs": consumer_inputs(all_sources().values()),
         "pending": pending,
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},

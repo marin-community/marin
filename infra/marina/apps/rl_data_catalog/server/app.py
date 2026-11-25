@@ -108,6 +108,7 @@ TABLE_SOURCE_FIELDS = frozenset(
         "lexical_contamination",
         "grading_environment",
         "actor_census_input",
+        "consumer_runtime_commit",
         "consumer_requirements",
         "consumer_receipt",
         "consumer_decision",
@@ -488,7 +489,10 @@ def create_api(services: AppletServices) -> FastAPI:
                         'consumer_decision',declaration->'consumer_decision',
                         'consumer_findings',declaration->'consumer_findings',
                         'consumer_requirements',declaration->'consumer_requirements'
-                    ) || CASE WHEN declaration ? 'data_restriction'
+                    ) || CASE WHEN declaration ? 'consumer_runtime_commit'
+                        THEN jsonb_build_object('consumer_runtime_commit',declaration->'consumer_runtime_commit')
+                        ELSE '{}'::jsonb END
+                    || CASE WHEN declaration ? 'data_restriction'
                         THEN jsonb_build_object('data_restriction',declaration->'data_restriction')
                         ELSE '{}'::jsonb END AS declaration
                     FROM atlas_sources WHERE load_id=:load_id ORDER BY id

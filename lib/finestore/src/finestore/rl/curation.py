@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, model_validator
@@ -876,6 +876,9 @@ class ConsumerReason(StrEnum):
     LOADER_REJECTED = "CONSUMER_LOADER_REJECTED"
 
 
+ConsumerRuntimeCommit = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+
+
 class ConsumerReceipt(CatalogRecord):
     """Complete frozen-population check by the pinned SkyRL loader and registry."""
 
@@ -1197,6 +1200,7 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
+    consumer_runtime_commit: ConsumerRuntimeCommit | None = Field(default=None, exclude_if=lambda value: value is None)
     consumer_receipt: ConsumerReceipt | None = None
     consumer_requirements: list[ConsumerNeed] = Field(default_factory=list)
     consumer_findings: list[ConsumerReason] = Field(default_factory=list)

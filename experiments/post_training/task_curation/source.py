@@ -13,6 +13,7 @@ from finestore.rl.curation import (
     ConsumerNeed,
     ConsumerReason,
     ConsumerReceipt,
+    ConsumerRuntimeCommit,
     ContentEvidenceReference,
     ConvertedExamples,
     DatasetRelease,
@@ -279,6 +280,10 @@ class SourceInfo:
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
+    consumer_runtime_commit: Annotated[ConsumerRuntimeCommit | None, Field(exclude_if=lambda value: value is None)] = (
+        None
+    )
+    """A source-specific consumer pin; absent sources use the global catalog runtime."""
     consumer_receipt: ConsumerReceipt | None = None
     consumer_requirements: tuple[ConsumerNeed, ...] = ()
     consumer_decision: ConsumerDecision | None = None
@@ -713,6 +718,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return PendingStage.CONSUMER_CHECK_PENDING
 
     @property
+    def consumer_runtime_commit(self) -> str:
+        """The source's selected consumer runtime, falling back to the catalog pin."""
+        return self.info.consumer_runtime_commit or CONSUMER_RUNTIME_COMMIT
+
+    @property
     def consumer_findings(self) -> tuple[ConsumerReason, ...]:
         return consumer_blockers(
             self.info.consumer_receipt,
@@ -720,7 +730,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             self.info.actor_census_input,
             self.info.within_source_dedup.unique_count if self.info.within_source_dedup else 0,
             self.info.consumer_requirements,
-            runtime_commit=CONSUMER_RUNTIME_COMMIT,
+            runtime_commit=self.consumer_runtime_commit,
         )
 
     @property
@@ -730,7 +740,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             self.info.id,
             self.info.actor_census_input,
             self.consumer_findings,
-            runtime_commit=CONSUMER_RUNTIME_COMMIT,
+            runtime_commit=self.consumer_runtime_commit,
         )
         return SourceStatus(status) if status is not None else None
 
@@ -863,6 +873,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             grading_environment=info.grading_environment,
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,
+            consumer_runtime_commit=info.consumer_runtime_commit,
             consumer_receipt=info.consumer_receipt,
             consumer_requirements=info.consumer_requirements,
             consumer_findings=self.consumer_findings,

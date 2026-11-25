@@ -12,11 +12,15 @@ from finestore.rl.curation import (
     ConsumerDecision,
     ConsumerNeed,
     ConsumerReceipt,
+    ConsumerRuntimeCommit,
     consumer_blockers,
     consumer_decision_status,
 )
+from pydantic import TypeAdapter
 
 from .consumer_evidence import CONSUMER_INPUTS, CONSUMER_RUNTIME_COMMIT
+
+RUNTIME_PIN = TypeAdapter(ConsumerRuntimeCommit | None)
 
 
 @cache
@@ -31,6 +35,8 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     requirements = tuple(ConsumerNeed(need) for need in current.get("consumer_requirements") or ())
     if not requirements:
         return declaration
+    runtime_pin = RUNTIME_PIN.validate_python(current.get("consumer_runtime_commit"))
+    runtime_commit = runtime_pin or CONSUMER_RUNTIME_COMMIT
     raw = current.get("consumer_receipt")
     binding = declaration.get("actor_census_input")
     reasons = consumer_blockers(
@@ -39,7 +45,7 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         ActorCensusInput.model_validate(binding) if binding is not None else None,
         (declaration.get("within_source_dedup") or {}).get("unique_count", 0),
         requirements,
-        runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        runtime_commit=runtime_commit,
     )
     raw_decision = current.get("consumer_decision")
     decision = ConsumerDecision.model_validate(raw_decision) if raw_decision is not None else None
@@ -48,7 +54,7 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         declaration["id"],
         ActorCensusInput.model_validate(binding) if binding is not None else None,
         reasons,
-        runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        runtime_commit=runtime_commit,
     )
     effective = {
         **declaration,
@@ -57,6 +63,9 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         "consumer_findings": [reason.value for reason in reasons],
         "consumer_decision": raw_decision if approved is not None else None,
     }
+    effective.pop("consumer_runtime_commit", None)
+    if runtime_pin is not None:
+        effective["consumer_runtime_commit"] = runtime_pin
     if not reasons:
         return effective
     notes = declaration.get("notes", "")

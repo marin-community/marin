@@ -174,7 +174,7 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
         binding,
         declaration.within_source_dedup.unique_count,
         declaration.consumer_requirements,
-        runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        runtime_commit=declaration.consumer_runtime_commit or CONSUMER_RUNTIME_COMMIT,
     )
     if (
         consumer_decision_status(
@@ -182,7 +182,7 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
             declaration.id,
             binding,
             reasons,
-            runtime_commit=CONSUMER_RUNTIME_COMMIT,
+            runtime_commit=declaration.consumer_runtime_commit or CONSUMER_RUNTIME_COMMIT,
         )
         is not None
     ):
