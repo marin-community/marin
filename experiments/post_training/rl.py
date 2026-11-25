@@ -641,7 +641,7 @@ def _run_command(
         else:
             if sft_only:
                 validate_coordinator_graph(handles, execution=context.meta["sft_execution"])
-                build_artifacts(context.meta["sft_handle"], max_concurrent=max_concurrent)
+                build_artifacts(*handles, max_concurrent=max_concurrent)
             else:
                 validate_coordinator_graph(handles)
                 _run_graph(rl_handles, max_concurrent)
@@ -882,7 +882,6 @@ def command(
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
             export = initializer.step
-            click.get_current_context().meta["sft_handle"] = export
             export_config = export.build_config(StepContext.for_fingerprint(export.runtime_args, export.deps))
             if isinstance(export_config, dict) and (revision := export_config.get("source_revision")):
                 click.get_current_context().meta["sft_source_revision"] = revision

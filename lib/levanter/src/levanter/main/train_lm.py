@@ -50,7 +50,7 @@ from levanter.models.snowball_sft import (
     SnowballSftConfig,
     reseed_snowball_head,
     snowball_update_transform,
-    snowball_loss_with_dispatch_counts,
+    snowball_loss_with_dispatch_drops,
     snowball_batch_metrics,
 )
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
@@ -91,6 +91,7 @@ class TrainLmConfig:
     snowball_sft: SnowballSftConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
     token_weighted_accumulation: bool = field(default=False, metadata={"fingerprint_omit_value": False})
     tensorstore_cache_bytes: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
+    """Per-process jagged-cache limit, applied before loading data or model weights."""
     evaluation_data: LmDataConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
     initial_eval_match: InitialEvalMatchConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
 
@@ -172,7 +173,7 @@ def check_initial_evaluation(
     output_root: StoragePath | None,
     stage: str,
 ) -> dict:
-    """Audit and compare one initialization stage, preserving failed evaluations."""
+    """Compare audited initial loss, writing evidence when an output root is supplied."""
     batch = trainer.config.EvalBatch
     evaluator = TaggedEvaluator(
         EvalBatch=batch,
@@ -338,7 +339,7 @@ def main(config: TrainLmConfig):
         if config.snowball_sft is not None and config.snowball_sft.record_dispatch_counts:
             if not isinstance(model, SnowballLMHeadModel):
                 raise ValueError("Dispatch counts require a Snowball model")
-            loss, metrics = snowball_loss_with_dispatch_counts(
+            loss, metrics = snowball_loss_with_dispatch_drops(
                 model, example, z_loss_weight=config.z_loss_weight, reduction=reduction
             )
         else:

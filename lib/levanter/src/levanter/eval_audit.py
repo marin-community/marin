@@ -19,6 +19,9 @@ from levanter.layers.attention import AttentionMask
 from levanter.utils.thread_utils import blocking_wait
 
 
+EVAL_LOSS_METRIC = "eval/loss"
+
+
 @dataclass(frozen=True)
 class InitialEvalMatchConfig:
     data: LmDataConfig
@@ -31,12 +34,12 @@ class InitialEvalMatchConfig:
 
 
 def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[int, ...]) -> dict:
-    """Hash the global token stream and masks, independently of evaluation batch size."""
+    """Hash frozen evaluation tokens, masks and their prediction-weight sum."""
     tokens_hash = hashlib.sha256()
     weights_hash = hashlib.sha256()
     segments_hash = hashlib.sha256()
     positions = 0
-    scored_tokens = 0.0
+    loss_weight_sum = 0.0
     counts = {str(token): 0 for token in special_token_ids}
     remaining = blocking_wait(evaluator.dataset.async_len())
     for batch, _tags in evaluator.loader:
@@ -65,17 +68,17 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
         )
         segments_hash.update(segments.tobytes())
         positions += tokens.size
-        scored_tokens += float(weights.sum(dtype=np.float64))
+        loss_weight_sum += float(weights.sum(dtype=np.float64))
         for token in special_token_ids:
             counts[str(token)] += int(np.count_nonzero(tokens == token))
-    if scored_tokens <= 0:
+    if loss_weight_sum <= 0:
         raise ValueError("Initial evaluation has no scored tokens")
     return {
         "tokens_sha256": tokens_hash.hexdigest(),
         "weights_sha256": weights_hash.hexdigest(),
         "segments_sha256": segments_hash.hexdigest(),
         "positions": positions,
-        "scored_tokens": scored_tokens,
+        "scored_tokens": loss_weight_sum,
         "special_token_counts": counts,
     }
 
@@ -84,8 +87,8 @@ def initial_eval_match(reference: dict, metrics: dict, audit: dict, absolute_tol
     """Reject changed evaluation inputs or an initial loss outside the specified tolerance."""
     if reference["input_audit"] != audit:
         raise ValueError("Initial evaluation inputs do not match the reference token stream and masks")
-    expected = float(reference["metrics"]["eval/loss"])
-    actual = float(metrics["eval/loss"])
+    expected = float(reference["metrics"][EVAL_LOSS_METRIC])
+    actual = float(metrics[EVAL_LOSS_METRIC])
     delta = actual - expected
     if not math.isfinite(expected) or not math.isfinite(actual) or abs(delta) > absolute_tolerance:
         raise ValueError(f"Initial loss mismatch: reference={expected}, actual={actual}, delta={delta}")

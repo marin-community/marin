@@ -28,7 +28,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
@@ -167,18 +167,19 @@ _EXP7_RELEASE = (
 _EXP7_SPECIAL_TOKENS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
 _EXP7_ANCHORS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
 _EXP6_C4_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3"
-_EXP6_C4_REFERENCE = f"{_EXP6_C4_ROOT}/long-loop-exp3/initializer-proof-inputs/2026.11.15.47"
+_EXP6_C4_REFERENCE = prefix_join(_EXP6_C4_ROOT, "long-loop-exp3/initializer-proof-inputs/2026.11.15.47")
+_EXP6_C4_RESULT = prefix_join(_EXP6_C4_REFERENCE, "c4-reference.json")
 _EXP7_CHECKPOINTER = CheckpointerConfig(save_interval=timedelta(hours=2), keep=None, keep_last_temporary_checkpoints=3)
 
-# Port of Exp6's resolved SFT controls (round6 SFT157), assembled by exp3_sft_spec
-# on long-loop-prototype. Exp7 changes only the mix, full-token supervision and
-# the LLOM step stop. The constant schedule retains its 30-update warmup.
+# Frozen controls and their source artifact/revision are pinned in
+# snowball_sft_data/exp6-sft-controls.json. The cooldown uses update progress
+# instead of wall time, preserving its 15% duration and 0.1 floor.
 EXP7_SPEC = replace(
     MIXTURE_SPEC,
     name="checkpoints/snowball/exp7-262k-32node",
     version="2026.11.25.7",
     model=HFModel(
-        model_ref=f"{_EXP6_C4_ROOT}/evidence/initializer-hf/2026.11.15.39",
+        model_ref=prefix_join(_EXP6_C4_ROOT, "evidence/initializer-hf/2026.11.15.39"),
         tokenizer_path=EXP7_TOKENIZER,
         model=SnowballConfig(
             max_seq_len=MIXTURE_SEQ_LEN,
@@ -205,9 +206,9 @@ EXP7_SPEC = replace(
         weight_decay=0.1,
         max_grad_norm=None,
         warmup=30,
-        decay=1863,
+        decay=0.15,
         min_lr_ratio=0.1,
-        lr_schedule="constant",
+        lr_schedule="linear",
     ),
     mesh=MeshConfig(
         axes={"context": 8, "expert": 1, "model": 1, "replica": 1},
@@ -250,10 +251,10 @@ EXP7_SPEC = replace(
     tensorstore_cache_bytes=100_000_000,
     initial_eval_match=InitialEvalMatchConfig(
         data=LmDataConfig(
-            tokenizer=f"{_EXP6_C4_REFERENCE}/tokenizer",
+            tokenizer=prefix_join(_EXP6_C4_REFERENCE, "tokenizer"),
             components={
                 "c4_en": DatasetComponent(
-                    cache_dir=f"{_EXP6_C4_ROOT}/evidence/c4-reference/2026.11.15.28/c4",
+                    cache_dir=prefix_join(_EXP6_C4_ROOT, "evidence/c4-reference/2026.11.15.28/c4"),
                     split="validation",
                     format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
                 )
@@ -261,8 +262,8 @@ EXP7_SPEC = replace(
             train_weights={"c4_en": 1.0},
             auto_build_caches=False,
         ),
-        reference_path=f"{_EXP6_C4_REFERENCE}/c4-reference.json",
-        pre_reseed_reference_path=f"{_EXP6_C4_REFERENCE}/c4-reference.json",
+        reference_path=_EXP6_C4_RESULT,
+        pre_reseed_reference_path=_EXP6_C4_RESULT,
         sequence_length=MIXTURE_SEQ_LEN,
         max_examples_per_dataset=1,
         special_token_ids=_EXP7_SPECIAL_TOKENS,

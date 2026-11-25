@@ -708,7 +708,7 @@ def run_step(
 def run_execution(
     preset: presets.Preset, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
 ) -> IrisSkyRLExecution:
-    """Use the preset's coordinator route for an SFT stage or its continuing RL stage."""
+    """Return the preset's Iris placement, limits and required environment names."""
     layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:

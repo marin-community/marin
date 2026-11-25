@@ -186,18 +186,37 @@ def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
         )
         for key in reference["trainer"]
     }
+    actual["snowball_sft"]["special_token_lr_multiplier"] = actual["snowball_sft"].pop("special_token_update_multiplier")
     for key in ("model", "optimizer"):
         actual[key].pop("type", None)
     for key, value in reference.items():
         if key.startswith("source_"):
             continue
+        if key == "optimizer":
+            value = {**value, "decay": reference["source_cooldown"]["fraction"], "lr_schedule": "linear"}
         if key == "trainer":
             assert {name: actual[key][name] for name in value} == value
         else:
             assert actual[key] == value, key
-    curve = config.optimizer.lr_scheduler(config.optimizer_num_train_steps or config.trainer.num_train_steps)
-    np.testing.assert_allclose([curve(step) for step in (30, 900, 1892)], 5e-5, rtol=1e-6)
-    assert 0 < curve(15) < curve(30)
+    for updates in (1893, 1679):
+        adjusted = spec.with_steps(updates, version="2026.11.25.7")
+        native = materialized_config(adjusted.trained(EXP7_262K_32NODE.resources).step, str(tmp_path)).train_config
+        assert native.trainer.num_train_steps == updates
+        cooldown = reference["source_cooldown"]
+        tail = int(cooldown["fraction"] * updates)
+        begin = updates - tail
+        points = (0, 15, 30, begin, begin + tail // 2, updates)
+        scales = [
+            min(point / 30, 1)
+            * max(cooldown["min_lr_ratio"], 1 - max(point - begin, 0) / tail * (1 - cooldown["min_lr_ratio"]))
+            for point in points
+        ]
+        for group in ("learning_rate", "adam_lr"):
+            peak = reference["optimizer"][group]
+            curve = native.optimizer.lr_scheduler(
+                native.optimizer_num_train_steps or native.trainer.num_train_steps, override_lr=peak
+            )
+            np.testing.assert_allclose([curve(point) for point in points], np.asarray(scales) * peak, rtol=1e-6)
     requests = []
     with set_current_client(
         SimpleNamespace(
