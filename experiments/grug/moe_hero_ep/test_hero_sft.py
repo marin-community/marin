@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import json
 import math
+from types import SimpleNamespace
 
+import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,11 +16,11 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh, reshard
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.testing.devices import use_test_devices
 
-from experiments.grug.moe_hero_ep import model
+from experiments.grug.moe_hero_ep import model, train
 from experiments.grug.moe_hero_ep.expert_placement import (
     ExpertPlacement,
     balanced_expert_order,
@@ -25,21 +28,29 @@ from experiments.grug.moe_hero_ep.expert_placement import (
     source_order_loads,
 )
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
+    HERO_SFT_BASE_STEP,
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
+    SFT_TOKENIZER,
+    CatalogMixture,
     SftStore,
+    check_start_placement,
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
+    start_step_for,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    HeldOutEvalOnly,
     RouterBiasMode,
     SpecialTokenInit,
     _make_train_step,
     _place_restored_experts,
     initial_state,
     permute_experts,
+    reseed_at_start_step,
     reseed_special_token_columns,
     scale_special_token_updates,
 )
@@ -387,10 +398,10 @@ def test_expert_placement_moves_host_offloaded_optimizer_state():
     assert gate_moments >= 1
 
 
-def _write_checkpoint_metadata(path, placement: ExpertPlacement | None) -> str:
+def _write_checkpoint_metadata(path, placement: ExpertPlacement | None, step: int = 0) -> str:
     path.mkdir(parents=True)
     recorded = {} if placement is None else placement.checkpoint_metadata()
-    (path / "metadata.json").write_text(json.dumps({"step": 0, "timestamp": "2026-11-09T00:00:00", **recorded}))
+    (path / "metadata.json").write_text(json.dumps({"step": step, "timestamp": "2026-11-09T00:00:00", **recorded}))
     return str(path)
 
 
@@ -427,3 +438,158 @@ def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_pa
             _place_restored_experts(state, placement, loaded_checkpoint=other_save)
         with pytest.raises(ValueError, match="this run uses no expert placement"):
             _place_restored_experts(state, None, loaded_checkpoint=placed_save)
+
+
+def _write_data_config(path, cache_catalog: str) -> None:
+    data = LmDataConfig(
+        tokenizer=SFT_TOKENIZER,
+        cache_catalog=cache_catalog,
+        components={
+            "sft/a": DatasetComponent(cache_dir="s3://bucket/a/train"),
+            "pretrain/b": DatasetComponent(cache_dir="s3://bucket/b/train"),
+        },
+        train_weights=[(0, {"sft/a": 0.5, "pretrain/b": 0.5})],
+        mixture_block_size=64_000,
+    )
+    path.write_text(json.dumps(draccus.encode(data)))
+
+
+def test_catalog_mixture_trains_the_given_weights_from_the_continued_step(tmp_path):
+    _write_data_config(tmp_path / "data.json", "s3://bucket/cache_catalog.json")
+    (tmp_path / "weights.json").write_text(json.dumps([[0, {"sft/a": 0.95, "pretrain/b": 0.05}]]))
+
+    mixture = CatalogMixture.load(tmp_path / "data.json", tmp_path / "weights.json", num_updates=300)
+    data = mixture.data_config(start_step=400_407)
+
+    assert data.cache_catalog == "s3://bucket/cache_catalog.json"
+    assert [(step, dict(weights)) for step, weights in data.train_weights] == [(0, {"sft/a": 0.95, "pretrain/b": 0.05})]
+    assert data.mixture_start_step == 400_407
+    assert set(data.components) == {"sft/a", "pretrain/b"}
+
+
+@pytest.mark.parametrize("reseed", [True, False])
+def test_continued_run_keeps_trained_special_token_columns_when_reseed_is_off(reseed):
+    mesh = _one_device_mesh()
+    state = _trained_state(_tiny_config(), _optimizer(), mesh)
+    special = SpecialTokenInit(
+        token_ids=(5,), anchor_ids=(1,), start_step=int(state.step), lr_multiplier=2.0, reseed=reseed
+    )
+    before = np.asarray(state.params.output_proj)
+    with jax.set_mesh(mesh):
+        after = np.asarray(reseed_at_start_step(state, special, offload_opt_state=False).params.output_proj)
+
+    if reseed:
+        np.testing.assert_array_equal(after[:, 5], before[:, 1])
+    else:
+        np.testing.assert_array_equal(after, before)
+
+
+def test_start_placement_accepts_the_source_or_a_save_recording_the_same_placement(tmp_path):
+    source = str(tmp_path / "source")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=source)
+    other = dataclasses.replace(placement, order=((0, 1, 2, 3), (0, 1, 2, 3)))
+    placed_save = _write_checkpoint_metadata(tmp_path / "placed" / "step-9", placement)
+    unrecorded_save = _write_checkpoint_metadata(tmp_path / "unrecorded" / "step-9", None)
+    other_save = _write_checkpoint_metadata(tmp_path / "other" / "step-9", other)
+
+    check_start_placement(placement, source)
+    check_start_placement(placement, placed_save)
+    for checkpoint in (unrecorded_save, other_save):
+        with pytest.raises(ValueError, match="does not record it"):
+            check_start_placement(placement, checkpoint)
+
+
+class _SequenceSet:
+    def __init__(self, length: int):
+        self.length = length
+
+    def as_sync_dataset(self):
+        return range(self.length)
+
+
+def test_eval_only_records_the_dropless_metrics_and_the_checkpoint_it_scored(tmp_path, monkeypatch):
+    mesh = _one_device_mesh()
+    checkpoint = tmp_path / "step-400407"
+    checkpoint.mkdir()
+    metadata = json.dumps({"step": 400407, "is_temporary": False}).encode()
+    (checkpoint / "metadata.json").write_bytes(metadata)
+    output = tmp_path / "scores.json"
+    # The writer reads only the run's eval settings.
+    config = SimpleNamespace(
+        eval=GrugEvalConfig(eval_current=False, eval_ema=False, dropless_eval=True),
+        eval_only=HeldOutEvalOnly(output=str(output), weights_checkpoint=str(checkpoint)),
+    )
+    dropless = SimpleNamespace(
+        dataset=SimpleNamespace(datasets=[(_SequenceSet(8), ["sft", "sft/pooled"]), (_SequenceSet(9), ["c13q3"])])
+    )
+    scored = []
+
+    def fake_eval_model(evaluator, model, prefix):
+        scored.append((evaluator, prefix))
+        return {f"{prefix}/loss": 1.5}
+
+    monkeypatch.setattr(train, "eval_model", fake_eval_model)
+    with jax.set_mesh(mesh):
+        state = initial_state(_tiny_config(), optimizer=optax.identity(), mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        train._write_held_out_scores(
+            state,
+            config,
+            mesh,
+            evaluator=None,
+            dropless_evaluator=dropless,
+            dropless_eval_mesh=train.expert_collapsed_eval_mesh(mesh),
+        )
+
+    assert scored == [(dropless, "eval_dropless")]
+    record = json.loads(output.read_text())
+    assert record["weights_checkpoint"] == str(checkpoint)
+    assert record["checkpoint_step"] == 400407
+    assert record["checkpoint_metadata_sha256"] == hashlib.sha256(metadata).hexdigest()
+    assert record["sequences_per_set"] == {"sft/pooled": 8, "c13q3": 9}
+    assert record["metrics"] == {"eval_dropless/loss": 1.5}
+
+
+@pytest.mark.parametrize("problem", ["missing_metadata", "shared_last_tag"])
+def test_eval_only_refuses_before_scoring(tmp_path, monkeypatch, problem):
+    mesh = _one_device_mesh()
+    checkpoint = tmp_path / "step-400407"
+    checkpoint.mkdir()
+    if problem != "missing_metadata":
+        (checkpoint / "metadata.json").write_bytes(json.dumps({"step": 400407}).encode())
+    last_tag = "c13q3" if problem == "shared_last_tag" else "sft/pooled"
+    config = SimpleNamespace(
+        eval=GrugEvalConfig(eval_current=False, eval_ema=False, dropless_eval=True),
+        eval_only=HeldOutEvalOnly(output=str(tmp_path / "scores.json"), weights_checkpoint=str(checkpoint)),
+    )
+    dropless = SimpleNamespace(
+        dataset=SimpleNamespace(datasets=[(_SequenceSet(8), ["sft", last_tag]), (_SequenceSet(9), ["c13q3"])])
+    )
+    scored = []
+    monkeypatch.setattr(train, "eval_model", lambda evaluator, model, prefix: scored.append(prefix) or {})
+    with jax.set_mesh(mesh):
+        state = initial_state(_tiny_config(), optimizer=optax.identity(), mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        with pytest.raises((FileNotFoundError, ValueError)):
+            train._write_held_out_scores(
+                state,
+                config,
+                mesh,
+                evaluator=None,
+                dropless_evaluator=dropless,
+                dropless_eval_mesh=train.expert_collapsed_eval_mesh(mesh),
+            )
+    assert scored == []
+
+
+def test_launch_refuses_to_reseed_a_checkpoint_that_already_trained_sft(tmp_path):
+    base_dir = f"step-{HERO_SFT_BASE_STEP}"
+    base = _write_checkpoint_metadata(tmp_path / "base" / base_dir, None, HERO_SFT_BASE_STEP)
+    later = _write_checkpoint_metadata(tmp_path / "later" / "step-400407", None, 400_407)
+    placed = _write_checkpoint_metadata(tmp_path / "placed" / base_dir, _placement([[1, 0, 3, 2]]), HERO_SFT_BASE_STEP)
+
+    assert start_step_for(base, reseed_special_tokens=True) == HERO_SFT_BASE_STEP
+    with pytest.raises(ValueError, match="past the hero base step"):
+        start_step_for(later, reseed_special_tokens=True)
+    with pytest.raises(ValueError, match="records an expert placement"):
+        start_step_for(placed, reseed_special_tokens=True)
+    assert start_step_for(later, reseed_special_tokens=False) == 400_407
+    assert start_step_for(placed, reseed_special_tokens=False) == HERO_SFT_BASE_STEP

@@ -75,6 +75,6 @@ def test_sft_recipe_identities(monkeypatch):
             "2026.09.25.2",
             "c939e384",
         ),
-        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "ed4a0467"),
+        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "8d43d707"),
         ("grug/hero-sft-fullab-step393k-v2-hf", "2026.11.10", "df950f55"),
     ]
