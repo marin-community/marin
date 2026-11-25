@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "a0817555a03ceec14ed248d39b0236372b44919e",
-  "path": "experiments/post_training/task_curation/datasets/grading_census_receipts_facet_quiesce_20261125_v1/part-002.json",
-  "sha256": "24b988e11ad8998a4e4b30a74560010e3f0442bfe9699aeb5819471c8d81cbe6"
+  "revision": "02d38bce13874bbd6c81ce1c282111892903d8aa",
+  "path": "experiments/post_training/task_curation/datasets/grading_census_receipts_hierarchy_20261125_b_v2/part-002.json",
+  "sha256": "fcc81c1c837f9c7bade2abd75f3ac964f3277f430fc364aca210e3f16d6d2aaa"
 }

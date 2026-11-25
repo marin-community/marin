@@ -3,15 +3,20 @@
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
 from taskcompendium.models import Source, TaskSpec, judge_spec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
+from experiments.post_training.task_curation.datasets import hierarchy_intake, instruction_hierarchy
 from experiments.post_training.task_curation.datasets.instruction_hierarchy import REPO, REVISION, convert_hierarchy
+from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
 
 ROWS = json.loads((Path(__file__).parent / "fixtures/instruction_hierarchy.json").read_text())
 
@@ -63,3 +68,30 @@ def test_incomplete_native_contracts_are_typed_instead_of_filled_in(defect):
             "wrong_system_sentinel": "invalid_system_instruction",
         }[defect]
     )
+
+
+@pytest.fixture
+def measured_hierarchy():
+    original = instruction_hierarchy.source()
+    actor = actor_census_input(REPO, REVISION, instruction_hierarchy.VERSION, 3)
+    info = replace(original.info, actor_census_input=actor)
+    return {
+        "original_info": TypeAdapter(SourceInfo).dump_python(info, mode="json"),
+        "original_converted_tasks": 3,
+        "original_task_specs_sha256": actor.task_specs_sha256,
+    }
+
+
+def test_measured_intake_keeps_the_original_converter_before_retained_selection(measured_hierarchy, monkeypatch):
+    monkeypatch.setattr(hierarchy_intake, "read_registry_json", lambda path: measured_hierarchy)
+    (source,) = hierarchy_intake.sources()
+    assert source.config == instruction_hierarchy.source().config
+    assert source.info.actor_census_input.measured_tasks == 3
+
+
+@pytest.mark.parametrize("field,value", [("dataset_revision", "b" * 40), ("measured_tasks", 4)])
+def test_measured_intake_refuses_a_foreign_census(measured_hierarchy, monkeypatch, field, value):
+    measured_hierarchy["original_info"]["actor_census_input"][field] = value
+    monkeypatch.setattr(hierarchy_intake, "read_registry_json", lambda path: measured_hierarchy)
+    with pytest.raises(ValueError, match="measured source conversion"):
+        hierarchy_intake.sources()

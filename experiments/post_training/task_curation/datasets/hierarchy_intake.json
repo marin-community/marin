@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "02d38bce13874bbd6c81ce1c282111892903d8aa",
+  "path": "experiments/post_training/task_curation/datasets/hierarchy_intake.json",
+  "sha256": "63228aaf70614ebea280480670d03b93fc8c686e8cd7878fcb0fc470e6bc49b1"
+}
