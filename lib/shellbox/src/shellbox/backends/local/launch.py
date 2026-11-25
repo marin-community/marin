@@ -22,6 +22,10 @@ PR_CAP_AMBIENT = 47
 PR_CAP_AMBIENT_CLEAR_ALL = 4
 PR_SET_NO_NEW_PRIVS = 38
 LINUX_CAPABILITY_VERSION_3 = 0x20080522
+CAP_CHOWN = 0
+CAP_DAC_OVERRIDE = 1
+CAP_FOWNER = 3
+IMAGE_FILESYSTEM_CAPABILITIES = (CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER)
 SETUP_ERROR_LIMIT_BYTES = 512
 """At most POSIX's minimum PIPE_BUF, so reporting cannot block before the host reads."""
 
@@ -35,7 +39,10 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         os.set_inheritable(status, False)
     disk_status = config.get("disk_status")
     disk = None
+    namespace_directory = None
     try:
+        namespace_directory = os.open("/proc/self/ns", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        outer_user_namespace = os.stat("user", dir_fd=namespace_directory).st_ino
         if disk_status is not None:
             disk = os.open(config["disk_root"], os.O_RDONLY | os.O_DIRECTORY)
         if config.get("cgroup") is not None:
@@ -62,6 +69,10 @@ def execute_in_namespaces(configuration_fd: int) -> None:
             # Creating another member needs bwrap's own namespace setup. Its
             # descriptors are consumed and closed by bwrap, before the keeper runs.
             os.execv(config["program"][0], config["program"])
+        # The new /proc belongs to the guest PID namespace; this supervisor is
+        # outside it until fork, so use the original process's pinned proc dir.
+        if config["capabilities"] and os.stat("user", dir_fd=namespace_directory).st_ino == outer_user_namespace:
+            raise ValueError("Image ownership requires an isolated guest user namespace")
         os.fchdir(config["root"])
         os.chroot(".")
         os.chdir("/")
@@ -79,7 +90,7 @@ def execute_in_namespaces(configuration_fd: int) -> None:
             if disk is not None:
                 os.close(disk)
                 os.close(disk_status)
-            drop_privileges(config["account"])
+            drop_privileges(config["account"], config["capabilities"])
             signal.signal(signal.SIGPIPE, signal.SIG_DFL)
             signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
             os.execvpe(
@@ -91,6 +102,9 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         if status is not None:
             os.write(status, f"{type(error).__name__}: {error}".encode()[:SETUP_ERROR_LIMIT_BYTES])
         raise
+    finally:
+        if namespace_directory is not None:
+            os.close(namespace_directory)
     if status is not None:
         os.close(status)
     _, status = os.waitpid(child, 0)
@@ -104,11 +118,15 @@ def execute_in_namespaces(configuration_fd: int) -> None:
     sys.exit(code if code >= 0 else 128 - code)
 
 
-def drop_privileges(account: list[int] | None) -> None:
+def drop_privileges(account: list[int] | None, capabilities: list[int]) -> None:
+    if capabilities not in ([], list(IMAGE_FILESYSTEM_CAPABILITIES)):
+        raise ValueError("Only isolated image filesystem operations may retain capabilities")
     libc = ctypes.CDLL(None, use_errno=True)
-    # The bounding set must be dropped while the namespace still grants
-    # CAP_SETPCAP. no_new_privs also prevents setuid and file-capability gains.
+    # Retain only image-local filesystem operations. Drop the other bounding bits
+    # while CAP_SETPCAP remains available; no_new_privs prevents setuid/file gains.
     for capability in range(64):
+        if capability in capabilities:
+            continue
         if libc.prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) != 0 and ctypes.get_errno() != errno.EINVAL:
             raise OSError(ctypes.get_errno(), "Cannot drop capability bounding set")
     if libc.prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0:
@@ -119,6 +137,9 @@ def drop_privileges(account: list[int] | None) -> None:
         os.setuid(account[0])
     header = (ctypes.c_uint32 * 2)(LINUX_CAPABILITY_VERSION_3, 0)
     data = (ctypes.c_uint32 * 6)()
+    for capability in capabilities:
+        data[0] |= 1 << capability
+        data[1] |= 1 << capability
     if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
         raise OSError(ctypes.get_errno(), "Cannot clear process capabilities")
     if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
