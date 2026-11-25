@@ -28,6 +28,9 @@ RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
 RL_GPU_ZOOM_MESSAGE = "Zoom to 7h or less for GPU detail."
+# The rows an RL run's trainer and rollout workers report directly; the pickers
+# and the recent-runs list scan only these instead of every telemetry row.
+RL_PRODUCER_ROW_NAMES = ("lifecycle", "policy_step", "rollout_call")
 
 _CORE_NAMES = (
     "phase_duration_seconds",
@@ -192,9 +195,11 @@ WITH engine_rows AS (
                     'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
            OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
 ), sampled AS (
-    -- One row per series per bucket, the counter's end-of-bucket value on top.
-    -- Grouping here keeps LAG off the millions of scrape rows the filters select:
-    -- a per-sample window over them spills and misses the bridge query deadline.
+    -- One row per series and bucket. counter_end is the bucket's highest sample;
+    -- a reset inside the bucket leaves the pre-reset peak there, and the growth
+    -- CASE below treats the resulting drop as a reset. Grouping here keeps LAG
+    -- off the millions of scrape rows the filters select: a per-sample window
+    -- over them spills and misses the bridge query deadline.
     SELECT {bucket} AS t,
            service, execution_uid, node_name, process_index,
            name, engine, finished_reason, is_engine,
@@ -536,7 +541,7 @@ SELECT run_id AS run,
        MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
-WHERE service = 'marinskyrl' AND name IN ('lifecycle', 'policy_step', 'rollout_call') AND run_id IS NOT NULL
+WHERE service = 'marinskyrl' AND name IN ({sql_values(RL_PRODUCER_ROW_NAMES)}) AND run_id IS NOT NULL
   AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
 GROUP BY 1, 2 HAVING COUNT(*) FILTER (WHERE name = 'policy_step') > 0 ORDER BY last_seen DESC
 LIMIT {RL_RECENT_MAX_ROWS}

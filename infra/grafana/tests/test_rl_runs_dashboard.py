@@ -13,7 +13,7 @@ import pytest
 from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
-from rl_observability import rl_gpu_dataset, rl_overview_dataset
+from rl_observability import RL_PRODUCER_ROW_NAMES, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 from server import create_app
 from starlette.testclient import TestClient
@@ -918,16 +918,15 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_min
             "to": [str(row["window_to_ms"])],
         }
         linked = parse_qs(url.query)
-        params = {
-            param["key"]: (
-                param["value"]
-                .replace("${cluster:sqlstring}", f"'{linked['var-cluster'][0]}'")
-                .replace("${training_type:sqlstring}", f"'{linked['var-training_type'][0]}'")
-                .replace("${__from}", linked["from"][0])
-                .replace("${__to}", linked["to"][0])
-            )
-            for param in query["url_options"]["params"]
-        }
+        params = _picker_params(
+            query,
+            (
+                ("${cluster:sqlstring}", f"'{linked['var-cluster'][0]}'"),
+                ("${training_type:sqlstring}", f"'{linked['var-training_type'][0]}'"),
+                ("${__from}", linked["from"][0]),
+                ("${__to}", linked["to"][0]),
+            ),
+        )
         offered = _request_rows(store, query["url"], params)
         assert sorted(offered, key=lambda item: item["value"]) == [
             {"value": run} for run in sorted(linked_options[row["run"]])
@@ -952,18 +951,44 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_min
         ("sync", [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"]),
         ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
     ):
-        params = {
-            param["key"]: (
-                param["value"]
-                .replace("${cluster:sqlstring}", f"'{CLUSTER}'")
-                .replace("${training_type:sqlstring}", f"'{kind}'")
-                .replace("${__from}", str(_WINDOW_START_MS))
-                .replace("${__to}", str(home_end_ms))
-            )
-            for param in query["url_options"]["params"]
-        }
+        params = _picker_params(
+            query,
+            (
+                ("${cluster:sqlstring}", f"'{CLUSTER}'"),
+                ("${training_type:sqlstring}", f"'{kind}'"),
+                ("${__from}", str(_WINDOW_START_MS)),
+                ("${__to}", str(home_end_ms)),
+            ),
+        )
         offered = _request_rows(store, query["url"], params)
         assert sorted(offered, key=lambda row: row["value"]) == [{"value": run} for run in sorted(wanted)]
+
+
+def _picker_params(query: dict, replacements: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    """Fill a picker variable's Grafana templates in with concrete values."""
+    params = {}
+    for param in query["url_options"]["params"]:
+        value = param["value"]
+        for pattern, replacement in replacements:
+            value = value.replace(pattern, replacement)
+        params[param["key"]] = value
+    return params
+
+
+def _picker_sql(name: str) -> str:
+    (variable,) = [variable for variable in _dashboard()["templating"]["list"] if variable["name"] == name]
+    (sql,) = [
+        param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    return sql
+
+
+def test_the_run_job_and_execution_pickers_scan_the_same_producer_rows() -> None:
+    """Each picker narrows its scan to the producer row names. A list that drifts
+    in one picker silently changes which runs, jobs, and executions it offers."""
+    producer_names = ", ".join(f"'{name}'" for name in RL_PRODUCER_ROW_NAMES)
+    for picker in ("run", "job", "execution"):
+        assert f"name IN ({producer_names})" in _picker_sql(picker), picker
 
 
 def test_the_job_and_execution_pickers_offer_what_the_producers_report(store) -> None:
@@ -1001,13 +1026,7 @@ def test_the_job_and_execution_pickers_offer_what_the_producers_report(store) ->
 
     def picker_rows(name: str) -> list[dict]:
         query = variables[name]["query"]["infinityQuery"]
-        params = {}
-        for param in query["url_options"]["params"]:
-            value = param["value"]
-            for pattern, replacement in substitutions:
-                value = value.replace(pattern, replacement)
-            params[param["key"]] = value
-        return _request_rows(store, query["url"], params)
+        return _request_rows(store, query["url"], _picker_params(query, substitutions))
 
     assert picker_rows("job") == [{"value": JOB_ID}]
     assert picker_rows("execution") == [{"value": "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0"}]
