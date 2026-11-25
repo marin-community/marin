@@ -1101,7 +1101,7 @@ class InferenceServer:
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
-        """Install the weights and immutable policy identity in one serving version."""
+        """Install weights and set or clear the immutable policy ID in one serving version."""
         return self.inference_context.reload(weight_callback, expected_version=expected_version, policy_id=policy_id)
 
     def address(self):
