@@ -1170,6 +1170,16 @@ uv run python -m experiments.post_training.long_loop.round_runner \
   --validation-output /tmp/mochi-round-validation
 ```
 
+To continue an adopted RL round into canonical evaluation, declare
+`evaluation: frozen-micro210`, an `evaluation_profile` from the registered
+Micro210 serving profiles, and `rl.export_hf: true`; use `--through eval`.
+Set `rl.recipe.trainer.hf_export_checkpoint: best` to export the eligible
+validation winner. `rl.retained_checkpoints: 1` retains one rolling resume
+checkpoint while the trainer protects the selected best and final checkpoints
+in permanent storage. The graph waits for the selected HF export before
+evaluating it. The initial model receives a vocabulary check before RL; the
+future selected model receives its own CPU gate after export.
+
 The command validates without submitting. Normal runs use the canonical 12-hour learning
 clock that starts after the first optimizer update and starts again after process
 recovery. The separate GPU-job limit is 48 hours. `rl.max_steps` is an absolute
