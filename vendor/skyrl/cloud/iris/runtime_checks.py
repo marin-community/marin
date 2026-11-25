@@ -40,7 +40,8 @@ def main() -> None:
             from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE
             from vllm.model_executor.models import ModelRegistry
 
-            assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs()
+            if GRUG_MOE_ARCHITECTURE not in ModelRegistry.get_supported_archs():
+                raise SystemExit(f"vLLM does not support {GRUG_MOE_ARCHITECTURE}")
             print("[rl-iris] frozen runtime ready:", torch.__version__, vllm.__version__)
 
 

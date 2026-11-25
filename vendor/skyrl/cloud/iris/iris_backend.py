@@ -41,9 +41,7 @@ from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
-    LocalRaySpillTarget,
     RaySpillBackend,
-    resolve_ray_spill_target,
 )
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -648,14 +646,12 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     launch_config = args.launch_config_bundle
     if not isinstance(launch_config, BundledLaunchConfig):
         raise RuntimeError("resolved launch config payload is missing")
-    spill = resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir)
     return [
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
-        spill.location if isinstance(spill, LocalRaySpillTarget) else "",
         f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
-        *([] if _is_checkpoint_export(args) else ["--pynccl-init"]),
+        *(["--pynccl-init"] if args.runtime_profile.includes_vllm else []),
     ]
 
 

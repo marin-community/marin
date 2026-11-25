@@ -59,6 +59,7 @@ class EnvVarSpec:
     source: EnvVarSource
     scopes: frozenset[EnvVarScope]
     writers: frozenset[EnvVarWriter] = frozenset({EnvVarWriter.MANAGER})
+    prepend: bool = False
 
 
 ALL_RUNTIME_SCOPES = frozenset(EnvVarScope)
@@ -72,6 +73,7 @@ UV_USE_IO_URING_ENV = "UV_USE_IO_URING"
 FR_DUMP_TEMP_FILE_ENV = "TORCH_FR_DUMP_TEMP_FILE"
 NCCL_DEBUG_INFO_TEMP_FILE_ENV = "TORCH_NCCL_DEBUG_INFO_TEMP_FILE"
 NCCL_BUFFER_SIZE_ENV_VAR = "NCCL_BUFFSIZE"
+PATH_ENV = "PATH"
 PYTHONPATH_ENV = "PYTHONPATH"
 VLLM_USE_V1_ENV = "VLLM_USE_V1"
 VLLM_USE_V2_MODEL_RUNNER_ENV = "VLLM_USE_V2_MODEL_RUNNER"
@@ -174,7 +176,14 @@ ENV_VAR_SPECS = (
     EnvVarSpec("TORCH_NCCL_TRACE_CPP_STACK", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
     EnvVarSpec("TORCH_SHOW_CPP_STACKTRACES", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
     EnvVarSpec("TORCH_SYMBOLIZE_MODE", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
-    EnvVarSpec(PYTHONPATH_ENV, "ci.marin_nightly.grug", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.DRIVER})),
+    EnvVarSpec(PATH_ENV, "runtime.bootstrap", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.TASK_RUNTIME}), prepend=True),
+    EnvVarSpec(
+        PYTHONPATH_ENV,
+        "runtime.bootstrap",
+        EnvVarSource.EXTERNAL,
+        frozenset({EnvVarScope.DRIVER, EnvVarScope.TASK_RUNTIME}),
+        prepend=True,
+    ),
     EnvVarSpec(VLLM_USE_V1_ENV, "ci.marin_nightly.grug", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.DRIVER})),
     EnvVarSpec(
         VLLM_USE_V2_MODEL_RUNNER_ENV,
@@ -234,6 +243,7 @@ ENV_VAR_SPECS = (
         "runtime.bootstrap",
         EnvVarSource.EXTERNAL,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.TASK_RUNTIME}),
+        prepend=True,
     ),
     EnvVarSpec(
         NVRTC_HOME_ENV,
@@ -252,6 +262,7 @@ ENV_VAR_SPECS = (
         "runtime.bootstrap",
         EnvVarSource.EXTERNAL,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.TASK_RUNTIME}),
+        prepend=True,
     ),
     EnvVarSpec(
         MAX_JOBS_ENV,
@@ -717,10 +728,19 @@ def managed_environment_names(scope: EnvVarScope | None = None) -> frozenset[str
     return frozenset(spec.name for spec in ENV_VAR_SPECS if scope in spec.scopes)
 
 
+def skyrl_source_paths(repository_root: str | Path) -> tuple[str, ...]:
+    """Return the source roots shared by SkyRL's local and Iris task interpreters."""
+    root = Path(repository_root)
+    paths = (root, root / "skyrl-train", root / "skyrl-gym")
+    if root.parent.name == "vendor":
+        paths = (root.parent.parent, *paths)
+    return tuple(map(str, paths))
+
+
 def grug_gpu_gate_environment(repository_root: str, *, environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build the environment for the Grug rollout/train/broadcast GPU gate."""
     ambient = os.environ if environ is None else environ
-    source_paths = f"{repository_root}/skyrl-gym:{repository_root}/skyrl-train"
+    source_paths = os.pathsep.join(skyrl_source_paths(repository_root))
     if pythonpath := ambient.get(PYTHONPATH_ENV):
         source_paths = f"{source_paths}:{pythonpath}"
     return {
@@ -736,20 +756,34 @@ def wandb_launch_environment(*, entity: str | None, environ: Mapping[str, str] |
     return {WANDB_ENTITY_ENV: entity or ambient.get(WANDB_ENTITY_ENV, "dogml")}
 
 
-def _main(argv: list[str]) -> None:
-    if len(argv) == 3 and argv[1] == "write-frozen-cuda-runtime":
+def write_task_runtime(path: Path, profile: str, project: Path) -> None:
+    """Write the frozen task environment as NUL-terminated data records."""
+    values = {PATH_ENV: str(Path(sys.executable).parent)}
+    if profile != "hub-publish":
         manager = EnvVarManager.for_frozen_cuda_runtime(site.getsitepackages())
-        values = manager.environment_for(EnvVarScope.TASK_RUNTIME)
-        with Path(argv[2]).open("ab") as stream:
-            for name, value in values.items():
-                stream.write(os.fsencode(f"{name}={value}") + b"\0")
+        values.update(manager.environment_for(EnvVarScope.TASK_RUNTIME))
+        values.update(
+            SKYRL_HOME=str(project),
+            PYTHONPATH=os.pathsep.join(skyrl_source_paths(project)),
+            VLLM_USE_V1="1",
+        )
+    with path.open("wb") as stream:
+        for name, value in values.items():
+            spec = _SPECS_BY_NAME.get(name)
+            mode = "prepend" if spec is not None and spec.prepend else "replace"
+            stream.write(os.fsencode(f"{mode}:{name}={value}") + b"\0")
+
+
+def _main(argv: list[str]) -> None:
+    if len(argv) == 5 and argv[1] == "write-task-runtime":
+        write_task_runtime(Path(argv[2]), argv[3], Path(argv[4]))
         return
     if len(argv) >= 5 and argv[1] == "run-grug-gpu-gate" and argv[3] == "--":
         environment = dict(os.environ)
         environment.update(grug_gpu_gate_environment(argv[2]))
         os.execvpe(argv[4], argv[4:], environment)
     raise SystemExit(
-        f"usage: {argv[0]} write-frozen-cuda-runtime ENVIRONMENT_FILE | "
+        f"usage: {argv[0]} write-task-runtime ENVIRONMENT_FILE PROFILE PROJECT_ROOT | "
         "run-grug-gpu-gate REPOSITORY_ROOT -- COMMAND [ARG ...]"
     )
 

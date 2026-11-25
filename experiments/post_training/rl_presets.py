@@ -357,6 +357,10 @@ class Metric:
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
 
+    def __post_init__(self) -> None:
+        if self.window is WindowStatistic.GAIN_PER_GPU_HOUR and not self.key.endswith("_per_gpu_hour"):
+            raise ValueError("A gain-per-GPU-hour metric key must end in _per_gpu_hour")
+
 
 @dataclass(frozen=True)
 class BatchMix:

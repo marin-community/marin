@@ -8,14 +8,11 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
-import signal
 import statistics
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
@@ -29,17 +26,17 @@ from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
-    SKYRL_PROJECT,
     ArtifactHfModel,
     ResolvedModelLocator,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLSpec,
+    prepare_skyrl_cpu_python,
     read_skyrl_attempt,
-    skyrl_cpu_command,
-    skyrl_cpu_environment,
+    run_skyrl_cpu,
     skyrl_execution,
+    skyrl_project_root,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
@@ -71,7 +68,6 @@ GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 _NATIVE_PREPARATION_TIMEOUT = 300
 _NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
-_NATIVE_PHASE = f"{_NATIVE_CONFIG_MODULE}: "
 _NATIVE_ERROR = "native configuration cannot be composed"
 
 logger = logging.getLogger(__name__)
@@ -672,85 +668,67 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_diagnostic(error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
-    phase = diagnostic = ""
+def _native_diagnostic(
+    error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired, progress: Path | None
+) -> str:
+    phase = progress.read_text().strip() if progress is not None and progress.exists() else ""
     if isinstance(error, OSError):
-        cause = error.strerror or str(error)
+        cause, diagnostic = error.strerror or str(error), ""
     else:
-        stderr = error.stderr or ""
-        for line in reversed(stderr.splitlines()):
-            line = line.strip()
-            if line.startswith(_NATIVE_PHASE):
-                phase = line.removeprefix(_NATIVE_PHASE)
-                break
-            diagnostic = diagnostic or line
         cause = (
             f"timed out after {error.timeout:g} s"
             if isinstance(error, subprocess.TimeoutExpired)
             else f"exited with status {error.returncode}"
         )
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        diagnostic = next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), "")
     context = " ".join(part for part in (phase, cause, diagnostic) if part)
     return redact_string("".join(char for char in context if char.isprintable()))[:400]
 
 
-def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int) -> str:
-    # File-backed output lets the wrapper exit even when a build child still has its streams open.
-    with (
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stdout,
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stderr,
-        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env, start_new_session=True) as process,
-    ):
-        try:
-            returncode = process.wait(timeout=timeout)
-            if returncode:
-                raise subprocess.CalledProcessError(returncode, command)
-        except BaseException as error:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
-                stderr.seek(0)
-                error.stderr = stderr.read()
-            raise
-        stdout.seek(0)
-        return stdout.read()
-
-
-def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
+def _native_config(operation: str, *args: str, checkout: Path | None = None):
+    checkout = checkout or skyrl_project_root()
+    preparation = "Prepare SkyRL CPU environment"
     started = monotonic()
     try:
-        output = _run_native_process(command, env=env, timeout=timeout).strip()
+        interpreter = prepare_skyrl_cpu_python(_NATIVE_PREPARATION_TIMEOUT, project_root=checkout)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise InvalidComparison(
-            f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. {_native_diagnostic(error)}"
+            f"{_NATIVE_ERROR}: {preparation} after {monotonic() - started:.2f} s. {_native_diagnostic(error, None)}"
         ) from error
-    logger.info("%s took %.2f s", operation, monotonic() - started)
-    return output
-
-
-def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
-    """Run one native step and decode JSON from its last nonempty stdout line."""
-    output = _native_output(operation, command, env=env, timeout=timeout)
-    if not output:
-        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
-    try:
-        return json.loads(output.splitlines()[-1])
-    except ValueError as error:
-        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
-
-
-def _native_json(operation: str, *args: str, timeout: int = 120):
-    env = skyrl_cpu_environment()
-    venv = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv"
-    interpreter = venv / "bin" / "python"
-    # Sync the frozen project and verify its interpreter within the preparation deadline.
-    probe = skyrl_cpu_command(str(interpreter), "-I", "--version")
-    _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
-    return _native_command_json(operation, [str(interpreter), "-I", *args], env=env, timeout=timeout)
-
-
-def _native_config(operation: str, *args: str):
-    checkout = recipe.REPO_ROOT / SKYRL_PROJECT
-    return _native_json(operation, "-m", _NATIVE_CONFIG_MODULE, "--checkout", str(checkout), *args)
+    logger.info("%s took %.2f s", preparation, monotonic() - started)
+    with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
+        progress = Path(directory) / "stage"
+        command = [
+            str(interpreter),
+            "-I",
+            "-m",
+            _NATIVE_CONFIG_MODULE,
+            "--checkout",
+            str(checkout),
+            "--progress-file",
+            str(progress),
+            *args,
+        ]
+        started = monotonic()
+        try:
+            result = run_skyrl_cpu(command, timeout=120)
+            result.check_returncode()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise InvalidComparison(
+                f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. "
+                f"{_native_diagnostic(error, progress)}"
+            ) from error
+        logger.info("%s took %.2f s", operation, monotonic() - started)
+        output = result.stdout.strip()
+        if not output:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
+        try:
+            return json.loads(output.splitlines()[-1])
+        except ValueError as error:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
@@ -807,8 +785,8 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 
 @lru_cache(maxsize=16)
-def _schema_defaults(source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)))
+def _schema_defaults(checkout: Path, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
+    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout)
 
 
 def _check_control_config(
@@ -820,7 +798,8 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(Provenance.capture(recipe.REPO_ROOT).tree_hash, groups)
+        checkout = skyrl_project_root()
+        defaults = _schema_defaults(checkout, Provenance.capture(checkout).tree_hash, groups)
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:

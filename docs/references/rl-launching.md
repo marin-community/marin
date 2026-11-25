@@ -191,8 +191,8 @@ reading it where the behavior lives; it does not require adding matching CLI fla
 forwarding tests at every process boundary.
 
 Iris invokes SkyRL's checked-in task setup script with the selected runtime
-profile. The GPU node entry point prepares local Ray spill storage, loads the
-runtime, and runs the transport probe before starting the controller. Training
+profile. The GPU node entry point loads the runtime and runs the transport probe
+before starting the controller. The controller prepares Ray spill storage. Training
 and generation include the vLLM transport check. Checkpoint export runs the
 PyTorch transport check with its export profile.
 

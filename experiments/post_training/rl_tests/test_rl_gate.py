@@ -32,7 +32,7 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
@@ -618,15 +618,15 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
     lock = tmp_path / "build.lock"
     lock.touch()
     worker = Path(__file__).with_name("native_build_child.py")
-    failure = "exited with status 7" if exit_early else "timed out after 2 s"
     deadline = monotonic() + 6
-    with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
-        gate._native_command_json(
-            "Prepare test environment",
-            [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)],
-            env=gate.skyrl_cpu_environment(),
-            timeout=2,
-        )
+    command = [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)]
+    if exit_early:
+        result = run_skyrl_cpu(command, timeout=2, stream_stderr=True)
+        assert result.returncode == 7
+        assert "build child ready" in result.stderr
+    else:
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2"):
+            run_skyrl_cpu(command, timeout=2)
     with lock.open("r+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
     assert monotonic() < deadline, "native failure waited for the build child to finish"
@@ -755,7 +755,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
-        run_native = gate._run_native_process
+        run_native = gate.run_skyrl_cpu
         for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
@@ -765,27 +765,33 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if diagnostic == "bootstrap" and command[-1] == "--version":
-                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                     if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
+                        phase = Path(command[command.index("--progress-file") + 1])
                         if diagnostic == "timeout":
+                            phase.write_text("Import native modules")
                             interrupted_secret = secret.replace("sk-", "sk\x1b-")
-                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
-                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
-                        if diagnostic == "last-phase":
-                            stderr = (
-                                f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
-                                f"{gate._NATIVE_PHASE}Read native schema defaults\n"
+                            raise subprocess.TimeoutExpired(
+                                command, kwargs["timeout"], stderr=f"Interrupted with {interrupted_secret}"
                             )
-                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
+                        if diagnostic == "last-phase":
+                            phase.write_text("Read native schema defaults")
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
                         if diagnostic == "empty-stderr":
-                            raise subprocess.CalledProcessError(1, command, "", "")
-                        return "not JSON" if diagnostic == "invalid-json" else ""
+                            return subprocess.CompletedProcess(command, 1, "", "")
+                        output = "not JSON" if diagnostic == "invalid-json" else ""
+                        return subprocess.CompletedProcess(command, 0, output, "")
                     return run_native(command, *args, **kwargs)
 
-                unavailable.setattr(gate, "_run_native_process", unavailable_defaults)
+                if diagnostic == "bootstrap":
+
+                    def prepare_timeout(timeout, **kwargs):
+                        raise subprocess.TimeoutExpired("prepare", timeout)
+
+                    unavailable.setattr(gate, "prepare_skyrl_cpu_python", prepare_timeout)
+                else:
+                    unavailable.setattr(gate, "run_skyrl_cpu", unavailable_defaults)
                 report = compare(preset.name, "--candidate", name)
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]

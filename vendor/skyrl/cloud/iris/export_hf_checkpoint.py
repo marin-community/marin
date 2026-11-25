@@ -74,6 +74,12 @@ from skyrl_train.hf_publisher import publish_verified_hf_export
 from skyrl_train.io import io
 
 
+class ExportFailed(RuntimeError):
+    def __init__(self, message: str, *, exit_code: int = 1):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
 def _read_hf_export_request(checkpoint_path: str) -> HFExportRequest | None:
     from skyrl_train.hf_export import read_hf_export_request  # noqa: PLC0415 - keep launcher imports Torch-free
 
@@ -450,7 +456,7 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
             job.cancel()
             raise
         if status.state is not JobState.SUCCEEDED:
-            raise subprocess.CalledProcessError(1, ["publish-hf", str(spec.request.hf_hub_repo_id)])
+            raise ExportFailed(f"Hub publication job {job.job_id} ended in {status.state.name}")
 
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
@@ -471,10 +477,14 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
         if request.hf_hub_repo_id is not None:
             _run_hub_upload(spec)
     except BaseException as error:
-        exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
+        exit_code = 1
+        if isinstance(error, subprocess.CalledProcessError):
+            exit_code = error.returncode
+        elif isinstance(error, ExportFailed):
+            exit_code = error.exit_code
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
         if isinstance(error, ConnectError):
-            raise subprocess.CalledProcessError(exit_code, ["publish-hf", str(request.hf_hub_repo_id)]) from error
+            raise ExportFailed(f"Could not connect to Iris for checkpoint export at step {request.step}") from error
         raise
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 

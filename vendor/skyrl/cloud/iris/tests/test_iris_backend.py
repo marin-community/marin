@@ -18,6 +18,7 @@ from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_CONFIG_TASK_DIR
+from cloud.iris.tests.bootstrap_runtime_fixtures import fake_frozen_runtime
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
 from skyrl_train.hf_export_schema import HFExportRequest
@@ -169,20 +170,28 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     probe = app / "experiments/post_training/nccl_transport_probe.py"
     probe.parent.mkdir(parents=True)
     probe.symlink_to(stub)
-    (skyrl / ".iris-runtime-env").write_bytes(b"MAX_JOBS=4\0")
+    runtime, process_env = fake_frozen_runtime(tmp_path)
+    writer = source.parents[1] / "marinskyrl" / "environment_contract.py"
+    runtime_file = runtime / ".iris-runtime-env"
+    subprocess.run(
+        [runtime / "bin/python", "-I", writer, "write-task-runtime", runtime_file,
+         "megatron-export" if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT else "megatron", skyrl],
+        env=process_env, check=True, timeout=15,
+    )
+    process_env["IRIS_VENV"] = str(runtime)
     argv = [
         arg.replace(MARINSKYRL_TASK_ROOT, str(skyrl), 1) if arg.endswith("/node_entrypoint.sh") else arg
         for arg in request.entrypoint.run_command.argv
     ]
-    process = subprocess.run(argv, env=os.environ, check=True, capture_output=True, text=True, timeout=15)
+    process = subprocess.run(argv, env=process_env, check=True, capture_output=True, text=True, timeout=15)
     transport, controller = map(json.loads, process.stdout.splitlines())
-    assert spill.is_dir() == (spill_backend == "local")
+    assert not spill.exists()
     assert transport["cwd"] == controller["cwd"] == str(skyrl)
-    for process_env in (transport, controller):
-        assert process_env["max_jobs"] == "4"
-        assert process_env["skyrl_home"] == str(skyrl)
-        assert process_env["vllm_use_v1"] == "1"
-        assert process_env["python_path"].split(os.pathsep)[:3] == [
+    for node_env in (transport, controller):
+        assert node_env["max_jobs"] == "8"
+        assert node_env["skyrl_home"] == str(skyrl)
+        assert node_env["vllm_use_v1"] == "1"
+        assert node_env["python_path"].split(os.pathsep)[:3] == [
             str(app),
             str(skyrl),
             str(skyrl / "skyrl-train"),
@@ -195,7 +204,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert Path(config_path).parent == Path(RL_CONFIG_TASK_DIR)
     if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT:
         failed = subprocess.run(
-            argv, env=os.environ | {"EXIT_TRANSPORT_FIXTURE": "1"}, capture_output=True, text=True, timeout=15
+            argv, env=process_env | {"EXIT_TRANSPORT_FIXTURE": "1"}, capture_output=True, text=True, timeout=15
         )
         assert failed.returncode == 19
         assert len(failed.stdout.splitlines()) == 1
