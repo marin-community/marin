@@ -14,7 +14,8 @@ from haliax.partitioning import ResourceAxis
 from haliax.quantization import Fp8DotGeneralOp
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 
-from levanter.grad_accum import microbatched
+from levanter.grad_accum import microbatched, microbatched_arrays
+from levanter.metrics import Metric, ReductionType
 from levanter.testing.devices import use_test_devices
 from levanter.testing.helpers import use_test_mesh
 
@@ -150,3 +151,28 @@ def test_microbatch_explicit_batch_and_context_sharding_matches_full_batch():
             (actual_loss, _), actual_grad = eqx.filter_jit(accumulated)(weight, inputs)
             np.testing.assert_allclose(actual_loss, expected_loss, atol=1e-5, rtol=1e-5)
             np.testing.assert_allclose(actual_grad.array, expected_grad.array, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("all_positive", [False, True])
+def test_raw_microbatch_preserves_gradient_and_boolean_metric_reductions(all_positive):
+    # Parameter dimension equals the batch dimension: only the batch argument is split.
+    parameter = jnp.arange(4, dtype=jnp.float32) / 4
+    values = jnp.arange(16, dtype=jnp.float32).reshape(4, 4) / 8
+    flags = jnp.array([True, True, True, all_positive])
+    batch = {"values": values, "flags": flags, "shared_scale": jnp.array(2.0)}
+
+    def loss(weight, inputs):
+        projected = inputs["values"] @ weight * inputs["shared_scale"]
+        metrics = {
+            "any": Metric.from_value(jnp.any(inputs["flags"]), ReductionType.MAX),
+            "all": Metric.from_value(jnp.all(inputs["flags"]), ReductionType.MIN),
+        }
+        return jnp.mean(projected**2), metrics
+
+    gradient_fn = jax.value_and_grad(loss, has_aux=True)
+    expected = gradient_fn(parameter, batch)
+    actual = jax.jit(microbatched_arrays(lambda inputs: gradient_fn(parameter, inputs), 2))(batch)
+    np.testing.assert_allclose(actual[0][0], expected[0][0], atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(actual[1], expected[1], atol=1e-5, rtol=1e-5)
+    for name in expected[0][1]:
+        np.testing.assert_array_equal(actual[0][1][name].value(), expected[0][1][name].value())
