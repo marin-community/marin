@@ -14,6 +14,10 @@ uses it instead.
 
 Modes:
 
+- ``release``    — derive the release plan from the reviewed config and authoritative
+                   state (``--dry-run`` prints the derived summary, the lowered graph
+                   and the preflight results; the sealing path composes submission once
+                   the P0 ``submit/resume --cluster`` mode lands).
 - ``plan``      — resolve the plan, lower the graph and print every node; I/O-free.
 - ``preflight`` — per-stage type-check + small-slice run on real inputs; seals a
                   receipt per stage under the release prefix. Stages whose real
@@ -27,9 +31,9 @@ Modes:
 - ``resume``    — a rerun: completed stages are skipped (matching fingerprints),
                   failed stages restart alone.
 
-Nothing outside the repository is read or executed; the plan document is the only
-release configuration, and release-identifying values never appear in stage source
-(``guard.py`` enforces it).
+Nothing outside the repository is read or executed; the plan document (or the
+release config the plan stage derives from) is the only release configuration, and
+release-identifying values never appear in stage source (``guard.py`` enforces it).
 """
 
 import argparse
@@ -54,6 +58,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import read_step_status
 from rigging.timing import Duration
 
+from experiments.post_training.task_curation.atlas_deployment import ATLAS_SERVICE
 from experiments.post_training.task_curation.release_stages import guard, preflight_slices
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages.graph import (
@@ -67,13 +72,21 @@ from experiments.post_training.task_curation.release_stages.graph import (
     release_graph,
 )
 from experiments.post_training.task_curation.release_stages.guard import assert_submission_allowed, repo_head
+from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
+from experiments.post_training.task_curation.release_stages.plan_derivation import (
+    derive_release_plan,
+    seal_derivation,
+)
 from experiments.post_training.task_curation.release_stages.preflight_slices import SliceSelection
 from experiments.post_training.task_curation.release_stages.preflight_slices import (
     ensure_preflight as ensure_node_preflight,
 )
+from experiments.post_training.task_curation.release_stages.release_config import load_release_config
 
 
 def _plan_document(args) -> ReleasePlan:
+    if getattr(args, "plan", None) is None or getattr(args, "version", None) is None:
+        raise ValueError("this mode requires --version and --plan")
     plan = load_plan(Path(args.plan))
     if args.version is not None and plan.release_id != args.version:
         raise ValueError(f"the plan binds release {plan.release_id!r}, not {args.version!r}")
@@ -150,9 +163,14 @@ def mode_preflight(args) -> int:
     """Type-check and small-slice every requested stage on real inputs."""
     configure_coreweave_s3()
     plan = _plan_document(args)
+    return _run_preflight(plan, source=args.source, max_files=args.max_files, stages=args.stage)
+
+
+def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, stages: list[str] | None) -> int:
+    """The preflight sweep over one plan; shared by the preflight and release modes."""
     graph = release_graph(plan)
-    selection = SliceSelection(source=args.source, max_files=args.max_files)
-    nodes = _selected_nodes(graph, args.stage)
+    selection = SliceSelection(source=source, max_files=max_files)
+    nodes = _selected_nodes(graph, stages)
     blocked: list[str] = []
     failed: list[str] = []
     for node in sorted(nodes):
@@ -176,6 +194,55 @@ def mode_preflight(args) -> int:
         f" {len(blocked)} blocked until their upstream stages run"
     )
     return 0
+
+
+def mode_release(args) -> int:
+    """Derive the release plan from the reviewed config and authoritative state.
+
+    ``--dry-run`` derives, prints the derived plan summary, the lowered graph and
+    the preflight results, and writes nothing. Without it the derivation seals the
+    plan and its receipt write-once under the release prefix and then refuses the
+    submission until the P0 ``submit/resume --cluster`` mode lands (the R40 lane
+    owns that plumbing; this command composes it rather than duplicating it).
+    """
+    configure_coreweave_s3()
+    config_path = args.config or Path(__file__).parent / "plans" / f"{args.release}.json"
+    config = load_release_config(config_path)
+    if config.release_id != args.release:
+        raise ValueError(f"the config binds release {config.release_id!r}, not {args.release!r}")
+    if args.cluster is not None and args.cluster != config.cluster:
+        raise ValueError(f"the config pins cluster {config.cluster!r}, not {args.cluster!r}")
+
+    def query(sql: str, parameters: dict):
+        return open_paced_query(ATLAS_SERVICE.service_url, ATLAS_SERVICE.applet_id, RetryControl())(sql, parameters)
+
+    derived = derive_release_plan(config, repo_root=REPO_ROOT, query=query)
+    measured = derived.receipt["measured"]
+    print(
+        f"DERIVED {derived.release_id} at freeze {config.freeze_source_revision[:12]}"
+        f" artifact_version={derived.receipt['artifact_version']}: sources={measured['declared_source_count']}"
+        f" prior_sources={measured['prior_source_count']} targets={len(measured['targets'])}"
+        f" population_tasks={measured['expected_population_tasks']} panels={measured['expected_panels']}"
+        f" contract_tasks={measured['expected_contract_tasks']}"
+    )
+    for source_id, count in sorted(measured["population_task_counts"].items()):
+        print(f"POPULATION {source_id} tasks={count} evidence={measured['population_evidence_kinds'][source_id]}")
+    if not args.dry_run:
+        release_root = derived.plan_document["release_root"]
+        plan_ref = seal_derivation(release_root, derived)
+        print(f"SEALED {plan_ref['uri']} sha256={plan_ref['sha256']}")
+        raise ValueError(
+            "release submission rides on the P0 submit/resume --cluster mode (the R40 lane owns"
+            " that plumbing); the derived plan is sealed, and this command composes submission"
+            " once that mode lands"
+        )
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    for node in graph_nodes(release_graph(plan)):
+        deps = ", ".join(dep.split("atlas-release-", 1)[-1] for dep in node["deps"]) or "-"
+        print(f"NODE {node['name']} deps={deps} fp={node['fingerprint'][:12]}")
+    print(f"RELEASE {plan.release_id}: plan derived from state; {len(plan.populations)} populations pinned")
+    return _run_preflight(plan, source=args.source, max_files=args.max_files, stages=None)
 
 
 def mode_run(args, *, force_run_failed: bool) -> int:
@@ -430,8 +497,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="atlas-release",
         description=__doc__.splitlines()[0] if __doc__ else "atlas-release",
     )
-    parser.add_argument("--version", required=True, help="The release id the plan must bind")
-    parser.add_argument("--plan", required=True, type=Path, help="The release plan document (JSON)")
+    parser.add_argument("--version", help="The release id the plan must bind")
+    parser.add_argument("--plan", type=Path, help="The release plan document (JSON)")
     parser.add_argument(
         "--source-revision",
         help=(
@@ -441,6 +508,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     modes = parser.add_subparsers(dest="mode", required=True)
     modes.add_parser("plan", help="Print the lowered graph; I/O-free")
+
+    release_parser = modes.add_parser("release", help="Derive the release plan from the reviewed config and dry-run it")
+    release_parser.add_argument("--release", required=True, help="The release id the config must bind")
+    release_parser.add_argument(
+        "--cluster", help="The cluster the config must pin (the config's cluster is the default)"
+    )
+    release_parser.add_argument(
+        "--config",
+        type=Path,
+        help="The release config document (default: plans/<release>.json in this package)",
+    )
+    release_parser.add_argument("--dry-run", action="store_true", help="Derive and print; write nothing")
+    release_parser.add_argument("--source", help="The census/corpus slice source for the preflight sweep")
+    release_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
 
     preflight_parser = modes.add_parser("preflight", help="Per-stage type-check + small-slice on real inputs")
     preflight_parser.add_argument("--stage", action="append", help="Restrict to one graph node (repeatable)")
@@ -474,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "plan": mode_plan,
         "preflight": mode_preflight,
+        "release": mode_release,
         "status": mode_status,
         "resume": mode_resume,
         "submit": mode_submit,

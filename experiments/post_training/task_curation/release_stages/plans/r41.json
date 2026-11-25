@@ -1,0 +1,39 @@
+{
+  "kind": "atlas-release-config",
+  "release_id": "r41",
+  "cluster": "cw-us-east-02a",
+  "freeze_source_revision": "01e945c0b785834ba204cc6579f5dbc10c65f98d",
+  "prior_release": {
+    "release_id": "r39-admissions-refresh",
+    "declarations": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v27/prior-declarations.json",
+      "sha256": "60b7623525cb964d5a1620fb47a57664a7545aad4cdc592896af0f67933eb8c8"
+    },
+    "identity": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/source-identities-v7.json",
+      "sha256": "bb00732530d2c8ffbe7e924a7048978b1beb99cea8814a25f23a1fea64f311d4"
+    },
+    "backend": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/backend-map-v7.json",
+      "sha256": "ac27b48428b81cbcebdd91e56d9bde7ed1fb90cdfd060d8096148790681f1708"
+    },
+    "composed_release": {
+      "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/release.json",
+      "sha256": "0197190ca1ec1722e5ca83bd89174817e651e4304ca7bc74f8e216f921b1d17f"
+    },
+    "composed_coverage": {
+      "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/coverage.json",
+      "sha256": "3d1651246cb0e28c5dddbae6d6a71d22c6da5a77f34e91d03510a5a1d5b1aac7"
+    },
+    "oracle_inventory": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/oracle-inventory.json",
+      "sha256": "44b3650e04778b4309c5f1d525ec0df60c49c0c07a802f482db13efd6ea53260"
+    },
+    "source_counts": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/source-counts.json",
+      "sha256": "73afceacae585208a2ccb7aac34465c7170a209ba0b8243080e89db8d014794e"
+    }
+  },
+  "production_version": 76,
+  "preview_base_version": 32
+}
