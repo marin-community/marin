@@ -41,7 +41,7 @@ async function load(runId: string, uri: string | null) {
     else if (typeof parsed === 'object' && parsed !== null && 'steps' in parsed && Array.isArray(parsed.steps)) {
       trajectory.value = parsed as Trajectory
     } else {
-      const turns = skyrlTurnsToTrajectory(parsed)
+      const turns = skyrlTurnsToTrajectory(parsed, props.sample.doc_id)
       if (turns === null) throw new Error('Unsupported sample artifact format.')
       trajectory.value = turns
     }
