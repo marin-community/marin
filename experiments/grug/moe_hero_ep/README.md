@@ -316,7 +316,8 @@ The d6144 Hero and eval-enabled diagnostics score the current training length an
 65K, and 262K lengths that training has reached. Each distinct length runs once per scheduled eval
 and logs metrics such as `eval_dropless/seq_len_4096/paloma/macro_loss`. The unqualified
 `eval_dropless/paloma/macro_loss` tracks the training length. Set `GrugEvalConfig.seq_lens` to choose
-other lengths. With `None`, only the training length is scored.
+other lengths. For a single-length eval, leave `seq_lens` unset and use `max_seq_len` to override the
+training length.
 
 Continuous-text validation retains the final partial sequence with right padding and masks padding
 from attention and loss. This keeps PTB and WikiText-103 in the 262K Paloma macro and can change
