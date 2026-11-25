@@ -67,7 +67,7 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | Non
 
 
 def model_candidate(model: ModelConfig) -> PolicyCandidate:
-    """A model outside the policy's candidates, such as a training checkpoint, as a candidate.
+    """Wrap a supplied model, such as a training checkpoint, as a candidate.
 
     Its revision is pinned, and its largest context is the window it is served at. A model that sets no
     window is served at the one its checkpoint declares, stated in its config so records name it.

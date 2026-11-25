@@ -52,8 +52,8 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
     Excluded evaluations are left out. Each setting comes from the candidate's override, else the
     evaluation. An unset context is the benchmark's window if it declares one, else the policy's; a
     context that differs from the benchmark's window is rejected. A context larger than the candidate's
-    window needs an override. A model outside the policy's candidates, such as a training checkpoint, has
-    no exceptions and runs every evaluation.
+    window needs an override. A candidate with no matching exclusions or overrides uses every policy
+    evaluation.
     """
     excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
     overrides = {item.evaluation.name: item for item in policy.overrides if item.candidate == candidate}
