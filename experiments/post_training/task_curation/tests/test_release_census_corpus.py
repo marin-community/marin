@@ -39,6 +39,7 @@ from taskcompendium.models import (
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import corpus_assembly as corpus_stage
+from experiments.post_training.task_curation.release_stages import embed as embed_stage
 from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.tests import census_parallel_fixtures as census_fixtures
@@ -537,6 +538,8 @@ def test_corpus_assembly_end_to_end_after_census(tmp_path):
     corpus = json.loads((tmp_path / "release" / "corpus" / "corpus.json").read_text())
     assert corpus["population"] == "converted"
     assert sum(row["task_count"] for row in corpus["inventory"]) == 2
+    # The embed stage digest-verifies the corpus reference against the written bytes.
+    assert embed_stage.read_corpus(ArtifactRef(**proof["corpus"])) == corpus
     with pytest.raises(ValueError, match="already exists"):
         corpus_stage.run_corpus_assembly(inputs, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
 

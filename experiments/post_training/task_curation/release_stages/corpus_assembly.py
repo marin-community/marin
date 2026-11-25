@@ -163,10 +163,11 @@ def run_corpus_assembly(
             output_root = inputs.output_root
         frozen = frozen_sources_for(rows, census_results, sources_fn=sources_fn)
         prepare_sources(frozen, output_root, workers=inputs.workers)
-        corpus = json.loads((StoragePath(output_root) / "corpus.json").read_text())
+        # The reference binds the bytes prepare_sources wrote, which consumers digest-verify.
+        corpus_raw = (StoragePath(output_root) / "corpus.json").read_bytes()
+        corpus = json.loads(corpus_raw)
         shipped = [row for row in rows if (census_results.get(row.source_id) or {}).get("oracle_empty") is None]
         tasks = verify_corpus(corpus, shipped)
-        corpus_raw = (json.dumps(corpus, indent=2, sort_keys=True) + "\n").encode()
         corpus_ref = {"uri": f"{output_root}/corpus.json", "sha256": hashlib.sha256(corpus_raw).hexdigest()}
         proof = {
             "kind": f"atlas-{inputs.release_id}-{CORPUS_KIND_SUFFIX}",
