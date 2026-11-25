@@ -71,7 +71,7 @@ class MochiSFT:
 
     def with_data_mix(self, data: PreparedData) -> "MochiSFT":
         """Bind a versioned LM data manifest while retaining the training recipe."""
-        return replace(self, run_id=f"{self.run_id}-mix-{data.mix_name()}", prepared_data=data)
+        return replace(self, run_id=f"{self.run_id}-mix-{data.mix_fingerprint()}", prepared_data=data)
 
     def trained(
         self,
