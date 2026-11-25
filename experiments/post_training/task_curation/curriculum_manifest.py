@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Mapping
 
+import draccus
 from marin.rl.curriculum import CurriculumValidation, RlCurriculum, ValidationRow
 
 from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
@@ -35,6 +36,17 @@ def curriculum_from_manifest(manifest: Mapping) -> RlCurriculum:
     """Rebuild a known curriculum and refuse any mismatch with its recorded identity."""
     identity = manifest["curriculum"]
     name = identity.partition("@")[0]
+    if "curriculum_definition" in manifest:
+        curriculum = draccus.decode(RlCurriculum, dict(manifest["curriculum_definition"]))
+        if curriculum.identity != identity:
+            raise ValueError("Recorded curriculum definition differs from the manifest identity")
+        if curriculum.validation != CurriculumValidation(
+            size=manifest["validation"]["size"],
+            seed=manifest["validation"]["seed"],
+            rows=tuple(ValidationRow(**row) for row in manifest["validation"]["rows"]),
+        ):
+            raise ValueError("Recorded curriculum definition differs from the manifest holdout")
+        return curriculum
     if name not in _MANIFEST_BUILDERS:
         raise ValueError(f"Unregistered pool curriculum: {identity}")
     payload = manifest["validation"]

@@ -71,7 +71,9 @@ def test_gate_uses_current_plain_teacher_and_rejects_changed_sampled_logprobs(
     asyncio.run(gate.qualify(SimpleNamespace(server_url="http://draft/v1"), spec, "dspark-check", calibration))
     if sampled_logprob_error:
         with pytest.raises(ValueError, match="dspark-check/autoregressive-correctness"):
-            asyncio.run(gate.qualify(SimpleNamespace(server_url="http://teacher/v1"), spec, "plain-rescore", calibration))
+            asyncio.run(
+                gate.qualify(SimpleNamespace(server_url="http://teacher/v1"), spec, "plain-rescore", calibration)
+            )
         assert not (tmp_path / "correctness-passed.json").exists()
         rejected = json.loads((tmp_path / "dspark-check/autoregressive-correctness.json").read_text())
         assert rejected["difference"]["max_absolute_logprob_error"] == sampled_logprob_error

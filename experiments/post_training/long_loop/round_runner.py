@@ -670,6 +670,9 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     profile = MochiProfile(spec.name, roles, draccus.decode(MegatronGeometry, rl.megatron), execution)
     validate_model_geometry(config, profile)
     pools_manifest_bytes = (StoragePath(prefix_join(rl.pools["uri"], "manifest.json"))).read_bytes()
+    expected_manifest = rl.pools.get("manifest_sha256")
+    if expected_manifest is not None and hashlib.sha256(pools_manifest_bytes).hexdigest() != expected_manifest:
+        raise ValueError("Round pool manifest changed")
     pools_manifest = json.loads(pools_manifest_bytes)
     curriculum = curriculum_from_manifest(pools_manifest)
     files = {
@@ -685,10 +688,12 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         rl.pools["uri"],
         config={"files": files, "curriculum": curriculum.identity},
     )
-    training = tuple(
-        ArtifactDataSource(pools, relative_path=f"{label}/train.parquet")
-        for label in sorted(pools_manifest["composition"])
-    )
+    training_files = pools_manifest.get("training_files") or {
+        label: f"{label}/train.parquet" for label in pools_manifest["composition"]
+    }
+    if set(training_files) != set(pools_manifest["composition"]):
+        raise ValueError("Round training files differ from the curriculum's source populations")
+    training = tuple(ArtifactDataSource(pools, relative_path=training_files[label]) for label in sorted(training_files))
     heldout = ArtifactDataSource(pools, relative_path="validation.parquet")
     # The curriculum derives the rollout buffer's per-route window quotas at the
     # run's batch size; a declared value must match it exactly or name nothing.

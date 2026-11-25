@@ -29,6 +29,7 @@ from skyrl_train.io import io
 
 from experiments.post_training.long_loop.throughput import graph_capture_observed, workload_requests, write_json
 from experiments.post_training.mochi_correctness import (
+    AUTOREGRESSIVE_ARTIFACT,
     MAX_ROUTE_CHOICE_NOISE,
     decode_probes,
     prefix_scores,
@@ -122,7 +123,7 @@ async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibrat
             spec, "plain-rescore/fixed-control", fixed_reference["scores"], teacher, calibration["fixed_bounds"]
         )
         for arm in ("plain-check", "dspark-check"):
-            recorded = json.loads((StoragePath(spec["output"]) / f"{arm}/autoregressive.json").read_text())
+            recorded = json.loads((StoragePath(spec["output"]) / f"{arm}/{AUTOREGRESSIVE_ARTIFACT}").read_text())
             teacher = await prefix_scores(base, list(recorded["scores"].values()), 16)
             require_difference(
                 spec, f"{arm}/autoregressive-correctness", recorded["scores"], teacher, calibration["decode_bounds"]
@@ -150,7 +151,7 @@ async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibrat
         reference = json.loads((StoragePath(spec["output"]) / "plain-check/fixed-reference.json").read_text())
         require_difference(spec, f"{stage}/fixed-correctness", reference["scores"], scores, calibration["fixed_bounds"])
     decoded = await decode_probes(base, calibration["probes"], spec["correctness_seeds"])
-    write_json(spec["output"], f"{stage}/autoregressive.json", decoded)
+    write_json(spec["output"], f"{stage}/{AUTOREGRESSIVE_ARTIFACT}", decoded)
     grouped = sampling_by_prompt(decoded["trajectories"])
     if stage == "plain-check":
         # Rebind the teacher to this policy without changing the frozen noise limits.

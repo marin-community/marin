@@ -82,3 +82,18 @@ print(launch["inputs"]["curriculum"]["sources"])
 The identity recovers the exact mix: rebuild the curriculum with the matching builder using the recorded
 sources, weights, stages, and seed, and its fingerprint must equal the recorded one. A matching
 fingerprint means the rebuilt mix samples identically.
+
+
+## Derive a controlled holdout from recorded inputs
+
+For a historical comparison, pin the original training parquets and curriculum
+record, then draw the new holdout from those exact task documents. Give the
+derived curriculum a new identity and record its parent. A changed validation
+split changes the training population; do not reuse the parent fingerprint.
+
+A published pool manifest may carry the complete typed `curriculum_definition`
+when the parent source recipe versions differ from the current catalog. The
+reader reconstructs `RlCurriculum` and checks both its identity and its holdout
+against the manifest. The round may pin `pools.manifest_sha256`; the native
+preflight refuses changed metadata before constructing its data dependencies.
+No scorer regeneration or dataset conversion is implied by a new split.
