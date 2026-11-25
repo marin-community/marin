@@ -52,7 +52,7 @@ def stage_release_population(
     documents = release_documents(release_repo, revision)
     if len(documents) != manifest["converted_rows"]:
         raise ValueError(f"The release rows differ from its manifest: {len(documents)} != {manifest['converted_rows']}")
-    files = write_text_population((document, {}) for document in documents)
+    files = write_text_population(((document, {}) for document in documents), output_path=output_path)
     if files.task_count != manifest["converted_rows"] or files.task_count == 0:
         raise ValueError("The staged population differs from its completed release manifest")
     return SourceTextPopulation(
