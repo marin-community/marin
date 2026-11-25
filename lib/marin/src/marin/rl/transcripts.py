@@ -8,8 +8,9 @@ EvalDash sample adapter (`infra/marina/apps/evaldash` `skyrlTrajectory.ts`): the
 eval-dump trial row (flat, `uid` + `output_response` + `messages` + `verification`)
 and the SkyRL schema_v7 turn record (`response.messages`, `response.text`,
 `verification_result`, `trajectory.instance_id`). `render_documents` accepts one
-record, a list, or JSONL text; records sharing uid and repetition join into one
-cumulative transcript whose repeated message prefixes collapse.
+record, a list, or JSONL text; records sharing uid and repetition — plus the
+training step for turn records — join into one cumulative transcript whose
+repeated message prefixes collapse.
 """
 
 from __future__ import annotations
@@ -23,15 +24,32 @@ from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 DEFAULT_TRUNCATE_CHARS = 2_000
 THINK_START = "<|start_think|>"
 THINK_END = "<|end_think|>"
+TURN_RECORD_KIND = "turn-v7"
+EVAL_DUMP_KIND = "eval-dump"
 
 # Document blocks are tagged tuples: ("heading", level, text), ("paragraph", text),
-# ("fields", entries), ("code", text, language) and ("details", summary, inner blocks).
+# ("fields", entries), ("code", text, language), ("details", summary, inner).
 Block = tuple
+
+
+class ToolCall(NamedTuple):
+    """One normalized tool call; unparsable JSON arguments keep their raw text."""
+
+    name: str
+    arguments: dict[str, Any]
+
+
+class GroupKey(NamedTuple):
+    """One transcript's identity: records sharing it render together."""
+
+    uid: str
+    repetition: int | None
+    step: int | None
 
 
 def _clip(text: str, limit: int) -> str:
@@ -53,7 +71,7 @@ def _message_text(content: Any) -> str:
     return ""
 
 
-def _tool_calls(value: Any) -> list[dict]:
+def _tool_calls(value: Any) -> list[ToolCall]:
     """Normalize OpenAI-style `tool_calls` entries to name plus parsed arguments."""
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
@@ -67,23 +85,16 @@ def _tool_calls(value: Any) -> list[dict]:
         if not isinstance(name, str) or not name:
             continue
         raw = function.get("arguments") if "arguments" in function else call.get("arguments")
-        if isinstance(raw, str):
+        if isinstance(raw, Mapping):
+            arguments = dict(raw)
+        elif isinstance(raw, str):
             try:
                 arguments = json.loads(raw)
             except json.JSONDecodeError:
                 arguments = {"raw": raw}
-        elif isinstance(raw, Mapping):
-            arguments = dict(raw)
         else:
             arguments = {}
-        call_id = call.get("id")
-        calls.append(
-            {
-                "tool_call_id": call_id if isinstance(call_id, str) else None,
-                "name": name,
-                "arguments": arguments,
-            }
-        )
+        calls.append(ToolCall(name=name, arguments=arguments))
     return calls
 
 
@@ -137,7 +148,7 @@ class Turn:
     model: str
     prompt_text: str
     response_text: str
-    messages: list[Any] | None
+    messages: list[Mapping[str, Any]] | None
     verification: Mapping[str, Any] | None
     stop_reason: str | None
     exception: str | None
@@ -146,9 +157,9 @@ class Turn:
     score: Sequence[float] | None
 
     @property
-    def group_key(self) -> tuple[str, int | None, int | None]:
-        """One transcript per uid, repetition and training step; eval-dump rows group by uid."""
-        return (self.uid, self.repetition, self.step if self.kind == "turn-v7" else None)
+    def group_key(self) -> GroupKey:
+        """One transcript per uid, repetition and, for turn records, training step."""
+        return GroupKey(self.uid, self.repetition, self.step if self.kind == TURN_RECORD_KIND else None)
 
 
 def _numeric_metrics(value: Any) -> dict[str, float]:
@@ -167,14 +178,12 @@ def is_eval_dump_row(value: Any) -> bool:
 
 
 def is_turn_record(value: Any) -> bool:
-    """The SkyRL schema_v7 turn record shape: nested `response` and `verification_result`."""
+    """The SkyRL schema_v7 turn-record shape: `schema_version` 7 with a nested `response`."""
     return _is_record(value) and value.get("schema_version") == 7 and _is_record(value.get("response"))
 
 
 def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
-    step = record.get("ordinal")
-    if not isinstance(step, int):
-        step = record.get("step")
+    step = record.get("ordinal") if isinstance(record.get("ordinal"), int) else record.get("step")
     step = step if isinstance(step, int) else None
     score = record.get("score")
     score = [value for value in score if isinstance(value, (int, float))] if isinstance(score, Sequence) else None
@@ -182,7 +191,7 @@ def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
         uid=record["uid"],
         repetition=None,
         step=step,
-        kind="eval-dump",
+        kind=EVAL_DUMP_KIND,
         session=str(record.get("attempt_id") or ""),
         phase="eval",
         env_class=str(record.get("env_class") or ""),
@@ -213,7 +222,7 @@ def _normalize_turn_record(record: Mapping[str, Any]) -> Turn:
         uid=instance_id if isinstance(instance_id, str) and instance_id else str(record.get("record_id") or ""),
         repetition=repetition if isinstance(repetition, int) else None,
         step=step if isinstance(step, int) else None,
-        kind="turn-v7",
+        kind=TURN_RECORD_KIND,
         session=str(record.get("run_id") or ""),
         phase=str(record.get("phase") or ""),
         env_class=str(trajectory.get("environment_class") or ""),
@@ -262,7 +271,7 @@ def _verification_fields(turn: Turn) -> list[tuple[str, str]]:
     return entries
 
 
-def _turn_blocks(turn: Turn, messages: Sequence[Any], *, truncate: int) -> list[Any]:
+def _turn_blocks(messages: Sequence[Mapping[str, Any]], *, truncate: int) -> list[Block]:
     blocks: list[Any] = []
     for message in messages:
         if not isinstance(message, Mapping):
@@ -290,13 +299,13 @@ def _turn_blocks(turn: Turn, messages: Sequence[Any], *, truncate: int) -> list[
         elif text:
             blocks.append(("paragraph", text))
         for call in calls:
-            blocks.append(("paragraph", f"**Tool call: `{call['name']}`**"))
-            blocks.append(("code", json.dumps(call["arguments"], indent=2), "json"))
+            blocks.append(("paragraph", f"**Tool call: `{call.name}`**"))
+            blocks.append(("code", json.dumps(call.arguments, indent=2), "json"))
     return blocks
 
 
-def _raw_response_blocks(turn: Turn) -> list[Any]:
-    """Render the raw response text when it adds anything beyond the message turns."""
+def _raw_response_blocks(turn: Turn) -> list[Block]:
+    """Render raw response thinking that the message turns do not already carry."""
     if not turn.response_text:
         return []
     if turn.messages is None:
@@ -315,6 +324,17 @@ def _raw_response_blocks(turn: Turn) -> list[Any]:
     return [("heading", 3, "assistant — raw response"), ("details", "Thinking", tuple(thinking))]
 
 
+def _outcome_entries(turn: Turn) -> list[tuple[str, str]]:
+    """The outcome facts shared by the document header and per-step outcome lines."""
+    entries: list[tuple[str, str]] = []
+    if turn.stop_reason:
+        entries.append(("stop reason", turn.stop_reason))
+    entries.extend(_verification_fields(turn))
+    if turn.exception:
+        entries.append(("exception", turn.exception))
+    return entries
+
+
 def _header_fields(turn: Turn) -> Block:
     entries = [("uid", turn.uid)]
     entries += [
@@ -330,11 +350,7 @@ def _header_fields(turn: Turn) -> Block:
     ]
     if turn.step is not None:
         entries.append(("step", str(turn.step)))
-    entries.extend(_verification_fields(turn))
-    if turn.stop_reason:
-        entries.append(("stop reason", turn.stop_reason))
-    if turn.exception:
-        entries.append(("exception", turn.exception))
+    entries.extend(_outcome_entries(turn))
     for label, metric in (
         ("generated tokens", "episode/generated_tokens"),
         ("assistant turns", "episode/assistant_turns"),
@@ -349,12 +365,7 @@ def _header_fields(turn: Turn) -> Block:
 
 
 def _turn_outcome_fields(turn: Turn) -> Block:
-    entries = [("step", str(turn.step))] if turn.step is not None else []
-    if turn.stop_reason:
-        entries.append(("stop reason", turn.stop_reason))
-    entries.extend(_verification_fields(turn))
-    if turn.exception:
-        entries.append(("exception", turn.exception))
+    entries = ([("step", str(turn.step))] if turn.step is not None else []) + _outcome_entries(turn)
     return ("fields", tuple(entries))
 
 
@@ -362,32 +373,30 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-") or "record"
 
 
-def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> Iterator[tuple[str, list[Any]]]:
-    """Yield `(slug, blocks)` documents from one record, a list of them, or JSONL text.
+def _records_from_input(parsed: Any) -> list[Any]:
+    """Accept one record, a list of them, or JSONL text (one record or list per line)."""
+    if isinstance(parsed, list):
+        return list(parsed)
+    if not isinstance(parsed, str):
+        return [parsed]
+    records: list[Any] = []
+    for line in parsed.splitlines():
+        if line.strip():
+            records.extend(value if isinstance(value := json.loads(line), list) else [value])
+    return records
 
-    Records sharing uid and repetition join into one cumulative transcript whose
-    repeated message prefixes collapse; each record's outcome rides its turns.
-    """
-    if isinstance(parsed, str):
-        records: list[Any] = []
-        for line in parsed.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            value = json.loads(line)
-            records.extend(value if isinstance(value, list) else [value])
-    elif isinstance(parsed, list):
-        records = list(parsed)
-    else:
-        records = [parsed]
-    groups: dict[tuple[str, int | None, int | None], list[Turn]] = defaultdict(list)
+
+def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> Iterator[tuple[str, list[Block]]]:
+    """Yield `(slug, blocks)` documents from one record, a list, or JSONL text."""
+    records = _records_from_input(parsed)
+    groups: dict[GroupKey, list[Turn]] = defaultdict(list)
     for record in records:
         turn = normalize(record)
         if turn is None:
             raise ValueError("record is not a SkyRL eval-dump row or schema_v7 turn record")
         groups[turn.group_key].append(turn)
     for key, group_turns in groups.items():
-        uid, repetition = key[0], key[1]
+        uid, repetition = key.uid, key.repetition
         turns = sorted(group_turns, key=lambda turn: (turn.step is None, turn.step or 0))
         blocks: list[Any] = [
             ("heading", 1, f"Rollout {uid}" + (f" · repetition {repetition}" if repetition is not None else "")),
@@ -401,7 +410,7 @@ def render_documents(parsed: Any, *, truncate: int = DEFAULT_TRUNCATE_CHARS) -> 
             previous = messages if turn.messages is not None else previous
             if not fresh and turn.prompt_text:
                 fresh = [{"role": "user", "content": turn.prompt_text}]
-            blocks.extend(_turn_blocks(turn, fresh, truncate=truncate))
+            blocks.extend(_turn_blocks(fresh, truncate=truncate))
             blocks.extend(_raw_response_blocks(turn))
             if len(turns) > 1 and (outcome := _turn_outcome_fields(turn))[1]:
                 blocks.append(outcome)

@@ -207,8 +207,6 @@ def test_same_instance_rerolled_at_a_later_step_renders_separately() -> None:
         {"content": "21", "role": "assistant"},
     ]
     documents = list(render_documents([SCHEMA_V7_RECORD, later]))
-    # One instance re-rolled at a later training step is a separate rollout, even
-    # though both documents share a uid and repetition.
     assert len(documents) == 2
     texts = [to_markdown(blocks) for _, blocks in documents]
     assert any("- **step:** 7" in text for text in texts)
@@ -251,5 +249,9 @@ def test_html_render_escapes_and_renders_details() -> None:
     assert "<!DOCTYPE html>" in page
     assert "<details><summary>Thinking</summary>" in page
     assert "<h3>user</h3>" in page
-    # Message text is escaped, not interpreted.
-    assert "<p>Question: 40 pupils; half like blue.</p>" in page
+    # HTML-sensitive text renders escaped, not interpreted.
+    sensitive = json.loads(json.dumps(SCHEMA_V7_RECORD))
+    sensitive["response"]["messages"][0]["content"] = "a < b & c > d"
+    ((_, blocks),) = list(render_documents(sensitive))
+    page = to_html(blocks)
+    assert "a &lt; b &amp; c &gt; d" in page
