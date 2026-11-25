@@ -205,6 +205,8 @@ R41_PENDING_SOURCE_IDS = (
         # The Workplace admission landed after the 2026-11-24 freeze ruling: R40's source
         # set is frozen at the cut, so the newly admitted population routes to R41.
         "Nvidia:Nemotron-RL-agent-workplace_assistant",
+        # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
+        "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
     }
 )
 
@@ -222,6 +224,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *endless.cohort_source(),
     *pymethods2test.sources(),
     *workplace.sources(),
+    *hierarchy_intake.sources(),
     *(
         source
         for source in campaign_releases.sources()
