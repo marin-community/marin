@@ -165,7 +165,7 @@ as the numerical reference.
 
 ## Batch assembly
 
-The default `trainer.batch_builder=auto` selects policy workers at startup when the configuration supports them. It logs the choice and the reason if it selects the driver. Use `--set trainer.batch_builder=driver` with `experiments.post_training.async_rl` to select the driver explicitly. Explicit `worker` rejects these configurations:
+The default `trainer.batch_builder=auto` selects policy workers at startup when the configuration supports them. It logs the choice and the reason if it selects the driver. Set `trainer.batch_builder=driver` in the recipe to select the driver explicitly. Explicit `worker` rejects these configurations:
 
 | Worker startup refusal | Configurations |
 | --- | --- |
