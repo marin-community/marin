@@ -179,8 +179,8 @@ WITH engine_rows AS (
     SELECT * FROM "telemetry_v1.marinskyrl" WHERE service = 'marinskyrl'
 ), filtered AS (
     -- Reduce the scan to the narrow per-series facts the deltas need before any
-    -- JSON work: the metric-name predicate prunes millions of rows cheaply, and
-    -- the run's trainer rows never carry these engine names. The resource and
+    -- JSON work: the metric-name predicate prunes ordinary trainer rows, while
+    -- embedded vLLM rows retain these names. The resource and
     -- attribute hashes stand in for the old query's per-row JSON partition keys
     -- so one engine actor per registry stays its own series.
     SELECT service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
@@ -225,12 +225,9 @@ WITH engine_rows AS (
     FROM sampled
 ), growth AS (
     SELECT *,
-           -- The per-sample clamped sum, rebuilt from ordered aggregates: the step
-           -- across the bucket boundary plus the bucket's own ordered steps. A
-           -- reset inside the bucket (an ordered drop the spread cannot hide)
-           -- splits it at the drop: the pre-reset climb reaches counter_max and
-           -- the post-reset climb starts at counter_min. More than one reset in
-           -- one bucket collapses to the outermost pair.
+           -- Combine the cross-bucket step with the bucket's ordered endpoints.
+           -- For an in-bucket drop, the extrema approximate growth on each side.
+           -- Overlapping pre- and post-reset values or multiple resets can inflate it.
            CASE
                WHEN previous_end IS NULL AND sample_count = 1 THEN NULL
                WHEN counter_start > counter_min OR counter_end < counter_max

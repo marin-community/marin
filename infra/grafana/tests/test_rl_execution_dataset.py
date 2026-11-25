@@ -90,16 +90,12 @@ def query(database, title, *, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     target = PANELS[title]["targets"][0]
     selected = dataset(window_ms=window_ms, bucket_ms=bucket_ms)
     for source in selected.sources:
-        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {_duckdb_sql(source.sql)}')
+        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {finelog_sql_for_duckdb(source.sql)}')
     view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
     cursor = database.execute(selected.views[view])
     columns = [column[0] for column in cursor.description]
     assert columns == [column["selector"] for column in target["columns"]]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
-
-
-def _duckdb_sql(sql: str) -> str:
-    return finelog_sql_for_duckdb(sql)
 
 
 class TelemetryRow(NamedTuple):
@@ -596,7 +592,7 @@ def _bridge(database, *, max_rows=1000):
 
     def query_source(sql, *, max_rows):
         queries.append(sql)
-        return database.execute(_duckdb_sql(sql)).fetch_arrow_table()
+        return database.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
 
     source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
     return create_app(replace(bridge_config(), max_rows=max_rows), {"marin": source}, {}, None, None, None), queries
@@ -772,7 +768,7 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
         assert 0 < len(response.json()) <= RL_EXECUTION_MAX_RESULT_ROWS
         assert 0 < len({row["t"] for row in response.json() if row["section"] == "policy_step"}) <= 360
         for source in selected.sources:
-            rows = store.execute(_duckdb_sql(source.sql)).fetch_arrow_table()
+            rows = store.execute(finelog_sql_for_duckdb(source.sql)).fetch_arrow_table()
             assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         for panel in PANELS.values():
             for target in panel["targets"]:
@@ -785,11 +781,11 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
     gpu = rl_gpu_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + 7 * 60 * 60 * 1000, 60000)
     sources = (*overview.sources, *gpu.sources)
     narrow_counts = {
-        source.name: store.execute(_duckdb_sql(source.sql)).fetch_arrow_table().num_rows for source in sources
+        source.name: store.execute(finelog_sql_for_duckdb(source.sql)).fetch_arrow_table().num_rows for source in sources
     }
     _long_run_nodes(store, 8)
     for source in sources:
-        rows = store.execute(_duckdb_sql(source.sql)).fetch_arrow_table()
+        rows = store.execute(finelog_sql_for_duckdb(source.sql)).fetch_arrow_table()
         assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         assert rows.num_rows == narrow_counts[source.name] + (7 * 8 * 2 if source.name == "gpu" else 0)
     app, _ = _bridge(store, max_rows=RL_EXECUTION_MAX_RESULT_ROWS)

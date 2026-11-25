@@ -35,12 +35,7 @@ def install_finelog_dialect_macros(database) -> None:
 
 
 def finelog_sql_for_duckdb(sql: str) -> str:
-    """Rewrite the finelog spellings no macro can alias.
-
-    Finelog's engine (DataFusion) names the ordered aggregates first_value and
-    last_value; DuckDB spells the same aggregates first and last, and a macro
-    cannot absorb the ORDER BY clause inside the call.
-    """
+    """Translate Finelog's ordered aggregate names to DuckDB's names."""
     sql = re.sub(r"first_value\(", "first(", sql, flags=re.IGNORECASE)
     return re.sub(r"last_value\(", "last(", sql, flags=re.IGNORECASE)
 

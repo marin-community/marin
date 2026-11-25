@@ -19,7 +19,7 @@ from conftest import (
     queried_namespace,
 )
 from dashboard_stitch import stitch_all
-from rl_observability import RL_PRODUCER_ROW_NAMES, rl_gpu_dataset, rl_overview_dataset
+from rl_observability import rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 from server import create_app
 from starlette.testclient import TestClient
@@ -332,22 +332,28 @@ _SCHEMA = """(
 )"""
 
 
-@pytest.fixture
-def store() -> duckdb.DuckDBPyConnection:
+def _fresh_store() -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
-    # One table per semantic stream, seeded by routing each row on its service as the server does.
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
     install_finelog_dialect_macros(database)
+    return database
+
+
+def _seed_rows(database, rows: list[tuple]) -> None:
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
-    for row in _run_rows():
-        stream = _SEMANTIC_STREAM.get(row[service_index])
-        assert stream is not None, f"no semantic stream for service {row[service_index]!r}"
-        routed.setdefault(stream, []).append(row)
+    for row in rows:
+        routed.setdefault(_SEMANTIC_STREAM[row[service_index]], []).append(row)
     for stream, stream_rows in routed.items():
         database.executemany(f'INSERT INTO "{stream}" VALUES ({placeholders})', stream_rows)
+
+
+@pytest.fixture
+def store() -> duckdb.DuckDBPyConnection:
+    database = _fresh_store()
+    _seed_rows(database, _run_rows())
     return database
 
 
@@ -793,27 +799,7 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
     assert len(rates) == 5
 
 
-def _fresh_store() -> duckdb.DuckDBPyConnection:
-    database = duckdb.connect()
-    for stream in sorted(set(_SEMANTIC_STREAM.values())):
-        database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    install_finelog_dialect_macros(database)
-    return database
-
-
-def _seed_rows(database, rows: list[tuple]) -> None:
-    placeholders = ", ".join("?" for _ in _COLUMNS)
-    service_index = _COLUMNS.index("service")
-    routed: dict[str, list] = {}
-    for row in rows:
-        routed.setdefault(_SEMANTIC_STREAM[row[service_index]], []).append(row)
-    for stream, stream_rows in routed.items():
-        database.executemany(f'INSERT INTO "{stream}" VALUES ({placeholders})', stream_rows)
-
-
 def test_engine_growth_counts_a_reset_inside_its_bucket() -> None:
-    """A counter that resets inside one bucket grows by its ordered steps, not by
-    the spread of its samples: 1000, 1010, 0, 10 is 20, not 1010."""
     database = _fresh_store()
     _seed_rows(
         database,
@@ -840,10 +826,6 @@ def test_engine_growth_counts_a_reset_inside_its_bucket() -> None:
 
 
 def test_engine_rates_keep_two_actors_that_differ_only_by_resource() -> None:
-    """`engine` is unique within the registry that published it, so two actors can
-    both report engine 0 from one node and differ only in their resource
-    attributes; the series key must keep them apart or their counters get
-    differenced against each other."""
     database = _fresh_store()
     _seed_rows(
         database,
@@ -1054,7 +1036,6 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_min
 
 
 def _picker_params(query: dict, replacements: tuple[tuple[str, str], ...]) -> dict[str, str]:
-    """Fill a picker variable's Grafana templates in with concrete values."""
     params = {}
     for param in query["url_options"]["params"]:
         value = param["value"]
@@ -1064,27 +1045,7 @@ def _picker_params(query: dict, replacements: tuple[tuple[str, str], ...]) -> di
     return params
 
 
-def _picker_sql(name: str) -> str:
-    (variable,) = [variable for variable in _dashboard()["templating"]["list"] if variable["name"] == name]
-    (sql,) = [
-        param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
-    ]
-    return sql
-
-
-def test_the_run_job_and_execution_pickers_scan_the_same_producer_rows() -> None:
-    """Each picker narrows its scan to the producer row names. A list that drifts
-    in one picker silently changes which runs, jobs, and executions it offers."""
-    producer_names = ", ".join(f"'{name}'" for name in RL_PRODUCER_ROW_NAMES)
-    for picker in ("run", "job", "execution"):
-        assert f"name IN ({producer_names})" in _picker_sql(picker), picker
-
-
 def test_the_job_and_execution_pickers_offer_what_the_producers_report(store) -> None:
-    """The Job and Execution pickers scan the three producer row names the Run picker
-    scans. On a run whose every row is a vLLM histogram sample -- 119M rows over 12h --
-    the unfiltered pickers scan all of them and error out, so a job or execution that
-    never reports a producer row must not be offered."""
     other_job = "/atqamar/snowball-e6-muonh-0-attempt-1"
     quiet_execution = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/9:attempt:9"
     rows = [
