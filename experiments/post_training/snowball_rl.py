@@ -10,7 +10,6 @@ from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
-from finestore.rl.run_records import RL_WANDB_PROJECT
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactHfModel,
@@ -94,7 +93,7 @@ _DEFAULT_PATCH = RL_TRAINING_BASE.merge(
             epochs=50,
             eval_batch_size=256,
             eval_before_train=False,
-            project_name=RL_WANDB_PROJECT,
+            project_name="marin-snowball-rl",
             algorithm=sections.Algorithm(
                 off_policy_correction="none",
                 kl_estimator_type="k3_unbiased_gradient",

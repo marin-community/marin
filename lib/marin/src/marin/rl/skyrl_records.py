@@ -7,7 +7,6 @@ from typing import Any, TypedDict
 
 import yaml
 from finestore.rl.run_records import (
-    RL_WANDB_PROJECT,
     AttemptRecord,
     LaunchReceipt,
     read_attempt,
@@ -210,9 +209,7 @@ def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTr
         vllm_env={key: value for key, value in config.task_env.items() if key.startswith("VLLM_")},
         vllm_version=record.vllm_version,
     )
-    # Indexed receipts without a launch index used the shared W&B project.
-    legacy_index = record.index is not None and record.native.config["run"].get("index") is None
-    project = RL_WANDB_PROJECT if legacy_index else config.project_name
+    project = record.index.wandb_project if record.index is not None else config.project_name
     wandb_url = (
         f"https://wandb.ai/{config.wandb_entity}/{project}/runs/{record.attempt_id}"
         if config.wandb_entity and "wandb" in config.logger

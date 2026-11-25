@@ -576,7 +576,6 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         config["skyrl"].pop("runtime", None)
     # Grader reports are attempt diagnostics, like other launch-output destinations.
     trainer = config["skyrl"]["trainer"]
-    trainer.pop("project_name", None)
     trainer.pop("grader_report_dir", None)
     trainer.pop("dump_grader_report", None)
     for section in ("trainer", "checkpoint_export"):

@@ -89,6 +89,7 @@ class RunIndexIdentity(BaseModel):
     preset: Identity
     preset_version: Identity
     is_control: bool = False
+    wandb_project: Identity = RL_WANDB_PROJECT
     user: Identity
     branch: str | None
     source_revision: Identity
