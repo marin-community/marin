@@ -44,7 +44,7 @@ from taskcompendium.pipeline.assessment import assessment_inputs, assessment_jud
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignStatus
-from experiments.post_training.task_curation.curation_catalog import RUNS, CurationSource
+from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -198,10 +198,16 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             pointer = catalog.view.point(CURRENT, name="latest")
             # Persisted rows may carry historical IDs; the generated identity reconciles them,
             # and a row already stored under its generated identity wins over its alias row.
-            previous: dict[str, CurationSource] = {}
+            previous: dict[str, SnapshotSource] = {}
             for row in catalog.sources(pointer["snapshot_id"]) if pointer else []:
                 key = canonical_source_id(row.id)
                 if key not in previous or row.id == key:
+                    if row.id != key:
+                        # A row matched through its alias publishes under its generated identity,
+                        # so a renamed source keeps one row and its carried assessment joins by key.
+                        row = row.model_copy(
+                            update={"id": key, "declaration": row.declaration.model_copy(update={"id": key})}
+                        )
                     previous[key] = row
             if run["started_at"] is None:
                 raise ValueError(f"Campaign {run_id} has no start time")

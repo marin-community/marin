@@ -790,6 +790,17 @@ def _canonical_ids(sources: dict[str, str]) -> dict[str, str]:
     return canonical
 
 
+def _canonical_eval_lite_sources(parts: tuple[EvalLiteSource, ...]) -> tuple[EvalLiteSource, ...]:
+    """Resolve historical panel source keys to generated identities, refusing a silent collapse."""
+    canonical: dict[str, EvalLiteSource] = {}
+    for part in parts:
+        resolved = canonical_source_id(part.source_id)
+        if resolved in canonical:
+            raise ValueError(f"Panel sources collapse onto one identity: {resolved}")
+        canonical[resolved] = part.model_copy(update={"source_id": resolved})
+    return tuple(canonical.values())
+
+
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind admitted sources and fixed evaluation exclusions to a versioned training selection."""
     limits = (
@@ -1078,6 +1089,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
 
 def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> ArtifactStep[Artifact]:
     """Bind panel sources and training/development exclusions to their versioned artifacts."""
+    recipe = recipe.model_copy(update={"sources": _canonical_eval_lite_sources(recipe.sources)})
     missing = {part.source_id for part in recipe.sources} - curated.keys()
     if missing:
         raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")

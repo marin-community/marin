@@ -431,6 +431,135 @@ SOURCE_ID_ALIASES: dict[str, str] = {
     "Task Trove:SWE-Gym__SWE-Gym": "TaskTrove:SWE-Gym__SWE-Gym",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+    # The identity rewrite of main's declarations renamed these published IDs; the
+    # checked-in rename join (tests/source_id_renames.json) asserts the table
+    # resolves every one of them.
+    "Campaign Release:smartie-calibforge-admitted": "TaskTrove:smartie-calibforge-admitted",
+    "Campaign Release:smartie-swesmith-staged-v1": "TaskTrove:smartie-swesmith-staged-v1",
+    "Campaign Release:smartie-swesmith-staged-v2": "TaskTrove:smartie-swesmith-staged-v2",
+    "Checkpoint:agieval_lsat_ar": "lm-eval:agieval_lsat_ar",
+    "Checkpoint:bbh_cot_fewshot-boolean_expressions": "lm-eval:bbh_cot_fewshot-boolean_expressions",
+    "Checkpoint:bbh_cot_fewshot-causal_judgement": "lm-eval:bbh_cot_fewshot-causal_judgement",
+    "Checkpoint:bbh_cot_fewshot-date_understanding": "lm-eval:bbh_cot_fewshot-date_understanding",
+    "Checkpoint:bbh_cot_fewshot-disambiguation_qa": "lm-eval:bbh_cot_fewshot-disambiguation_qa",
+    "Checkpoint:bbh_cot_fewshot-dyck_languages": "lm-eval:bbh_cot_fewshot-dyck_languages",
+    "Checkpoint:bbh_cot_fewshot-formal_fallacies": "lm-eval:bbh_cot_fewshot-formal_fallacies",
+    "Checkpoint:bbh_cot_fewshot-geometric_shapes": "lm-eval:bbh_cot_fewshot-geometric_shapes",
+    "Checkpoint:bbh_cot_fewshot-hyperbaton": "lm-eval:bbh_cot_fewshot-hyperbaton",
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_five_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_five_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_seven_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_seven_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_three_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_three_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-movie_recommendation": "lm-eval:bbh_cot_fewshot-movie_recommendation",
+    "Checkpoint:bbh_cot_fewshot-multistep_arithmetic_two": "lm-eval:bbh_cot_fewshot-multistep_arithmetic_two",
+    "Checkpoint:bbh_cot_fewshot-navigate": "lm-eval:bbh_cot_fewshot-navigate",
+    "Checkpoint:bbh_cot_fewshot-object_counting": "lm-eval:bbh_cot_fewshot-object_counting",
+    "Checkpoint:bbh_cot_fewshot-penguins_in_a_table": "lm-eval:bbh_cot_fewshot-penguins_in_a_table",
+    "Checkpoint:bbh_cot_fewshot-reasoning_about_colored_objects": (
+        "lm-eval:bbh_cot_fewshot-reasoning_about_colored_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-ruin_names": "lm-eval:bbh_cot_fewshot-ruin_names",
+    "Checkpoint:bbh_cot_fewshot-salient_translation_error_detection": (
+        "lm-eval:bbh_cot_fewshot-salient_translation_error_detection"
+    ),
+    "Checkpoint:bbh_cot_fewshot-snarks": "lm-eval:bbh_cot_fewshot-snarks",
+    "Checkpoint:bbh_cot_fewshot-sports_understanding": "lm-eval:bbh_cot_fewshot-sports_understanding",
+    "Checkpoint:bbh_cot_fewshot-temporal_sequences": "lm-eval:bbh_cot_fewshot-temporal_sequences",
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_five_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_five_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_seven_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_seven_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_three_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_three_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-web_of_lies": "lm-eval:bbh_cot_fewshot-web_of_lies",
+    "Checkpoint:bbh_cot_fewshot-word_sorting": "lm-eval:bbh_cot_fewshot-word_sorting",
+    "Checkpoint:commonsense_qa": "lm-eval:commonsense_qa",
+    "Checkpoint:copa": "lm-eval:copa",
+    "Checkpoint:gsm8k_cot": "lm-eval:gsm8k_cot",
+    "Checkpoint:humaneval-10shot": "Evalchemy:humaneval@10shot",
+    "Checkpoint:leaderboard_bbh-boolean_expressions": "lm-eval:leaderboard_bbh-boolean_expressions",
+    "Checkpoint:leaderboard_bbh-causal_judgement": "lm-eval:leaderboard_bbh-causal_judgement",
+    "Checkpoint:leaderboard_bbh-date_understanding": "lm-eval:leaderboard_bbh-date_understanding",
+    "Checkpoint:leaderboard_bbh-disambiguation_qa": "lm-eval:leaderboard_bbh-disambiguation_qa",
+    "Checkpoint:leaderboard_bbh-formal_fallacies": "lm-eval:leaderboard_bbh-formal_fallacies",
+    "Checkpoint:leaderboard_bbh-geometric_shapes": "lm-eval:leaderboard_bbh-geometric_shapes",
+    "Checkpoint:leaderboard_bbh-hyperbaton": "lm-eval:leaderboard_bbh-hyperbaton",
+    "Checkpoint:leaderboard_bbh-logical_deduction_five_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_five_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-logical_deduction_seven_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_seven_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-logical_deduction_three_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_three_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-movie_recommendation": "lm-eval:leaderboard_bbh-movie_recommendation",
+    "Checkpoint:leaderboard_bbh-navigate": "lm-eval:leaderboard_bbh-navigate",
+    "Checkpoint:leaderboard_bbh-object_counting": "lm-eval:leaderboard_bbh-object_counting",
+    "Checkpoint:leaderboard_bbh-penguins_in_a_table": "lm-eval:leaderboard_bbh-penguins_in_a_table",
+    "Checkpoint:leaderboard_bbh-reasoning_about_colored_objects": (
+        "lm-eval:leaderboard_bbh-reasoning_about_colored_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-ruin_names": "lm-eval:leaderboard_bbh-ruin_names",
+    "Checkpoint:leaderboard_bbh-salient_translation_error_detection": (
+        "lm-eval:leaderboard_bbh-salient_translation_error_detection"
+    ),
+    "Checkpoint:leaderboard_bbh-snarks": "lm-eval:leaderboard_bbh-snarks",
+    "Checkpoint:leaderboard_bbh-sports_understanding": "lm-eval:leaderboard_bbh-sports_understanding",
+    "Checkpoint:leaderboard_bbh-temporal_sequences": "lm-eval:leaderboard_bbh-temporal_sequences",
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_five_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_five_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_seven_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_seven_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_three_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_three_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-web_of_lies": "lm-eval:leaderboard_bbh-web_of_lies",
+    "Checkpoint:leaderboard_gpqa-diamond": "lm-eval:leaderboard_gpqa-diamond",
+    "Checkpoint:leaderboard_gpqa-extended": "lm-eval:leaderboard_gpqa-extended",
+    "Checkpoint:leaderboard_gpqa-main": "lm-eval:leaderboard_gpqa-main",
+    "Checkpoint:leaderboard_mmlu_pro": "lm-eval:leaderboard_mmlu_pro",
+    "Checkpoint:medmcqa": "lm-eval:medmcqa",
+    "Checkpoint:minerva_math-algebra": "lm-eval:minerva_math-algebra",
+    "Checkpoint:minerva_math-counting_and_probability": "lm-eval:minerva_math-counting_and_probability",
+    "Checkpoint:minerva_math-geometry": "lm-eval:minerva_math-geometry",
+    "Checkpoint:minerva_math-intermediate_algebra": "lm-eval:minerva_math-intermediate_algebra",
+    "Checkpoint:minerva_math-number_theory": "lm-eval:minerva_math-number_theory",
+    "Checkpoint:minerva_math-prealgebra": "lm-eval:minerva_math-prealgebra",
+    "Checkpoint:minerva_math-precalculus": "lm-eval:minerva_math-precalculus",
+    "Checkpoint:pubmedqa": "lm-eval:pubmedqa",
+    "Checkpoint:wsc273": "lm-eval:wsc273",
+    "Eval:arc-agi-2": "Evalchemy:arc-agi-2",
+    "Eval:facts-grounding-v2": "Evalchemy:facts-grounding-v2",
+    "Eval:genomeqa": "Evalchemy:genomeqa",
+    "Eval:lexam-mcq-4-de": "Evalchemy:lexam-mcq-4-de",
+    "Eval:lexam-mcq-4-en": "Evalchemy:lexam-mcq-4-en",
+    "Eval:medmcqa-cot": "Evalchemy:medmcqa-cot",
+    "Eval:mmlu-redux": "Evalchemy:mmlu-redux",
+    "Eval:pdbthink": "Evalchemy:pdbthink",
+    "Eval:physics-verified": "Evalchemy:physics-verified",
+    "Eval:supergpqa": "Evalchemy:supergpqa",
+    "Hugging Face:marcusm117/ProofNet-Verified": "marcusm117:ProofNet-Verified",
+    "Hugging Face:project-numina/NuminaMath-LEAN": "project-numina:NuminaMath-LEAN",
+    "LongBenchV2:no-thinking": "lm-eval:LongBench-v2@no-thinking",
+    "LongBenchV2:thinking": "lm-eval:LongBench-v2@thinking",
+    "NeMo:predicted-action": "Nemotron:predicted-action",
+    "Task Trove:AweAI-Team__CalibForge": "TaskTrove:AweAI-Team__CalibForge",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__code": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__code",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
+    "frontierscience-olympiad": "OpenAI:frontierscience-olympiad",
+    "frontierscience-research": "OpenAI:frontierscience-research",
 }
 
 

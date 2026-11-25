@@ -1068,8 +1068,8 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
     families = {task_id: row.family for task_id, row in annotations.items()}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
-    assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
-    assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
+    assert counts["Evalchemy:questions"]["overlap"] == counts["Nemotron:predicted-action"]["overlap"] == 1
+    assert counts["Nemotron:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
     assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
     saturated = fast[-1]
     measured_tasks = [task for task in full if task.id != saturated.id] + [saturated]
@@ -1204,7 +1204,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         publish_eval_lite(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
 
 
-LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: NeMo:predicted-action"
+LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: Nemotron:predicted-action"
 PROXY = ("eval", "tool-call-proxy")
 TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "judge": (

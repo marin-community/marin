@@ -403,7 +403,9 @@ An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceOrigin` naming the upstream provider; internal campaigns and pipelines
 belong in `build_path`. Stored records written under historical IDs resolve
 through the alias table (`finestore.rl.source_identity`) where they are read -
-recipes, corpora and catalog joins canonicalize both sides, so historical keys
+recipes, corpora and catalog joins canonicalize both sides, publication re-keys
+a matched prior row onto its generated identity, and the Atlas load compares a
+selected assessment's source through the same aliases, so historical keys
 select renamed sources. Every source states its `data_restriction` tier
 explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store,
 and the declaration and every derived artifact inherit it. `current_release`
