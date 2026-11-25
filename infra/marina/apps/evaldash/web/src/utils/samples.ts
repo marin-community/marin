@@ -27,6 +27,22 @@ function graderError(row: SampleRow): string | null {
   }
 }
 
+/** The verifier's own note from `grading.detail`, shown when a row carries nothing to compare. */
+function gradingNote(row: SampleRow): string {
+  let parsed: { reason?: unknown; status?: unknown; score?: unknown } = {}
+  try {
+    parsed = JSON.parse(row.grading?.detail ?? '{}')
+  } catch {
+    return '' // detail is the grader's free-form JSON escape hatch
+  }
+  if (typeof parsed.reason === 'string' && parsed.reason) return ` (${parsed.reason})`
+  const status = typeof parsed.status === 'string' ? parsed.status : null
+  const score = typeof parsed.score === 'number' ? `score ${parsed.score}` : null
+  if (status && score) return ` (${status}, ${score})`
+  if (status || score) return ` (${status ?? score})`
+  return ''
+}
+
 /** A grader error takes precedence; continuous scores have a scored outcome without pass/fail. */
 export function sampleOutcome(row: SampleRow): SampleOutcome {
   if (graderError(row)) return 'errored'
@@ -91,6 +107,11 @@ export function sampleHint(row: SampleRow): string {
   // generation
   const extracted = row.extracted ?? row.output ?? ''
   const target = gsm8kGradedReference(row) ?? row.target_text ?? ''
-  if (sampleOutcome(row) === 'ungraded') return `“${truncate(extracted)}” (ungraded)`
-  return row.correct ? `“${truncate(extracted)}” ✓` : `“${truncate(extracted)}” vs “${truncate(target)}”`
+  const answer = truncate(extracted)
+  const reference = truncate(target)
+  if (sampleOutcome(row) === 'ungraded') return answer ? `“${answer}” (ungraded)` : `ungraded${gradingNote(row)}`
+  if (row.correct) return answer ? `“${answer}” ✓` : `✓${gradingNote(row)}`
+  // No reference recorded: the answer alone, or the verifier's note when the row said nothing.
+  if (!reference) return answer ? `“${answer}”` : `no answer${gradingNote(row)}`
+  return `“${answer}” vs “${reference}”`
 }
