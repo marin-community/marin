@@ -30,6 +30,11 @@ from marin.training.run_environment import dependency_groups_for_resources
 P = ParamSpec("P")
 R = TypeVar("R")
 
+# The dispatched child jobs' retry policy: constants, not caller flags. A child
+# tolerates transient failures like the root job does; a deterministic failure
+# burns the cap and fails with the node's error.
+DISPATCHED_JOB_MAX_RETRIES_FAILURE = 2
+DISPATCHED_JOB_MAX_TASK_FAILURES = 6
 DEFAULT_JOB_NAME = "remote_job"
 
 
@@ -83,6 +88,12 @@ class RemoteCallable(Generic[P, R]):
                     pip_packages=self.pip_packages,
                     env_vars=self.env_vars,
                 ),
+                # Baked-in retry policy, not a caller flag: a dispatched child
+                # tolerates transient failures the way the root job does, and a
+                # deterministic failure still burns the cap and fails with the
+                # node's error (the release retry-cap constants).
+                max_retries_failure=DISPATCHED_JOB_MAX_RETRIES_FAILURE,
+                max_task_failures=DISPATCHED_JOB_MAX_TASK_FAILURES,
             )
         )
         handle.wait(raise_on_failure=True)

@@ -40,7 +40,12 @@ from marin.execution.artifact import (
     is_mutable_version,
     write_step_record,
 )
-from marin.execution.remote import RemoteCallable, sanitize_job_name
+from marin.execution.remote import (
+    DISPATCHED_JOB_MAX_RETRIES_FAILURE,
+    DISPATCHED_JOB_MAX_TASK_FAILURES,
+    RemoteCallable,
+    sanitize_job_name,
+)
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import PreviousTaskFailedError, StatusFile, StepAlreadyDone, step_lock, worker_id
 from marin.training.run_environment import dependency_groups_for_resources
@@ -499,6 +504,10 @@ def _submit_iris_job(
             pip_packages=pip_packages,
             env_vars=env_vars,
         ),
+        # The dispatched child jobs' retry policy: constants, not caller flags —
+        # the same policy the root job carries.
+        max_retries_failure=DISPATCHED_JOB_MAX_RETRIES_FAILURE,
+        max_task_failures=DISPATCHED_JOB_MAX_TASK_FAILURES,
     )
     handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)
