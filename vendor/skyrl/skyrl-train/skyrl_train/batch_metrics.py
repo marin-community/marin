@@ -60,7 +60,7 @@ def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
 
 def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     fields = BatchFields.from_groups([group.fields for group in facts])
-    if "reward_shaping_components" not in fields.first_group_list_fields or any(group.loop_credit for group in facts):
+    if "reward_shaping_components" not in fields.first_group_list_fields:
         return {}
     components = [values for group in facts for values in group.shaping_components]
     totals = [
@@ -86,6 +86,8 @@ def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     groups = shaping_groups(last, len(lengths))
     violations = [value for group in facts for value in group.reasoning_span_violations]
     token_penalties = [value for group in facts for value in group.reasoning_span_token_penalties]
+    loop_credit = [value for group in facts for value in group.loop_credit_totals]
+    charged = [row for group in facts for row in group.charged_loop_credit]
     return reward_shaping_metrics(
         trajectory_components=[aggregate_reward_shaping_components(components, rows) for rows in groups],
         shaped_totals=[totals[rows[-1]] for rows in groups],
@@ -93,9 +95,9 @@ def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
         trajectory_lengths=[sum(lengths[row] for row in rows) for rows in groups],
         trajectory_stops=[stops[rows[-1]] for rows in groups],
         loop_incidence=[any(incidence[row] for row in rows) for rows in groups],
-        trajectory_loop_advantages=[0] * len(groups),
-        trajectory_loop_token_counts=[0] * len(groups),
-        charged_loop_advantages=[],
+        trajectory_loop_advantages=[sum(loop_credit[row] for row in rows) for rows in groups],
+        trajectory_loop_token_counts=[sum(len(charged[row]) for row in rows) for rows in groups],
+        charged_loop_advantages=[value for row in charged for value in row],
         reasoning_span_token_penalties=[sum(token_penalties[row] for row in rows) for rows in groups],
         reasoning_span_incidence=[any(violations[row] for row in rows) for rows in groups],
     )

@@ -93,7 +93,6 @@ def plan_worker_batch(
     replay = moe_router_replay_requested(cfg)
     for group, rows in zip(groups, facts, strict=True):
         for reason, unsupported in (
-            ("nonzero loop credit", rows.loop_credit),
             (
                 "teacher evidence",
                 bool(

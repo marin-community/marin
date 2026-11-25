@@ -169,7 +169,7 @@ The default `trainer.batch_builder=auto` selects policy workers at startup when 
 
 | Worker startup refusal | Configurations |
 | --- | --- |
-| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, advantage normalization, loop advantage credit or marker-target penalties |
+| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, or advantage normalization |
 | Placement and output | Colocation, MoE ETP (or its TP fallback) greater than one, rows requiring DP padding, dense batch dumps |
 
 Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unsupported rollout rows stop training with the refusal reason and group uid. The choice stays fixed for the run. Auto selects the driver when it cannot read model metadata needed for expert parallelism or router replay. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.

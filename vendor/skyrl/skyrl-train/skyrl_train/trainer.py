@@ -160,7 +160,6 @@ from skyrl_train.hf_export_schema import (
     HFExportStatus,
     TRAINER_STATE_FILENAME,
 )
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
 from marinskyrl.runtime_options import BatchBuilder
 from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input, plan_worker_batch
 from skyrl_train.batch_metrics import (
@@ -1809,8 +1808,6 @@ class RayPPOTrainer:
                 ),
                 metrics=rollout_metrics(facts),
             )
-            if any(group.loop_credit for group in facts):
-                refresh_trajectory_reward_shaping_metrics(trajectory_batch)
             self.all_metrics.update(trajectory_batch["rollout_metrics"])
             self.all_metrics.update(staleness_metrics)
 

@@ -6,6 +6,7 @@ import pytest
 import torch
 from finestore.rl.run_records import METRIC_METADATA_KEYS
 from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import SHAPING_METRIC_PREFIX
 
 from tests.batch_assertions import assert_metric_parity
 from tests.cpu.tiny_training import experiment
@@ -52,7 +53,12 @@ def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator:
     cfg.trainer.algorithm.advantage_estimator = estimator
     cfg.trainer.algorithm.group_advantage_min_size = None
     cfg.generator.trajectory_reward_shaping.enabled = True
-    cfg.generator.trajectory_reward_shaping.overlong.penalty_scale = 0.0
+    shaping = cfg.generator.trajectory_reward_shaping
+    shaping.overlong.penalty_scale = 0.0
+    shaping.loop.advantage_penalty_per_token = 0.05
+    shaping.loop.minimum_occurrences = 2
+    shaping.reasoning_span.target = "marker"
+    shaping.reasoning_span.penalty = 0.1
     return cfg
 
 
@@ -124,6 +130,9 @@ def test_worker_batches_match_two_driver_updates(
     assert [row["trainer/global_step"] for row in steps] == [1, 2]
     assert all(row["policy/raw_grad_norm"] > 0 for row in steps)
     required = {"policy/policy_loss", "policy/raw_grad_norm"}
+    if config_builder is _worker_batch_config:
+        assert any(row[f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean"] > 0 for row in steps)
+        required.update(key for key in baseline[0] if key.startswith(f"{SHAPING_METRIC_PREFIX}/"))
     for actual, expected in zip(steps, baseline, strict=True):
         assert_metric_parity(actual, expected, required=required)
     assert all(row["generate/avg_num_tokens"] > 0 for row in steps)

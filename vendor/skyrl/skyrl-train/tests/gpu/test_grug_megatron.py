@@ -50,6 +50,7 @@ from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.timing_observability import StepWallTime
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import SHAPING_METRIC_PREFIX, shape_trajectory_rewards
 from tests.batch_assertions import assert_metric_parity
 from tests.cpu.tiny_training.tiny_model import write_gsm8k_dataset
 from skyrl_train.utils.torch_utils import logprobs_from_logits
@@ -903,7 +904,8 @@ class _RecordedRollouts:
 
 
 @pytest.mark.slow
-def test_megatron_worker_batches_match_driver_update(tmp_path):
+@pytest.mark.parametrize("pp", [2, 4], ids=["dp2", "dp1"])
+def test_megatron_worker_batches_match_driver_update(tmp_path, pp):
     world_size = 4
     require_hoppers(world_size)
     model_path = tmp_path / "model"
@@ -918,7 +920,7 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     with safe_open(model_path / "model.safetensors", framework="pt", device="cpu") as checkpoint:
         parameter_names = list(checkpoint.keys())
-    cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
+    cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=1)
     cfg.trainer.policy.megatron_config.moe_router_replay = True
     with open_dict(cfg.generator.engine_init_kwargs):
         cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
@@ -929,6 +931,11 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
     cfg.trainer.algorithm.group_advantage_min_size = 2
     cfg.trainer.algorithm.off_policy_correction = "tis"
     cfg.generator.n_samples_per_prompt = 4
+    shaping = cfg.generator.trajectory_reward_shaping
+    shaping.enabled = True
+    shaping.loop.advantage_penalty_per_token = 0.05
+    shaping.reasoning_span.target = "marker"
+    shaping.reasoning_span.penalty = 0.1
     validate_cfg(cfg)
     cfg.trainer.training_metrics = True
     cfg.trainer.rollout_buffer.max_staleness_steps = 0
@@ -966,6 +973,9 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
                 [0.1, 0.2] + [0.0] * (length - 3) + [reward]
                 for length, reward in zip(lengths, batch["rewards"], strict=True)
             ]
+        batch["reasoning_span_violations"] = [1, 3, 6, 1]
+        batch["reasoning_span_violation_tokens"] = [[0], list(range(3)), list(range(6)), []]
+        shape_trajectory_rewards(batch, shaping)
         prompt = dataset.collate_fn([dataset[index]])[0]
         groups.append(RolloutGroup(batch, dataset.uid(index), 1, prompt))
     initialize_ray(cfg)
@@ -1078,6 +1088,8 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
             trainer = None
             results[builder] = result
         required = {"policy/policy_loss", "policy/policy_entropy", "policy/raw_grad_norm"}
+        required.update(key for key in results["driver"]["metrics"] if key.startswith(f"{SHAPING_METRIC_PREFIX}/"))
+        assert results["worker"]["metrics"][f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean"] > 0
         assert results["worker"]["parameters"] == results["driver"]["parameters"]
         assert_metric_parity(
             results["worker"]["metrics"],

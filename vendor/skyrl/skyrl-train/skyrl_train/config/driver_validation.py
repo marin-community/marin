@@ -145,7 +145,6 @@ _OUTCOME_LOSSES = frozenset(
 def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = True) -> str | None:
     """Return the first reason policy-worker assembly is unavailable, or None."""
     algorithm = cfg.trainer.algorithm
-    shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     supported_loss = (
         algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
     ) or (
@@ -159,8 +158,6 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
         ("trajectory selection", cfg.trainer.trajectory_selector.type is not None),
         ("step-wise training", cfg.trainer.step_wise_training),
         ("advantage batch normalization", algorithm.advantage_batch_normalize),
-        ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
-        ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
         ("dense batch dumping", cfg.trainer.dump_data_batch),
     ]
     for reason, unsupported in restrictions:

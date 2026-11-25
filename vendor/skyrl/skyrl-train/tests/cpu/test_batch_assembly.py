@@ -14,7 +14,7 @@ from skyrl_train.config.driver_validation import validate_cfg, worker_batch_refu
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.batch_metrics import reward_metrics, rollout_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
 import torch
@@ -30,12 +30,15 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.rollouts.buffer import AdmittedRollout, RolloutGroup
 from skyrl_train.trajectory_runners.trajectory_processing import (
+    concatenate_trajectory_batches,
     normalize_trajectory_batches,
     token_reward_rows,
 )
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import SHAPING_METRIC_PREFIX, shape_trajectory_rewards
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.utils.advantage_estimators import (
+    apply_loop_advantages,
     compute_advantages_and_returns,
 )
 
@@ -193,6 +196,41 @@ def assert_batch_exact(actual, expected):
     torch.testing.assert_close(actual.routed_experts_tensor(), expected.routed_experts_tensor(), rtol=0, atol=0)
 
 
+def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
+    config = {
+        "enabled": True,
+        "loop": {"advantage_penalty_per_token": 0.025},
+        "reasoning_span": {"target": "marker", "penalty": 0.1},
+    }
+    batches = []
+    for counts, tokens, responses, excluded in (
+        ([1, 3, 6], [[0], [0, 1, 2], list(range(6))], [list(range(8))] * 3, [False] * 3),
+        ([1, 0], [[], []], [[8] * 8, [9] * 8], [False, True]),
+        ([0], [[]], [list(range(8))], [False]),
+    ):
+        batch = {
+            "prompt_token_ids": [[10]] * len(counts),
+            "response_ids": responses,
+            "loss_masks": [[1] * 8 for _ in counts],
+            "rewards": [1.0] * len(counts),
+            "reasoning_span_violations": counts,
+            "reasoning_span_violation_tokens": tokens,
+            "exclude_from_baseline": excluded,
+        }
+        shape_trajectory_rewards(batch, config)
+        batches.append(batch)
+    del batches[-1]["loop_advantages"]
+
+    expected = concatenate_trajectory_batches(batches)["rollout_metrics"]
+    actual = rollout_metrics([RowFacts.from_batch(batch) for batch in batches])
+    shaping = f"{SHAPING_METRIC_PREFIX}/"
+    assert {key: value for key, value in actual.items() if key.startswith(shaping)} == {
+        key: value for key, value in expected.items() if key.startswith(shaping)
+    }
+    # Five loop tokens plus six negative marker roundoff values.
+    assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 6
+
+
 @pytest.mark.parametrize("dp_size", [1, 3, 8])
 @pytest.mark.parametrize("estimator", ["rloo", "rloo_n", "grpo"])
 @pytest.mark.parametrize("loop_channel", [False, True, "first", "last"])
@@ -224,7 +262,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             "stop_reasons": ["stop", "length", None, "stop"],
         }
         if loop_channel is True or (loop_channel == "first" and index == 0) or (loop_channel == "last" and index == 5):
-            batch["loop_advantages"] = [[0.0] * length for length in lengths]
+            batch["loop_advantages"] = [[-0.25] + [-0.1] * (length - 1) if length else [] for length in lengths]
             batch["reasoning_span_violations"] = [int(length > 0) for length in lengths]
             batch["reasoning_span_violation_tokens"] = [[0] if length else [] for length in lengths]
             batch["reasoning_span_token_penalties"] = [0.25 if length else 0.0 for length in lengths]
@@ -267,7 +305,10 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         lengths = [1, 2, 3, 4] * 6
         lengths[8] = lengths[12] = 0
         lengths[-1] = 9
-        assert normalized["loop_advantages"] == [[0.0] * length for length in lengths]
+        assert normalized["loop_advantages"] == [
+            [-0.25] + [-0.1] * (length - 1) if violation else [0.0] * length
+            for length, violation in zip(lengths, violations, strict=True)
+        ]
     normalized["rewards"] = token_reward_rows(normalized["rewards"], normalized["response_ids"])
     whole_plan = BatchPlan(
         facts=(RowFacts.from_batch(normalized),), fields=BatchFields.from_batch(normalized), **layout
@@ -285,6 +326,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         exclude_from_baseline=whole.metadata.get("exclude_from_baseline"),
         group_advantage_invariant=invariant,
     )
+    apply_loop_advantages(whole)
     whole.metadata.update(pad_size=0, global_step=7)
     for rank, expected in enumerate(whole.chunk(whole.batch_size // dp_size)):
         rows = worker_plan.rank_rows(rank, dp_size)
@@ -302,14 +344,14 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             algorithm,
             reduction=SimpleNamespace(combine=lambda values, operation: values + other_scores),
         )
-        assert_batch_exact(actual, expected)
+        assert_batch_exact(apply_loop_advantages(actual), expected)
 
 
 @pytest.mark.parametrize(
     ("overrides", "refusal"),
     [
         ({}, (None, None)),
-        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, (None, "g0.*nonzero loop credit")),
+        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, (None, None)),
         ({"batch.teacher_evidence": [None] * 4}, (None, "g0.*teacher evidence")),
         ({"batch.distillation": [None] * 4}, (None, "g0.*teacher evidence")),
         ({"batch.student_topk_indices": [None] * 4}, (None, "g0.*teacher evidence")),
@@ -344,7 +386,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "generator.trajectory_reward_shaping.enabled": True,
                 "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token": 0.1,
             },
-            ("loop advantage credit", None),
+            (None, None),
         ),
         (
             {
@@ -352,7 +394,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "generator.trajectory_reward_shaping.reasoning_span.target": "marker",
                 "generator.trajectory_reward_shaping.reasoning_span.penalty": 0.5,
             },
-            ("marker-target reasoning penalties", None),
+            (None, None),
         ),
         (
             {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2, "model_experts": 4},

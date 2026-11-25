@@ -31,7 +31,7 @@ from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward, loop_credit_without_markers
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
 from math import fsum
 import numpy as np
@@ -151,7 +151,8 @@ class RowFacts:
     exclude_from_baseline: np.ndarray
     fields: BatchFields
     rewards: GroupRewards
-    loop_credit: bool
+    loop_credit_totals: tuple[float, ...]
+    charged_loop_credit: tuple[tuple[float, ...], ...]
     shaping_components: tuple[RewardShapingComponents, ...] | None
     shaping_response_tokens: tuple[int, ...]
     loop_incidence: tuple[bool, ...]
@@ -179,6 +180,7 @@ class RowFacts:
         """Capture finalized row scalars without retaining token arrays or verifier records."""
         responses = batch["response_ids"]
         count = len(responses)
+        loop_credit = loop_credit_without_markers(batch)
         rewards = GroupRewards.from_batch(batch)
         results = batch.get("verification_results")
         reward_sign_totals = tuple(float(np.sum(reward)) for reward in batch["rewards"])
@@ -206,7 +208,9 @@ class RowFacts:
             ),
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
-            loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
+            loop_credit_totals=tuple(sum(row) for row in loop_credit) or (0.0,) * count,
+            charged_loop_credit=tuple(tuple(value for value in row if value < 0) for row in loop_credit)
+            or ((),) * count,
             shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
             if batch.get("reward_shaping_components") is not None
             else None,

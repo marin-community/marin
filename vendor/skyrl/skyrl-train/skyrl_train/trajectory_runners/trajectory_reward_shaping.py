@@ -232,6 +232,21 @@ def _reasoning_span_evidence(
     return violations, violation_tokens, token_penalties
 
 
+def loop_credit_without_markers(output: TrajectoryBatch) -> list[list[float]]:
+    """Return the loop credit used for metrics, with marker charges removed."""
+    rows = list(output.get("loop_advantages") or ())
+    if not rows:
+        return rows
+    tokens = output.get("reasoning_span_violation_tokens") or ()
+    penalties = output.get("reasoning_span_token_penalties") or ()
+    for index, (positions, penalty) in enumerate(zip(tokens, penalties)):
+        if positions and penalty:
+            row = rows[index] = list(rows[index])
+            for position in positions:
+                row[position] -= penalty / len(positions)
+    return rows
+
+
 def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     """Recompute shaping metrics after concatenation, filtering, or replacement."""
     components = output.get("reward_shaping_components")
@@ -244,7 +259,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     outcomes = output.get("unshaped_rewards")
     spans = output.get("reward_shaping_loop_spans")
     loop_advantages = output.get("loop_advantages")
-    violations, violation_tokens, token_penalties = _reasoning_span_evidence(output, batch_size)
+    violations, _, token_penalties = _reasoning_span_evidence(output, batch_size)
     if (
         outcomes is None
         or spans is None
@@ -254,11 +269,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         or len(loop_advantages) != batch_size
     ):
         raise ValueError("shaped outputs must retain outcomes, loop spans, and loop advantages for every generated row")
-    # Exclude marker penalties from loop credit metrics.
-    loop_advantages = [list(row) for row in loop_advantages]
-    for index, penalty in enumerate(token_penalties):
-        for position in violation_tokens[index] if penalty else ():
-            loop_advantages[index][position] -= penalty / len(violation_tokens[index])
+    loop_advantages = loop_credit_without_markers(output)
 
     stop_reasons = output.get("stop_reasons")
     if stop_reasons is None:
