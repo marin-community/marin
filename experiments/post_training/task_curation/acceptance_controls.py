@@ -81,14 +81,24 @@ def recorded_bug_rewards(original_repo: str, original_revision: str) -> dict[str
 
 
 def original_pin(cohort_repo: str, cohort_revision: str) -> tuple[str, str]:
-    """The original release pin the cohort manifest records (top-level or under ``plan``)."""
-    manifest_path = Path(hf_hub_download(cohort_repo, "manifest.json", repo_type="dataset", revision=cohort_revision))
+    """The original release pin the cohort manifest records (top-level or under ``plan``).
+
+    Cohort families without a manifest (their recorded controls are the
+    campaign's verifier-liveness sample) resolve to an empty original pin and
+    the acceptance expects the zero-reward sample.
+    """
+    try:
+        manifest_path = Path(
+            hf_hub_download(cohort_repo, "manifest.json", repo_type="dataset", revision=cohort_revision)
+        )
+    except Exception:
+        return "", ""
     manifest = json.loads(manifest_path.read_bytes())
     plan = manifest.get("plan") or {}
     source_id = manifest.get("source_dataset_id") or plan.get("source_dataset_id")
     source_revision = manifest.get("source_revision") or plan.get("source_revision")
     if not source_id or not source_revision:
-        raise ValueError(f"The cohort manifest names no original release: {cohort_repo}@{cohort_revision[:12]}")
+        return "", ""
     return source_id, source_revision
 
 
