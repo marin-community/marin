@@ -184,6 +184,54 @@ storage policies (5 years; 8 GiB each for `tasks` and `task_attempts`, 4 GiB
 each for `jobs` and `job_config`) bound only the hub's local copy; older segments are read back from
 the archive.
 
+## Backfilling rows from before the live path
+
+**Rows cannot be removed once written.** Finelog has no row delete, and
+dropping a table drops the live rows too. A wrong backfill can only be
+filtered out of queries, as `ts < live_start` for its cluster.
+
+The live path writes rows only for changes after a controller with it starts
+(`live_start`). `lib/iris/scripts/backfill_controller_rows.py` writes, once per
+cluster, one row for each job, job config, task and attempt in a controller DB
+checkpoint that has no row yet: its state in the checkpoint, built by the live
+path's own queries and row builders, with the same redaction. Its `ts` is the
+entity's latest own time (finish, start, or submit), capped at
+`live_start - 1 ms`, so a live row for the same key always sorts after it, even
+one written during the run; such a key ends up with both rows, the live one
+current. A key that already has a row is skipped, so a second run writes nothing.
+
+What a backfilled row cannot hold:
+
+- History: one row per entity, its state in the checkpoint, not one per change.
+- Jobs pruned before the checkpoint: the controller deletes terminal jobs 7
+  days after they finish, so the backfill reaches about 7 days back.
+- `worker_id` of an attempt, and `current_worker_id` of a task, whose worker
+  was removed: NULL, because only the live path keeps the cleared value.
+- `ts` is the entity's own time, not when its row was written.
+
+Before writing, the script refuses a `--live-start-ms` less than 15 minutes
+old, later than the checkpoint, earlier than the live rows' real start (a job
+submitted after it has no live config row), or later than it (rows before it
+already exist, unless `--rerun` declares an earlier run). It reads Finelog's
+keys one table and day at a time, halving a failed window down to an hour, and
+stops without writing when that fails. It writes 5,000-row batches, one table
+after another, flushing each and stopping at the first that does not land; a
+rerun writes the rest.
+
+```bash
+# In a job on the cluster, from the checkpoint taken after live_start:
+uv run python lib/iris/scripts/backfill_controller_rows.py dry-run \
+  --cluster marin --live-start-ms <ms> --checkpoint <checkpoint_dir_url>
+# Then run, with the confirmation value the dry run prints, and check:
+uv run python lib/iris/scripts/backfill_controller_rows.py run ... \
+  --i-understand-rows-cannot-be-removed=marin:<ms>
+uv run python lib/iris/scripts/backfill_controller_rows.py check ...
+```
+
+`check` exits 1 when any DB entity has no row. Delivery is at least once, so a
+retried batch can land twice; the copies are identical, and counts should use
+distinct keys.
+
 ## Cost to the controller, and turning the copy off
 
 The rows are read just before each write transaction commits and enqueued just
