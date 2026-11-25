@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_round_trips_gzip_zstd_and_empty_bodies() {
+    fn registry_round_trips_payloads_and_decompresses_empty_input() {
         let registry = compression_registry();
         let body = b"log line\n".repeat(128);
         for encoding in ["gzip", "zstd"] {

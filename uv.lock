@@ -5762,7 +5762,7 @@ test = [
     { name = "pytest-xdist" },
     { name = "soundfile" },
     { name = "tensorboardx", specifier = ">=2.6" },
-    { name = "torchcodec", specifier = ">=0.10,<0.11" },
+    { name = "torchcodec", specifier = ">=0.13,<0.14" },
     { name = "trackio", specifier = ">=0.5.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
@@ -11094,15 +11094,19 @@ wheels = [
 
 [[package]]
 name = "torchcodec"
-version = "0.10.0"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/ff/2b27797e039673156710e5a0febe87cafc203722acafa3d34db283b40cf9/torchcodec-0.10.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:b35fa4061c5757f8d714187c040a90a11669de6470a644bb04e3cd335ff1c110", size = 4073213, upload-time = "2026-01-22T15:41:45.485Z" },
-    { url = "https://files.pythonhosted.org/packages/29/34/ccc711b6dc581e43b8d8d227e4173a8826994ee7b68d6b3d82291f307325/torchcodec-0.10.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:6e43184d83ccced965b31cad5bb6200c779646fee2ec153a6d784b4def40c91b", size = 2083121, upload-time = "2026-01-22T15:41:37.947Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/6c/9af3bd945a610d6c757d898aa4624e0f5135cc8a6992d0a1d846f1084576/torchcodec-0.10.0-cp312-cp312-win_amd64.whl", hash = "sha256:e4f022fa53d91b414b4177fe87b0afc40a806092da4595d24de4b245d6fb0fba", size = 2225338, upload-time = "2026-01-22T15:41:52.094Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/b6/b1041c8ccb175b08779b3e2d3e60f838bbcbfe2398d49e3673b6a66f0649/torchcodec-0.10.0-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:be3ce7cc667effecd06da9d0d6c5e9e347c5f376b705934e7b82378a65cf6eef", size = 4043681, upload-time = "2026-01-22T15:41:47.236Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/85/fc44f6d702dfd344e6859a9a4d713aaaa991578eb74677a80297d9ae8a07/torchcodec-0.10.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:71f25caf9ab89a434ae2008b1374fd98557a6864b8313b103bae53af3e6fd17f", size = 2088572, upload-time = "2026-01-22T15:41:39.203Z" },
-    { url = "https://files.pythonhosted.org/packages/df/9d/b73a0f47e11b66a1d23c7d867f12f8bb41b1b5e707d7e23d8f54793e3267/torchcodec-0.10.0-cp313-cp313-win_amd64.whl", hash = "sha256:9e077146e894f373b805972da96aee42ff8bb87b1a3f3fb64d26925cd9e64184", size = 2225208, upload-time = "2026-01-22T15:41:53.233Z" },
+    { url = "https://files.pythonhosted.org/packages/73/a2/9ce9365dc777bc08452f7e1fc42f70d87c00985158a290119e38cc7a9e60/torchcodec-0.13.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:f2883716333314412df85d671fc16d1e1463c5d1ada1d80d35de56a202c2e24f", size = 4600139, upload-time = "2026-05-21T11:15:02.331Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/f7/641126886e21b8755eef54b2a34c6a3a98be6dd746563f1d0dc56e2fb3a6/torchcodec-0.13.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9e59c6be489aa5853a189b17da7e4f897d51a7040d9a5235b023648c01fb0f74", size = 2579723, upload-time = "2026-05-21T11:15:04.65Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/cf/3483a531c30611513dcc141f7c73a0cbcc7f545054429f4212a56755c930/torchcodec-0.13.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:5b8b905b60debc1d8e021c8ab30f2cdc3ce140c26308ebd0fcafe3457469a7a1", size = 2525007, upload-time = "2026-05-21T11:15:06.196Z" },
+    { url = "https://files.pythonhosted.org/packages/41/e3/c1e9f5e9d2b076f10a57e438df0f4761352b959c52bc9a27927d5e4fd520/torchcodec-0.13.0-cp312-cp312-win_amd64.whl", hash = "sha256:2a4417def0318cfc63509bdfd2d0e875bd2e63c2a9571c22da833c0789bbeb62", size = 2212636, upload-time = "2026-05-21T11:15:07.749Z" },
+    { url = "https://files.pythonhosted.org/packages/04/69/3b1951dca8daf1a14d2f7f7f99a4776861e9821631850abf39f816b692ae/torchcodec-0.13.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:134518b8ed05859b7f07062c8051beeecfbe9257d57a548648237a03f5556252", size = 4586967, upload-time = "2026-05-21T11:15:09.779Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/3a/a973dc5e9e12d841270fba40d3df697646fd34e4e7385121c1ac72b75a04/torchcodec-0.13.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:1d9989504fe5de0b9bdb7b5da9737c0f1c1a7ad3532af7a17bd331c27f585e17", size = 2578908, upload-time = "2026-05-21T11:15:11.756Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/d7/66fc01fd50b17bca247507f45f50da08517642e9fe2524d9533819ac6df5/torchcodec-0.13.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:ffa5d542363287043343f3e613355c1c4cc855219418fb319f15345294be910c", size = 2525376, upload-time = "2026-05-21T11:15:13.801Z" },
+    { url = "https://files.pythonhosted.org/packages/62/19/bf90cbd15de627fe73b0cb63985cd66ad2dad0e0aff00967d4b26d16f606/torchcodec-0.13.0-cp313-cp313-win_amd64.whl", hash = "sha256:fcf15a66dd206c086698c908503074b226e678c20fd80b7d4c8d45581df4cef2", size = 2212674, upload-time = "2026-05-21T11:15:15.307Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/00/37316406298589120395d7fc44c8ffda2edaad63ed8e410ed8c33c57922c/torchcodec-0.13.0-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:f9887397d778da2cbf546e64aba87cdbbce73ca825c6b03217b93fa8bfe2f1d8", size = 2583171, upload-time = "2026-05-21T11:15:17.212Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/34/d219959a2a19aa5461aa853c1d0e80a5ee8e2c3b13f40881ba2b6d4a4a5b/torchcodec-0.13.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:b745aff148e91c83443ee50f3b587f9bf805ee790225aeefcb89ffaf0dbe241c", size = 2516563, upload-time = "2026-05-21T11:15:19.267Z" },
 ]
 
 [[package]]
