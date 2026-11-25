@@ -8,7 +8,15 @@ aggregates, and head-to-head difference intervals."""
 import pytest
 from evaldash import app as evaldash_app
 from evaldash.app import MemoryRecordStore
-from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from evaldash.metrics import (
+    ALL_COHORTS,
+    build_comparison,
+    build_meta,
+    build_model_detail,
+    build_panel,
+    eval_suites,
+    panel_request,
+)
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
 from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
@@ -882,10 +890,10 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
     with TestClient(api.app) as client:
-        panel_rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
+        panel_rows = client.get("/panel", params={"cohort": ALL_COHORTS}).json()["rows"]
         panel_cell = next(row for row in panel_rows if row["model"] == "a")["cells"]["math500"]
-        detail = client.get("/models/a", params={"cohort": "all"}).json()
-        history = client.get("/history", params={"model": "a", "task": "math500", "cohort": "all"}).json()
+        detail = client.get("/models/a", params={"cohort": ALL_COHORTS}).json()
+        history = client.get("/history", params={"model": "a", "task": "math500", "cohort": ALL_COHORTS}).json()
 
         assert panel_cell["run_id"] == newest["a"]
         assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6

@@ -574,8 +574,8 @@ class RecordStore:
     def history(self, model: str, task: str, request: SelectionRequest) -> list[dict]:
         """Admitted headline scores for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
-        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. Each point has a primary metric
+        matching the column's protocol, with its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
         return build_history(records, model, task, request)
