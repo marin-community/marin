@@ -1507,11 +1507,8 @@ pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
 
 /// Fill the aligned batch's origin `cluster` column with `local` on every row
 /// that leaves it NULL or empty, keeping any value the writer supplied. No-op
-/// when the namespace's schema has no cluster column.
-///
-/// This is the local-write counterpart of [`stamp_cluster_column`]: a writer
-/// admitted by a trusted network carries no per-writer identity, so a row it
-/// leaves blank is this server's own, and a row it names keeps that name.
+/// when the namespace's schema has no cluster column. For rows from this
+/// server's own writers; forwarded rows use [`stamp_cluster_column`].
 pub fn fill_empty_cluster_column(
     aligned: &mut AlignedBatch,
     local: &str,
