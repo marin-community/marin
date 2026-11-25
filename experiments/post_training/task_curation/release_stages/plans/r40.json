@@ -1,5 +1,5 @@
 {
-  "artifact_version": "2026.11.24.9",
+  "artifact_version": "2026.11.24.10",
   "catalog_root": "s3://marin-us-east-02a/marin/rl-data/catalog/production",
   "catalog_target_load_id": "54405be9b4db4c2d9828549469abe759",
   "curriculum_target_load_id": "cbe58f5c9e2142b294986479c6f457c2",
@@ -419,7 +419,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "r40",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v9",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v10",
   "removed_sources": [
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -441,7 +441,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "PENDING",
+  "source_revision": "dab326d78577c7535dcbce257e70062a572648f5",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
