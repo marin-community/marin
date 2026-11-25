@@ -859,6 +859,11 @@ credential is involved. Setting `GRAFANA_BRIDGE_LOCAL_FINELOG_URL` (an
 together switches the bridge to this route; unset, it uses Direct VPC egress as
 deployed.
 
+The bridge's `/k8s` routes, such as `/k8s/nodes` with each node's rack and node pool, need the
+CoreWeave read-role token. Export `CW_READ_TOKEN` in the shell that runs compose (the command is in
+`local/compose.yaml`); compose passes it through and never writes it. Without it those routes answer
+with auth-error rows.
+
 Every panel query reaches the production hub, so the local setup holds the load down:
 
 - Only the `marin` hub is served, with at most one query in flight to it.
