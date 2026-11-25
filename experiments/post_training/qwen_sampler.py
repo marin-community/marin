@@ -22,9 +22,10 @@ TASKS = f"{qwen_sampler_lab.NAME}@{qwen_sampler_lab.VERSION}"
 QWEN = ArtifactHfModel(qwen3_0_6b, relative_path="")
 RESPONSE_TOKENS = 4096
 PROMPT_EXPLORATION = 0.20
+ROLE_PLAN = replace(role_plan(batch_size=16, group_size=4, micro_train_batch_size=4), colocate_all=True)
 LAYOUT = Layout(
     name="qwen-h100x2",
-    workload=Training(replace(role_plan(batch_size=16, group_size=4, micro_train_batch_size=4), colocate_all=True)),
+    workload=Training(ROLE_PLAN),
     megatron=MegatronGeometry(1, 1, 1, 1, 1),
     cluster="cw-us-east-02a",
     host_memory="128GB",
@@ -34,6 +35,14 @@ LAYOUT = Layout(
     priority="interactive",
     coordinator_timeout_hours=2,
     job_timeout_seconds=1800,
+)
+RNO_LAYOUT = replace(
+    LAYOUT,
+    name="qwen-h100x8-rno",
+    workload=Training(replace(ROLE_PLAN, policy_num_gpus_per_node=8, num_inference_engines=8)),
+    cluster="cw-rno2a",
+    host_cpu=80,
+    host_memory="512GB",
 )
 EVAL = Evaluation(
     "qwen_lab",
@@ -47,7 +56,9 @@ EVAL = Evaluation(
 )
 
 
-def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int) -> Preset:
+def sampler_preset(
+    name: str, updates: int, kind: str, epsilon: float, seed: int, *, layout: Layout, revision: str
+) -> Preset:
     verifier = TASK_MACHINES[CommandSemantics.SHELL_SIMULATOR]
     config = RecipePatch(
         environment=sections.Environment(
@@ -92,24 +103,24 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int
     )
     return Preset(
         name=name,
-        revision="2026.11.25.2",
+        revision=revision,
         tasks=TASKS,
         model=QWEN,
         recipe=Recipe(
-            replace(LAYOUT, job_timeout_seconds=2700) if updates == 32 else LAYOUT,
+            replace(layout, job_timeout_seconds=2700) if updates == 32 else layout,
             fixed_reply_tokens=None,
             config=config,
         ),
         updates=updates,
         measured=range(1, updates + 1),
         seed=seed,
-        evaluations=(replace(EVAL, every=updates),),
+        evaluations=(replace(EVAL, every=8 if updates == 32 else updates),),
         held_out_tasks=TASKS,
         checkpoints="none",
         sample_namespace="datasets/qwen-sampler",
         wandb_entity="marin-community",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
-        budget="2 H100s; wall time unmeasured",
+        budget=f"{layout.workload.plan.gpus_per_node} H100s; wall time unmeasured",
     )
 
 
@@ -117,7 +128,8 @@ QWEN_SAMPLER = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-sampler",
     presets=tuple(
-        sampler_preset(f"{stage}-{arm}{suffix}", updates, kind, epsilon, seed)
+        sampler_preset(f"{prefix}{stage}-{arm}{suffix}", updates, kind, epsilon, seed, layout=layout, revision=revision)
+        for prefix, layout, revision in (("", LAYOUT, "2026.11.25.2"), ("rno-", RNO_LAYOUT, "2026.11.25.3"))
         for stage, updates, seed, suffix in (("smoke", 4, 17, ""), ("pilot", 32, 17, ""), ("pilot", 32, 29, "-seed29"))
         for arm, kind, epsilon in (
             ("fixed", "adaptive-source", 1.0),
