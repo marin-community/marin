@@ -307,8 +307,11 @@ async def test_worker_retains_safe_model_server_error_text(agent_harnesses, work
         pass
 
     credential = "hf_" + "a" * 24
-    error = ModelServerError("server_error", "fixture-request", 503)
-    error.args = (f"worker queue unavailable for {credential}",)
+    class DescribedModelServerError(ModelServerError):
+        def __str__(self):
+            return f"{super().__str__()}; worker queue unavailable for {credential}"
+
+    error = DescribedModelServerError("server_error", "fixture-request", 503)
     request = TaskRequestBatch(rows=(task_input(lowered_task(text_task(), "pi")),))
     worker = TaskRolloutWorker(
         worker_config,

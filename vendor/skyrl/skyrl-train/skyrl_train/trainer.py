@@ -774,9 +774,14 @@ class RayPPOTrainer:
         )
         return True
 
+    async def _run_step_begin_callbacks(self, epoch: int) -> None:
+        self._control.reset()
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
+
     async def _run_step_end_callbacks(self, state: TrainerState, *, step_wall: StepWallTime | None = None) -> None:
         """Run callback-requested work that belongs to the current training step."""
-        self._control.reset()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
         if self._control.should_save:
@@ -1467,9 +1472,7 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
             self.all_metrics.update(metadata.metrics)
-        self._control = await self.callback_handler.call_event_async(
-            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
-        )
+        await self._run_step_begin_callbacks(epoch)
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1513,9 +1516,7 @@ class RayPPOTrainer:
             metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
             reader = context.reader(metadata, stall_timeout=stall_timeout)
             self.all_metrics.update(metadata.metrics)
-        self._control = await self.callback_handler.call_event_async(
-            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
-        )
+        await self._run_step_begin_callbacks(epoch)
         step_wall.start("batch_assembly")
         plan, metrics = plan_worker_batch(
             self.cfg,

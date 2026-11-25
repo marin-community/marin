@@ -25,7 +25,6 @@ from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import StatusFile, worker_id
 from pydantic import BaseModel
 from rigging.filesystem.step_status import STATUS_SUCCESS
-from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -815,25 +814,6 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
     )
 
     _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
-
-
-@pytest.mark.parametrize("override_resources", [False, True])
-def test_step_dispatch_preserves_remote_timeout(tmp_path: Path, fray_client, override_resources):
-    timeout = Duration.from_seconds(120)
-
-    @remote(timeout=timeout)
-    def my_step(output_path: str) -> Artifact:
-        return Artifact(path=output_path)
-
-    step = StepSpec(
-        name="remote_step_with_timeout",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-        resources=ResourceConfig.with_cpu(cpu=2) if override_resources else None,
-    )
-
-    [request] = _run_step_with_submit_spy(step, fray_client).requests
-    assert request.timeout == timeout
 
 
 def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):

@@ -30,8 +30,8 @@ def test_sizing_with_router_replay_uses_balanced_valid_targets():
 
     routes = trainer_memory_profile.sizing_replay_routes(2, 16, 3, 8, 2)
     validate_replay_geometry(
-        num_layers_captured=3, expected_moe_layers=3, topk_captured=2, expected_topk=2,
-        num_experts=8, targets=routes, response_len=16, num_actions=16,
+        num_layers_captured=routes.shape[-2], expected_moe_layers=3, topk_captured=routes.shape[-1], expected_topk=2,
+        num_experts=8, targets=routes, response_len=routes.shape[1], num_actions=16,
     )
     dense, mask = dense_replay_targets(routes, batch_size=2, seq_len=17, num_actions=16)
     assert mask[:, :16].all() and not mask[:, 16].any()

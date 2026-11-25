@@ -440,9 +440,11 @@ class EvaluationCallback(TrainerCallback):
             control.should_evaluate = True
         return control
 
-    def on_step_begin(self, state: TrainerState, control: TrainerControl, **kwargs) -> TrainerControl:
-        trainer = kwargs["trainer"]
-        if self.eval_steps > 0 and state.global_step % self.eval_steps == 0 and trainer.eval_dataset is not None:
+    def _periodic_evaluation_due(self, step: int) -> bool:
+        return self.eval_steps > 0 and step % self.eval_steps == 0
+
+    async def on_step_begin_async(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs):
+        if self._periodic_evaluation_due(state.global_step) and trainer.eval_dataset is not None:
             trainer.context.pause()
         return control
 
@@ -452,7 +454,7 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.eval_steps > 0 and state.global_step % self.eval_steps == 0:
+        if self._periodic_evaluation_due(state.global_step):
             control.should_evaluate = True
         return control
 

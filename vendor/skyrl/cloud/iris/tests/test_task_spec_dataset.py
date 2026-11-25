@@ -188,6 +188,7 @@ def test_dataset_keeps_verifier_machine_for_judged_script(tmp_path: Path):
         update={"judge_connection": JudgeConnection("http://judge.invalid/v1", "fixture-key")}
     )
     validate_spec(connected, FACTORIES)
+    assert connected.verifier_machine is not None
 
 
 def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
