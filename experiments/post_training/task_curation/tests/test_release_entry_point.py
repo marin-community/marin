@@ -456,22 +456,21 @@ def test_bare_stage_selection_runs_that_stage(plan_document, monkeypatch, capsys
     """`atlas-release census --plan … --version …` IS the run dispatch for one stage."""
     seen: dict = {}
 
-    def fake_run(args, *, force_run_failed):
+    def fake_run(args):
         seen["stage"] = args.stage
         seen["mode"] = args.mode
-        seen["force"] = force_run_failed
         return 0
 
     monkeypatch.setattr(entry_point, "mode_run", fake_run)
     exit_code = entry_point.main(_argv(plan_document, "census"))
     assert exit_code == 0
-    assert seen == {"stage": ["census"], "mode": "run", "force": False}
+    assert seen == {"stage": ["census"], "mode": "run"}
 
 
 def test_bare_all_selection_runs_the_whole_release(plan_document, monkeypatch):
     seen: dict = {}
 
-    def fake_run(args, *, force_run_failed):
+    def fake_run(args):
         seen["stage"] = args.stage
         return 0
 

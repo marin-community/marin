@@ -521,7 +521,7 @@ def _submit_root(args) -> int:
         shutil.rmtree(snapshot, ignore_errors=True)
 
 
-MODES = ("plan", "release", "preflight", "run", "status", "resume", "submit")
+MODES = ("plan", "release", "preflight", "run", "status", "submit")
 # Flags that consume the following token (so the selection scan does not read a
 # flag's value as the stage selection).
 _VALUE_FLAGS = ("--version", "--plan", "--source-revision", "--watchdog-feed", "--landing-log")
@@ -620,9 +620,7 @@ def main(argv: list[str] | None = None) -> int:
     preflight_parser.add_argument("--source", help="The census/corpus slice source (default: first declared)")
     preflight_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
 
-    run_parser = modes.add_parser(
-        "run", help="The one idempotent verb: guard, preflight gate, then the lazy graph"
-    )
+    run_parser = modes.add_parser("run", help="The one idempotent verb: guard, preflight gate, then the lazy graph")
     run_parser.add_argument("--stage", action="append", help="Restrict to one graph node's subtree (repeatable)")
     run_parser.add_argument("--source", help="The census/corpus slice source for auto-preflight")
     run_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
