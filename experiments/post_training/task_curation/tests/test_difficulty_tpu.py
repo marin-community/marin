@@ -181,6 +181,17 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
         assert config.iris.worker_resources.regions == ["us-central2"]
         assert config.iris.max_retries_failure > 0 and config.iris.max_retries_preemption > 0
         assert shape.tensor_parallel * shape.data_parallel * shape.attention_data_parallel == shape.chips
+        model = tpu.tpu_model(solver, "gs://marin-us-central2/fixture")
+        # Regression: attnDP16 previously expanded these into a 262k-token /
+        # 2048-sequence compile, which exhausted v4 HBM at its 65k-token bucket.
+        assert model.serve.max_num_batched_tokens * shape.attention_data_parallel <= 16384
+        assert model.serve.max_num_seqs * shape.attention_data_parallel <= 128
+        if solver == Solver.LARGE:
+            # Regression: aligned prefix states required 159 GiB of cache;
+            # the pilot slice had 66 GiB available for the frozen context.
+            assert "--enable-prefix-caching" not in model.serve.vllm_extra_args
+            assert "--no-enable-prefix-caching" in model.serve.vllm_extra_args
+            assert model.serve.max_model_len == 65536
         assert not any("eager" in argument for argument in config.engine.extra_args)
     # Snowball's 20 Q / 5 KV heads cannot be split across TP8 or TP16.
     assert tpu.SHAPES[Solver.SNOWBALL].tensor_parallel == 1

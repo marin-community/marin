@@ -106,7 +106,14 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
     shape = SHAPES[solver]
     if not weights.startswith("gs://marin-us-central2/"):
         raise ValueError("TPU weights must be staged in us-central2")
-    extra = ("--enable-auto-tool-choice", "--enable-prefix-caching")
+    extra = ("--enable-auto-tool-choice",)
+    if solver == Solver.LARGE:
+        # Prefix checkpoints retain a GDN state for every cache block and do
+        # not fit the frozen context on this slice. The pinned TPU backend's
+        # compact mode retains one state per active request instead.
+        extra += ("--no-enable-prefix-caching", "--mamba-cache-mode", "none")
+    else:
+        extra += ("--enable-prefix-caching",)
     if solver == Solver.SNOWBALL:
         # Ordinary DP replicates the expert weights. Attention DP keeps all five
         # KV heads local while the backend's EXPERT axis shards the MoE weights.
@@ -139,8 +146,10 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
             data_parallel_size=shape.data_parallel,
             instances=1,
             max_model_len=73728 if solver == Solver.SNOWBALL else 65536,
-            max_num_batched_tokens=16384,
-            max_num_seqs=128,
+            # The TPU DP scheduler interprets these limits per attention shard.
+            # Keep the compiled global envelope at 16k tokens / 128 sequences.
+            max_num_batched_tokens=16384 // shape.attention_data_parallel,
+            max_num_seqs=(32 if solver == Solver.LARGE else 128) // shape.attention_data_parallel,
             gpu_memory_utilization=0.90,
             tool_call_parser=(
                 "hermes" if solver == Solver.SNOWBALL else "qwen3_coder" if solver == Solver.SMALL else "qwen3_xml"
