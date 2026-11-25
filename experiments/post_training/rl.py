@@ -37,6 +37,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version, read_artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
@@ -95,7 +96,11 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     run_inputs,
 )
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    VALIDATION_FILENAME,
+    TrainingHoldout,
+)
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _PUBLICATION_POLL_SECONDS = 60
@@ -104,6 +109,57 @@ _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, 
 logger = logging.getLogger(__name__)
 _SUBMITTED_INDEX = TypeAdapter(dict[str, RunIndexIdentity])
 _CACHED_ATTEMPTS = TypeAdapter(dict[str, str])
+
+
+@dataclass(frozen=True)
+class ArmSteps:
+    sft: int
+    rl: int
+
+
+ARM_STEPS = {"mochi": ArmSteps(sft=524, rl=72), "snowball": ArmSteps(sft=360, rl=36)}
+CURRICULUM_HOLDOUT_COUNT = 200
+VALIDATION_EVERY = 3
+BEST_WINDOW = 3
+
+
+def _curriculum_arm(
+    preset: presets.Preset, *, version: str, holdout: int, seed: int, every: int, window: int, updates: int
+) -> presets.Preset:
+    if updates is None or updates < 1:
+        raise click.BadParameter("SFT mix arms require a positive trainer.max_steps update budget")
+    if not preset.evaluations:
+        raise click.BadParameter("SFT mix arms require a preset with held-out evaluation")
+    if is_mutable_version(version):
+        raise click.BadParameter("SFT mix arms require an immutable run version")
+    evaluation = replace(
+        preset.evaluations[0],
+        name="curriculum",
+        file=Path(VALIDATION_FILENAME).stem,
+        source="tasks",
+        sample=None,
+        every=every,
+        at_start=False,
+        training_holdout=TrainingHoldout(holdout, seed),
+        profile=preset.evaluations[0].profile.replace(n_samples_per_prompt=1),
+    )
+    layout = replace(preset.recipe.layout, coordinator_timeout_hours=0, job_timeout_seconds=0)
+    return replace(
+        preset.with_updates(updates),
+        revision=version,
+        recipe=replace(preset.recipe, layout=layout),
+        evaluations=(evaluation,),
+        held_out_tasks=None,
+        checkpoint_evaluation=(),
+        checkpoints="best",
+        export="best",
+        checkpoint_every=every,
+        keep_every=every,
+        best_window=window,
+        temporary_output=False,
+        retention=replace(preset.retention, checkpoints_in_run_output=True),
+        budget=f"{updates} RL updates",
+    )
 
 
 class SFTModelPreset(Protocol):
@@ -278,7 +334,7 @@ def build_experiment(
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
-        for source in (recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks),)
+        for source in (recipe.evaluation_source(evaluation, selection, default, preset),)
     ]
     changes = {
         "tasks": (selection.name, selection.version),
@@ -1020,6 +1076,15 @@ def command(
         export: presets.CheckpointPolicy | None,
         priority: str | None,
         sft_name: str | None = None,
+        sft_data_mix: str | None = None,
+        sft_data_uri: str | None = None,
+        sft_data_file: str | None = None,
+        sft_data_tokenizer: str | None = None,
+        sft_steps: int | None = None,
+        holdout: int | None = None,
+        holdout_seed: int | None = None,
+        val_every: int | None = None,
+        best_window: int | None = None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
@@ -1039,6 +1104,13 @@ def command(
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
         initializer = init
+        mix_options = (sft_data_uri, sft_data_file, sft_data_tokenizer, holdout, holdout_seed, val_every, best_window)
+        if sft_name is None and (
+            sft_data_mix is not None or sft_steps is not None or any(value is not None for value in mix_options)
+        ):
+            raise click.UsageError("SFT data, step, and validation options require --sft")
+        if sft_data_mix is None and any(value is not None for value in mix_options):
+            raise click.UsageError("SFT data and validation options require --sft-data-mix")
         if sft_name is not None:
             if init is not None or init_name is not None or resume_name is not None or control:
                 raise click.UsageError("--sft requires a fresh candidate without --init or --resume")
@@ -1052,13 +1124,70 @@ def command(
                 raise click.BadParameter(
                     f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
                 )
-            from experiments.sft.launcher import HFModel, SFTSpec  # noqa: PLC0415 - load only for --sft
+            from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT  # noqa: PLC0415 - optional Mochi SFT backend
+            from experiments.sft.launcher import (  # noqa: PLC0415 - load only for --sft
+                HFModel,
+                PreparedData,
+                SFTPreset,
+                SFTSpec,
+            )
 
             sft = by_name[sft_name]
+            if sft_data_mix is not None:
+                name, separator, version = sft_data_mix.rpartition("@")
+                if (
+                    not name
+                    or not separator
+                    or any(value is None for value in (sft_data_uri, sft_data_file, sft_data_tokenizer))
+                ):
+                    raise click.BadParameter(
+                        "--sft-data-mix requires NAME@VERSION, --sft-data-uri, --sft-data-file and --sft-data-tokenizer"
+                    )
+                if any(value is not None for value in (checkpoints, checkpoint_every, export)):
+                    raise click.BadParameter("SFT mix arms own best-checkpoint retention and export")
+                budget = ARM_STEPS[table.model]
+                preset = _curriculum_arm(
+                    preset,
+                    version=resolve_version("sft-rl-arm", None),
+                    holdout=holdout if holdout is not None else CURRICULUM_HOLDOUT_COUNT,
+                    seed=holdout_seed if holdout_seed is not None else preset.seed,
+                    every=val_every if val_every is not None else VALIDATION_EVERY,
+                    window=best_window if best_window is not None else BEST_WINDOW,
+                    updates=recipe.override_document(settings).get("trainer", {}).get("max_steps", budget.rl),
+                )
+                assert isinstance(sft, SFTPreset)
+                source_recipe = sft.recipe.with_data_mix(
+                    PreparedData(ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft_data_tokenizer)
+                )
+                sft_steps = budget.sft if sft_steps is None else sft_steps
+                if isinstance(source_recipe, SFTSpec):
+                    model = source_recipe.model
+                    if isinstance(model, HFModel):
+                        model = replace(model, task_timeout_seconds=None)
+                    source_recipe = replace(source_recipe, model=model, timeout=None)
+                sft = replace(
+                    sft,
+                    recipe=source_recipe,
+                    resources=replace(sft.resources, target_cluster=preset.recipe.layout.cluster, regions=()),
+                )
+            if sft_steps is not None:
+                assert isinstance(sft, SFTPreset)
+                source_recipe = sft.recipe
+                if isinstance(source_recipe, MochiSFT):
+                    source_recipe = replace(
+                        source_recipe, stop_after_steps=sft_steps, checkpoints="final", version=preset.revision
+                    )
+                elif isinstance(source_recipe, SFTSpec):
+                    source_recipe = replace(source_recipe, num_train_steps=sft_steps, version=preset.revision)
+                else:
+                    raise click.BadParameter("The selected SFT recipe does not accept an update budget")
+                sft = replace(sft, recipe=source_recipe)
             try:
                 initializer = sft.model(
                     coordinator_cluster=preset.recipe.layout.cluster,
-                    coordinator_prefix=recipe.run_prefix(preset) if preset.temporary_output else None,
+                    coordinator_prefix=(
+                        recipe.run_prefix(preset) if preset.temporary_output or sft_data_mix is not None else None
+                    ),
                 )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
@@ -1154,10 +1283,39 @@ def command(
         return (*rl_handles, *following)
 
     if sft_presets is not None:
-        run_command.params.append(
-            click.Option(
-                ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
-            )
+        run_command.params.extend(
+            [
+                click.Option(
+                    ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
+                ),
+                click.Option(
+                    ["--sft-data-mix"], help="Immutable SFT data mix NAME@VERSION; enables a curriculum validation arm."
+                ),
+                click.Option(["--sft-data-uri"], help="Regional directory of the published SFT mix."),
+                click.Option(["--sft-data-file"], help="LM data JSON manifest relative to the mix directory."),
+                click.Option(["--sft-data-tokenizer"], help="Tokenizer identity in the SFT data manifest."),
+                click.Option(
+                    ["--sft-steps"],
+                    type=click.IntRange(min=1),
+                    help="SFT updates; mix arms default to Mochi 524 / Snowball 360.",
+                ),
+                click.Option(
+                    ["--holdout"],
+                    type=click.IntRange(min=1),
+                    help="Random prompts removed from the curriculum; mix arms default to 200.",
+                ),
+                click.Option(["--holdout-seed"], type=int, help="Holdout seed; defaults to the RL preset seed."),
+                click.Option(
+                    ["--val-every"],
+                    type=click.IntRange(min=1),
+                    help="Validation cadence; mix arms default to 3 updates.",
+                ),
+                click.Option(
+                    ["--best-window"],
+                    type=click.IntRange(min=1),
+                    help="Best-policy score window; mix arms average 3 evaluations.",
+                ),
+            ]
         )
     return run_command
 

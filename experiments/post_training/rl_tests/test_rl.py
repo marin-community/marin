@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
 
 import click
+import draccus
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -26,19 +27,34 @@ from finestore.rl.run_records import (
     read_evaluations,
     write_attempt,
 )
+from finestore.rl.strata import TaskStrata
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
+from marin.experiment.cli import graph_handles
 from marin.rl import skyrl as skyrl_api
-from marin.rl.cli import RUN_INDEX_ENV
+from marin.rl.cli import RUN_INDEX_ENV, _coordinator_request
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from skyrlrecipe.documents import merge_mappings, set_path
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    GraderMachine,
+    PlainText,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
@@ -69,9 +85,24 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
-from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.skyrl_test_support import (
+    native_json,
+    read_skyrl_metrics,
+    run_native_test,
+    selection_summary,
+)
+from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    SUMMARY_FILENAME,
+    TASK_SCHEMA,
+    TASK_SPEC_COLUMN,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
+    TrainingHoldout,
+    curriculum_holdout_step,
+)
+from experiments.sft.launcher import PreparedData
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -1632,3 +1663,214 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["state"] = "failed"
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)
+
+
+@pytest.mark.parametrize("model,sft_updates,rl_updates", [("mochi", 524, 72), ("snowball", 360, 36)])
+def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
+    model, sft_updates, rl_updates, tmp_path, monkeypatch, selection, mochi_sft_presets
+):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-test/llom")
+    fake_s3_checkpoint(monkeypatch, "s3://marin-test/llom", tmp_path / "cloud")
+    monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
+    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
+    monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-test/llom")
+    sft = mochi_sft_presets["periodic"] if model == "mochi" else MIXTURE_262K_32NODE
+    table = MOCHI if model == "mochi" else snowball_model.SNOWBALL
+    tokenizer = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+    data = LmDataConfig(
+        tokenizer=tokenizer,
+        components={"v5": DatasetComponent(cache_dir="/regional/v5", flat_cache=True)},
+        train_weights={"v5": 1.0},
+        auto_build_caches=False,
+    )
+    root = tmp_path / "v5"
+    root.mkdir()
+    manifest = "mix.json"
+    (root / manifest).write_text(json.dumps(draccus.encode(data)))
+    plans = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", plans.extend)
+    arguments = [
+        "--preset",
+        "train-long",
+        "--sft",
+        sft.name,
+        "--sft-data-mix",
+        "tests/sft-v5@2026.11.25",
+        "--sft-data-uri",
+        str(root),
+        "--sft-data-file",
+        manifest,
+        "--sft-data-tokenizer",
+        tokenizer,
+        "--version",
+        "2026.11.25.2",
+        "--plan",
+    ]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), sft_presets=lambda: (sft,)), arguments)
+    assert result.exit_code == 0, (result.output, result.exception)
+    [run] = plans
+    handles = graph_handles([run])
+    [training] = [
+        step
+        for step in handles
+        if "mix-" in step.name
+        and step.name.startswith(("grug/", "users/", "checkpoints/"))
+        and any(dep.name == "tests/sft-v5" for dep in step.deps)
+    ]
+    config = materialized_config(training, str(tmp_path))
+    if model == "mochi":
+        assert config.stop_step == config.trainer.trainer.num_train_steps == 393491 + sft_updates
+        assert config.data.mixture_start_step == 393491
+        assert config.optimizer.decay == 52
+        train_config = config
+    else:
+        train_config = config.train_config
+        assert train_config.trainer.num_train_steps == sft_updates
+        assert training.run.keywords["timeout"] is None
+    assert train_config.data.components == data.components
+    launch = yaml.safe_load(materialized_config(run, str(tmp_path)).launch_config_yaml)
+    trainer = launch["skyrl"]["trainer"]
+    assert trainer["max_steps"] == rl_updates
+    assert trainer["eval_interval"] == 3
+    assert trainer["checkpoint_keep_every"] == 3
+    callbacks = {item["type"]: item for item in trainer["callbacks"]}
+    assert callbacks["checkpoint"]["save_steps"] == callbacks["evaluation"]["eval_steps"] == 3
+    assert callbacks["best_checkpoint"]["expected_tasks"] == 200
+    assert callbacks["best_checkpoint"]["selection_window"] == 3
+    assert trainer["hf_export_checkpoint"] == "best"
+    assert (
+        launch["inputs"]["train_data"][0]["uri"].rsplit("/", 1)[0]
+        == launch["inputs"]["validation_data"][0]["uri"].rsplit("/", 1)[0]
+    )
+    execution = skyrl_api.skyrl_execution(run)
+    assert execution.coordinator_timeout_hours == execution.job_timeout_seconds == 0
+    environment = {key: "fixture" for key in execution.required_env_vars}
+    _, request = _coordinator_request([run], "experiments.post_training.snowball_rl", (), Path.cwd(), environment)
+    assert request.timeout is None
+    path = tmp_path / "launch.json"
+    path.write_text(json.dumps(launch))
+    native = native_json()(
+        """
+import json,sys
+from omegaconf import OmegaConf
+from skyrl_train.trainer import RayPPOTrainer
+config = json.load(open(sys.argv[1]))['skyrl']
+trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+trainer.cfg = OmegaConf.create(config)
+trainer.train_dataset = range(100000)
+trainer._configure_training_schedule()
+print(json.dumps({'stop':trainer.total_training_steps,'available':trainer.available_training_steps}))
+""",
+        [str(path)],
+    )
+    assert native["stop"] == rl_updates < native["available"]
+
+
+def test_data_mix_changes_get_separate_sft_outputs(tmp_path):
+    source = ArtifactStep.adopt("tests/sft-mix", "2026.11.25.1", str(tmp_path))
+    first = PreparedData(source, "v5.json", MIXTURE_262K_32NODE.recipe.model.tokenizer_cache_key())
+    second = replace(first, step=replace(source, version="2026.11.25.2"), file="v7.json")
+    spec = MIXTURE_262K_32NODE.recipe
+    v5 = spec.with_data_mix(first).trained(MIXTURE_262K_32NODE.resources).step
+    v7 = spec.with_data_mix(second).trained(MIXTURE_262K_32NODE.resources).step
+    assert v5.path() != v7.path()
+
+
+def test_curriculum_holdout_is_seeded_disjoint_and_records_its_population(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "outputs"))
+    root = tmp_path / "curriculum"
+    root.mkdir()
+    tags = TaskStrata(family="nonagentic", source="fixture", aai_category="general").model_dump()
+    rows = []
+    for index in range(620):
+        identifier = f"task-{index}"
+        task = TaskSpec(
+            id=identifier,
+            source=Source(dataset="fixture", revision="1", row=identifier, importer_revision="1"),
+            context=ConversationInput(events=(TextMessage(role="user", content=f"Solve {index}."),)),
+            environment_requirements=EnvironmentRequirements(),
+            answer_type=AnswerType.TEXT,
+            answer_format=PlainText(),
+            grader=ScriptGrader(
+                argv=("python", "/grade.py"),
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="numpy==2.3.5\n"
+                    )
+                ),
+            ),
+        )
+        rows.append({TASK_SPEC_COLUMN: task.model_dump_json(), **tags})
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), root / TRAIN_FILENAME)
+    (root / SUMMARY_FILENAME).write_text(
+        json.dumps({"recipe": {"heldout": []}, "selection_strata": {"name": "curriculum", "version": "2026.11.25"}})
+    )
+    source = ArtifactStep.adopt("tests/curriculum", "2026.11.25", str(root))
+
+    def ids(values):
+        return {json.loads(row[TASK_SPEC_COLUMN])["id"] for row in values}
+
+    results = []
+    for seed in (17, 18):
+        step = curriculum_holdout_step(source, TrainingHoldout(count=200, seed=seed))
+        run(step)
+        directory = Path(step.path())
+        train = pq.read_table(directory / TRAIN_FILENAME).to_pylist()
+        val = pq.read_table(directory / VALIDATION_FILENAME).to_pylist()
+        assert len(train) == 420 and len(val) == 200
+        assert ids(train).isdisjoint(ids(val))
+        assert ids(train) | ids(val) == ids(rows)
+        summary = json.loads((directory / SUMMARY_FILENAME).read_text())
+        assert summary["training_holdout"]["count"] == 200
+        assert summary["training_holdout"]["seed"] == seed
+        assert summary["training_holdout"]["population"] == 620
+        assert set(summary["validation_task_ids"]) == ids(val)
+        results.append(ids(val))
+    assert results[0] != results[1]
+    reversed_root = tmp_path / "reversed"
+    reversed_root.mkdir()
+    pq.write_table(pa.Table.from_pylist(list(reversed(rows)), schema=TASK_SCHEMA), reversed_root / TRAIN_FILENAME)
+    (reversed_root / SUMMARY_FILENAME).write_bytes((root / SUMMARY_FILENAME).read_bytes())
+    repeated = curriculum_holdout_step(
+        ArtifactStep.adopt("tests/reversed", "2026.11.25", str(reversed_root)), TrainingHoldout(count=200, seed=17)
+    )
+    run(repeated)
+    assert ids(pq.read_table(Path(repeated.path()) / VALIDATION_FILENAME).to_pylist()) == results[0]
+    assert len(pq.read_table(root / TRAIN_FILENAME)) == 620
+
+
+def test_best_checkpoint_uses_three_evaluation_mean_and_restores_window(tmp_path):
+    result = native_json()(
+        """
+import asyncio,json,sys
+from pathlib import Path
+from types import SimpleNamespace
+from skyrl_train.callbacks.base import TrainerControl,TrainerState
+from skyrl_train.callbacks.builtin import BestCheckpointCallback
+root=Path(sys.argv[1])
+saved=[]
+step=0
+async def save_checkpoints(): saved.append(step)
+trainer=SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(root),export_path=str(root/'exports'))),save_checkpoints=save_checkpoints)
+params=dict(initial_model_uri='sft-final',expected_tasks=200,minimum_scored_tasks=198,selection_window=3)
+callback=BestCheckpointCallback(**params)
+async def main():
+ global callback,step
+ windows=[]
+ for step,score in zip((3,6,9,12,15,18),(.9,.1,.2,.8,.8,.1)):
+  if step==15: callback=BestCheckpointCallback(**params)
+  metrics={'eval/all/num_attempted':200,'eval/all/num_scored':200,'eval/all/avg_verifier_score':score}
+  await callback.on_evaluate_async(TrainerState(step,0,18,18),TrainerControl(),trainer=trainer,metrics=metrics)
+  windows.append(metrics.get('eval/selection_score'))
+ selected=json.loads((root/'best_checkpoint.json').read_text())
+ print(json.dumps({'selected':selected,'saved':saved,'windows':windows,'export':json.loads((root/'exports/best_checkpoint.json').read_text())}))
+asyncio.run(main())
+""",
+        [str(tmp_path)],
+    )
+    assert result["selected"]["step"] == 15
+    assert result["selected"]["accuracy"] == pytest.approx(0.6)
+    assert result["windows"][:2] == [None, None]
+    assert result["windows"][2:] == pytest.approx([0.4, 1.1 / 3, 0.6, 1.7 / 3])
+    assert result["saved"] == [9, 15]
+    assert result["export"] == result["selected"]

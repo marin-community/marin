@@ -138,7 +138,11 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
-        timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
+        timeout_hours=(
+            0
+            if any(execution.coordinator_timeout_hours == 0 for execution in executions)
+            else max(execution.coordinator_timeout_hours for execution in executions)
+        ),
         container_profile=container_profile,
     )
 
@@ -176,7 +180,7 @@ def _coordinator_request(
         ),
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
-        timeout=Duration.from_hours(route.timeout_hours),
+        timeout=Duration.from_hours(route.timeout_hours) if route.timeout_hours else None,
     )
     return route.cluster_config, request
 

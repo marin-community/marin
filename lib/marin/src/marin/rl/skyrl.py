@@ -690,8 +690,8 @@ class IrisSkyRLExecution:
     role_topology: RoleTopologyMode | None = None
 
     def __post_init__(self) -> None:
-        if self.coordinator_timeout_hours <= 0:
-            raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.coordinator_timeout_hours < 0:
+            raise ValueError("SkyRL coordinator_timeout_hours cannot be negative; zero disables the deadline")
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):

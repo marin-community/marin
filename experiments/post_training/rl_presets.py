@@ -44,7 +44,7 @@ from experiments.post_training.rl_checkpoint_eval import (
     CheckpointCohort,
     checkpoint_cohorts,
 )
-from experiments.post_training.task_curation.selection import TRAIN_FILENAME
+from experiments.post_training.task_curation.selection import TRAIN_FILENAME, TrainingHoldout
 
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
@@ -126,6 +126,7 @@ class Evaluation:
     sample: int | None = None
     every: int | None = None
     at_start: bool = False
+    training_holdout: TrainingHoldout | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.isidentifier():
@@ -254,6 +255,7 @@ class Training:
                     initial_model_uri=initial_model_uri,
                     expected_tasks=expected_tasks,
                     minimum_scored_tasks=minimum_scored_tasks,
+                    **({"selection_window": preset.best_window} if preset.best_window > 1 else {}),
                 )
             )
         every = preset.checkpoint_every
@@ -440,6 +442,7 @@ class Preset:
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
     budget: str = "hours to days"
+    best_window: int = 1
 
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):

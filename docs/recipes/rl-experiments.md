@@ -72,44 +72,69 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 
 ### Compose a versioned SFT data mix with RL
 
-`experiments.post_training.long_loop` builds SFT and RL as one graph. Pass a
-published `LmDataConfig` JSON manifest through `PreparedData`; both Snowball's
-`SFTSpec.with_data_mix` and `MochiSFT.with_data_mix` retain the preset's optimizer,
-batch size, context length, and allocation. The manifest owns the data components,
-weights, packing, and data validation splits. Its tokenizer must match the trainer.
-For Mochi, set the manifest's `mixture_start_step` for the native initializer's
-absolute step. Explicit Snowball steps set the optimizer schedule horizon. The Mochi stop
-bounds the preset's existing schedule without rescaling it to the mix's token count.
+Use the existing model command's `--sft` path for a complete arm. Add an
+immutable `--sft-data-mix NAME@VERSION`, its regional URI, relative JSON manifest
+file and tokenizer. `PreparedData` supplies an `LmDataConfig` to either SFT
+recipe while retaining optimizer settings, context, batch and allocation.
+The manifest owns component weights, packing and data-validation splits.
+Leave the manifest's `mixture_start_step` unset so the same mix serves both models;
+Mochi binds it to its native initializer step and rejects conflicting clocks.
 
-The entrypoint requires immutable mix and run versions and separate SFT and RL
-update counts. Changed mixes receive distinct training names. It passes the
-unbuilt SFT export directly to `rl.build_experiment(init=...)`, then enables
-best-checkpoint selection and export using the RL preset's held-out evaluation.
-The existing `--init NAME@VERSION` path in the model RL entrypoints remains
-available for published models.
+Mix arms default explicitly to 524 SFT / 72 RL updates for Mochi and 360 SFT /
+36 RL updates for Snowball. `--sft-steps` sets SFT updates; the existing
+`--set trainer.max_steps=N` sets RL updates. Both models size their SFT schedule to the explicit update budget; Mochi keeps
+its preset decay fraction and starts the mixture at the restored step. Total SFT task,
+RL worker and coordinator deadlines are disabled for mix arms. Failure
+watchdogs and agent-attempt timeouts still detect failed work.
 
-Print a plan without submitting any work:
+A mix arm samples 200 prompts uniformly from its own admitted RL train pool
+with a fixed seed and removes them from train by task and prompt identity.
+The derived selection records its parent, seed, count, population and held-out
+IDs. Both train and validation consume that same artifact. Validation runs
+at steps 3, 6, 9, and so on, recording raw reward. The best checkpoint maximizes
+the arithmetic mean of the last three evaluations; a full three-evaluation
+window is required. The score window restores after restart. Main's 99%
+coverage requirement remains (198/200 scored and all 200 attempted).
+
+Every validation-step checkpoint is saved and retained. The selected best
+and final SFT artifact remain in durable storage. `--holdout`, `--holdout-seed`,
+`--val-every`, and `--best-window` expose this policy explicitly. For example,
+print a Mochi arm without submitting work:
 
 ```bash
-uv run python -m experiments.post_training.long_loop \
-  --model snowball --sft-preset mixture-262k-32node --rl-preset train-long \
-  --data-mix "$MIX_NAME@$MIX_VERSION" --data-uri "$MIX_URI" \
-  --data-file mix.json --data-tokenizer "$MIX_TOKENIZER" \
-  --sft-steps 360 --rl-steps 36 --version 2026.11.25.1
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long-agentic --sft mixture-262k-176node \
+  --sft-data-mix "$MOCHI_MIX@$MOCHI_MIX_VERSION" --sft-data-uri "$MOCHI_MIX_URI" \
+  --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-steps 524 --set trainer.max_steps=72 --tasks "$MOCHI_TASKS" \
+  --holdout 200 --holdout-seed 20261020 --val-every 3 --best-window 3 \
+  --version 2026.11.25.2 --plan
 ```
 
-The mix, model weights, and output must be staged in the selected region before
-launch. SFT presets with a fixed target cluster must match the RL coordinator;
-the Snowball mixture targets `cw-us-east-02a`, whereas `train-long-agentic`
-targets `cw-rno2a`. This entrypoint does not transfer artifacts between regions.
+The equivalent Snowball command is:
 
-Micro210 is not yet attached to this entrypoint. The native frozen 2026.11.23
-binding must land through [PR #12249](https://github.com/marin-community/marin/pull/12249)
-before adding the downstream export consumer. That follow-up must bind the
-model's serving profile and read its export manifest after the dependency
-completes. The Mochi profile is `mochi-gb200-cw-us-east-08a`; the Snowball profile
-is `snowball-h100-cw-us-east-02a`. Evaluation should consume the best RL export,
-including the SFT initializer when step zero wins, and optionally the SFT export.
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long-agentic --sft mixture-262k-32node \
+  --sft-data-mix "$SNOWBALL_MIX@$SNOWBALL_MIX_VERSION" --sft-data-uri "$SNOWBALL_MIX_URI" \
+  --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-steps 360 --set trainer.max_steps=36 --tasks "$SNOWBALL_TASKS" \
+  --holdout 200 --holdout-seed 20261020 --val-every 3 --best-window 3 \
+  --version 2026.11.25.2 --plan
+```
+
+SFT uses its preset allocation in the RL coordinator's region. Stage weights,
+corpus and tokenizer in that region before any launch; this command performs
+no cross-region transfer. The existing `--init NAME@VERSION` path remains
+available for previously published models.
+
+Micro210 remains deferred until [PR #12249](https://github.com/marin-community/marin/pull/12249)
+lands its native frozen 2026.11.23 binding. Its export consumer must evaluate the
+best-window RL export, optionally evaluate SFT, and use the model-specific
+`mochi-gb200-cw-us-east-08a` or `snowball-h100-cw-us-east-02a` serving profile.
+When a row seals, the same follow-up must automatically publish the matching
+FineStore/EvalDash record under `CW_RECORDS_PREFIX` with model, checkpoint and
+policy in the run name.
 
 ### Task selection and native resume
 
