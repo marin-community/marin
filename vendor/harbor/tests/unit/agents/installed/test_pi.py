@@ -326,6 +326,7 @@ class TestPiAgent:
             model_name="openai/test-model",
             model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
             compaction_reserve_tokens=32768,
+            http_idle_timeout=360,
         )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
@@ -336,6 +337,7 @@ class TestPiAgent:
             "reserveTokens": 32768,
             "keepRecentTokens": 16384,
         }
+        assert settings["httpIdleTimeoutMs"] == 360000
 
     @pytest.mark.parametrize("compaction_reserve_tokens", [16383, 65536])
     def test_explicit_compaction_reserve_must_fit_model_limits(
