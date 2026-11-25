@@ -239,6 +239,8 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 async def test_malformed_model_tool_arguments_score_zero_without_cancelling_other_attempts(
     tmp_path, published_corpora, run_config
 ):
+    malformed_arguments = '{"cmd": "oops'
+
     async def model(request):
         prompt = request.messages[-1]["content"]
         if prompt == "colors/0" and request.options["seed"] == 7:
@@ -246,7 +248,7 @@ async def test_malformed_model_tool_arguments_score_zero_without_cancelling_othe
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"cmd": "oops'}}
+                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": malformed_arguments}}
                 ],
             }
         else:
@@ -268,7 +270,7 @@ async def test_malformed_model_tool_arguments_score_zero_without_cancelling_othe
     assert Counter(row["grading"]["score"] for row in samples) == {0.0: 1, 1.0: 3}
     assert (
         raw["conversations"][0]["steps"][0]["turn"]["message"]["tool_calls"][0]["function"]["arguments"]
-        == '{"cmd": "oops'
+        == malformed_arguments
     )
 
 
