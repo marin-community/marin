@@ -73,7 +73,7 @@ dependencies = [
     "deepdiff>=8.6.2",
     "lenses",
     "jinja2",  # needed for apply_chat_template
-    "protobuf>=6",
+    "protobuf>=6.31.1",
     "immutabledict",
 ]
 
@@ -140,6 +140,7 @@ profiling = [
 ]
 serve = [
   "fastapi>=0.100.0",
+  "grpcio>=1.76.0",
   "uvicorn[standard]>=0.23.0",
   "openai>=1.0.0",
 ]
