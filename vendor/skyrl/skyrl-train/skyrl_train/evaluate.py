@@ -12,6 +12,7 @@ import numpy as np
 from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow, write_evaluations
 from finestore.rl.strata import TaskEvaluationIdentity
 from skyrl_train.task_inputs import TrajectoryMetadata
+from skyrl_train.mismatch_probe.protocol import request_seed
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from skyrl_train.utils import Timer
@@ -155,6 +156,16 @@ async def _collect_evaluation_rollouts(
                 "eval",
                 global_step,
             )
+            master_seed = cfg.generator.eval_sampling_params.get("seed")
+            if master_seed is not None:
+                task_id = request.rows[0].spec.task.id if isinstance(request, TaskRequestBatch) else uids[0]
+                request = replace(
+                    request,
+                    sampling_params={
+                        **(request.sampling_params or {}),
+                        "seed": request_seed(int(master_seed), task_id, repetition),
+                    },
+                )
             request = replace(
                 request,
                 trajectory_ids=tuple(

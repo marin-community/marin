@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import hashlib
 from itertools import permutations
@@ -173,6 +174,46 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
         means.add(mean)
         assert passed == 1.0
     assert means == ({3.0} if per_token else {0.75})
+
+
+@pytest.mark.asyncio
+async def test_eval_trial_seeds_survive_task_reordering_and_pool_size(tmp_path):
+    config = get_default_config()
+    config.trainer.export_path = str(tmp_path)
+    config.trainer.dump_eval_results = False
+    config.generator.eval_n_samples_per_prompt = 2
+    config.generator.eval_sampling_params.seed = 20261125
+    OmegaConf.update(config, "runtime", {"attempt_id": "seeded-attempt", "model": "test-policy"}, force_add=True)
+    rows = [{"input": task_input(lowered_task(text_task(task_id)))} for task_id in ("alpha", "beta")]
+    tokenizer = SimpleNamespace(eos_token_id=2, decode=lambda _tokens: "answer")
+    projection = WholeTaskProjection(config.generator, tokenizer)
+    snapshots = []
+    for ordered, concurrency in ((rows, 1), (list(reversed(rows)), 4)):
+        observed = {}
+
+        async def run(request):
+            task_id = request.rows[0].spec.task.id
+            repetition = request.trajectory_ids[0].repetition_id
+            observed[task_id, repetition] = request.sampling_params["seed"]
+            await asyncio.sleep(0)
+            response = TrainingRollout(
+                task_id=task_id,
+                messages=(),
+                prompt_token_ids=(1,),
+                response_token_ids=(2,),
+                loss_mask=(1,),
+                logprobs=(-0.1,),
+                grade=GradeResult(Outcome.GRADED, 1.0),
+                stop_reason="stop",
+            )
+            return projection.project([response], request)
+
+        async with EvaluationPool(concurrency=concurrency) as pool:
+            loader = StatefulDataLoader(ordered, collate_fn=list)
+            await evaluate(loader, SimpleNamespace(run=run), config, 0, tokenizer, evaluation_pool=pool)
+        snapshots.append(observed)
+    assert snapshots[0] == snapshots[1]
+    assert len(set(snapshots[0].values())) == 4
 
 
 @pytest.mark.asyncio

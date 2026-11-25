@@ -50,6 +50,7 @@ from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
 
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
+from skyrl_train.mismatch_probe.protocol import request_seed
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
@@ -520,13 +521,19 @@ class TaskRolloutWorker:
             attempt_id = session_id
             external_agent = lowered.harness in agents
             identity = request.rows[index].metadata.evaluation_identity
+            turn_index = 0
 
             async def model(request):
+                nonlocal turn_index
+                turn_sampling = sampling
+                if sampling.get("seed") is not None:
+                    turn_sampling = {**sampling, "seed": request_seed(int(sampling["seed"]), "model-turn", turn_index)}
+                turn_index += 1
                 try:
                     return await _model_turn(
                         self.model_client,
                         request,
-                        sampling_params=sampling,
+                        sampling_params=turn_sampling,
                         max_context_length=max_context_length,
                         max_prompt_length=None if external_agent else max_input_length,
                         chat_template_kwargs=self.chat_template_kwargs,

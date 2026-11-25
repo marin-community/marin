@@ -85,8 +85,10 @@ def sampled_reply(content="Working"):
 class ScriptedClient:
     def __init__(self, replies):
         self.replies = iter(replies)
+        self.requests = []
 
-    async def generate(self, _request):
+    async def generate(self, request):
+        self.requests.append(request)
         reply = next(self.replies)
         if isinstance(reply, Exception):
             raise reply
@@ -147,11 +149,13 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
     task = text_task().model_copy(update={"grader": verifyit_package(NumericSpec("12", 0, 0)).grader})
     request = TaskRequestBatch(
         rows=(task_input(lowered_task(task, "pi", max_turns=2 if sample_first else 1)),),
+        sampling_params={"seed": 20261125},
     )
+    client = ScriptedClient(replies)
     worker = TaskRolloutWorker(
         worker_config,
         WholeTaskProjection(worker_config, WorkerTokenizer()),
-        ScriptedClient(replies),
+        client,
         {},
         agents=agent_harnesses(agent),
         shutdown_timeout=5,
@@ -172,6 +176,8 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         ["Working", "12"] if sample_first else ["12"]
     )
     assert batch["assistant_turn_token_ids"] == ([[[3], [3]]] if sample_first else [[[3]]])
+    seeds = [request["sampling_params"]["seed"] for request in client.requests]
+    assert len(seeds) == len(set(seeds))
 
 
 @pytest.mark.asyncio
