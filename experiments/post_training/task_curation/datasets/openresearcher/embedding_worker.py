@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,13 @@ from experiments.post_training.task_curation.datasets.openresearcher.dense_contr
 logger = logging.getLogger(__name__)
 
 CHUNK_DOCS = 6_400
+# Cap padded tokens per forward pass: a fixed document count can batch 32x8192
+# tokens, which OOMs an 80GB H100 on the 8B encoder. 64K padded tokens peaks at
+# a few GiB of activations above the 16GB bf16 weights.
+TOKEN_BUDGET = 65_536
+MAX_BATCH_DOCS = 256
+# Conservative chars-per-token estimate used to size batches before tokenizing.
+CHARS_PER_TOKEN = 3
 
 
 def sha256_file(path: Path) -> str:
@@ -133,7 +141,6 @@ def embed_chunk(
     shard: Path,
     chunk: int,
     output: Path,
-    batch_size: int,
     max_tokens: int,
 ) -> dict:
     """Embed rows [chunk*CHUNK_DOCS, ...) of one shard, resuming completed chunks."""
@@ -164,12 +171,30 @@ def embed_chunk(
     # Length-sorted batches minimize padding waste; vectors scatter back to the
     # corpus row order before writing so the docid mapping never changes.
     order = sorted(range(len(docids)), key=lambda index: len(texts[index]))
+    lengths = [len(texts[index]) for index in order]
+    # Greedy token-budgeted batches over the sorted order: each batch pads to
+    # its longest member, so batch cost scales with count x longest length.
+    batches: list[list[int]] = []
+    batch: list[int] = []
+    batch_longest = 0
+    for position, index in enumerate(order):
+        candidate_longest = max(batch_longest, lengths[position])
+        if batch and (len(batch) + 1) * candidate_longest > TOKEN_BUDGET * CHARS_PER_TOKEN:
+            batches.append(batch)
+            batch, batch_longest = [], 0
+            candidate_longest = lengths[position]
+        batch.append(index)
+        batch_longest = candidate_longest
+        if len(batch) == MAX_BATCH_DOCS:
+            batches.append(batch)
+            batch, batch_longest = [], 0
+    if batch:
+        batches.append(batch)
     vectors = np.empty((len(docids), model.config.hidden_size), dtype=np.float16)
     embedded = 0
-    for batch_start in range(0, len(docids), batch_size):
-        rows = order[batch_start : batch_start + batch_size]
+    for batch_rows in batches:
         encoded = tokenizer(
-            [texts[row] for row in rows],
+            [texts[row] for row in batch_rows],
             padding=True,
             truncation=True,
             max_length=max_tokens,
@@ -177,9 +202,9 @@ def embed_chunk(
         ).to(model.device)
         with torch.no_grad():
             hidden = model(**encoded).last_hidden_state[:, -1]
-        vectors[rows] = normalize_rows(hidden.to(torch.float32).cpu().numpy()).astype(np.float16)
-        embedded += len(rows)
-        if embedded % (batch_size * 100) < len(rows):
+        vectors[batch_rows] = normalize_rows(hidden.to(torch.float32).cpu().numpy()).astype(np.float16)
+        embedded += len(batch_rows)
+        if embedded % (MAX_BATCH_DOCS * 10) < len(batch_rows):
             logger.info("Embedded %s chunk %d: %d/%d documents", shard.name, chunk, embedded, len(docids))
     entry = write_part(output, shard, chunk, docids, vectors)
     logger.info("Embedded %s chunk %d: %d documents", shard.name, chunk, entry["documents"])
@@ -191,7 +216,6 @@ def main() -> None:
     parser.add_argument("--plan", required=True, help="JSON file with this worker's corpus shard assignments")
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     plan = json.loads(Path(args.plan).read_text())
@@ -200,6 +224,7 @@ def main() -> None:
     device = plan.get("device", "cuda")
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("The embedding worker requires a CUDA device")
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, padding_side="left")
     model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.bfloat16, local_files_only=True)
     model.to(device).eval()
@@ -212,7 +237,7 @@ def main() -> None:
         shard_path = Path(shard)
         total_rows = shard_rows(shard_path)
         for chunk in range((total_rows + CHUNK_DOCS - 1) // CHUNK_DOCS):
-            entries.append(embed_chunk(model, tokenizer, shard_path, chunk, output, args.batch_size, plan["max_tokens"]))
+            entries.append(embed_chunk(model, tokenizer, shard_path, chunk, output, plan["max_tokens"]))
     (output / f"worker-manifest-{plan['worker']}.json").write_text(json.dumps(entries, indent=2) + "\n")
     if device == "cuda":
         torch.cuda.empty_cache()

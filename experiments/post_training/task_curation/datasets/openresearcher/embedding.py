@@ -319,8 +319,6 @@ def run_workers(
                     str(work / "model"),
                     "--output",
                     str(staged_output),
-                    "--batch-size",
-                    str(config.batch_size),
                 ],
                 env={
                     **os.environ,
