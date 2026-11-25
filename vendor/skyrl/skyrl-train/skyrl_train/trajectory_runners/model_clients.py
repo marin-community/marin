@@ -395,6 +395,14 @@ class DirectModelClient:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
+            # Agent relays use the OpenAI client's extra_body convention. The direct client
+            # sends raw vLLM requests and tokenizes that same flattened body.
+            row_options = dict(row_options)
+            extra = row_options.pop("extra_body", {})
+            template = {**row_options.get("chat_template_kwargs", {}), **extra.get("chat_template_kwargs", {})}
+            row_options.update(extra)
+            if template:
+                row_options["chat_template_kwargs"] = template
             chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {

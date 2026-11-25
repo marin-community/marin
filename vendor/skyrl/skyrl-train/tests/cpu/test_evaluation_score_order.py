@@ -24,7 +24,6 @@ from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
-from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
 from skyrl_train.evaluate import evaluate
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
@@ -40,15 +39,14 @@ from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, t
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
-@pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp])
-def test_final_profiles_build_primary_and_additional_datasets_without_periodic_evaluation(tmp_path, experiment_type):
+def test_final_profiles_build_primary_and_additional_datasets_without_periodic_evaluation(tmp_path):
     config = get_default_config()
     primary, named = tmp_path / "primary" / "tasks.parquet", tmp_path / "named" / "tasks.parquet"
     task = text_task("shared").model_copy(update={"tags": ("agentic",)})
     digest = canonical_sha256(task.model_dump(mode="json"))
     for path in (primary, named):
         path.parent.mkdir()
-        if experiment_type is BasePPOExp and path == primary:
+        if path == primary:
             pq.write_table(
                 pa.table(
                     {
@@ -70,11 +68,8 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
                        "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
         )
     config.data.val_data = [str(primary)]
-    config.data.task_cache_dir = str(tmp_path / "task-cache")
     manifest_path = primary.parent / "summary.json"
     faults = [(manifest_path, b'{"selection_strata": null}', "SelectionDefinition")]
-    if experiment_type is TerminalBenchExp:
-        OmegaConf.update(config, "terminal_bench_config", {}, force_add=True)
     config.trainer.eval_interval = 0
     config.trainer.callbacks = [
         {
@@ -86,7 +81,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
             },
         }
     ]
-    experiment = experiment_type.__new__(experiment_type)
+    experiment = BasePPOExp.__new__(BasePPOExp)
     experiment.cfg = config
     original_config = OmegaConf.to_container(config, resolve=True)
     experiment.evaluation_profiles = resolve_evaluation_profiles(config)
@@ -99,8 +94,6 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["shared"]
     additional_dataset = additional_datasets["named_final"]
     assert [row["input"].spec.task.id for row in additional_dataset.collate_fn(list(additional_dataset))] == ["shared"]
-    if experiment_type is TerminalBenchExp:
-        assert (primary_dataset.uid(0), additional_dataset.uid(0)) == ("shared", "shared")
 
     identities = [
         dataset.collate_fn(list(dataset))[0]["input"].metadata for dataset in (primary_dataset, additional_dataset)
@@ -126,52 +119,36 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     config.data.val_data = [str(primary), str(named)]
     with pytest.raises(ValueError, match="conflicting selection identities"):
         experiment.get_eval_dataset()
-    if experiment_type is TerminalBenchExp:
-        package = tmp_path / "packages" / "shared"
-        (package / "environment").mkdir(parents=True)
-        (package / "tests").mkdir()
-        (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
-        (package / "instruction.md").write_text("Write an answer.")
-        (package / "task.toml").write_text(
-            f'[verifier]\nenvironment_mode = "separate"\n[environment]\ndocker_image = "{NATIVE_ENVIRONMENT.docker_image}"\n'
-        )
-        config.trainer.max_prompt_length = 4096
-        package_dataset = experiment.get_eval_dataset([str(package.parent)])
-        package_input = package_dataset.collate_fn(list(package_dataset))[0]["input"]
-        assert package_input.spec.task.id == "shared" and package_input.metadata.evaluation_identity is None
-        with pytest.raises(ValueError, match="conflicting selection identities"):
-            experiment.get_eval_dataset([str(primary), str(package.parent)])
-    else:
-        raw = {
-            "prompt": [{"role": "user", "content": "Count cats."}],
-            "env_class": "cat_count",
-            "data_source": "original",
-            "extra_info": {"n": 1},
-        }
-        source_file = tmp_path / "raw.jsonl"
-        source_file.write_text(json.dumps(raw) + "\n")
-        source_dataset = experiment.get_eval_dataset([str(source_file)])
-        source_task = source_dataset.collate_fn(list(source_dataset))[0]["input"].spec.task
-        payload = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-        assert source_task.source.revision == "sha256:" + hashlib.sha256(payload).hexdigest()
-        original = pq.read_table(primary)
-        changed = task.model_copy(update={"tags": ()})
-        pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
-        with pytest.raises(ValueError, match="task content differs from selection manifest"):
-            experiment.get_eval_dataset([str(primary)])
-        mismatched = original.set_column(
-            original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
-        )
-        membership_path = primary.parent / "validation.parquet"
-        membership = pq.read_table(membership_path)
-        changed_task = json.loads(membership["task_spec"][0].as_py())
-        changed_task["id"] = "edited"
-        faults.extend(
-            [
-                (primary, mismatched, "row strata differ from selection manifest"),
-                (membership_path, pa.table({"task_spec": [json.dumps(changed_task)]}), "manifest population differs"),
-            ]
-        )
+    raw = {
+        "prompt": [{"role": "user", "content": "Count cats."}],
+        "env_class": "cat_count",
+        "data_source": "original",
+        "extra_info": {"n": 1},
+    }
+    source_file = tmp_path / "raw.jsonl"
+    source_file.write_text(json.dumps(raw) + "\n")
+    source_dataset = experiment.get_eval_dataset([str(source_file)])
+    source_task = source_dataset.collate_fn(list(source_dataset))[0]["input"].spec.task
+    payload = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    assert source_task.source.revision == "sha256:" + hashlib.sha256(payload).hexdigest()
+    original = pq.read_table(primary)
+    changed = task.model_copy(update={"tags": ()})
+    pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
+    with pytest.raises(ValueError, match="task content differs from selection manifest"):
+        experiment.get_eval_dataset([str(primary)])
+    mismatched = original.set_column(
+        original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
+    )
+    membership_path = primary.parent / "validation.parquet"
+    membership = pq.read_table(membership_path)
+    changed_task = json.loads(membership["task_spec"][0].as_py())
+    changed_task["id"] = "edited"
+    faults.extend(
+        [
+            (primary, mismatched, "row strata differ from selection manifest"),
+            (membership_path, pa.table({"task_spec": [json.dumps(changed_task)]}), "manifest population differs"),
+        ]
+    )
     config.data.val_data = [str(primary)]
     for path, replacement, expected in faults:
         original = path.read_bytes()

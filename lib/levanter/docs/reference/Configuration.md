@@ -176,13 +176,17 @@ share fits under `max_staged_host_bytes` returns while the commits drain, and a 
 rolls through it.
 
 When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
-file that every other writer waits on. One process publishes the array metadata before the
-others open the arrays, and the others open it without reading it back. Each chunk commits
-as soon as it is staged. Before that commit, the writer refreshes the directory and holds a
-commit-order lock until the commit finishes, so it rewrites the manifest the previous client
-published instead of a cached copy. A save also publishes a writer lease for its lifetime.
-Lock files left in the directory are removed only after that lease is gone or stale.
-Set `checkpointer.write.file_io_locking` to `os`, `lockfile`, or `none` to override that default.
+file that every other writer waits on. Each process chooses its commit path from its own
+staged bytes. A save that does not fit in `max_staged_host_bytes` batches each staging wave
+into one atomic manifest commit. A save that fits, and every save that is not using lock
+files, commits each chunk as soon as it is staged, which overlaps staging with storage I/O.
+In either path, one process publishes the array metadata before the others open the arrays,
+and the others open it without reading it back. Before each manifest commit, the writer
+refreshes the directory and holds a commit-order lock until the commit finishes, so it
+rewrites the manifest the previous client published instead of a cached copy. A save also
+publishes a writer lease for its lifetime. Lock files left in the directory are removed only
+after that lease is gone or stale. Set `checkpointer.write.file_io_locking` to `os`,
+`lockfile`, or `none` to override that default.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|

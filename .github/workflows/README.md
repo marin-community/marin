@@ -214,7 +214,7 @@ PR description focused on its resulting behavior.
 
 ## SkyRL runtime checks
 
-`Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin and Harbor
+`Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin
 dependencies, or CI tooling changes. It checks the nested lock and runs the
 packaging, launcher, and verifier tests in SkyRL's CPU environment. GPU smoke
 tests run separately; see `docs/dev-guide/skyrl.md`.

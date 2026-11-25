@@ -68,14 +68,14 @@ Run, with a known difference:
 
 | Benchmark | October | This policy |
 | --- | --- | --- |
-| CruxEval | no output cap | protocol cap 2,048 tokens |
+| CruxEval | no output cap; published accuracy on the output-direction items | protocol cap 2,048 tokens; primary metric is accuracy over both directions |
 | FinanceBench | no output cap | protocol cap 4,096 tokens |
 | NUPA | no output cap | protocol cap 256 tokens |
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
+| FinanceBench, OlympiadBench judge | `MiniMaxAI/MiniMax-M3-MXFP8` (`c5454eb`) on 8×H100 with a 262,144-token window, in offline regrades of the sealed replies | Together `openai/gpt-oss-120b`, during the run |
 | Agentic benchmarks | external Harbor fork | curated TaskSpec corpora, with prebuilt and Dockerfile base images pinned by digest, run by Marin's rollout engine ([#11664](https://github.com/marin-community/marin/pull/11664)) |
 | TB2, OT-TBLite, SWE-bench Verified | Daytona snapshots | declarative Daytona image builds, which create no snapshots |
 
 The same as October: the 20 single-turn selections (thinking mode, repeats, few-shot count,
-MRCR and MMLU-Pro windows), seed 42 on AIME24 and OlympiadBench, and the Together
-`openai/gpt-oss-120b` judge for FinanceBench and OlympiadBench. Agent input and reply limits,
-trials and concurrency match the October campaign files.
+MRCR and MMLU-Pro windows) and seed 42 on AIME24 and OlympiadBench. Agent input and reply
+limits, trials and concurrency match the October campaign files.

@@ -351,7 +351,7 @@ def _log_status(peaks: dict | None = None, breakdown: bool = False) -> None:
         if sys_pct >= 85:
             print(
                 "[fd-monitor] Node memory pressure HIGH — consider reducing "
-                "harbor.n_concurrent_trials / trainer.rollout_buffer.max_in_flight",
+                "trajectory_runner.max_concurrent_training_machine_tasks or trainer.rollout_buffer.max_in_flight",
                 flush=True,
             )
 
@@ -386,7 +386,7 @@ def _log_status(peaks: dict | None = None, breakdown: bool = False) -> None:
                 print(
                     "[fd-monitor] CGROUP memory pressure HIGH — approaching the "
                     "--memory cap; OOM-kill imminent (reduce policy ranks/node, "
-                    "GDN scan working set, or n_concurrent_trials)",
+                    "GDN scan working set, or concurrent training machine tasks)",
                     flush=True,
                 )
         else:

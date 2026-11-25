@@ -6,17 +6,15 @@
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import httpx
 import loom_alerts
 import pytest
+import yaml
 from config import LoomAlertConfig, SlackAlertConfig
-from loom_alerts import (
-    LoomAlertClient,
-    LoomAlertDeliveryError,
-    LoomAlertPayloadError,
-    OperatorBehavior,
-)
+from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
+from server import OPERATOR_BEHAVIORS
 
 SLACK_CHANNEL = "C0123ABCD"
 
@@ -75,19 +73,20 @@ def client_for(
     slack: FakeSlack,
     *,
     runs: list[dict] | None = None,
-    loom_status: int | None = None,
+    loom_status: int | list[int | None] | None = None,
 ):
     """A client whose Slack and Loom legs are both mocked.
 
-    `runs` collects the run requests. `loom_status` fails every Loom-side call
-    with that status instead, leaving Slack working.
+    `runs` collects the run requests. `loom_status` can be changed through a
+    one-element list to simulate a Loom outage and recovery.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "slack.com":
             return slack.respond(request)
-        if loom_status is not None:
-            return httpx.Response(loom_status, text="secret response body")
+        status = loom_status[0] if isinstance(loom_status, list) else loom_status
+        if status is not None:
+            return httpx.Response(status, text="secret response body")
         if request.url.host == "metadata.google.internal":
             assert request.headers["Metadata-Flavor"] == "Google"
             assert dict(request.url.params) == {
@@ -105,25 +104,7 @@ def client_for(
             return httpx.Response(201, json={"id": "run-1", "session_id": "session-1"})
         raise AssertionError(f"unexpected request: {request.url}")
 
-    behaviors = (
-        OperatorBehavior(
-            name="default",
-            channel="operator",
-            session_title="Grafana operator",
-            operator_name="Marin Grafana operator",
-        ),
-        OperatorBehavior(
-            name="hero",
-            channel="operator:hero",
-            session_title="Hero run operator",
-            operator_name="Marin hero-run operator",
-            instructions=(
-                "Gather current evidence for the logical run with telemetry_v1, iris.task_state, "
-                "iris.task_event, and log queries."
-            ),
-        ),
-    )
-    return LoomAlertClient(loom_config(), behaviors=behaviors, transport=httpx.MockTransport(handler))
+    return LoomAlertClient(loom_config(), behaviors=OPERATOR_BEHAVIORS, transport=httpx.MockTransport(handler))
 
 
 def alert_payload(status: str = "firing") -> dict:
@@ -247,6 +228,25 @@ def test_hero_behavior_uses_a_separate_channel_and_live_query_guidance():
     data = goal_data(request)
     assert data["operatorBehavior"] == "hero"
     assert "operatorContext" not in data
+
+
+def test_storage_alert_links_viewer_and_starts_owner_investigation():
+    runs: list[dict] = []
+    slack = FakeSlack()
+    payload = alert_payload()
+    rules_file = Path(__file__).resolve().parent.parent / "provisioning/alerting/rules.yaml"
+    rules = [rule for group in yaml.safe_load(rules_file.read_text())["groups"] for rule in group["rules"]]
+    headroom = next(rule for rule in rules if rule["uid"] == "coreweave-storage-headroom")
+    payload["alerts"][0]["labels"].update(headroom["labels"])
+    payload["alerts"][0]["annotations"].update(headroom["annotations"])
+
+    asyncio.run(client_for(slack, runs=runs).submit(payload))
+
+    assert "<https://cw-s3.oa.dev/?v=time|Size &amp; growth>" in slack.roots[0]["text"]
+    assert runs[0]["session"]["title"] == "CoreWeave storage operator"
+    assert goal_data(runs[0])["operatorBehavior"] == "storage"
+    assert "verify their Slack user ID" in runs[0]["session"]["goal"]
+    assert "<@USER_ID>" in runs[0]["session"]["goal"]
 
 
 def test_operator_behavior_routes_independently_of_alert_name():
@@ -408,6 +408,60 @@ def test_a_loom_failure_is_reported_on_the_alert_thread_and_still_fails_the_webh
     assert any("No Loom triage session opened" in text for text in slack.reply_texts)
 
 
+def test_loom_failure_retries_keep_one_thread_reply_until_delivery_recovers(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    status: list[int | None] = [503]
+    slack = FakeSlack()
+    client = client_for(slack, loom_status=status)
+
+    for minute in (0, 1, 20, 40, 5 * 60, 10 * 60):
+        clock[0] = minute * 60
+        with pytest.raises(LoomAlertDeliveryError):
+            asyncio.run(client.submit(alert_payload()))
+
+    assert len(slack.roots) == 1
+    assert len(slack.reply_texts) == 1
+    failure_reply = slack.reply_texts[0]
+    assert "No Loom triage session opened" in failure_reply
+
+    status[0] = None
+    clock[0] = 10 * 60 * 60 + 60
+    asyncio.run(client.submit(alert_payload()))
+    assert len(slack.reply_texts) == 2
+    assert "https://loom.example.com/s/session-1" in slack.reply_texts[-1]
+
+    status[0] = 503
+    clock[0] += 60
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+    assert slack.reply_texts.count(failure_reply) == 2
+
+
+def test_failed_slack_notice_is_retried_while_loom_delivery_fails(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    status: list[int | None] = [None]
+    slack = FakeSlack()
+    client = client_for(slack, loom_status=status)
+    asyncio.run(client.submit(alert_payload()))
+
+    status[0] = 503
+    slack.ok = False
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+    failed_notice = slack.reply_texts[-1]
+
+    slack.ok = True
+    clock[0] = 20 * 60
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+
+    assert len(slack.roots) == 1
+    assert slack.reply_texts.count(failed_notice) == 2
+    assert "Still firing." not in slack.reply_texts
+
+
 def test_a_slack_failure_still_opens_the_triage_session():
     """A silent announcement is bad; losing the triage session is worse."""
     runs: list[dict] = []
@@ -433,6 +487,9 @@ def test_alert_card_escapes_text_and_drops_links_that_could_break_out():
     payload["alerts"][0]["dashboardURL"] = "https://grafana.example.com/d/ok"
     payload["alerts"][0]["panelURL"] = "https://evil.example.com/x|Click here>*hi*<"
     payload["alerts"][0]["silenceURL"] = "javascript:alert(1)"
+    payload["alerts"][0]["annotations"].update(
+        {"related_url": "https://unsafe.example.com/ok", "related_label": "bad|label"}
+    )
 
     asyncio.run(client_for(slack).submit(payload))
 
@@ -440,4 +497,5 @@ def test_alert_card_escapes_text_and_drops_links_that_could_break_out():
     assert "cluster &lt;script&gt; &amp; more" in card
     assert "<https://grafana.example.com/d/ok|Dashboard>" in card
     assert "evil.example.com" not in card, "a url carrying Slack link delimiters is dropped"
+    assert "unsafe.example.com" not in card, "a label carrying Slack link delimiters is dropped"
     assert "javascript:" not in card

@@ -6,6 +6,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marinskyrl.agent_harnesses import PI_HARNESS
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.validation import validate_spec
@@ -16,7 +17,6 @@ from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpe
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
-from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.task_inputs import TaskInput, task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
@@ -101,10 +101,10 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
         validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
 
 
-def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp_path: Path):
-    harbor = text_task("harbor-task", source="harbor-source")
+def test_dataset_harness_binding_keeps_agent_and_assistant_prefix_execution(tmp_path: Path):
+    agent = text_task("agent-task", source="agent-source")
     ordinary = text_task("ordinary-task", source="ordinary-source")
-    prefix = harbor.model_copy(
+    prefix = agent.model_copy(
         update={
             "id": "prefix-task",
             "context": ConversationInput(
@@ -113,10 +113,10 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
         }
     )
 
-    inputs = _load(tmp_path, (harbor, ordinary, prefix), harness_by_dataset={"harbor-source": HARBOR_TRIAL_SESSION})
+    inputs = _load(tmp_path, (agent, ordinary, prefix), harness_by_dataset={"agent-source": PI_HARNESS})
     loaded = [item.spec for item in inputs]
 
-    assert loaded[0].harness == HARBOR_TRIAL_SESSION
+    assert loaded[0].harness == PI_HARNESS
     assert is_shell_harness(loaded[1].harness)
     assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
 

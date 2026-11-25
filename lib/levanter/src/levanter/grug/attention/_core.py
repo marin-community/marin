@@ -255,7 +255,7 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
 
 def _explicit_mask(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
-    scores: Float[Array, "B H Q K"],
+    scores: Float[Array, "B ... Q K"],
     batch: int,
 ) -> Bool[Array, "B 1 Q K"] | Float[Array, "B 1 Q K"] | None:
     """The mask as a dense [B or 1, 1, Q, K] array broadcast across heads (bool = allowed, float = additive bias)."""
@@ -300,18 +300,24 @@ def _reference_attention_math(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = align_kv_heads(k, num_q_heads=num_q_heads)
-    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    num_kv_heads = k.shape[2]
+    if num_q_heads % num_kv_heads != 0 or v.shape[2] != num_kv_heads:
+        raise ValueError("Query heads must form complete groups over matching key/value heads")
+    groups = num_q_heads // num_kv_heads
+    # Keep query groups in the contraction so KV gradients sum before BF16 rounding.
+    q = q.reshape(*q.shape[:2], num_kv_heads, groups, head_dim)
+    scaled_q = q * (1.0 / math.sqrt(head_dim))
+    scores = jnp.einsum("bqhgd,bkhd->bhgqk", scaled_q, k)
 
-    scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
-
-    scores = _apply_mask(scores, _explicit_mask(mask, scores, q.shape[0]))
+    explicit = _explicit_mask(mask, scores, q.shape[0])
+    if explicit is not None:
+        explicit = explicit[:, :, None, :, :]  # Broadcast across KV heads and query groups.
+    scores = _apply_mask(scores, explicit)
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
-    return ctx.astype(v.dtype)
+    ctx = jnp.einsum("bhgqk,bkhd->bqhgd", weights, v)
+    return ctx.reshape(*q.shape[:2], num_q_heads, v.shape[-1]).astype(v.dtype)
 
 
 def reference_attention(
@@ -322,14 +328,12 @@ def reference_attention(
     *,
     logits_dtype: jnp.dtype | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Reference attention whose output sharding follows ``q``."""
+    """Scale Q in its dtype, optionally cast scores before softmax, and preserve Q sharding."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
-    # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
-    # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
-    # score contraction ambiguous), so run the math under Auto axes and pin only the
-    # output to q's sharding.
+    # Explicit axes cannot infer every score contraction layout when heads or
+    # head dimensions are sharded. Run under Auto axes and pin the output layout.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
@@ -386,6 +390,10 @@ def _tpu_splash_attention(
             "TPU Splash attention does not support fa4_bounds; select a static sliding_window mask."
         )
 
+    # On TPU, keep Splash's backward query scale from folding into the BF16 RoPE multiply.
+    # Changing the rounding order gave ~0.34% relative L2 query gradient error on v4-16.
+    # See https://github.com/dlwh/marin/pull/67 for the paired comparison.
+    q = jax.lax.optimization_barrier(q)
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))

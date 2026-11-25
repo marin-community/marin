@@ -86,11 +86,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
         trajectory_runner = (
             self.get_trajectory_runner(self.cfg, self.tokenizer, inference_engine_client)
             if evaluation_runner is EvaluationRunner.TRAINING
-            else self.get_task_runner(
-                self.cfg,
-                inference_engine_client,
-                harbor_config=self.cfg.terminal_bench_config if evaluation_runner is EvaluationRunner.HARBOR else None,
-            )
+            else self.get_task_runner(self.cfg, inference_engine_client)
         )
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
