@@ -30,6 +30,7 @@ from taskcompendium.convert.nemotron_ultra import (
     PLACEHOLDER_FIELD,
     BlendRequest,
     agent_request,
+    blend_component,
     blend_request,
     blend_task,
     text_request,
@@ -37,6 +38,7 @@ from taskcompendium.convert.nemotron_ultra import (
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
+    SUBSET_LABEL,
     AnswerType,
     EnvironmentRequirements,
     FinalAction,
@@ -818,6 +820,7 @@ def _agent_task(
         answer_format=FinalAction() if action else PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
+        labels={SUBSET_LABEL: blend_component(request.contract)},
     )
     return NormalizedTask(task, (*changes, *request.changes))
 

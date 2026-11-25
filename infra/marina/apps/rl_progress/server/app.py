@@ -106,7 +106,13 @@ def create_api(services):
         skipped = []
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT run_id, attempt_id, record FROM rl_runs ORDER BY run_id, attempt_id")
+                text(
+                    "SELECT run_id, attempt_id, CASE WHEN jsonb_typeof(record) != 'object' "
+                    "OR record -> 'grader_report' = 'null'::jsonb "
+                    "THEN record ELSE record - 'grader_report' END AS record, "
+                    "record -> 'grader_report' IS NOT NULL AND record -> 'grader_report' != 'null'::jsonb "
+                    "AS has_grader_report FROM rl_runs ORDER BY run_id, attempt_id"
+                )
             ).mappings()
             for row in rows:
                 try:
@@ -128,8 +134,7 @@ def create_api(services):
                     )
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
-                if record.get("grader_report") is not None:
-                    record = {key: value for key, value in record.items() if key != "grader_report"}
+                if row["has_grader_report"]:
                     record["has_grader_report"] = True
                 records.append(record)
         return {"runs": records, "skipped_records": skipped}

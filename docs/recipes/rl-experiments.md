@@ -25,17 +25,17 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 ### Long loop
 
 The long loop trains a model and evaluates it on held-out tasks.
-Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
+Use `train-long` for EvalLite or `train-long-checkpoint-eval` to add the agentic cohorts.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |
 | Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
-| Snowball `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). | CPU plan only |
+| Snowball `train-long-checkpoint-eval` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Daytona sandbox costs. | EvalLite plus 90 agent episodes at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#agentic-checkpoint-evaluation). | CPU plan only |
 
 Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
 Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
-A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor` evaluates with Harbor cohorts.
+A preset ending in `-agentic` trains on agent tasks. Snowball's `train-long-checkpoint-eval` adds agent episodes to checkpoint evaluation.
 
 | Mochi preset | When to use it | Layout | Ran on GPU |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ and at least 90% of 50 or more distinct probed tasks must have a graded attempt.
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
 4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
-   `data-medium`, `train-long` and `train-long-harbor`, open the dashboard row in `rl_progress_url`.
+   `data-medium`, `train-long` and `train-long-checkpoint-eval`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
@@ -209,14 +209,18 @@ family, AAII category and difficulty, and links to the run's Grafana window.
 
 The publishing presets also save grader diagnostics in
 `exports/grader_reports/<attempt_id>/grader_report.json`. The report groups
-training rollouts and each named evaluation by environment and task source.
-Success rates use verified responses and are null when no verdict is available.
+training rollouts and each named evaluation by task subset. Each task's
+`subset_id` label supplies the subset, with the source dataset as a fallback.
+The report also records success and coverage by task ID. Success rates use
+verified responses and are null when no verdict is available.
 Open **Grader stats** from the published attempt's details to see coverage,
-failure counts and grading latency alongside success rates. The trainer logs
-reporting errors and continues, so an attempt may have a partial or missing report.
+failure counts and grading latency. Expand **Individual tasks** for task results.
+Exported evaluation responses include `task_id` and `subset_id`.
+The trainer logs reporting errors and continues, so an attempt may have a partial
+or missing report.
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and
+data-medium, train-long and train-long-checkpoint-eval attempts using the caller's Marina login. The row shows the model and
 the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--marina-url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
@@ -341,7 +345,6 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    ```bash
    uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
-
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
@@ -422,32 +425,24 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 [Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
 [EvalDash](https://marina.oa.dev/evaldash/).
 
-## Harbor evaluation
+## Agentic checkpoint evaluation
 
-A Harbor cohort is a pinned sample of tasks from one benchmark. `train-long-harbor`
-evaluates cohorts of 30 tasks each from BFCL, SWE-bench Verified and OpenThoughts-TBLite.
-Set `DAYTONA_EVAL_API_KEY` and
-`DAYTONA_TARGET` for the evaluation account before submitting. Each cohort can run 30
-Daytona sandboxes at once, up to 90 across all three cohorts. Each sandbox builds the pinned
-task environment in declarative mode. The runner enables the HTTP endpoint that Harbor uses
-to evaluate the current training weights.
+`train-long-checkpoint-eval` evaluates 30 pinned tasks each from BFCL, SWE-bench Verified
+and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` before submitting.
+The cohorts share SkyRL's evaluation pool with EvalLite. Up to 90 agent episodes can run
+concurrently across the three cohorts. Daytona builds the pinned task environments in
+declarative mode, and Terminus-2 evaluates the same frozen policy as EvalLite.
 
-A checkpoint is eligible when it scores at least 99% of the EvalLite active set and 90% of each Harbor cohort.
-`eval/all` pools native and Harbor rewards. Per-cohort metrics use `eval/harbor/<cohort>/`, and
-`eval/harbor/wall_seconds` measures the complete Harbor callback. The agents use the engine's
-serving window as their total context limit, with the reply cap inside it. SWE-bench uses
-the pinned harness's 3,000-second verifier timeout. OpenThoughts-TBLite uses each pinned
-verifier's timeout, capped at 3,600 seconds. A trial can retry once after phase cancellation
-or a Daytona sandbox setup, command transport or cleanup error. The retry list includes
-`TmuxExecTimeoutError`, `DaytonaOutputUnavailable` and `MachineTerminated`. A failed trial
-with unconfirmed teardown can retry even after verification. The selected attempt must
-have confirmed teardown for the archive to seal.
+A checkpoint is eligible when it attempts every task and scores at least 99% of the EvalLite
+active set and 90% of each agentic cohort. `eval/all` weights verifier scores by the number
+of scored tasks. Per-cohort metrics use `eval/<cohort>/all/`. Each task has one trial.
+Terminus-2 can take up to 32 main turns with up to 8,192 reply tokens per request within
+the engine's serving window. BFCL and SWE-bench use verifier deadlines of 300 and 3,000 seconds.
+OpenThoughts-TBLite uses each task's verifier deadline, capped at 3,600 seconds.
+Infrastructure failures can retry once. A result with unconfirmed sandbox cleanup is unscored.
 
-This retry policy uses revision `2026.11.20.6` with fingerprint `76baa3fb`. The earlier
-revision `2026.11.20.5` has fingerprint `e1f1635a`.
-
-Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
-command to resume from the latest retained checkpoint. The separate
+Agentic cohort results are stored under the named evaluation directories in `exports/`.
+Repeat the command to resume from the latest retained checkpoint. The separate
 [offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
 
 ## What a run writes

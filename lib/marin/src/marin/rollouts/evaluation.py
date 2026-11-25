@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import threading
 from collections.abc import Callable, Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -249,15 +250,28 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
     return options
 
 
+def served_chat_template_kwargs(
+    protocol_kwargs: Mapping[str, bool | str],
+    model_kwargs: Mapping[str, bool | str],
+    thinking_off_kwargs: Mapping[str, bool | str],
+) -> dict[str, bool | str]:
+    """The chat template arguments a request sends: the model's, then the protocol's, with the model's own
+    thinking-off arguments in place of a protocol's ``enable_thinking: False``."""
+    kwargs = {**model_kwargs, **protocol_kwargs}
+    if protocol_kwargs.get("enable_thinking") is False and thinking_off_kwargs:
+        kwargs.pop("enable_thinking", None)
+        kwargs.update(thinking_off_kwargs)
+    return kwargs
+
+
 def effective_protocol(protocol: EvaluationProtocol, config: EvaluationRunConfig) -> EvaluationProtocol:
     """Use the same resolved chat policy for context admission and generation."""
     sampling = protocol.sampling
     if sampling is None or protocol.operation not in CHAT_OPERATIONS:
         return protocol
-    kwargs = {**config.chat_template_kwargs, **sampling.chat_template_kwargs}
-    if sampling.chat_template_kwargs.get("enable_thinking") is False and config.thinking_off_template_kwargs:
-        kwargs.pop("enable_thinking", None)
-        kwargs.update(config.thinking_off_template_kwargs)
+    kwargs = served_chat_template_kwargs(
+        sampling.chat_template_kwargs, config.chat_template_kwargs, config.thinking_off_template_kwargs
+    )
     return protocol.model_copy(update={"sampling": sampling.model_copy(update={"chat_template_kwargs": kwargs})})
 
 
@@ -505,33 +519,81 @@ def episode_limits(run: RolloutLimits, operation: AgentEpisode, inputs: EpisodeI
 
 
 @dataclasses.dataclass(frozen=True)
+class _QueuedWrite:
+    write: Callable[[Transaction], object]
+    durable: asyncio.Future[None]
+
+
+@dataclasses.dataclass(frozen=True)
 class _EvaluationWriter:
-    """Serialize durable writes while model calls and sandbox commands keep running."""
+    """Commit durable writes on one thread while model calls and sandbox commands keep running.
+
+    Each caller returns once its own write is durable, and every queued write commits before the executor shuts down.
+    """
 
     store: DataStore
     executor: ThreadPoolExecutor
-
-    async def _run(self, operation: Callable[[], object]) -> None:
-        pending = asyncio.get_running_loop().run_in_executor(self.executor, operation)
-        try:
-            await asyncio.shield(pending)
-        except asyncio.CancelledError:
-            # A queued write can carry terminal evidence from a completed attempt.
-            await asyncio.shield(pending)
-            raise
+    queued: list[_QueuedWrite] = dataclasses.field(default_factory=list, init=False)
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock, init=False)
 
     async def commit(self, write: Callable[[Transaction], object]) -> None:
-        def commit_transaction() -> None:
-            with self.store.transaction() as transaction:
-                write(transaction)
+        loop = asyncio.get_running_loop()
+        queued = _QueuedWrite(write, loop.create_future())
+        with self.lock:
+            self.queued.append(queued)
+        # Each write submits a drain, so the executor's shutdown commits every queued write.
+        self.executor.submit(self._drain, loop)
+        await _await_durable(queued.durable)
 
-        await self._run(commit_transaction)
+    def _drain(self, loop: asyncio.AbstractEventLoop) -> None:
+        # Writes queued while the thread was busy share one transaction and its object-store round trips.
+        with self.lock:
+            batch = self.queued[:]
+            self.queued.clear()
+        if batch:
+            self._commit_batch(batch, loop)
+
+    def _commit_batch(self, batch: list[_QueuedWrite], loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            # A single write may hold an agent episode's evidence, which can exceed a batch's byte limit.
+            with self.store.transaction() if len(batch) > 1 else self.store.unbounded_transaction() as transaction:
+                for queued in batch:
+                    queued.write(transaction)
+        except Exception as error:
+            if len(batch) > 1:
+                # A failed transaction publishes nothing; halving isolates the failing write from the rest.
+                middle = len(batch) // 2
+                self._commit_batch(batch[:middle], loop)
+                self._commit_batch(batch[middle:], loop)
+            else:
+                loop.call_soon_threadsafe(_resolve, batch[0].durable, error)
+            return
+        for queued in batch:
+            loop.call_soon_threadsafe(_resolve, queued.durable, None)
 
     async def append_rows(self, table: str, rows: list[dict]) -> None:
         await self.commit(lambda transaction: transaction.table(table).extend(rows))
 
     async def seal(self) -> None:
-        await self._run(self.store.seal)
+        await _await_durable(asyncio.get_running_loop().run_in_executor(self.executor, self.store.seal))
+
+
+def _resolve(durable: asyncio.Future[None], error: Exception | None) -> None:
+    if durable.done():
+        return
+    if error is None:
+        durable.set_result(None)
+    else:
+        durable.set_exception(error)
+
+
+async def _await_durable(pending: asyncio.Future[object]) -> None:
+    try:
+        await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        # A queued write can carry terminal evidence from a completed attempt.
+        await asyncio.shield(pending)
+        raise
 
 
 async def _save_attempt(
@@ -951,12 +1013,48 @@ async def run_evaluation(
         )
         failures = 0
 
+        async def dispatch(
+            protocol: EvaluationProtocol,
+            dataset_id: str,
+            records: list[dict],
+            cases: list[tuple[EvaluationCase, Selection]],
+        ) -> None:
+            # Cohort decisions are durable before expanding trials, including on resumed runs.
+            # One commit covers up to `concurrency` cases, so dispatch keeps pace with the consumers.
+            await writer.append_rows(SELECTIONS_TABLE, records[:])
+            records.clear()
+            for case, selection in cases:
+                for trial in range(protocol.trials.count):
+                    old = latest.get(_attempt_key(dataset_id, case.item.source_row, trial))
+                    if (
+                        old is not None
+                        and old.phase == AttemptPhase.FINISHED
+                        and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
+                    ):
+                        continue
+                    await queue.put(
+                        (
+                            case,
+                            protocol,
+                            selection,
+                            trial,
+                            0 if old is None else old.retry + 1,
+                            (
+                                _grading_retry_turn(reader, old)
+                                if isinstance(case.item.operation, ChatGeneration | TextGeneration)
+                                else None
+                            ),
+                        )
+                    )
+            cases.clear()
+
         async def produce() -> None:
             for root, protocol, manifest in corpora:
                 dataset_id = canonical_sha256(manifest.model_dump(mode="json", exclude_none=True))
                 published_protocol = protocol
                 protocol = effective_protocol(protocol, config)
-                records = []
+                records: list[dict] = []
+                cases: list[tuple[EvaluationCase, Selection]] = []
                 selected = 0
                 for decision in select_cases(
                     root,
@@ -971,45 +1069,21 @@ async def run_evaluation(
                     ),
                 ):
                     records.append(decision.record.model_dump(mode="json"))
-                    if len(records) >= 500 or decision.case is not None:
-                        await writer.append_rows(SELECTIONS_TABLE, records)
-                        records = []
                     case = decision.case
-                    if case is None:
-                        continue
-                    _validate_judge(case.task, config.judge)
-                    _validate_task_secrets(case.task, config.task_secrets)
-                    operation = case.item.operation
-                    if isinstance(operation, AgentEpisode) and operation.harness.kind not in harnesses:
-                        raise ValueError(
-                            f"No harness is registered for {operation.harness.kind!r}: {protocol.benchmark}"
-                        )
-                    selected += 1
-                    # Cohort decisions are durable before expanding trials, including on resumed runs.
-                    for trial in range(protocol.trials.count):
-                        old = latest.get(_attempt_key(dataset_id, case.item.source_row, trial))
-                        if (
-                            old is not None
-                            and old.phase == AttemptPhase.FINISHED
-                            and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
-                        ):
-                            continue
-                        await queue.put(
-                            (
-                                case,
-                                protocol,
-                                decision.record,
-                                trial,
-                                0 if old is None else old.retry + 1,
-                                (
-                                    _grading_retry_turn(reader, old)
-                                    if isinstance(case.item.operation, ChatGeneration | TextGeneration)
-                                    else None
-                                ),
+                    if case is not None:
+                        _validate_judge(case.task, config.judge)
+                        _validate_task_secrets(case.task, config.task_secrets)
+                        operation = case.item.operation
+                        if isinstance(operation, AgentEpisode) and operation.harness.kind not in harnesses:
+                            raise ValueError(
+                                f"No harness is registered for {operation.harness.kind!r}: {protocol.benchmark}"
                             )
-                        )
+                        selected += 1
+                        cases.append((case, decision.record))
+                    if len(records) >= 500 or len(cases) >= config.concurrency:
+                        await dispatch(protocol, dataset_id, records, cases)
                 if records:
-                    await writer.append_rows(SELECTIONS_TABLE, records)
+                    await dispatch(protocol, dataset_id, records, cases)
                 if not selected:
                     raise ValueError(f"No evaluation rows are eligible under this run: {protocol.benchmark}")
             for _ in range(config.concurrency):

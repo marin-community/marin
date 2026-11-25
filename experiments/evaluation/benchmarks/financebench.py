@@ -3,6 +3,7 @@
 
 """FinanceBench evaluation declarations."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
@@ -19,7 +20,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
 FINANCEBENCH_SHA256 = "0df2b2080400693d98eeccac6970432af72d7e092287b08bcc9bd013d2c3232e"
@@ -29,9 +30,12 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Evalchemy:financebench",
-                title="FinanceBench",
-                origin="Evalchemy",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="financebench",
+                upstream_name="FinanceBench",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="judged-answer",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
                 count=50,

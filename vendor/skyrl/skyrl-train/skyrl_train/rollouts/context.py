@@ -272,8 +272,12 @@ class TrainingContext:
         except ray.exceptions.RayError:
             logger.exception("Failed to collect grader stats for {}", self._grader_report_path)
             return
-        if summary:
-            write_grader_report(self._grader_report_path, self._grader_report_attempt, {"training": summary})
+        if summary["subsets"]:
+            write_grader_report(
+                self._grader_report_path,
+                self._grader_report_attempt,
+                {"training": summary["subsets"], "training_tasks": summary["tasks"]},
+            )
 
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
