@@ -475,6 +475,17 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     config["run"].pop("index", None)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
         del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
+    data = config["skyrl"]["data"]
+    # Saved controls still record unused task-cache and source-binding defaults.
+    data.pop("task_cache_dir", None)
+    if data.get("terminal_bench_data") == []:
+        del data["terminal_bench_data"]
+    task_sessions = config["skyrl"].get("environment", {}).get("task_sessions", {})
+    if task_sessions.get("agent_harnesses") == {}:
+        del task_sessions["agent_harnesses"]
+    trajectory_runner = config["skyrl"].get("trajectory_runner", {})
+    if trajectory_runner.get("max_concurrent_training_machine_tasks") is None:
+        trajectory_runner.pop("max_concurrent_training_machine_tasks", None)
     inputs = launch["inputs"]
 
     def replace_alias(path, aliases, replacement):

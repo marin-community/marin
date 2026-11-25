@@ -5,20 +5,30 @@
 
 import pytest
 from finestore.rl.curation import DaytonaSafety
+from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.source import (
     EXCLUDED_TAG,
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
     SourceInfo,
+    SourceOrigin,
     TaskFormat,
 )
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 
 
-def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
+def _agentic(task_format: TaskFormat | None, source_id: str = "Nemotron:agentic") -> RlDataSource:
     return RlDataSource(
-        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=source_id.partition(":")[2],
+            upstream_name=source_id.partition(":")[2],
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.NEMOTRON,
+            tags=("agentic",),
+            task_format=task_format,
+        )
     )
 
 
@@ -42,7 +52,8 @@ def test_the_grandfather_list_holds_only_runnable_agentic_marinskyrl_sources():
     sources = all_sources()
     for source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
         source = sources[source_id]
-        assert source.info.origin == "MarinSkyRL"
+        assert source.info.origin is SourceOrigin.NEMOTRON
+        assert source.info.build_path == "MarinSkyRL"
         assert "agentic" in source.info.tags
         assert source.pipeline is not None
         assert source.info.task_format is TaskFormat.MARINSKYRL
@@ -51,7 +62,7 @@ def test_the_grandfather_list_holds_only_runnable_agentic_marinskyrl_sources():
 def test_a_new_internal_format_agentic_source_is_rejected():
     """A MarinSkyRL-format source outside the frozen list cannot be selected."""
     with pytest.raises(ValueError, match="not grandfathered"):
-        require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "MarinSkyRL:a-new-blend"))
+        require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "Nemotron:a-new-blend"))
 
 
 def test_an_agentic_source_without_a_declared_format_is_rejected():
@@ -62,11 +73,21 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
 @pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
 def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
     require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(RlDataSource(info=SourceInfo(id="fixture:math", title="math", origin="fixture")))
+    require_accepted_task_format(
+        RlDataSource(
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="math",
+                upstream_name="math",
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+            )
+        )
+    )
 
 
-def test_pipeline_less_pointers_are_inventory_never_admitted():
-    """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
+def test_pipeline_less_sources_are_never_admitted_to_selection():
+    """A pipeline-less source stays visible and unselectable, whatever its label."""
     sources = all_sources()
     runnable = set(runnable_sources())
     pointers = [source for source in sources.values() if source.pipeline is None]

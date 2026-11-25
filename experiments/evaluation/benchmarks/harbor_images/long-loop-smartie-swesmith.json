@@ -1,0 +1,5 @@
+{
+  "ghcr.io/astral-sh/uv:0.8": "sha256:1d31be550ff927957472b2a491dc3de1ea9b5c2d319a9cea5b6a48021e2990a6",
+  "python:3.10-bookworm": "sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8",
+  "python:3.11-bookworm": "sha256:726d304906fa5eb468e5531e366548d1903286352f5adb54ef508ac01fbd80c6"
+}
