@@ -37,10 +37,11 @@ def test_canonical_report_uses_frozen_rows_and_only_the_completed_attempt(tmp_pa
             "verification": {"status": "verified", "score": 1},
             "response_token_ids": [1],
             "stop_reason": "stop",
+            "output_response": "model text with a Unicode separator\u0085inside the JSON string",
         }
         for index, source in enumerate(("a", "b"))
     ]
-    (results / "results.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    (results / "results.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows))
     other = evaluated / "exports/dumped_evals/interrupted/eval_only"
     other.mkdir(parents=True)
     (other / "results.jsonl").write_text(json.dumps(rows[0]))

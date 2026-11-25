@@ -30,7 +30,7 @@ def audit(
     for path in sorted(fs.glob(pattern)):
         if path.endswith("/aggregated_results.jsonl"):
             continue
-        rows = [json.loads(line) for line in fs.cat_file(path).decode().splitlines() if line.strip()]
+        rows = [json.loads(line) for line in fs.cat_file(path).splitlines() if line.strip()]
         source_counts.update(row["data_source"] for row in rows)
         if expected_identities is not None:
             identities.update((row["data_source"], str(row["uid"])) for row in rows)
