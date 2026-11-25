@@ -49,6 +49,7 @@ from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorte
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
 _READ_CACHE_BYTES = 64 * 1024 * 1024
+_MERGE_BATCH_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -187,9 +188,16 @@ class _ScanProfile:
     batch_readahead: int
     fragment_readahead: int
     pre_buffer: bool = True
+    # When set, a batch also stays near this many uncompressed bytes of the columns read.
+    batch_bytes: int | None = None
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
+# A full-table read holds a batch of every shard. A batch is sized in bytes because one larger than
+# a row group makes the Parquet reader decode the shard's next groups as well.
+_MERGE_SCAN_PROFILE = _ScanProfile(
+    batch_rows=16_384, batch_readahead=1, fragment_readahead=1, batch_bytes=_MERGE_BATCH_BYTES
+)
 _BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
 _ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
@@ -440,17 +448,40 @@ def iter_shard_batches(
 ) -> Generator[pa.RecordBatch, None, None]:
     """Yield shard batches with resolved commit and generation coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    with dataset.scanner(
+    fragment = next(dataset.get_fragments())
+    assert isinstance(fragment, pds.ParquetFileFragment)
+    batch_rows = scan_profile.batch_rows
+    if scan_profile.batch_bytes is not None:
+        fragment.ensure_complete_metadata()
+        assert fragment.metadata is not None
+        batch_rows = _rows_within(fragment.metadata, columns, scan_profile.batch_bytes, batch_rows)
+    with fragment.scanner(
+        schema=unified,
         columns=columns,
         filter=_build_filter(where),
         use_threads=False,
-        batch_size=scan_profile.batch_rows,
+        batch_size=batch_rows,
         batch_readahead=scan_profile.batch_readahead,
         fragment_readahead=scan_profile.fragment_readahead,
         fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
     ).to_reader() as batches:
         for batch in batches:
             yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
+
+
+def _rows_within(metadata: pq.FileMetaData, columns: Sequence[str] | None, max_bytes: int, max_rows: int) -> int:
+    """Rows that hold about ``max_bytes`` of the given columns, by the footer's uncompressed sizes."""
+    wanted = None if columns is None else set(columns)
+    total = 0
+    for index in range(metadata.num_row_groups):
+        group = metadata.row_group(index)
+        for column in range(group.num_columns):
+            chunk = group.column(column)
+            if wanted is None or chunk.path_in_schema.split(".")[0] in wanted:
+                total += chunk.total_uncompressed_size
+    if not total:
+        return max_rows
+    return max(1, min(max_rows, max_bytes * metadata.num_rows // total))
 
 
 def iter_shard_row_groups(
@@ -681,7 +712,7 @@ class _ReadOperations:
             table,
             columns=columns,
             where=where,
-            scan_profile=_TABLE_SCAN_PROFILE,
+            scan_profile=_MERGE_SCAN_PROFILE,
         )
 
     def _iter_rows(

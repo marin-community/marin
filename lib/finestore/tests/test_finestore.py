@@ -12,12 +12,13 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from botocore.exceptions import ClientError
+from finestore import reader as reader_module
 from finestore import shard_writer
 from finestore import store as store_module
 from finestore.admin import drop_table
@@ -560,6 +561,36 @@ def test_row_groups_use_arrow_buffer_bytes(monkeypatch, explicit_schema, archive
     metadata = _parquet_metadata(shard)
     assert metadata.num_rows == 3
     assert metadata.num_row_groups == 2
+
+
+def test_full_read_of_overlapping_shards_holds_a_few_row_groups_per_shard(monkeypatch, archive_root):
+    # Every shard spans the whole key range, so the ordered read keeps all of them open together.
+    # Shrink the row groups and merge batches so each shard has about 30 groups.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
+    monkeypatch.setattr(
+        reader_module, "_MERGE_SCAN_PROFILE", replace(reader_module._MERGE_SCAN_PROFILE, batch_bytes=16 * 1024)
+    )
+    shards, rows_per_shard, payload_bytes = 8, 2_000, 1_000
+    rng = random.Random(0)
+    with DataStore.open(archive_root, writer_id="w", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        for shard in range(shards):
+            table.extend(
+                {"id": index * shards + shard, "payload": rng.randbytes(payload_bytes)}
+                for index in range(rows_per_shard)
+            )
+            store.flush()
+
+    baseline = pa.total_allocated_bytes()
+    peak = rows = 0
+    for _ in ReadView(archive_root).iter_rows("samples"):
+        rows += 1
+        if rows % 50 == 0:
+            peak = max(peak, pa.total_allocated_bytes() - baseline)
+
+    assert rows == shards * rows_per_shard
+    # A shard decodes to about 2 MB; holding each one whole would take about 16 MB.
+    assert peak < 4 * 1024 * 1024
 
 
 def test_schema_evolution_null_promotes_missing_column(archive_root):
