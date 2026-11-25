@@ -336,7 +336,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         ({"trainer.algorithm.policy_loss_type": "clip_cov"}, ("the configured loss and estimator", None)),
         ({"trainer.placement.colocate_all": True}, ("colocated placement", None)),
         ({"trainer.algorithm.distillation": {}}, ("distillation", None)),
-        ({"trainer.trajectory_selector.type": "top_k"}, ("trajectory selection", None)),
+        ({"trainer.trajectory_selector.type": "best_of_n"}, ("trajectory selection", None)),
         ({"trainer.step_wise_training": True}, ("step-wise training", None)),
         ({"trainer.algorithm.advantage_batch_normalize": True}, ("advantage batch normalization", None)),
         (

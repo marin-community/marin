@@ -146,7 +146,6 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
     """Return the first reason policy-worker assembly is unavailable, or None."""
     algorithm = cfg.trainer.algorithm
     shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
-    train_rows = cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg)
     supported_loss = (
         algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
     ) or (
@@ -163,11 +162,13 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
         ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
         ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
         ("dense batch dumping", cfg.trainer.dump_data_batch),
-        ("rows requiring DP padding", train_rows % _policy_dp_size(cfg)),
     ]
     for reason, unsupported in restrictions:
         if unsupported:
             return reason
+    train_rows = cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg)
+    if train_rows % _policy_dp_size(cfg):
+        return "rows requiring DP padding"
     megatron = cfg.trainer.policy.megatron_config
     etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
     replay = moe_router_replay_requested(cfg)
