@@ -1,30 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Main declares every Atlas-admitted source at the Atlas pin.
+"""Check catalog coverage and pins against the Atlas cut recorded in the fixture.
 
-The fixture pins one Atlas cut (origin/atlas-env-audit revision and the R40 admit
-set); its ``atlas_revision`` and ``r40_plan`` fields record where each value came
-from. Regenerate it whenever the Atlas admits more sources, with
-``tests/generate_atlas_source_pins.py``.
-
-Three checks, all computed from the catalog:
-
-- coverage: every Atlas-admitted source is declared on main, or carries a
-  ``declaration_blockers`` entry — the import that would run it on main is still
-  pending, and per the #11903 review resolution a record lands together with its
-  import, never pipeline-less;
-- stale blockers: a source whose blocker entry still stands while main declares
-  it — the ingestion PR that landed the import must remove the entry;
-- pin parity: every declared source's durable reference (repo, revision, files,
-  recipe, version) equals the Atlas admitted pin, unless a recorded waiver
-  states the blocker; parity that has landed makes the waiver stale.
+Regenerate the fixture with ``generate_atlas_source_pins.py`` when the cut changes.
 """
 
 import json
 from pathlib import Path
 
-import pytest
 from finestore.rl.source_identity import canonical_source_id
 
 from experiments.post_training.task_curation.sources import all_sources
@@ -49,7 +33,6 @@ def _durable_ref(source) -> dict:
 
 
 def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked():
-    """An Atlas-admitted source missing from the catalog fails unless its blocker stands."""
     fixture = _fixture()
     blockers = fixture["declaration_blockers"]
     sources = {canonical_source_id(source.info.id) for source in all_sources().values()}
@@ -62,7 +45,6 @@ def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked(
 
 
 def test_a_declaration_blocker_expires_when_main_declares_the_source():
-    """The ingestion PR that lands the import removes the source's blocker entry."""
     fixture = _fixture()
     blockers = fixture["declaration_blockers"]
     sources = {canonical_source_id(source.info.id): source for source in all_sources().values()}
@@ -71,7 +53,6 @@ def test_a_declaration_blocker_expires_when_main_declares_the_source():
 
 
 def test_main_pins_match_the_atlas_admitted_pins():
-    """A declared pin differs from the Atlas admitted pin only under a recorded waiver."""
     fixture = _fixture()
     waivers = fixture["pin_parity_waivers"]
     blockers = fixture["declaration_blockers"]
@@ -94,7 +75,3 @@ def test_main_pins_match_the_atlas_admitted_pins():
 
     assert stale_waivers == [], f"parity landed; drop the waivers: {stale_waivers}"
     assert unwaived == [], f"pins differ from the Atlas admitted pins with no waiver: {unwaived}"
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))

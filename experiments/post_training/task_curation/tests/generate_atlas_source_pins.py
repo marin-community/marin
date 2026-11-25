@@ -13,14 +13,13 @@ main's declarations change:
 
 2. Regenerate the fixture from both trees::
 
-       uv run --isolated --frozen python experiments/post_training/task_curation/tests/
-       generate_atlas_source_pins.py --audit-root /tmp/atlas-cut
+       uv run --isolated --frozen python \
+           experiments/post_training/task_curation/tests/generate_atlas_source_pins.py \
+           --audit-root /tmp/atlas-cut
 
    The audit tree's status computation reads the Atlas registry documents over the
    network (read-only metadata); the plan path and the alias table come from the
-   respective trees. Review the printed diff summary before committing the fixture:
-   the three tests in ``test_atlas_source_coverage.py`` then drive which sources
-   main must declare and which waivers or blocker entries expire.
+   respective trees. Review the fixture diff before committing it.
 """
 
 import argparse
