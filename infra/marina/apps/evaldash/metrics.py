@@ -403,7 +403,7 @@ def _missing_cells(
 def _selection_measurements(
     records: list[EvalRunRecord], request: SelectionRequest, eligible: list[EvalRunRecord]
 ) -> tuple[list[EvalRunRecord], list[Measurement]]:
-    """Keep cross-cohort protocol references while applying the selected cohort's policy rule."""
+    """Collect selected measurements, retaining every version for the all-cohorts view."""
     source = eligible if request.cohort is CohortMode.LATEST_VALID else _panel_records(records)
     measurements = [
         measurement
