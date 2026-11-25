@@ -175,12 +175,13 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
     default_inputs = RunInputs(preset_name=preset.name)
     plans = (default_inputs,) if inputs == default_inputs else (default_inputs, inputs)
     defaults, *composed = _compose_plans(preset, plans)
+    control_defaults = _control_defaults(preset, pin, defaults)
     for path in control_paths(preset, pin, table=table):
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None or receipt.native.result.state != "succeeded":
             raise InvalidComparison(f"expected a successful pinned control receipt at {path}")
         launch = read_recorded_launch(receipt)
-        _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+        _check_control_config(receipt.native.config, control_defaults, launch, preset=preset)
     return composed[0] if composed else defaults
 
 
@@ -1086,8 +1087,9 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
+        control_config = _control_defaults(preset, control_pin, current_config)
         for candidate in controls:
-            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
+            _check_control_config(candidate.config, control_config, candidate.recorded, preset=preset)
         report.comparisons = tuple(_compare(preset, runs, controls, inputs.requirements))
         report.verdict, report.effect = _verdict(report.invariants, report.comparisons)
     return _store_report(report, output)
@@ -1141,6 +1143,14 @@ def _control_placement(preset: presets.Preset, pin: ControlPin) -> presets.Prese
     return replace(preset, recipe=replace(preset.recipe, layout=replace(layout, cluster=pin.cluster)))
 
 
+def _control_defaults(preset: presets.Preset, pin: ControlPin, defaults: dict) -> dict:
+    placed = _control_placement(preset, pin)
+    if placed is preset:
+        return defaults
+    (config,) = _compose_plans(placed, (RunInputs(preset_name=placed.name),))
+    return config
+
+
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
     return recipe.run_path(_control_placement(preset, pin), _pinned_control_name(pin, index, table=table), pin.revision)
 
@@ -1151,9 +1161,8 @@ def control_paths(preset: presets.Preset, pin: ControlPin, *, table: ModelPreset
 
 
 def _read_link_control(
-    preset: presets.Preset, pin: ControlPin, path: str, *, current: bool = False
+    preset: presets.Preset, pin: ControlPin, path: str, receipt: AttemptRecord | None, *, current: bool = False
 ) -> tuple[AttemptRecord, RecordedLaunch]:
-    receipt = read_stored_skyrl_attempt(path)
     if receipt is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
     launch = read_recorded_launch(receipt)
@@ -1171,14 +1180,13 @@ def _read_link_control(
     return receipt, launch
 
 
-def _cohort_held_out_tasks(runs: Sequence[RunMeasurements]) -> str | None:
+def _check_cohort_held_out_tasks(runs: Sequence[RunMeasurements]) -> None:
     first = runs[0]
     if any(
         run.held_out_tasks != first.held_out_tasks or run.evaluation_identity != first.evaluation_identity
         for run in runs[1:]
     ):
         raise InvalidComparison("control cohort contains different held-out selections or TaskSpec sets")
-    return first.held_out_tasks
 
 
 def _write_control_link(
@@ -1191,14 +1199,18 @@ def _write_control_link(
 ) -> GateReport:
     metadata = RunMetadata(preset_name=preset.name, base_commit=current.commit, replicates=len(run_paths))
     with _report_scope(preset, metadata, previous, len(control_paths), revision=LINK_REVISION) as report:
-        candidates = [_read_link_control(preset, current, path, current=True) for path in run_paths]
+        receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
         report.run = report.run.model_copy(
-            update={
-                "attempt_ids": tuple(receipt.attempt_id for receipt, _ in candidates),
-                "held_out_tasks": held_out_identity(preset, candidates[0][1]),
-            }
+            update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt is not None)}
         )
-        baseline = [_read_link_control(preset, previous, path) for path in control_paths]
+        candidates = [
+            _read_link_control(preset, current, path, receipt, current=True)
+            for path, receipt in zip(run_paths, receipts, strict=True)
+        ]
+        report.run = report.run.model_copy(update={"held_out_tasks": held_out_identity(preset, candidates[0][1])})
+        baseline = [
+            _read_link_control(preset, previous, path, read_stored_skyrl_attempt(path)) for path in control_paths
+        ]
         report.control = report.control.model_copy(update={"held_out_tasks": held_out_identity(preset, baseline[0][1])})
         if _cohort_protocol(preset, [launch for _, launch in candidates]) != _cohort_protocol(
             preset, [launch for _, launch in baseline]
@@ -1212,12 +1224,10 @@ def _write_control_link(
             read_measurements(path, recorded_preset(preset, launch), attempt=receipt)
             for path, (receipt, launch) in zip(control_paths, baseline, strict=True)
         ]
-        report.run = report.run.model_copy(
-            update={"held_out_tasks": _cohort_held_out_tasks(runs), "engines": tuple(run.engine for run in runs)}
-        )
-        report.control = report.control.model_copy(
-            update={"held_out_tasks": _cohort_held_out_tasks(controls), "engines": tuple(run.engine for run in controls)}
-        )
+        _check_cohort_held_out_tasks(runs)
+        _check_cohort_held_out_tasks(controls)
+        report.run = report.run.model_copy(update={"engines": tuple(run.engine for run in runs)})
+        report.control = report.control.model_copy(update={"engines": tuple(run.engine for run in controls)})
         for candidate in runs:
             _check_control(candidate, current)
         for candidate in controls:
@@ -1248,16 +1258,20 @@ def control_link_step(
         raise ValueError(f"current control pin must match the {preset.name} revision")
     if (current.commit, current.revision) == (previous.commit, previous.revision):
         raise ValueError("control link requires distinct cohorts")
+    current_paths = control_paths(preset, current, table=table)
+    previous_paths = control_paths(preset, previous, table=table)
+    identity = fingerprint_hash(canonical_json((current, previous, current_paths, previous_paths)))
+    name = f"checkpoints/{table.namespace}/control-links/{preset.name}-{previous.commit}-{current.commit}-{identity}"
     return apply(
-        user_owned_name(f"checkpoints/{table.namespace}/control-links/{preset.name}-{previous.commit}-{current.commit}"),
+        user_owned_name(name),
         _write_control_link,
         version=LINK_REVISION,
         artifact_type=GateReport,
         preset=preset,
         current=current,
         previous=previous,
-        run_paths=control_paths(preset, current, table=table),
-        control_paths=control_paths(preset, previous, table=table),
+        run_paths=current_paths,
+        control_paths=previous_paths,
         output=OUT,
     )
 

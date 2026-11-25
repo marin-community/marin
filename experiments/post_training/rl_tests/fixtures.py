@@ -83,31 +83,45 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
-def cache_native_compositions(monkeypatch) -> None:
-    """Reuse successful compositions of equivalent launch documents within one test."""
+def native_compositions():
+    """Cache real native compositions of equivalent fixture documents."""
     compose_configs = gate.compose_configs
     cached = {}
-    # Attempt IDs also appear in derived fields such as the Iris job name.
-    attempt_placeholder = "<generated-attempt-id>"
 
-    def compose(paths, *, validate_driver=False):
+    def substitute(value: str, replacements: Sequence[tuple[str, str]]) -> str:
+        for old, new in replacements:
+            value = value.replace(old, new)
+        return value
+
+    def compose(paths, *, validate_driver=False, substitutions=None):
         documents = [Path(path).read_text() for path in paths]
-        attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
+        if substitutions is None:
+            substitutions = [()] * len(documents)
+        patches = [
+            ((yaml.safe_load(document)["run"]["attempt_id"], "<fixture-attempt>"), *replacements)
+            for document, replacements in zip(documents, substitutions, strict=True)
+        ]
         key = validate_driver, tuple(
-            document.replace(attempt, attempt_placeholder) for document, attempt in zip(documents, attempts, strict=True)
+            substitute(document, patch) for document, patch in zip(documents, patches, strict=True)
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
-            cached[key] = [
-                json.dumps(config).replace(attempt, attempt_placeholder)
-                for config, attempt in zip(configs, attempts, strict=True)
-            ]
+            cached[key] = [substitute(json.dumps(config), patch) for config, patch in zip(configs, patches, strict=True)]
         return [
-            json.loads(config.replace(attempt_placeholder, attempt))
-            for config, attempt in zip(cached[key], attempts, strict=True)
+            json.loads(substitute(config, [(token, original) for original, token in patch]))
+            for config, patch in zip(cached[key], patches, strict=True)
         ]
 
-    monkeypatch.setattr(gate, "compose_configs", compose)
+    return compose
+
+
+def cache_native_compositions(monkeypatch, native_compositions):
+    """Enable the native fixture cache for a test's gate calls."""
+
+    def enable():
+        monkeypatch.setattr(gate, "compose_configs", native_compositions)
+
+    return enable
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:
@@ -393,7 +407,7 @@ def evaluation_task_rows(
     ]
 
 
-def recorded_runs(selection, tmp_path, monkeypatch, request, native_receipt_configs):
+def recorded_runs(selection, tmp_path, monkeypatch, request, native_compositions):
     monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
@@ -476,25 +490,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_receipt_conf
             substitutions = [
                 (str(source_root), "<fixture-output>"),
                 (str(tmp_path), "<fixture-root>"),
-                (launch["run"]["attempt_id"], "<fixture-attempt>"),
             ]
             for field in ("train_data", "validation_data"):
                 for index, artifact in enumerate(launch["inputs"][field]):
                     if artifact["uri"].startswith(f"{tmp_path}/"):
                         substitutions.append((artifact["identity"], f"<fixture-{field}-{index}>"))
-            normalized = rendered
-            for old, token in substitutions:
-                normalized = normalized.replace(old, token)
-            if normalized not in native_receipt_configs:
-                document.write_text(rendered)
-                encoded = json.dumps(gate.compose_configs([str(document)])[0])
-                for old, token in substitutions:
-                    encoded = encoded.replace(old, token)
-                native_receipt_configs[normalized] = encoded
-            encoded = native_receipt_configs[normalized]
-            for old, token in substitutions:
-                encoded = encoded.replace(token, old)
-            config = json.loads(encoded)
+            document.write_text(rendered)
+            (config,) = native_compositions([str(document)], substitutions=[substitutions])
             templates[key] = (source_root, config)
         return templates[key]
 

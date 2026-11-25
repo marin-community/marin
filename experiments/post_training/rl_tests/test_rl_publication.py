@@ -746,6 +746,26 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert {fact["name"]: fact["value"] for fact in persisted["invariants"] if fact["name"] in names} == coverage
         slices = {row["metric"] for row in persisted["comparisons"] if row["role"] == "slice"}
         assert slices == {"eval_lite/mean", "eval_lite/family/small/mean", "eval_lite/family/large/mean"}
+    members = ((pin.members[0][0], pin.members[0][1] + 1), *pin.members[1:])
+    write_json(prior_pin, asdict(replace(pin, members=members)))
+    current_root = Path(gate.control_paths(fresh_preset, fresh_pin, table=fresh_table)[1])
+    with edit_receipt(current_root) as receipt:
+        receipt["config"]["skyrl"]["trainer"]["max_steps"] = fresh_preset.updates + 1
+    command = CliRunner().invoke(
+        publication.command(fresh_table),
+        ["--preset", preset.name, "--marina-url", "http://localhost", "--link-from", str(prior_pin)],
+    )
+    assert command.exit_code == 0, (command.output, command.exception)
+    refused = json.loads(command.output)
+    assert refused["errors"] == [] and refused["link_report"] != attached["link_report"]
+    refused_report = gate.read_gate_report(str(Path(refused["link_report"]).parent))
+    assert refused_report is not None and refused_report.run.attempt_ids == ("fresh-0", "fresh-1")
+    for attempt in ("fresh-0", "fresh-1"):
+        persisted = stored()[attempt]["gate_result"]
+        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"]
+        assert persisted["verdict"] == "invalid"
+        assert persisted["reason"] == "recorded control update budget differs from its preset revision"
+
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }

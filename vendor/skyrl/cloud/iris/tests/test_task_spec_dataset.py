@@ -63,7 +63,7 @@ def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list[TaskInput]:
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
     configs["task_spec"].update(task_spec_overrides)
     dataset = SourceTaskDataset([str(path)], _tokenizer(), 128, num_workers=1, environment_configs=configs)
-    return [row["input"].spec for row in dataset.collate_fn(list(dataset))]
+    return [row["input"] for row in dataset.collate_fn(list(dataset))]
 
 
 FACTORIES = {

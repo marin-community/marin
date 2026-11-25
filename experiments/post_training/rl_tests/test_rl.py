@@ -50,7 +50,6 @@ from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
-    cache_native_compositions,
     controls,
     copy_evaluations,
     edit_receipt,
@@ -86,11 +85,12 @@ def test_preset_table_rejects_duplicate_names():
 def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
     launch_paths = {}
 
-    def collect_plan(paths, **_):
-        # A CLI plan discards the composed config. Validate the emitted documents in one native process.
-        (source,) = paths
-        shutil.copyfile(source, launch_path)
-        return []
+    def collect_plan(paths, *, validate_driver=False):
+        # Retain the driver document for the real batch validation below.
+        if validate_driver:
+            (source,) = paths
+            shutil.copyfile(source, launch_path)
+        return [yaml.safe_load(Path(path).read_text()) for path in paths]
 
     table = snowball_model.SNOWBALL
     name, version = "tests/evaluation-init", "2026.11.17"
@@ -123,13 +123,17 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
     coordinator = tmp_path / "coordinator-env"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(coordinator)], check=True, timeout=20)
-    before = {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")}
+
+    def file_times():
+        return {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*") if path.is_file() or path.is_symlink()}
+
+    before = file_times()
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
     monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
     monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
 
     composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
-    assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
+    assert file_times() == before
     configs = dict(zip(launch_paths, composed, strict=True))
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
@@ -668,7 +672,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ],
 )
 def test_submission_exit_codes_and_publication_retries(
-    recorded_runs, selection, tmp_path, monkeypatch, preset_table, case, expected
+    recorded_runs, selection, tmp_path, monkeypatch, preset_table, cache_native_compositions, case, expected
 ):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
@@ -682,7 +686,7 @@ def test_submission_exit_codes_and_publication_retries(
     }
     # The data-short case rewrites its validation data before launch.
     if publication_case and case != "data-short":
-        cache_native_compositions(monkeypatch)
+        cache_native_compositions()
     preset_name = "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if case == "child":

@@ -11,10 +11,8 @@ source_provenance = pytest.fixture(fixtures.source_provenance)
 recorded_runs = pytest.fixture(fixtures.recorded_runs)
 preset_table = pytest.fixture(fixtures.preset_table)
 
-
-@pytest.fixture(scope="session")
-def native_receipt_configs():
-    return {}
+native_compositions = pytest.fixture(scope="session")(fixtures.native_compositions)
+cache_native_compositions = pytest.fixture(fixtures.cache_native_compositions)
 
 
 @pytest.fixture

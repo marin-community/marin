@@ -372,9 +372,6 @@ Each member is `[replicate, retry]`. Set `cluster` if the previous cohort ran in
 cluster from the preset default. The publisher reports the saved `link_report` path. When the
 recorded evaluation protocols differ, the history shows a protocol change at that link.
 
-The nightly workflow produces a plan. The live collection design also considers code changes
-along each preset's execution path and gives the pin update to a bot once CI passes.
-
 ## Change a preset's default
 
 1. Edit that preset's `tasks`, `model`, `held_out_tasks` or `recipe` in `snowball_rl.py`.

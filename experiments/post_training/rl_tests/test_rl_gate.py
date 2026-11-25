@@ -58,7 +58,6 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
-    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -102,8 +101,8 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypatch):
-    cache_native_compositions(monkeypatch)
+def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, cache_native_compositions):
+    cache_native_compositions()
     controls(recorded_runs, "speed-medium")
     report = compare("speed-medium", "--leave-out", "r0")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
@@ -305,8 +304,8 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "learning-medium"])
-def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset, monkeypatch):
-    cache_native_compositions(monkeypatch)
+def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset, cache_native_compositions):
+    cache_native_compositions()
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
     if preset == "speed-short":
@@ -644,7 +643,9 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
         "malformed-seed",
     ],
 )
-def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
+def test_gate_compares_recorded_configuration_and_defaults(
+    preset_table, recorded_runs, tmp_path, monkeypatch, cache_native_compositions, case
+):
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
     settings = (
@@ -742,7 +743,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
-        cache_native_compositions(monkeypatch)
+        cache_native_compositions()
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
         run_native = gate._run_native_process
         for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
@@ -929,8 +930,17 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
 )
 def test_link_requires_overall_and_family_task_overlap(shared, reason):
     labels = {str(index): TaskStrata(family="small" if index == 0 else "large") for index in range(20)}
-    with pytest.raises(gate.InsufficientOverlap, match=reason):
+    table = snowball_model.SNOWBALL
+    pin = table.control_pins["learning-medium"]
+    preset = table.by_name[pin.preset]
+    metadata = gate.RunMetadata(preset_name=preset.name, replicates=2)
+    with gate._report_scope(preset, metadata, pin, len(pin.members)) as report:
         gate._require_shared_overlap("eval_lite", {str(index) for index in shared}, labels)
+    assert report.verdict == "invalid" and report.reason and reason in report.reason
+    coverage = {fact.name: fact for fact in report.invariants}
+    assert coverage[f"eval_lite/{SHARED_TASKS_INVARIANT}"].value == len(shared)
+    assert coverage[f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"].value == len(shared) / len(labels)
+    assert not report.invariants[-1].holds
 
 
 @pytest.mark.parametrize(
@@ -942,9 +952,9 @@ def test_link_requires_overall_and_family_task_overlap(shared, reason):
     ),
 )
 def test_control_link_scores_shared_evaluation(
-    recorded_runs, preset_table, monkeypatch, tmp_path, case, replaced, extra, shared
+    recorded_runs, preset_table, monkeypatch, tmp_path, cache_native_compositions, case, replaced, extra, shared
 ):
-    cache_native_compositions(monkeypatch)
+    cache_native_compositions()
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3), checkpoint_every=3
     )
@@ -1010,11 +1020,13 @@ def test_control_link_scores_shared_evaluation(
     changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
     fresh_roots = []
     for index in range(len(fresh.members)):
-        candidate = recorded_runs(preset.name, gate.control_name(preset.name, fresh.commit, index, table=table))
+        candidate = recorded_runs(
+            preset.name, gate.control_name(preset.name, fresh.commit, index, table=table), attempt_id=f"fresh-{index}"
+        )
         fresh_roots.append(candidate)
         if changed_ids:
             export = str(candidate / "exports")
-            rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
+            rows = read_evaluations(export, attempt_id=f"fresh-{index}", evaluation="eval/", step=preset.updates)
             write_evaluations(
                 export,
                 [
@@ -1057,6 +1069,9 @@ def test_control_link_scores_shared_evaluation(
         with pytest.raises(ValueError, match="current control pin must match"):
             gate.control_link_step(preset, previous, fresh, table=table)
 
+        with pytest.raises(ValueError, match="expected two complete control pins"):
+            gate.control_link_step(preset, fresh, replace(previous, members=previous.members[:1]), table=table)
+
         def rejected_link(expected_reason):
             report = gate._write_control_link(
                 preset,
@@ -1067,6 +1082,7 @@ def test_control_link_scores_shared_evaluation(
                 str(tmp_path / "incompatible-link"),
             )
             assert report.verdict == "invalid" and report.reason == expected_reason
+            assert report.run.attempt_ids == ("fresh-0", "fresh-1")
 
         with edit_receipt(fresh_roots[1]) as receipt:
             receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates + 1
@@ -1075,12 +1091,24 @@ def test_control_link_scores_shared_evaluation(
             receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates
 
         baseline = baseline_roots[1]
+        unavailable = baseline.rename(baseline.with_name("unavailable"))
+        rejected_link(f"no terminal attempt record at {baseline}")
+        unavailable.rename(baseline)
         with edit_receipt(baseline) as receipt:
+            receipt["result"]["provenance"]["dirty"] = True
+        rejected_link(f"control does not match its pin: {baseline}")
+        with edit_receipt(baseline) as receipt:
+            receipt["result"]["provenance"]["dirty"] = False
             native = deepcopy(receipt["config"])
         validation = native["inputs"]["validation_data"]
         mutations = (
             ("inputs.train_data", [], "recorded control workload differs from the link preset"),
             ("inputs.evaluation_data", {"retired_evaluation": validation}, EVALUATION_PROTOCOL_DIFFERS),
+            (
+                "skyrl.generator.eval_sampling_params.temperature",
+                0.5,
+                "control cohort contains different evaluation protocols",
+            ),
             (
                 "inputs.validation_data",
                 [{**validation[0], "identity": "selection/other-panel@2026.11.24.2:fixture"}],
@@ -1095,8 +1123,26 @@ def test_control_link_scores_shared_evaluation(
         with edit_receipt(baseline) as receipt:
             receipt["config"] = native
 
+        export = str(baseline / "exports")
+        original_rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
+        write_evaluations(
+            export,
+            [
+                row.model_copy(
+                    update={
+                        "answers": [
+                            answer.model_copy(update={"error_treatment": "passthrough"}) for answer in row.answers
+                        ]
+                    }
+                )
+                for row in original_rows
+            ],
+        )
+        rejected_link(f"previous control has incomplete evaluation coverage: {baseline}")
+        write_evaluations(export, original_rows)
+
         export = str(fresh_roots[0] / "exports")
-        [answer_row, *_] = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+        [answer_row, *_] = read_evaluations(export, attempt_id="fresh-0", evaluation="eval/")
         write_evaluations(export, [answer_row.model_copy(update={"task_digest": "0" * 64})])
         rejected_link(f"recorded held-out TaskSpec content differs for {answer_row.task_id}")
         write_evaluations(export, [answer_row])
@@ -1112,6 +1158,8 @@ def test_control_link_scores_shared_evaluation(
         assert "eval_lite/unshared/mean" not in results
         assert "eval_lite/family/small/mean" not in results
         assert results["eval_lite/family/large/mean"]["tasks"] == 20
+        # The edited task's initial scores average 0.50. The other 19 start
+        # at 0.30, giving (0.50 + 19 * 0.30) / 20 = 0.31 and a gain of 0.18525.
         assert results["eval_lite/family/large/mean/initial"]["control"] == pytest.approx(0.31)
         assert results["eval_lite/family/large/mean/gain"]["control"] == pytest.approx(0.18525)
     gain = "eval_lite/family_mean/gain_per_gpu_hour"
@@ -1119,6 +1167,7 @@ def test_control_link_scores_shared_evaluation(
         assert results[gain]["run"] is results[gain]["control"] is None
     else:
         assert results[gain]["run"] == pytest.approx(0.2 / 40)
+        # Without the relabeled task the shared controls go from 0.30 to 0.495.
         expected_control_gain = 0.18525 if case == "relabeled-family" else 0.195
         assert results[gain]["control"] == pytest.approx(expected_control_gain / 40)
 

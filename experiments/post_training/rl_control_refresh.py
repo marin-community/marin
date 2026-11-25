@@ -22,7 +22,7 @@ def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[s
     provenance = Provenance.capture(rl_compose.REPO_ROOT)
     if provenance.dirty or not provenance.base_commit:
         raise ValueError("control refresh needs a clean source commit")
-    gated = [preset for preset in table.presets if preset.control_preset is not None]
+    gated = [preset for preset in table.presets if preset.gated]
     if preset_name is not None:
         gated = [preset for preset in gated if preset.name == preset_name]
         if not gated:
