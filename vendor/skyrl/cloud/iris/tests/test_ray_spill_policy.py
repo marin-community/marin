@@ -1,5 +1,4 @@
 import re
-import socket
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -29,18 +28,21 @@ def test_concurrent_ray_heads_use_disjoint_ports(tmp_path, monkeypatch, first_po
     commands = []
     monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
     endpoints = []
-    with ExitStack() as listeners:
+    if not first_ports[0] and sys.platform != "linux":
+        pytest.skip("Kubernetes host-network ports use Linux network namespaces")
+    with ExitStack() as leases:
         for first_port in first_ports:
             requested = {port: first_port + index if first_port else 0 for index, port in enumerate(RayPort)}
             for port, value in requested.items():
                 monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
-            resolve_ray_ports()
+            leases.enter_context(resolve_ray_ports())
             allocated = {port: allocated_ray_port(port) for port in RayPort}
-            if not first_port:
-                # Hold the real kernel-selected ports while resolving the next task.
-                for value in allocated.values():
-                    listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-                    listener.bind(("", value))
+            if first_port:
+                assert allocated == requested
+            else:
+                assert {p for p, value in allocated.items() if value == 0} == {
+                    RayPort.DASHBOARD, RayPort.NODE_MANAGER, RayPort.OBJECT_MANAGER
+                }
             runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
             flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
             ports = {
@@ -64,7 +66,7 @@ def test_concurrent_ray_heads_use_disjoint_ports(tmp_path, monkeypatch, first_po
             parameters.update_pre_selected_port()
             assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
             assert set(ports.values()) == set(allocated.values())
-            endpoints.append(set(ports.values()))
+            endpoints.append(set(ports.values()) - {0})
     assert endpoints[0].isdisjoint(endpoints[1])
 
 

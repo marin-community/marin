@@ -2381,25 +2381,25 @@ def main() -> None:
             else policy_local_path or policy_chat_template_model(args.prestage_model, args.model_local_path)
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
-    resolve_ray_ports()
     rank = _rank()
     trainer = launch_config.skyrl.get("trainer", {})
     debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
-    if rank == 0:
-        final_config_path = _write_final_config(
-            launch_config,
-            policy_model=policy_model,
-            policy_tokenizer=policy_tokenizer,
-            draft_model=draft_model,
-        )
-        timing_uri = None
-        if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
-            timing_uri = join_resource_path(str(trainer.grader_report_dir), "trainer_timing.json")
-        exit_code = run_head(
-            args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode, trainer_timing_uri=timing_uri
-        )
-    else:
-        exit_code = run_worker(args, debug_mode=debug_mode)
+    with resolve_ray_ports():
+        if rank == 0:
+            final_config_path = _write_final_config(
+                launch_config,
+                policy_model=policy_model,
+                policy_tokenizer=policy_tokenizer,
+                draft_model=draft_model,
+            )
+            timing_uri = None
+            if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
+                timing_uri = join_resource_path(str(trainer.grader_report_dir), "trainer_timing.json")
+            exit_code = run_head(
+                args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode, trainer_timing_uri=timing_uri
+            )
+        else:
+            exit_code = run_worker(args, debug_mode=debug_mode)
     if exit_code != 0:
         sys.exit(exit_code)
 
