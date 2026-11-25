@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -100,8 +101,8 @@ class RolloutWorker:
         start_fd_monitor()
         self._executor_threads = executor_threads
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
-        logger.info(
-            "Rollout worker initialized: shard={}/{}, node={}",
+        logging.getLogger(__name__).info(
+            "Rollout worker initialized: shard=%s/%s, node=%s",
             shard.index,
             shard.count,
             ray.get_runtime_context().get_node_id(),

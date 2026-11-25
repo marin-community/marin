@@ -29,7 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.8"
+RUN_VERSION = "2026.11.25.9"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""

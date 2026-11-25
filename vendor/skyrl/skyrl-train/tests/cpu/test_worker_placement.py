@@ -1,10 +1,20 @@
 from types import SimpleNamespace
 
 import ray
+from loguru import logger
+from ray import cloudpickle
 from ray.cluster_utils import Cluster
 
 from skyrl_train.config.rollout_workers import RolloutWorkerPlacement
 from skyrl_train.rollouts import workers
+
+
+def test_rollout_actor_exports_with_a_runtime_log_file(tmp_path):
+    sink = logger.add(tmp_path / "runtime.log")
+    try:
+        cloudpickle.dumps(workers.RolloutWorker.__ray_metadata__.modified_class)
+    finally:
+        logger.remove(sink)
 
 
 @ray.remote
