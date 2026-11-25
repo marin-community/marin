@@ -104,6 +104,9 @@ def test_a_candidate_runs_at_most_at_its_window_and_overrides_still_apply():
         "gpqa-diamond": (60_000, 30_000, None),
     }
     assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL))["gpqa-diamond"] == (60_000, 10_000, None)
+    # An override's context is capped like the evaluation's own.
+    above = replace(SMALL_LONG, context=500_000)
+    assert _settings(resolve(_policy(overrides=(above,)), SMALL))["gpqa-diamond"] == (60_000, 10_000, None)
     # An override's output limit must still fit the context it leaves.
     with pytest.raises(ValueError, match="small on gpqa-diamond"):
         resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)

@@ -8,7 +8,7 @@ policy is tracked in [#10197](https://github.com/marin-community/marin/issues/10
 | File | Holds |
 | --- | --- |
 | [`versions/`](versions/) | one directory per policy version; `versions/__init__.py` loads every `policy.yaml` |
-| [`load.py`](load.py) | reads a policy file into the schema, rejecting unknown keys and names |
+| [`load.py`](load.py) | reads a policy file into the schema, rejecting unknown keys and names, values of the wrong type, variants the catalog doesn't declare, and judged benchmarks without a judge |
 | [`schema.py`](schema.py) | `PolicyCandidate`, `PolicyEvaluation`, `PolicyExclusion`, `PolicyOverride`, `EvalPolicy` |
 | [`resolve.py`](resolve.py) | the settings each evaluation runs with for one candidate |
 | [`cli.py`](cli.py) | the `policy` command |
