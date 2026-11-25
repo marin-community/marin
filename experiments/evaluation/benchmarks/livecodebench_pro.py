@@ -82,7 +82,8 @@ DEADLINE = 480
 """Most seconds one reply is judged. Curated runs stop grading at 600 seconds
 (``marin.evaluation.dataset_evaluator``) and record a timeout as unscored, so judging must end first."""
 GRADER_STARTUP_ALLOWANCE = 60
-"""Seconds beyond the deadline for unpacking tests and compiling the checker."""
+"""Seconds beyond the deadline for staging the task's files and starting the grade script. Unpacking the
+tests and compiling count against the deadline, so judging ends within it whatever setup takes."""
 
 GRADE = grade_script(HERE / "livecodebench_pro_grade.py")
 CONVERSION_REVISION = "1-" + canonical_sha256({resource.path: resource.source.content_base64 for resource in GRADE})[:16]
