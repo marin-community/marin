@@ -1640,6 +1640,17 @@ python -m experiments.post_training.mochi_dspark_gate \
   --purpose qualification
 ```
 
+For a failed plain control, `--purpose plain-batching` runs only the plain
+server. It scores the frozen prefixes twice at each `(requested rank, request
+concurrency)` pair: `(automatic, 16)`, `(automatic, 1)`, `(0, 1)`, `(1, 1)` and
+`(0, 16)`. Explicit ranks use `X-data-parallel-rank`. Engine settings
+and numerical limits stay unchanged. Failed comparisons are retained so the
+remaining diagnostic conditions can finish; completion is not qualification
+and never writes `correctness-passed.json`. Request concurrency does not fix
+the realized GPU batch shape, and successive conditions share a cache whose
+eviction is not controlled. Use serving-only INTERACTIVE or BATCH jobs for
+this investigation and retain all task completion and graph-capture evidence.
+
 The inference-stats callback records cumulative draft/accepted-token counts,
 acceptance rate and mean acceptance length at each training step. Use per-engine
 counter differences between updates for each update's acceptance; account for
