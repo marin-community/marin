@@ -945,6 +945,7 @@ def command(
         metavar="BATCH",
         help="Run a gated preset's defaults as named controls from a clean checkout.",
     )
+    @click.option("--control-cluster", type=click.Choice(("cw-rno2a",)), hidden=True)
     def run_command(
         preset_name: str,
         settings: tuple[str, ...],
@@ -953,6 +954,7 @@ def command(
         resume_name: str | None,
         replicates: int,
         control: str | None,
+        control_cluster: str | None,
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
@@ -1014,6 +1016,13 @@ def command(
                 hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
                 layout = replace(layout, coordinator_timeout_hours=hours)
                 preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
+        if control_cluster is not None:
+            if not control or preset.recipe.layout.gpu_variant != "H100":
+                raise click.BadParameter(
+                    "the control cluster override is for H100 controls", param_hint="--control-cluster"
+                )
+            layout = replace(preset.recipe.layout, cluster=control_cluster)
+            preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
         if control:
             preset = replace(preset, temporary_output=False)
         context.meta["rl_preset"] = preset

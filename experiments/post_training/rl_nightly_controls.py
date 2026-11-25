@@ -49,6 +49,8 @@ def _run_control(module: str, table: ModelPresets, preset: Preset, batch: str, *
         "--run",
         "--wait",
     ]
+    if table.model == "snowball":
+        command.extend(("--control-cluster", "cw-rno2a"))
     print(json.dumps({"model": table.model, "preset": preset.name, "version": version, "requested": count}), flush=True)
     return subprocess.run(command, check=False).returncode
 
