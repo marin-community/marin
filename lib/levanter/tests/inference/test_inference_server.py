@@ -24,6 +24,8 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
+from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 
 try:
@@ -367,6 +369,7 @@ class _FakeCompletionContext:
         *,
         abort_event: Event | None = None,
     ) -> str:
+        del abort_event
         if (
             prompt_tokens != [0, 1]
             or max_tokens != 1
@@ -822,8 +825,11 @@ def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_mod
     config = dataclasses.replace(inference_server_config, service=service)
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
-    with TestClient(server.app) as client:
-        yield client
+    try:
+        with TestClient(server.app) as client:
+            yield client
+    finally:
+        server.shutdown()
 
 
 @pytest.mark.parametrize("chat", [False, True])
@@ -878,6 +884,10 @@ def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_cli
             np.testing.assert_array_equal(stopped_tensors[key], limited_tensors[key])
 
 
+PREFILL_GATE_TIMEOUT = 30
+ADMISSION_TIMEOUT = 5
+
+
 @pytest.fixture
 def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
     started = Event()
@@ -889,7 +899,7 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
     def gate(_positions):
         if not started.is_set():
             started.set()
-            if not release.wait(30):
+            if not release.wait(PREFILL_GATE_TIMEOUT):
                 raise TimeoutError("Test did not release the blocked prefill")
 
     class GatedModel(fixed_token_model):
@@ -925,11 +935,13 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
 
         await server.app(scope, receive_request, send)
 
-    with TestClient(observe_registration) as client:
-        try:
+    try:
+        with TestClient(observe_registration) as client:
             yield client, started, release, registered, disconnect, disconnect_observed
-        finally:
-            release.set()
+    finally:
+        release.set()
+        disconnect.set()
+        server.shutdown()
 
 
 def _generate_policy_zero(client, ids, request_id, max_tokens=4):
@@ -952,12 +964,12 @@ def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gat
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
             running = pool.submit(_generate_policy_zero, client, prompt, "running")
-            assert started.wait(30)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
-            assert registered["queued"].wait(5)
+            assert registered["queued"].wait(ADMISSION_TIMEOUT)
             abort = client.post("/abort", json={"request_ids": ["running", "queued"]})
             assert abort.status_code == 200
-            empty_metadata, empty_tensors = queued.result(timeout=5)
+            empty_metadata, empty_tensors = queued.result(timeout=ADMISSION_TIMEOUT)
             assert empty_metadata["choices"] == [
                 {"finish_reason": "abort", "completion_tokens": 0, "policy_id": "policy-0", "model_version": 0}
             ]
@@ -965,7 +977,7 @@ def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gat
             assert not empty_tensors["choice.0.behavior_logprobs"].size
         finally:
             release.set()
-        partial_metadata, partial = running.result(timeout=30)
+        partial_metadata, partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
 
     assert partial_metadata["choices"] == [
         {"finish_reason": "abort", "completion_tokens": 1, "policy_id": "policy-0", "model_version": 0}
@@ -990,14 +1002,14 @@ def test_binary_disconnect_releases_running_generation(gated_binary_server):
                 content=body,
                 headers={"content-type": MEDIA_TYPE, "x-request-id": "disconnecting"},
             )
-            assert started.wait(30)
-            assert registered["disconnecting"].wait(5)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
+            assert registered["disconnecting"].wait(ADMISSION_TIMEOUT)
             disconnect.set()
-            assert disconnect_observed.wait(5)
+            assert disconnect_observed.wait(ADMISSION_TIMEOUT)
         finally:
             disconnect.set()
             release.set()
-        response = running.result(timeout=30)
+        response = running.result(timeout=PREFILL_GATE_TIMEOUT)
 
     assert response.status_code == 200, response.text
     metadata, tensors = decode_frame(response.content)
@@ -1022,11 +1034,11 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
             running = pool.submit(client.post, GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-            assert started.wait(30)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(client.post, "/v1/completions", json=completion, headers={"x-request-id": "queued"})
-            assert registered["queued"].wait(5)
+            assert registered["queued"].wait(ADMISSION_TIMEOUT)
             assert client.post("/abort", json={"request_ids": ["queued"]}).status_code == 200
-            response = queued.result(timeout=5)
+            response = queued.result(timeout=ADMISSION_TIMEOUT)
             assert response.status_code == 200, response.text
             if stream:
                 data = next(
@@ -1049,11 +1061,11 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
     with ThreadPoolExecutor(max_workers=4) as pool:
         try:
             running = pool.submit(_generate_policy_zero, client, prompt, "running")
-            assert started.wait(30)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
-            assert registered["queued"].wait(5)
+            assert registered["queued"].wait(ADMISSION_TIMEOUT)
             pause = pool.submit(client.post, "/pause_generation", json={"mode": "abort", "clear_cache": True})
-            queued_metadata, queued_tensors = queued.result(timeout=5)
+            queued_metadata, queued_tensors = queued.result(timeout=ADMISSION_TIMEOUT)
             assert queued_metadata["choices"][0]["finish_reason"] == "abort"
             assert not queued_tensors["choice.0.token_ids"].size
             assert not queued_tensors["choice.0.behavior_logprobs"].size
@@ -1064,9 +1076,9 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
             resume = pool.submit(client.post, "/resume_generation")
         finally:
             release.set()
-        assert pause.result(timeout=30).status_code == 200
-        assert resume.result(timeout=30).status_code == 200
-        partial_metadata, partial = running.result(timeout=30)
+        assert pause.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
+        assert resume.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
+        partial_metadata, partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
 
     assert partial_metadata["choices"][0]["finish_reason"] == "abort"
     assert partial_metadata["choices"][0]["policy_id"] == "policy-0"
@@ -1095,3 +1107,31 @@ def test_unsupported_pause_policy_keeps_admission_open(greedy_client, policy):
     )
     assert response.status_code == 200, response.text
     assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inference_server_config, fixed_token_model):
+    llama3_style_chat_tokenizer().save_pretrained(tmp_path)
+    tokenizer = load_tokenizer(str(tmp_path))
+    model = fixed_token_model(len(tokenizer), tokenizer.get_vocab()["<|eot_id|>"])
+    options = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, max_pages=32),
+    )
+    with options.trainer.use_device_mesh(), hax.axis_mapping(options.trainer.compute_axis_mapping):
+        server = InferenceServer.create(options, model, tokenizer)  # type: ignore[arg-type]
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": TEST_MODEL_NAME,
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "temperature": 0,
+                    "max_tokens": 1,
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["finish_reason"] == "stop"
+        assert response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.shutdown()

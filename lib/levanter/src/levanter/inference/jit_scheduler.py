@@ -3,6 +3,7 @@
 
 import dataclasses
 from enum import IntEnum, auto
+from typing import Literal
 
 import equinox as eqx
 import haliax as hax
@@ -31,6 +32,17 @@ class FinishReason(IntEnum):
     STOP = auto()
     LENGTH = auto()
     ABORT = auto()
+
+
+def format_finish_reason(reason: FinishReason) -> Literal["stop", "length", "abort"]:
+    """Format a terminal reason for generation responses."""
+    if reason == FinishReason.STOP:
+        return "stop"
+    if reason == FinishReason.LENGTH:
+        return "length"
+    if reason == FinishReason.ABORT:
+        return "abort"
+    raise ValueError(f"Expected a terminal finish reason, got {reason.name}")
 
 
 class PackedSequence(eqx.Module):
@@ -565,7 +577,7 @@ class DecodeState(eqx.Module):
     page_table: PageTable
 
     pad_token_id: int
-    eos_token_id: int | None = eqx.field(static=True)
+    generation_stop_ids: tuple[int, ...] = eqx.field(static=True)
 
     # Per sequence sampling parameters
     max_num_tokens: ht.i32[NamedArray, "seq"]
@@ -595,7 +607,7 @@ class DecodeState(eqx.Module):
         return DecodeState.init(
             page_table=self.page_table.reset(),
             pad_token_id=self.pad_token_id,
-            eos_token_id=self.eos_token_id,
+            generation_stop_ids=self.generation_stop_ids,
             max_stop_seqs=self.stop_tokens.shape["stop_seq"] if self.stop_tokens is not None else 0,
             max_stop_tokens=self.stop_tokens.shape["position"] if self.stop_tokens is not None else 0,
             max_queued_tokens=self.tqueue.max_queued_tokens,
@@ -609,7 +621,7 @@ class DecodeState(eqx.Module):
         max_stop_tokens: int = 16,
         max_queued_tokens: int = 0,
         *,
-        eos_token_id: int | None = None,
+        generation_stop_ids: tuple[int, ...] = (),
     ) -> "DecodeState":
         """
         Initialize a DecodeState with empty buffers.
@@ -626,7 +638,7 @@ class DecodeState(eqx.Module):
             page_size=page_size,
             page_table=page_table,
             pad_token_id=pad_token_id,
-            eos_token_id=eos_token_id,
+            generation_stop_ids=generation_stop_ids,
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
             logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
@@ -894,7 +906,11 @@ class DecodeState(eqx.Module):
                 max_allowed = self.max_num_tokens["seq", sid].scalar()
                 len_done = (pos + 1) >= max_allowed
                 stop_done = (
-                    new_tokens["position", i].scalar() == self.eos_token_id if self.eos_token_id is not None else False
+                    jnp.any(
+                        new_tokens["position", i].scalar() == jnp.asarray(self.generation_stop_ids, dtype=jnp.int32)
+                    )
+                    if self.generation_stop_ids
+                    else False
                 )
                 if self.stop_tokens is not None:
                     stop_len = self.stop_tokens.axis_size("position")
@@ -941,14 +957,7 @@ class DecodeState(eqx.Module):
         )
 
     def is_finished(self, slot_id: jnp.ndarray) -> jnp.ndarray:
-        """
-        Check if the sequence or sequences with the given local ID is finished.
-        A sequence is finished if it has reached its maximum number of tokens or hit its stop sequence.
-
-        See is_stop_signal for stop sequence checking.
-
-        Returns jnp.ndarray with the same shape as slot_id, where each entry is True if the sequence is finished.
-        """
+        """Return whether each slot ended by token limit, EOS, or a stop sequence."""
 
         if slot_id.ndim == 0:
             slot_id = jnp.expand_dims(slot_id, axis=0)
