@@ -13,6 +13,7 @@ from marin.evaluation.runner import _record
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
 from experiments.evaluation.curated import selection_dataset
+from experiments.evaluation.policy import launch
 from experiments.evaluation.policy.launch import model_candidate
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
@@ -104,6 +105,36 @@ def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_mod
     (expected,) = expected_runs(policy, record_candidate(policy, record), limit=None, evaluations={"aime24"})
     assert expected.evaluation.identity.run_id == run.evaluation.identity.run_id
     assert run_problems(record, _evidence(expected), expected) == (RunState.VALID, ())
+
+
+def _paths(policy) -> dict[str, str]:
+    names = {"aime24", "swebench-verified"}
+    return {run.name: run.record_path for run in expected_runs(policy, QWEN, limit=None, evaluations=names)}
+
+
+def test_a_new_inference_build_moves_every_run(monkeypatch):
+    before = _paths(POLICY)
+    release = replace(launch.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
+    monkeypatch.setattr(launch, "VLLM_GPU_RELEASE", release)
+    after = _paths(POLICY)
+    assert all(before[name] != after[name] for name in before)
+
+
+def test_a_new_agent_concurrency_moves_only_that_agents_run_and_verify_names_it(tmp_path):
+    before = _paths(POLICY)
+    agent = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "swebench-verified")
+    faster = replace(
+        POLICY, in_distribution=tuple(replace(e, concurrency=32) if e is agent else e for e in POLICY.in_distribution)
+    )
+    after = _paths(faster)
+    assert before["aime24"] == after["aime24"]
+    assert before["swebench-verified"] != after["swebench-verified"]
+
+    (old,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"swebench-verified"})
+    (new,) = expected_runs(faster, QWEN, limit=None, evaluations={"swebench-verified"})
+    state, problems = run_problems(_write(tmp_path, old), _evidence(new), new)
+    assert state is RunState.INVALID
+    assert any(problem.startswith("run_id:") for problem in problems)
 
 
 def test_a_run_of_the_policy_is_valid(tmp_path):

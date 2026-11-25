@@ -74,11 +74,13 @@ Each candidate runs on one server at its serving window, split only when its jud
 keys, and the server runs several evaluations at once. A full run (no `--limit`) launches only from a
 clean checkout at HEAD, so its records name the commit that ran.
 
-A run's ID comes from the policy version and the run's inputs, so launching again finds the same
-paths. `launch` resolves every model before submitting any job, leaves out evaluations whose record
-already succeeded, and starts no server for a group with none left; the dry run lists them. Failed
-runs rerun at their old paths. A run that succeeded but is invalid (for example, another server
-window) is therefore not rerun; `status` says so for each such run.
+A run's ID comes from the policy version, the run's inputs, the server's inference build (the vLLM
+release or fork) and tensor parallelism, and, for an agent, how many attempts it runs at once, so
+launching again finds the same paths. `launch` resolves every model before submitting any job, leaves
+out evaluations whose record already succeeded, and starts no server for a group with none left; the
+dry run lists them. Failed runs rerun at their old paths. A run that succeeded but is invalid (for
+example, another server window) is not rerun unless named with `--rerun RUN_ID`; `status` says so for
+each such run.
 
 Check the runs a launch from this checkout would make, or any runs by ID:
 
@@ -90,13 +92,15 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
 `status` shows each evaluation's full and smoke run: valid, invalid, not run, or differing from this
 checkout (run at another commit with other inputs). A ⚠ marks a run
 whose replies often hit their output cap or whose attempts often went unscored. `verify` checks any
-run against the policy and names each field that differs; a run of a supplied model is checked
-against the model its record names. A full run must decide every item: it may
+run against the policy, names each field that differs, and exits non-zero unless every run is valid;
+a run of a supplied model is checked against the model its record names. A full run must decide every
+item: it may
 leave out items its protocol excludes, such as ones too long for its window, but not items it never
 inspected. `launch`, `status` and `verify` need CoreWeave credentials.
 
 A policy marked `released=True` launches only from a clean checkout of its tag, `eval-policy-<version>`,
-and `status` and `verify` mark its runs from any other commit invalid. Its run IDs include the tag's
+is checked by `status` and `verify` only from that checkout, and has its runs from any other commit marked
+invalid. Its run IDs include the tag's
 commit, so runs made before the release, at the same version, never stand in for the release's. A
 fix to a released policy is a new version. A policy not yet released launches from any commit. To cut a
 release, set `released=True`, merge, then tag the merged commit.

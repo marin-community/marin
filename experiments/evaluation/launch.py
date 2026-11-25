@@ -561,6 +561,13 @@ def build_evaluation_batch(
                 "judge": (
                     _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
+                # An agent's attempts share its wall-clock budget with the model's load-dependent latency, so how
+                # many the evaluation runs at once can change its results. The model's own bound stays throughput.
+                **(
+                    {"agent_concurrency": selection.run.concurrency}
+                    if reference.curated is not None and reference.curated.agent is not None
+                    else {}
+                ),
                 "policy": spec.version,
             },
             sort_keys=True,

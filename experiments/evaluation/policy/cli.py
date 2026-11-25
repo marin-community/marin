@@ -149,6 +149,18 @@ def _release_commit(policy: EvalPolicy) -> str | None:
         raise click.ClickException(f"{policy.version} is released as {policy.release_tag}; fetch its tag") from error
 
 
+def _checked_release(policy: EvalPolicy) -> str | None:
+    """The release commit to check a released policy's runs against, which must be the checkout.
+
+    A released policy's expected runs come from its tag's code, so checking from another commit would compare
+    its records against something else.
+    """
+    release = _release_commit(policy)
+    if release is not None and git_output(["rev-parse", "HEAD"], find_project_root()) != release:
+        raise click.ClickException(f"check {policy.version} from its tag: git checkout {policy.release_tag}")
+    return release
+
+
 def _evaluation_names(_context: click.Context, _parameter: click.Parameter, value: str | None) -> frozenset[str] | None:
     """Parse ``--evaluations``: None when it is absent, else the evaluations it names, at least one."""
     if value is None:
@@ -425,7 +437,7 @@ def status(
     """
     policy = POLICIES[version]
     candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config) or policy.candidates
-    release = _release_commit(policy)
+    release = _checked_release(policy)
     configure_coreweave_s3()
     for candidate in candidates:
         smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit, release_commit=release)}
@@ -441,12 +453,12 @@ def status(
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @click.argument("run_ids", nargs=-1, required=True)
 def verify(version: str, run_ids: tuple[str, ...]) -> None:
-    """Check runs against the policy as this checkout resolves it, and exit non-zero if any is invalid.
+    """Check runs against the policy as this checkout resolves it, and exit non-zero unless every one is valid.
 
     Warnings flag results far outside expectations without making a run invalid.
     """
     policy = POLICIES[version]
-    release = _release_commit(policy)
+    release = _checked_release(policy)
     configure_coreweave_s3()
     invalid = False
     for run_id in run_ids:
@@ -470,7 +482,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
             click.echo(f"  {problem}")
         for warning in check.warnings:
             click.echo(f"  warning: {warning}")
-        invalid |= check.state is RunState.INVALID
+        invalid |= check.state is not RunState.VALID
     if invalid:
         raise SystemExit(1)
 
