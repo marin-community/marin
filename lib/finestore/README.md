@@ -130,8 +130,9 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
-Every manifest is immutable and names its parent, and FineStore never deletes data
-files, so every published commit stays readable:
+Every manifest is immutable and names its parent, and FineStore itself never deletes
+data files, so a published commit stays readable unless a bucket lifecycle rule, such as
+the 30-day expiry of cache archives, removes its objects:
 
 ```python
 from finestore.history import commit_log, row_history

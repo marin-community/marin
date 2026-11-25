@@ -4,9 +4,10 @@
 """Commit history and row versions, read from an archive's immutable manifests.
 
 Every manifest names its parent, so the chain from ``HEAD`` back to the first commit is the
-archive's history. FineStore never deletes data files, so the rows a commit wrote stay
-readable through that commit's manifest after later commits supersede them and compaction
-rewrites their files. Walking the history reads one manifest per commit.
+archive's history. FineStore itself never deletes data files, so the rows a commit wrote
+stay readable through that commit's manifest after later commits supersede them and
+compaction rewrites their files. A bucket lifecycle rule, such as the expiry of cache
+archives, can still delete them. Walking the history reads one manifest per commit.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, read_snapshot_at
-from finestore.layout import RESERVED_COLUMNS, CommitInfo, FineStoreLayout
+from finestore.layout import CommitInfo, FineStoreLayout
 from finestore.reader import ReadView
 
 
@@ -53,8 +54,6 @@ def row_history(root: str, table: str, key: tuple) -> Iterator[RowVersion]:
     may hold ``key``, so a commit that wrote other rows costs its manifest read.
     """
     key = tuple(key)
-    if any(value is None for value in key):
-        raise ValueError("row_history does not support null key values")
     for snapshot in _snapshots(root):
         state = snapshot.manifest.tables.get(table)
         if state is None:
@@ -69,16 +68,9 @@ def row_history(root: str, table: str, key: tuple) -> Iterator[RowVersion]:
         if not own_shards:
             continue
         view = ReadView(root, snapshot)
-        primary_key = view.primary_key(table)
-        if len(key) != len(primary_key):
-            raise ValueError(f"row_history needs a value for each primary-key column {primary_key}")
-        if not view.keys_committed_after(table, [key], sequence - 1):
-            continue
-        row = view.rows_by_key(table, [key])[key]
-        yield RowVersion(
-            commit=_record(view, snapshot),
-            row={name: value for name, value in row.items() if name not in RESERVED_COLUMNS},
-        )
+        # The key and version columns of the commit's own shards say whether it wrote the row.
+        if view.keys_committed_after(table, [key], sequence - 1):
+            yield RowVersion(commit=_record(view, snapshot), row=view.rows_by_key(table, [key])[key])
 
 
 def _snapshots(root: str) -> Iterator[ArchiveSnapshot]:

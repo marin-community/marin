@@ -843,19 +843,9 @@ class Transaction:
         if table in self._table_changes:
             raise ValueError(f"table {table!r} was created, renamed or dropped in this transaction")
         keys = [tuple(key) for key in keys]
-        if any(value is None for key in keys for value in key):
-            raise ValueError(f"read keys for table {table!r} must not contain null values")
-        self._guards.setdefault(table, set()).update(keys)
-        if not keys or self._base.table_metadata_path(table) is None:
-            return {}
-        width = len(self._base.primary_key(table))
-        if any(len(key) != width for key in keys):
-            raise ValueError(f"keys for table {table!r} must have {width} columns")
         rows = self._base.rows_by_key(table, keys)
-        return {
-            key: {name: value for name, value in row.items() if name not in RESERVED_COLUMNS}
-            for key, row in rows.items()
-        }
+        self._guards.setdefault(table, set()).update(keys)
+        return rows
 
     def _require_open(self) -> None:
         if self._closed:

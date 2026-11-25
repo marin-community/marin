@@ -226,8 +226,9 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
 def read_snapshot_at(layout: FineStoreLayout, commit_id: str) -> ArchiveSnapshot:
     """Return the snapshot that commit ``commit_id`` published, from its immutable manifest.
 
-    FineStore never deletes data files, so every published commit stays readable. An unknown
-    ``commit_id`` raises ``FileNotFoundError``.
+    FineStore itself never deletes data files, so a published commit stays readable unless a
+    bucket lifecycle rule removes its objects. An unknown ``commit_id``, or a deleted manifest,
+    raises ``FileNotFoundError``.
     """
     manifest_path = layout.manifest_path(commit_id)
     manifest = _read_manifest(manifest_path)
