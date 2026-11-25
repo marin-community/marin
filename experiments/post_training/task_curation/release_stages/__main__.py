@@ -35,6 +35,7 @@ release configuration, and release-identifying values never appear in stage sour
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -82,10 +83,17 @@ def _attest_revision(args, plan: ReleasePlan) -> None:
     if getattr(args, "source_revision", None) is None:
         return
     revision = args.source_revision
-    if plan.source_revision != revision:
-        import shutil  # noqa: PLC0415
-        import subprocess  # noqa: PLC0415 — the local (git) validation path
-
+    in_bundle = (
+        not subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+    if plan.source_revision != revision and not in_bundle:
         pinned = subprocess.run(
             ["git", "merge-base", "--is-ancestor", plan.source_revision, revision],
             cwd=REPO_ROOT,
@@ -93,10 +101,9 @@ def _attest_revision(args, plan: ReleasePlan) -> None:
             text=True,
             check=False,
         )
-        if pinned.returncode != 0 and shutil.which("git") is not None:
+        if pinned.returncode != 0:
             raise ValueError(
-                f"the attested revision {revision} does not contain the plan's pinned revision"
-                f" {plan.source_revision}"
+                f"the attested revision {revision} does not contain the plan's pinned revision {plan.source_revision}"
             )
     os.environ[guard.ATTESTED_REVISION_ENV] = revision
 
