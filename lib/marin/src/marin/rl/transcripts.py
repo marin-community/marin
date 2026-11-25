@@ -9,8 +9,8 @@ eval-dump trial row (flat, `uid` + `output_response` + `messages` + `verificatio
 and the SkyRL schema_v7 turn record (`response.messages`, `response.text`,
 `verification_result`, `trajectory.instance_id`). `render_documents` accepts one
 record, a list, or JSONL text; records sharing uid and repetition — plus the
-training step for turn records — join into one cumulative transcript whose
-repeated message prefixes collapse.
+training step for turn records — form one cumulative transcript whose repeated
+message prefixes collapse.
 """
 
 from __future__ import annotations
@@ -68,10 +68,11 @@ def _message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
-        parts = [
-            part.get("text", "") for part in content if isinstance(part, Mapping) and isinstance(part.get("text"), str)
-        ]
-        return "\n\n".join(part for part in parts if part)
+        return "\n\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, Mapping) and isinstance(part.get("text"), str) and part["text"]
+        )
     return ""
 
 
@@ -89,15 +90,11 @@ def _tool_calls(value: Any) -> list[ToolCall]:
         if not isinstance(name, str) or not name:
             continue
         raw = function.get("arguments") if "arguments" in function else call.get("arguments")
-        if isinstance(raw, Mapping):
-            arguments = dict(raw)
-        elif isinstance(raw, str):
-            try:
-                arguments = json.loads(raw)
-            except json.JSONDecodeError:
-                arguments = {"raw": raw}
-        else:
-            arguments = {}
+        try:
+            # An unparsable JSON string keeps its raw text under a `raw` key.
+            arguments = dict(raw) if isinstance(raw, Mapping) else json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            arguments = {"raw": raw}
         calls.append(ToolCall(name=name, arguments=arguments))
     return calls
 
@@ -107,22 +104,13 @@ def _split_thinking(text: str) -> tuple[list[Block], list[Block]]:
     thinking: list[Block] = []
     answer: list[Block] = []
     rest = text
-    while True:
-        start = rest.find(THINK_START)
-        if start < 0:
-            break
-        if rest[:start].strip():
-            answer.append(("paragraph", rest[:start].strip()))
-        rest = rest[start + len(THINK_START) :]
-        end = rest.find(THINK_END)
-        if end < 0:
-            if rest.strip():
-                thinking.append(("paragraph", rest.strip()))
-            rest = ""
-            break
-        if rest[:end].strip():
-            thinking.append(("paragraph", rest[:end].strip()))
-        rest = rest[end + len(THINK_END) :]
+    while THINK_START in rest:
+        head, rest = rest.split(THINK_START, 1)
+        if head.strip():
+            answer.append(("paragraph", head.strip()))
+        body, _, rest = rest.partition(THINK_END)
+        if body.strip():
+            thinking.append(("paragraph", body.strip()))
     if rest.strip():
         answer.append(("paragraph", rest.strip()))
     return thinking, answer
@@ -140,7 +128,6 @@ def _drop_repeated_prefix(previous: Sequence[Message], nxt: Sequence[Message]) -
 
 @dataclass(frozen=True)
 class Turn:
-    # One record normalized across both real shapes.
     uid: str
     repetition: int | None
     step: int | None
@@ -213,6 +200,31 @@ def _normalize_eval_dump(record: Mapping[str, Any]) -> Turn:
     )
 
 
+def _starts_with(messages: Sequence[Message], prefix: Sequence[Message]) -> bool:
+    return len(messages) >= len(prefix) and all(
+        json.dumps(m, sort_keys=True) == json.dumps(h, sort_keys=True) for m, h in zip(messages, prefix, strict=False)
+    )
+
+
+def _turn_messages(record: Mapping[str, Any], response: Mapping[str, Any]) -> list[Message] | None:
+    """Merge the record's stored prompt with the response conversation.
+
+    `build_trajectory_records` stores the prompt separately in `prompt.messages`
+    when the response carries only the assistant turn; prepend it unless the
+    response already begins with those messages.
+    """
+    prompt = record.get("prompt") or {}
+    prompt_messages = prompt.get("messages") if isinstance(prompt.get("messages"), Sequence) else None
+    response_messages = response.get("messages") if isinstance(response.get("messages"), Sequence) else None
+    if response_messages is None and prompt_messages is None:
+        return None
+    if not prompt_messages:
+        return list(response_messages or [])
+    if _starts_with(list(response_messages or []), list(prompt_messages)):
+        return list(response_messages or [])
+    return list(prompt_messages) + list(response_messages or [])
+
+
 def _normalize_turn_record(record: Mapping[str, Any]) -> Turn:
     response = record.get("response") or {}
     trajectory = record.get("trajectory") or {}
@@ -234,7 +246,7 @@ def _normalize_turn_record(record: Mapping[str, Any]) -> Turn:
         model=str(provenance.get("model_source_identity") or ""),
         prompt_text="",
         response_text=str(response.get("text") or ""),
-        messages=response.get("messages") if isinstance(response.get("messages"), Sequence) else None,
+        messages=_turn_messages(record, response),
         verification=(
             record.get("verification_result") if isinstance(record.get("verification_result"), Mapping) else None
         ),
@@ -453,12 +465,12 @@ def _parse_input(raw: str) -> Any:
         return raw
 
 
-def _write_documents(parsed: Any, out_dir: Path, *, html: bool, truncate: int) -> int:
-    """Write one Markdown file per document, optionally with a standalone HTML page."""
+def _write_documents(parsed: Any, out_dir: Path, *, html: bool, truncate: int, start_index: int) -> int:
+    """Write one Markdown file per document; `start_index` keeps names unique across inputs."""
     out_dir.mkdir(parents=True, exist_ok=True)
     written = 0
-    for index, (slug, blocks) in enumerate(render_documents(parsed, truncate=truncate)):
-        name = f"{index:04d}-{slug}"
+    for offset, (slug, blocks) in enumerate(render_documents(parsed, truncate=truncate)):
+        name = f"{start_index + offset:04d}-{slug}"
         (out_dir / f"{name}.md").write_text(to_markdown(blocks))
         if html:
             (out_dir / f"{name}.html").write_text(to_html(blocks))
@@ -472,14 +484,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("inputs", nargs="+", help="record .json (object or array) or .jsonl files")
     parser.add_argument("--out", required=True, help="directory to write rendered documents into")
     parser.add_argument("--html", action="store_true", help="also write a standalone HTML page per document")
-    parser.add_argument(
-        "--truncate", type=int, default=DEFAULT_TRUNCATE_CHARS, help="tool-result truncation limit in chars"
-    )
+    parser.add_argument("--truncate", type=int, default=DEFAULT_TRUNCATE_CHARS, help="tool-result truncation limit")
     args = parser.parse_args(argv)
-    written = sum(
-        _write_documents(_parse_input(Path(path).read_text()), Path(args.out), html=args.html, truncate=args.truncate)
-        for path in args.inputs
-    )
+    out_dir = Path(args.out)
+    written = 0
+    for path in args.inputs:
+        parsed = _parse_input(Path(path).read_text())
+        written += _write_documents(parsed, out_dir, html=args.html, truncate=args.truncate, start_index=written)
     print(f"wrote {written} documents to {args.out}")
     return 0
 

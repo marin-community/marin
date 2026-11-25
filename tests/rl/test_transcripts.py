@@ -8,6 +8,7 @@ import json
 import pytest
 from marin.rl.transcripts import (
     DEFAULT_TRUNCATE_CHARS,
+    main,
     render_documents,
     to_html,
     to_markdown,
@@ -196,6 +197,45 @@ def test_cumulative_records_collapse_shared_prefix() -> None:
     assert text.count("Question: 40 pupils; half like blue.") == 1
     assert "Question: 41 pupils." in text
     assert "- **stop reason:** length" in text and "- **stop reason:** stop" in text
+
+
+def test_schema_v7_prompt_stored_separately_is_rendered() -> None:
+    # build_trajectory_records stores the prompt separately when the response
+    # carries only the assistant turn.
+    record = {
+        "schema_version": 7,
+        "global_step": 4,
+        "record_id": "assistant-only",
+        "prompt": {"messages": [{"content": "What is 6 times 7?", "role": "user"}]},
+        "response": {
+            "messages": [{"content": "42", "role": "assistant"}],
+            "text": "42",
+            "stop_reason": "stop",
+        },
+        "verification_result": {"status": "verified", "score": 1.0},
+        "trajectory": {"instance_id": "assess-1", "repetition_id": 0},
+    }
+    text = _markdown(record)
+    assert "What is 6 times 7?" in text and "### user" in text
+    assert "42" in text and "### assistant" in text
+
+
+def test_schema_v7_response_already_carrying_the_prompt_is_not_duplicated() -> None:
+    text = _markdown(SCHEMA_V7_RECORD)
+    assert text.count("Question: 40 pupils; half like blue.") == 1
+
+
+def test_cli_output_names_stay_unique_across_input_files(tmp_path) -> None:
+    first = tmp_path / "a.json"
+    second = tmp_path / "b.json"
+    record = json.loads(json.dumps(SCHEMA_V7_RECORD))
+    record["trajectory"] = {**SCHEMA_V7_RECORD["trajectory"], "instance_id": "shared-uid"}
+    first.write_text(json.dumps(record))
+    second.write_text(json.dumps(record))
+    out = tmp_path / "out"
+    assert main([str(first), str(second), "--out", str(out)]) == 0
+    names = sorted(path.name for path in out.iterdir())
+    assert len(names) == 2 and names[0] != names[1]
 
 
 def test_same_instance_rerolled_at_a_later_step_renders_separately() -> None:
