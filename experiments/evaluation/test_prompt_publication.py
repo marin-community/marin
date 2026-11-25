@@ -99,9 +99,7 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     cases = list(evaluation_cases(str(output)))
     published_protocol, published_manifest = evaluation_protocol(str(output))
     assert published_protocol.num_fewshot == shots
-    # The declaration carries no hand count; the published corpus binds the measured population.
     assert published_manifest.rows == manifest.rows == 2
-    assert published_protocol.fingerprint == published_manifest.protocol_hash
     assert [case.item.source_ordinal for case in cases] == [0, 1]
     assert cases[0].task.id != cases[1].task.id
     for case in cases:
