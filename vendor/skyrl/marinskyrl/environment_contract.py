@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import site
 import socket
 import sys
@@ -604,15 +603,6 @@ class EnvVarManager:
             }
         )
 
-    def write_shell_activation(self, path: Path, scope: EnvVarScope) -> None:
-        """Write managed values as a sourceable shell activation file."""
-        values = self.environment_for(scope)
-        lines = []
-        for name, value in sorted(values.items()):
-            suffix = f"${{{name}:+:${name}}}" if name == LD_LIBRARY_PATH_ENV else ""
-            lines.append(f"export {name}={shlex.quote(value)}{suffix}\n")
-        path.write_text("".join(lines))
-
     @staticmethod
     def _artifact_root(config: Any) -> str:
         checkpoint_path = str(_config_value(config, "trainer.ckpt_path", "") or "")
@@ -749,14 +739,15 @@ def wandb_launch_environment(*, entity: str | None, environ: Mapping[str, str] |
 def _main(argv: list[str]) -> None:
     if len(argv) == 3 and argv[1] == "write-frozen-cuda-runtime":
         manager = EnvVarManager.for_frozen_cuda_runtime(site.getsitepackages())
-        manager.write_shell_activation(Path(argv[2]), EnvVarScope.TASK_RUNTIME)
+        values = {"PATH": str(Path(sys.executable).parent), **manager.environment_for(EnvVarScope.TASK_RUNTIME)}
+        Path(argv[2]).write_bytes(b"".join(os.fsencode(f"{name}={value}") + b"\0" for name, value in values.items()))
         return
     if len(argv) >= 5 and argv[1] == "run-grug-gpu-gate" and argv[3] == "--":
         environment = dict(os.environ)
         environment.update(grug_gpu_gate_environment(argv[2]))
         os.execvpe(argv[4], argv[4:], environment)
     raise SystemExit(
-        f"usage: {argv[0]} write-frozen-cuda-runtime ACTIVATION_FILE | "
+        f"usage: {argv[0]} write-frozen-cuda-runtime ENVIRONMENT_FILE | "
         "run-grug-gpu-gate REPOSITORY_ROOT -- COMMAND [ARG ...]"
     )
 

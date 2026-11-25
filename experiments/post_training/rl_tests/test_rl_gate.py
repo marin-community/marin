@@ -616,28 +616,13 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
 def test_native_failure_stops_build_child(tmp_path, exit_early):
     lock = tmp_path / "build.lock"
     lock.touch()
-    child = (
-        "import fcntl,sys,time\n"
-        "with open(sys.argv[1], 'r+') as lock:\n"
-        "    fcntl.flock(lock, fcntl.LOCK_EX)\n"
-        "    print('ready', flush=True)\n"
-        "    time.sleep(8)\n"
-    )
-    wrapper = (
-        "import subprocess,sys\n"
-        "worker = subprocess.Popen([sys.executable, '-I', '-c', *sys.argv[1:3]], stdout=subprocess.PIPE, text=True)\n"
-        "assert worker.stdout.readline().strip() == 'ready'\n"
-        "print('build child ready', file=sys.stderr, flush=True)\n"
-        "if sys.argv[3] == 'True':\n"
-        "    sys.exit(7)\n"
-        "worker.wait()\n"
-    )
+    worker = Path(__file__).with_name("native_build_child.py")
     failure = "exited with status 7" if exit_early else "timed out after 2 s"
     deadline = monotonic() + 6
     with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
         gate._native_command_json(
             "Prepare test environment",
-            [sys.executable, "-I", "-c", wrapper, child, str(lock), str(exit_early)],
+            [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)],
             env=gate.skyrl_cpu_environment(),
             timeout=2,
         )

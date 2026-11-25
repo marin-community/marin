@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import pytest
 from iris.client.client import IrisContext, iris_ctx_scope
@@ -15,7 +18,7 @@ from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
 from skyrl_train.hf_export_schema import HFExportRequest
 
 
@@ -62,6 +65,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     document = raw_launch_config()
+    spill = tmp_path / "spill path '$literal'"
+    document["ray"]["spill_dir"] = str(spill)
     document["run"].update(submission="detach", export_hf=False)
     document["runtime"]["task_env"] = {} if interface is None else {"NCCL_SOCKET_IFNAME": interface}
     document["iris"].update(
@@ -148,7 +153,29 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     )
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
 
-    shell = request.entrypoint.run_command.argv[-1]
-    assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus" in shell
-    assert "/interconnect-gate; " in shell
-    assert ("--pynccl-init" in shell) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
+    app = tmp_path / "app"
+    skyrl = app / "vendor/skyrl"
+    launcher = skyrl / "cloud/iris"
+    launcher.mkdir(parents=True)
+    source = Path(__file__).parents[1]
+    stub = Path(__file__).with_name("node_command_fixture.py")
+    for name in ("node_entrypoint.sh", "load_runtime_environment.sh"):
+        (launcher / name).symlink_to(source / name)
+    (launcher / "task_runtime.py").symlink_to(stub)
+    probe = app / "experiments/post_training/nccl_transport_probe.py"
+    probe.parent.mkdir(parents=True)
+    probe.symlink_to(stub)
+    (skyrl / ".iris-runtime-env").write_bytes(b"MAX_JOBS=4\0")
+    argv = [
+        arg.replace(MARINSKYRL_TASK_ROOT, str(skyrl), 1) if arg.endswith("/node_entrypoint.sh") else arg
+        for arg in request.entrypoint.run_command.argv
+    ]
+    process = subprocess.run(argv, env=os.environ, check=True, capture_output=True, text=True, timeout=15)
+    transport, controller = map(json.loads, process.stdout.splitlines())
+    assert spill.is_dir()
+    assert transport["cwd"] == controller["cwd"] == str(skyrl)
+    assert transport["max_jobs"] == controller["max_jobs"] == "4"
+    assert transport["argv"][:4] == ["--mode", "gate", "--gate-coverage", "all-gpus"]
+    assert transport["argv"][4:6] == ["--gate-report-prefix", f"{config.ray.rendezvous_dir}/interconnect-gate"]
+    assert ("--pynccl-init" in transport["argv"]) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
+    assert controller["argv"][0] == "--config"

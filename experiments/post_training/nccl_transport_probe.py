@@ -26,11 +26,8 @@ provide torch with the production NCCL build; the pinned image digest is the
         --task-image "$IMAGE" \
         --cpu 8 --memory 32GB --disk 200GB \
         --no-sync -- \
-        bash -c 'cd /app/vendor/skyrl && \
-        bash cloud/iris/bootstrap_runtime.sh /app/vendor/skyrl "$IRIS_VENV" \
-        /app/vendor/skyrl/.iris-runtime-env megatron production && \
-        source /app/vendor/skyrl/.iris-runtime-env && \
-        exec python /app/experiments/post_training/nccl_transport_probe.py'
+        bash /app/vendor/skyrl/cloud/iris/setup_task_runtime.sh megatron \
+        python /app/experiments/post_training/nccl_transport_probe.py
 
 The variants cover the recipe workaround (`NCCL_NET=Socket`,
 `NCCL_IB_DISABLE=1`, `NCCL_SOCKET_FAMILY=AF_INET`) as one overlay and each
