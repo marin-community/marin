@@ -753,7 +753,8 @@ def test_loss_helpers_keep_distinct_mixed_precision_defaults():
     logits = hax.named(jax.random.normal(jax.random.key(11), (17, 31), dtype=jnp.bfloat16) * 11, (Pos, Vocab))
     direct_default = next_token_loss(Pos, Vocab, logits, ids)
     direct_explicit = next_token_loss(Pos, Vocab, logits, ids, dtype=None)
-    assert direct_default.dtype == jnp.bfloat16
+    # Leaving the input dtype unchanged still uses FP32 policy normalization.
+    assert direct_default.dtype == jnp.float32
     np.testing.assert_array_equal(np.asarray(direct_default.array), np.asarray(direct_explicit.array))
 
 
@@ -1517,8 +1518,14 @@ def test_snowball_fp32_activations_round_once():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         outputs = {}
         for flag in (False, True):
-            norm = GatedNorm(w_down=w_down, w_up=w_up, fp32_activations=flag)
-            mlp = DenseMLP(w_gate=w_gate, w_up=w_up2, w_down=w_down2, fp32_activations=flag)
+            norm = GatedNorm(w_down=w_down, w_up=w_up, implementation="native", fp32_activations=flag)
+            mlp = DenseMLP(
+                w_gate=w_gate,
+                w_up=w_up2,
+                w_down=w_down2,
+                projection_implementation="native",
+                fp32_activations=flag,
+            )
             outputs[flag] = (norm(x), mlp(x))
             for got, want in zip(outputs[flag], by_hand(flag)):
                 assert got.dtype == jnp.bfloat16

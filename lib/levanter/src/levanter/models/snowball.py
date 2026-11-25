@@ -1638,9 +1638,10 @@ class SnowballMoEMLP(eqx.Module):
                 token_valid=token_valid,
                 mesh=get_abstract_mesh(),
             )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        if not (expert_implementation == "split" and max_active_tokens == 1 and b * s == 1):
-            routed = reshard(routed, _activation_spec())
+        if expert_implementation == "split" and max_active_tokens == 1 and b * s == 1:
+            routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+        else:
+            routed = jax.lax.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
         ids = None
         if return_routes:
             ids = reshard(selected_experts.astype(jnp.int32), P(None, None)).reshape(b, s, -1)
