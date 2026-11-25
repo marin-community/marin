@@ -6,7 +6,6 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import click
