@@ -179,8 +179,10 @@ class _MeasuredMachine:
             self.verdicts.append(target.read_bytes())
 
     async def close(self) -> None:
-        await self.finish_usage()
-        await self.machine.close()
+        try:
+            await self.finish_usage()
+        finally:
+            await self.machine.close()
 
 
 class _CleanupTrackedMachine:
