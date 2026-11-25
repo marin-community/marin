@@ -103,9 +103,9 @@
   "panels": [
     {
       "id": 1,
-      "type": "table",
-      "title": "Task attempts on the node",
-      "description": "Attempts on ${node} that overlap the time range: their job, the job's request, and its usage category (empty until job tags are written). Attempts whose newest row is older than 1 day before the range start are missed.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = '${node}' OR worker_id = '${node}')   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1) SELECT a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) ORDER BY a.started_at\n```",
+      "type": "timeseries",
+      "title": "Jobs on the node",
+      "description": "One line per job: 1 while an attempt of the job runs on ${node}, 0 otherwise, stacked so two jobs at once read 2. The table below lists the attempts. Attempts whose newest row is older than 1 day before the range start are missed. This panel's query also feeds the table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = '${node}' OR worker_id = '${node}')   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid\n```",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -123,7 +123,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = '${node}' OR worker_id = '${node}')   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1) SELECT a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) ORDER BY a.started_at"
+                "value": "WITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = '${node}' OR worker_id = '${node}')   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid"
               },
               {
                 "key": "from",
@@ -136,6 +136,11 @@
             ]
           },
           "columns": [
+            {
+              "selector": "minute",
+              "text": "minute",
+              "type": "timestamp_epoch"
+            },
             {
               "selector": "attempt_uid",
               "text": "attempt_uid",
@@ -210,16 +215,175 @@
               "selector": "category",
               "text": "category",
               "type": "string"
+            },
+            {
+              "selector": "active",
+              "text": "active",
+              "type": "number"
             }
           ]
         }
       ],
       "gridPos": {
-        "h": 9,
+        "h": 7,
         "w": 24,
         "x": 0,
         "y": 0
       },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "minute": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "active": {
+                "aggregations": [
+                  "max"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "job_id"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Task attempts on the node",
+      "description": "The attempts behind the job lines: job, request and usage category (empty until job tags are written). Reuses the job panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 1
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "attempt_uid": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "task_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "attempt_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "user_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "state": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "started_at": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "finished_at": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "cpu_request": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "memory_request_bytes": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerator_kind": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerator_type": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerators_per_task": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "category": {
+                "aggregations": [],
+                "operation": "groupby"
+              }
+            }
+          }
+        }
+      ],
       "fieldConfig": {
         "defaults": {},
         "overrides": [
