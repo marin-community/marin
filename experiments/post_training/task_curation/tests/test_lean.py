@@ -5,6 +5,7 @@
 
 import json
 import os
+import subprocess
 import time
 
 import pytest
@@ -12,7 +13,13 @@ from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
 from experiments.post_training.task_curation.datasets.lean import proofs
-from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
+from experiments.post_training.task_curation.datasets.lean.check_statements import (
+    RECORDED,
+    REPLIES,
+    failed_unexpectedly,
+    replies_record,
+    reply_outcome,
+)
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
@@ -27,8 +34,12 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP,
+    FIXED_REPLY_LABEL,
     PASSING_PROOFS,
+    PROOFS_FILE,
+    REPLY_CHECKS,
     UNCOMPILABLE,
+    ReplyOutcome,
     human_proof,
     is_human_proof_row,
 )
@@ -326,6 +337,61 @@ def test_eval_overlap_matches_statements_that_differ_only_in_binder_names_and_sp
 
 def test_the_fixture_rows_used_as_golden_controls_have_passing_proofs():
     assert all(numina_proof_key(row) in PASSING_PROOFS for row in NUMINA_ROWS)
+
+
+def test_the_pinned_checks_drop_the_fixture_row_with_contradictory_hypotheses_and_label_the_others(tmp_path):
+    inputs = prime_inputs(tmp_path)
+    contradictory, *kept = NUMINA_ROWS
+    rejection = convert_row(NUMINA, contradictory, inputs=inputs)
+    assert isinstance(rejection, ImportRejection)
+    assert rejection.reason == "contradictory_hypotheses"
+    labels = [converted_task(NUMINA, row, inputs=inputs).labels for row in kept]
+    assert labels == [{FIXED_REPLY_LABEL: "not_proved"}, {FIXED_REPLY_LABEL: "proved"}]
+
+
+def test_the_pinned_reply_checks_cover_every_task_once_with_the_current_replies_and_toolchain():
+    checked = REPLY_CHECKS["checked"]
+    assert checked["replies"] == REPLIES
+    assert {key: checked[key] for key in RECORDED} == json.loads(PROOFS_FILE.read_text())["checked"]
+    keys = [*REPLY_CHECKS["contradictory"], *(key for keys in REPLY_CHECKS["fixed_reply"].values() for key in keys)]
+    assert len(keys) == len(set(keys))
+    assert set(keys) == PASSING_PROOFS
+
+
+@pytest.mark.parametrize(
+    ("returncode", "output", "outcome"),
+    [
+        (0, "", ReplyOutcome.PROVED),
+        (0, "Task.lean:7:6: warning: Unused tactic linter: `intros` does nothing", ReplyOutcome.PROVED),
+        (0, "Task.lean:3:8: warning: declaration uses 'sorry'", ReplyOutcome.NOT_PROVED),
+        (1, "Task.lean:9:6: error: `grind` failed", ReplyOutcome.NOT_PROVED),
+        (1, "INTERNAL PANIC: out of memory", ReplyOutcome.UNKNOWN),
+        (-9, "", ReplyOutcome.UNKNOWN),
+        (None, "", ReplyOutcome.UNKNOWN),
+    ],
+    ids=["proved", "linter_warning", "sorry", "lean_error", "crash", "killed", "timeout"],
+)
+def test_a_fixed_reply_compile_reads_as_the_grader_scores_it(returncode, output, outcome):
+    result = None if returncode is None else subprocess.CompletedProcess([], returncode, stdout=output, stderr="")
+    assert reply_outcome(result) == outcome
+
+
+def test_only_a_proved_contradiction_drops_a_task_and_every_other_task_keeps_its_fixed_reply_outcome():
+    def checked(key: str, contradiction: str, fixed_reply: str) -> dict:
+        return {"row": key, "key": key, "status": "checked", "contradiction": contradiction, "fixed_reply": fixed_reply}
+
+    results = [
+        checked("a", "proved", "proved"),
+        checked("b", "unknown", "not_proved"),
+        checked("c", "not_proved", "proved"),
+        checked("d", "not_proved", "unknown"),
+        {"row": "e", "status": "rejected", "reason": "eval_overlap"},
+    ]
+    provenance = {"source": "numina", "revision": "r", "sha256": "s", "lean": "l", "mathlib": "m"}
+    record = replies_record(provenance, results)
+    assert record["contradictory"] == ["a"]
+    assert record["contradiction_unknown"] == ["b"]
+    assert record["fixed_reply"] == {"proved": ["c"], "not_proved": ["b"], "unknown": ["d"]}
 
 
 def test_only_rows_with_a_human_statement_and_proof_are_selected():

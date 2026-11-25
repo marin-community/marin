@@ -20,6 +20,12 @@ no longer parses, when its proof uses ``native_decide``, ``sorry`` or ``admit`` 
 elaborates, when its statement runs code, when its statement proves other theorems before the target,
 which the solver would see, when it restates one of the eval problems (``eval_overlap.py``), and when its
 human proof does not compile.
+
+A task is also left out when its hypotheses contradict each other: ``CONTRADICTION_REPLY``, which ignores
+the conclusion, proves it, so any reply that derives ``False`` scores. Every other task carries the label
+``lean.fixed_reply``, which says whether ``FIXED_REPLY``, one constant reply that tries fifteen tactics,
+proves it, so that a selection can drop or downweight the tasks a constant reply already solves. Both
+come from ``numina_replies.json``; curation never runs Lean.
 """
 
 import gzip
@@ -27,6 +33,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -94,6 +101,60 @@ PASSING_PROOFS = frozenset(json.loads(PROOFS_FILE.read_text())["passing"])
 """Rows whose human proof, as the golden control submits it, compiles without ``sorry`` with the grader's
 toolchain, by ``proof_key``. ``check_statements.py numina --write-proofs`` writes the file; rerun it, and
 bump the recipe's ``version``, when the toolchain or the revision moves."""
+
+
+class ReplyOutcome(StrEnum):
+    """How the grader's candidate step ends on a fixed reply."""
+
+    PROVED = "proved"
+    """The reply compiles without ``sorry``."""
+    NOT_PROVED = "not_proved"
+    """Lean reports an error, or the reply leaves ``sorry``; the grader scores either 0."""
+    UNKNOWN = "unknown"
+    """The compile ran out of time or crashed, which a busy machine can cause as well as the reply."""
+
+
+FIXED_REPLY_TACTICS = (
+    "rfl",
+    "decide",
+    "trivial",
+    "norm_num",
+    "simp",
+    "omega",
+    "linarith",
+    "positivity",
+    "simp_all",
+    "tauto",
+    "ring",
+    "nlinarith",
+    "aesop",
+    "grind",
+    "exact?",
+)
+FIXED_REPLY = "by\n  first " + " ".join(f"| ({tactic}; done)" for tactic in FIXED_REPLY_TACTICS)
+"""One constant reply that tries each tactic in turn, cheapest first, within one declaration's heartbeats.
+``done`` makes an alternative that leaves goals fail, so that ``first`` moves on. ``first`` does not catch a
+runtime error, such as ``simp`` reaching the maximum recursion depth, which ends the whole reply."""
+CONTRADICTION_REPLY = "by\n  intros\n  fail_if_success guard_target =ₛ False\n  exfalso\n  grind"
+"""A reply that ignores the conclusion: it proves a statement only when ``grind`` derives ``False`` from the
+hypotheses and the goal's leading binders. It cannot see a hypothesis it does not introduce, such as one
+inside a set or under an existential, so it finds only some of the statements whose hypotheses contradict.
+It fails on a statement whose conclusion after ``intros`` is ``False``: such a task asks to show that the
+hypotheses contradict each other, so deriving ``False`` is its proof."""
+REPLIES_FILE = Path(__file__).resolve().parent / "numina_replies.json"
+REPLY_CHECKS = json.loads(REPLIES_FILE.read_text())
+"""The two replies compiled on every task like the grader's candidate step, by ``proof_key``: the tasks
+``CONTRADICTION_REPLY`` proves or leaves undecided, and ``FIXED_REPLY``'s outcome on every other task.
+``check_statements.py numina --write-replies`` writes the file; rerun it, and bump the recipe's ``version``,
+when the toolchain, the revision, ``PASSING_PROOFS`` or a reply moves."""
+CONTRADICTORY = frozenset(REPLY_CHECKS["contradictory"])
+"""Tasks that ``CONTRADICTION_REPLY`` proves."""
+FIXED_REPLY_OUTCOMES = {
+    key: ReplyOutcome(outcome) for outcome, keys in REPLY_CHECKS["fixed_reply"].items() for key in keys
+}
+"""``FIXED_REPLY``'s outcome on every task outside ``CONTRADICTORY``."""
+FIXED_REPLY_LABEL = "lean.fixed_reply"
+"""The task label that carries ``FIXED_REPLY_OUTCOMES``."""
 HELD_OUT_SOURCES = frozenset({"math_test"})
 """NuminaMath-LEAN sources taken from a test split Marin evaluates on: MATH's test split holds MATH-500."""
 
@@ -191,8 +252,14 @@ def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | Import
     contract = row_contract(data, lambda uuid: excluded_by_prime(uuid, context))
     if isinstance(contract, ImportRejection):
         return contract
+    row_key = proof_key(data)
+    if row_key in CONTRADICTORY:
+        return source_defect(
+            "contradictory_hypotheses", "The hypotheses prove False, so a reply that ignores the conclusion scores"
+        )
     evidence = {key: data[key] for key in ("uuid", "source", "problem_type", "question_type", "exam") if key in data}
-    return proof_task(row, context, contract, data["problem"], {**evidence, "proof": data["formal_ground_truth"]})
+    task = proof_task(row, context, contract, data["problem"], {**evidence, "proof": data["formal_ground_truth"]})
+    return task.model_copy(update={"labels": {FIXED_REPLY_LABEL: FIXED_REPLY_OUTCOMES[row_key].value}})
 
 
 def human_proof(task: TaskSpec) -> Reply:
@@ -237,7 +304,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     select=is_human_proof_row,
                 ),
                 convert=convert_numina,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 controls=NUMINA_CONTROLS,
                 inputs={name: prime_list_source(name) for name in PRIME_LISTS},

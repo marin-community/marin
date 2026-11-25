@@ -14,11 +14,13 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.lean import numina, proofs
+from experiments.post_training.task_curation.datasets.lean.numina import ReplyOutcome
 
 PROOFNET = proofs.sources()[0].config
 NUMINA = numina.sources()[0].config
 NUMINA_FIXTURE = Path(__file__).parent / "fixtures/lean/numina_rows.json"
-"""Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain."""
+"""Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain. The
+first row's hypotheses contradict each other; the fixed reply does not prove the second row and proves the third."""
 PROOFS_FIXTURE = Path(__file__).parent / "fixtures/lean/proofnet_proofs.json"
 """Rows copied from the pinned ProofNet-Verified payload, each with a proof checked by the grader's toolchain."""
 
@@ -60,6 +62,8 @@ REAL_PROOFS = real_proofs()
 
 
 NUMINA_ROWS = json.loads(NUMINA_FIXTURE.read_text())
+NUMINA_TASK_ROWS = NUMINA_ROWS[1:]
+"""The fixture rows the recipe turns into tasks."""
 
 
 def numina_row(**fields: Any) -> dict[str, Any]:
@@ -92,6 +96,8 @@ def prime_inputs(
 
 
 def with_passing_proof(monkeypatch: Any, row: dict[str, Any]) -> dict[str, Any]:
-    """``row``, with its human proof counted as passing for this test only."""
-    monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {numina.proof_key(row)})
+    """``row``, with its human proof counted as passing and the fixed reply as not proving it, for this test only."""
+    key = numina.proof_key(row)
+    monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {key})
+    monkeypatch.setattr(numina, "FIXED_REPLY_OUTCOMES", {**numina.FIXED_REPLY_OUTCOMES, key: ReplyOutcome.NOT_PROVED})
     return row

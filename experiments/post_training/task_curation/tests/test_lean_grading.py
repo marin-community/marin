@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import LEAN_GR
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA,
-    NUMINA_ROWS,
+    NUMINA_TASK_ROWS,
     PROOFNET,
     REAL_PROOFS,
     prime_inputs,
@@ -136,7 +136,7 @@ def test_the_negative_control_scores_zero_after_every_step(lean_kernel_machines)
     assert statuses == {"negative": CheckStatus.PASS}, report
 
 
-@pytest.mark.parametrize("row", NUMINA_ROWS, ids=[row["uuid"][:8] for row in NUMINA_ROWS])
+@pytest.mark.parametrize("row", NUMINA_TASK_ROWS, ids=[row["uuid"][:8] for row in NUMINA_TASK_ROWS])
 def test_a_numina_human_proof_is_a_golden_control_that_scores_one(row, lean_kernel_machines, tmp_path):
     task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
     report = run_controls(task, controls=NUMINA_CONTROLS, machines=lean_kernel_machines)
