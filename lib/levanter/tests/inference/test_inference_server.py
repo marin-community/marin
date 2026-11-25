@@ -346,7 +346,7 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: list[int] | None,
+        stop_tokens: list[list[int]] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
@@ -641,6 +641,24 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
             assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
             assert np.isfinite(choice.behavior_logprobs).all()
 
+        stop = result.choices[0].token_ids[0]
+        other = (stop + 1) % server.inference_context.model.Vocab.size
+        stopped = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt,
+                max_new_tokens=2,
+                temperature=0,
+                seed=17,
+                num_choices=2,
+                stop_sequences=[
+                    inference_pb2.TokenSequence(token_ids=[other, other]),
+                    inference_pb2.TokenSequence(token_ids=[stop]),
+                ],
+            ),
+            timeout=30,
+        )
+        assert [list(choice.token_ids) for choice in stopped.choices] == [[stop], [stop]]
+
         with pytest.raises(grpc.RpcError) as invalid:
             stub.Generate(
                 inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=TEST_MAX_SEQ_LEN),
@@ -726,3 +744,15 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
         read_router_replay(response, 0, wrong_inputs)
+
+
+
+
+def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
+    client, server = test_client
+    stops = ["A"] * (server.config.service.max_stop_seqs + 1)
+    response = client.post(
+        "/v1/completions",
+        json={"model": TEST_MODEL_NAME, "prompt": "A", "max_tokens": 1, "stop": stops},
+    )
+    assert response.status_code == 400
