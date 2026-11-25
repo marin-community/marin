@@ -265,8 +265,8 @@ class TrainingContext:
         tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         try:
+            await asyncio.gather(*tasks, return_exceptions=True)
             await self._write_grader_report()
         finally:
             ray.kill(self._buffer)
