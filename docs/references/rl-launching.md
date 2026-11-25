@@ -573,6 +573,27 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
+If a long-loop coordinator fails after its RL and evaluation children succeed,
+recover the reporting tail with `experiments.post_training.long_loop.postprocess`.
+Its hash-pinned plan records the fresh `version`, `postprocessing_revision`,
+original `resolved_spec` URI and SHA-256, completed `artifacts` by stage,
+`artifact_record_sha256` pins, `additional_evidence`, `sft_geometry`, and any
+explicit `accepted_unscored_attempts`. Omit `recovery` when the native evaluation
+is already complete. The graph adopts the producers and runs reporting,
+SFT accounting and archiving on CPUs:
+
+```bash
+uv run python -m experiments.post_training.long_loop.postprocess \
+  --plan-uri <immutable-plan-uri> --plan-sha256 <sha256> --version <fresh-version>
+# After inspecting the plan, repeat with --run to submit.
+```
+
+Canonical reporting verifies the prepared Parquet hash, derives cohort identities
+from its rows, and reads only the completed evaluation attempt. It does not rely
+on the older `selection.json` preparation file or its historical attempt count.
+An explicitly recorded unscored attempt remains unscored and blocks native
+checkpoint cleanup; preserving it does not certify full evaluation coverage.
+
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the
 [selection handoff](task-curation.md#train-on-a-snowball-selection).

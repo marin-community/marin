@@ -6,11 +6,15 @@
 import hashlib
 import json
 import tempfile
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.rl.skyrl import SkyRLRun
 from rigging.event_log import Event, EventLog
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -20,6 +24,47 @@ from experiments.post_training.long_loop.eval_runtime.audit_results import audit
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.finalization import terminal_outcome
 from experiments.post_training.long_loop.timing import report
+
+
+def prepare_reporting_inputs(
+    *,
+    output: str,
+    prepared_inputs: str,
+    evaluated: str,
+    source_sha256: str,
+    data_relative_path: str,
+    policy_sha256: str,
+) -> None:
+    """Bind report coverage and native result paths to the exact canonical evaluation."""
+    canonical = json.loads((StoragePath(evaluated) / "canonical-evaluation.json").read_bytes())
+    if canonical["canonical_spec_sha256"] != policy_sha256:
+        raise ValueError("Reporting policy differs from the completed canonical evaluation")
+    raw = (StoragePath(prepared_inputs) / data_relative_path).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != source_sha256:
+        raise ValueError("Canonical Micro210 prepared task bytes changed")
+    rows = pq.read_table(pa.BufferReader(raw), columns=["task_rollout_spec"]).to_pylist()
+    identities = [
+        {
+            "dataset_row_uid": str(index),
+            "data_source": json.loads(row["task_rollout_spec"])["task"]["source"]["dataset"],
+        }
+        for index, row in enumerate(rows)
+    ]
+    run = SkyRLRun.raw_load(evaluated)
+    if not run.attempt_id:
+        raise ValueError("Canonical evaluation must identify its completed attempt")
+    selection = {
+        "attempts": len(identities),
+        "attempts_per_data_source": dict(Counter(row["data_source"] for row in identities)),
+        "identities": identities,
+        "results_uri": prefix_join(evaluated, f"exports/dumped_evals/{run.attempt_id}/eval_only"),
+        "source_sha256": source_sha256,
+        "policy_sha256": policy_sha256,
+    }
+    root = StoragePath(output)
+    (root / "selection.json").write_text(json.dumps(selection, indent=2))
+    (root / "environment.json").write_text(json.dumps({"prepared_inputs": prepared_inputs, "sha256": source_sha256}))
+    (root / "rollouts.parquet").write_bytes(raw)
 
 
 def timed(step: ArtifactStep) -> ArtifactStep:
@@ -44,7 +89,7 @@ def write_report(
     *,
     output: str,
     stages: list[str],
-    expected_rollouts: int,
+    expected_rollouts: int | None,
     sft_geometry: str,
     evaluation_selection: str | None = None,
     additional_timing: list[dict] | None = None,
@@ -96,18 +141,25 @@ def write_report(
     fs.pipe_file(prefix_join(root, "timing-sources.json"), json.dumps(sources, indent=2).encode())
     expected_by_data_source = None
     expected_identities = None
+    results_uri = None
     if evaluation_selection is not None:
         selection_fs, selection_key = filesystem_for(prefix_join(evaluation_selection, "selection.json"))
         selection = json.loads(selection_fs.cat_file(selection_key))
+        if expected_rollouts is None:
+            expected_rollouts = selection["attempts"]
         if selection["attempts"] != expected_rollouts:
             raise ValueError("Prepared evaluation attempt count differs from the resolved run spec")
         expected_by_data_source = selection["attempts_per_data_source"]
         expected_identities = selection["identities"]
+        results_uri = selection.get("results_uri")
+    if expected_rollouts is None:
+        raise ValueError("Report requires a pinned evaluation cohort or an explicit attempt count")
     evaluation = audit(
         stages[-1],
         expected_rollouts=expected_rollouts,
         expected_by_data_source=expected_by_data_source,
         expected_identities=expected_identities,
+        results_uri=results_uri,
     )
     evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
     evaluation["accepted_unscored_attempts"] = accepted_unscored_attempts or []
@@ -126,7 +178,7 @@ def report_step(
     stages: list[ArtifactStep],
     archive_plan: dict | None = None,
     *,
-    expected_rollouts: int = SMOKE_PATH_COUNT,
+    expected_rollouts: int | None = SMOKE_PATH_COUNT,
     evaluation_selection: ArtifactStep | None = None,
     additional_timing: list[dict] | None = None,
     accepted_unscored_attempts: list[dict] | None = None,
