@@ -1316,8 +1316,7 @@ def _corpus_assembly_step(
             "source_revision": plan.source_revision,
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "census_receipt": _resolved_receipt(ctx, census),
-            # The fresh corpus holds only the targets; the retained curriculum covers the rest.
-            "output_root": stage_output_root(plan, "corpus-fresh"),
+            "output_root": stage_output_root(plan, "corpus"),
             "expected_sources": plan.expected_source_count,
             "targets": plan.targets,
             "workers": sizing.workers,

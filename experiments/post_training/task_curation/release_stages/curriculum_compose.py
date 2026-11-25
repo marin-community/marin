@@ -437,7 +437,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     for result in retained_files:
         for row in result["counts"]:
             measured[row["source_id"]] += row["count"]
-    if measured != Counter({sid: source.task_count for sid, source in old_sources.items()}):
+    if measured != Counter({sid: old_sources[sid].task_count for sid in selected}):
         raise ValueError("retained assignment counts disagree with the retained release sources")
     assignment_paths = [row["output"] for row in retained_files] + list(plan.fresh_release.paths)
     release = release.model_copy(update={"paths": assignment_paths})

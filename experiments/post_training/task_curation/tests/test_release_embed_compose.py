@@ -23,7 +23,9 @@ from taskcompendium.pipeline.curriculum.models import AlignmentRelease, Alignmen
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import embed as embed_stage
+from experiments.post_training.task_curation.release_stages.graph import _fresh_corpus_expectation
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 NODES = [
@@ -188,7 +190,7 @@ def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
     return ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
-def _composition(tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2) -> dict:
+def _composition(tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2) -> tuple[dict, int]:
     """A sealed composition manifest over a one-source retained release plus one fresh.
 
     ``drift`` crafts a declaration copy in the current-target document that differs
@@ -442,3 +444,26 @@ def test_embed_dry_run_records_plan_without_executing(tmp_path):
     assert not any((tmp_path / "release" / "artifacts").rglob("*"))
     rows = (tmp_path / "alerts.jsonl").read_text().splitlines()
     assert json.loads(rows[-1])["kind"] == embed_stage.alerts.KIND_FINISH
+
+
+def test_fresh_corpus_expectation_counts_the_shipped_targets():
+    """Embed's expectation is the shipped fresh set: zero-admission targets ship nothing.
+
+    The census proof's per-source results carry the oracle-empty marker; the
+    expectation counts only the targets the census did not filter to empty and
+    sums their retained tasks.
+    """
+    plan = fixture_plan(targets=("Marin:fixture", "Marin:fixture-empty"), expected_population_tasks=10)
+    census_proof = {
+        "results": [
+            {"source_id": "Marin:fixture", "inventory": {"retained_tasks": 4}},
+            {
+                "source_id": "Marin:fixture-empty",
+                "oracle_empty": {"original_count": 7},
+                "inventory": {"retained_tasks": 0},
+            },
+            {"source_id": "Marin:not-a-target", "inventory": {"retained_tasks": 99}},
+        ]
+    }
+    expectation = _fresh_corpus_expectation(plan, census_proof)
+    assert expectation == {"expected_source_count": 1, "expected_task_count": 4}

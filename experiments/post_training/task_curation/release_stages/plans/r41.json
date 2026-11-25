@@ -2,7 +2,7 @@
   "kind": "atlas-release-config",
   "release_id": "r41",
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "9a85416bb9d03d6a317dc5009925d98e66a4ff87",
+  "freeze_source_revision": "65a0a026c524bc49305059cf5c9e558480e8fe06",
   "prior_release": {
     "release_id": "r39-admissions-refresh",
     "declarations": {

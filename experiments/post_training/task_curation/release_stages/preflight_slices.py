@@ -481,6 +481,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     runtime_defaults=plan.validation_runtime_defaults,
                 ),
                 dry_run=True,
+                repo_root=REPO_ROOT,
             )
             return {"targets": len(proof["targets"]), "task_count": proof["task_count"], "mode": "dry-run"}
 
