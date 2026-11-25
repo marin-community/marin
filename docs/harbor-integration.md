@@ -21,22 +21,10 @@ Before launching:
 
 ## Run a benchmark
 
-Choose a model and eval from `experiments/evaluation/models.py` and
-`experiments/evaluation/evals.py`:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --evals tb2-lite --dry-run
-
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --evals tb2-lite
-```
-
-`tb2-lite` runs two Terminal-Bench tasks in Daytona. `--evals agentic` selects the
-standard Harbor suite. `--limit N` caps tasks. Policy trial repetitions still apply.
-`--no-wait` returns after submission.
-
-Use `--harbor-config` for a policy outside the catalog:
+The catalog's agentic keys, such as `tb2`, `swebench`, `gaia`, `bfcl`, `aider`,
+`medagentbench` and `aime-harbor`, run as curated TaskSpec corpora through
+RolloutEngine, not through Harbor; see [evaluation tasks](references/evaluation-tasks.md).
+A Harbor policy runs only through `--harbor-config`:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -45,7 +33,8 @@ uv run python -m experiments.evaluation.cli launch \
   --limit 2 --dry-run
 ```
 
-Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies.
+Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies. `--limit N`
+caps tasks; policy trial repetitions still apply. `--no-wait` returns after submission.
 You can also select catalog entries with `--evals` in the same command.
 
 To serve a judge in the same batch:
@@ -115,16 +104,9 @@ environment:
     image_build: declarative
 ```
 
-Set the target before launching:
-
-```bash
-export DAYTONA_TARGET=us
-```
-
-The host entry point reads `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
-once. The API URL defaults to `https://app.daytona.io/api`. Missing credentials or target
-fail before allocation. SDK `.env` files, JWT credentials and other connection overrides
-are not read.
+The host entry point reads `DAYTONA_API_KEY` once. The API URL and target region are
+constants (`https://app.daytona.io/api` and `us`). Missing credentials fail before
+allocation. SDK `.env` files, JWT credentials and other connection overrides are not read.
 
 The launcher does not change a policy's provider. Remove unsupported settings from the
 policy and prepare any missing task images before launching. Harbor rejects `--no-delete` and

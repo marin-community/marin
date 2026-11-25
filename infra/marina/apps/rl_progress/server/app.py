@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
-_RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids")
+_RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids", "grader_report")
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
     for key in _RETAINED_FIELDS
@@ -106,7 +106,13 @@ def create_api(services):
         skipped = []
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT run_id, attempt_id, record FROM rl_runs ORDER BY run_id, attempt_id")
+                text(
+                    "SELECT run_id, attempt_id, CASE WHEN jsonb_typeof(record) != 'object' "
+                    "OR record -> 'grader_report' = 'null'::jsonb "
+                    "THEN record ELSE record - 'grader_report' END AS record, "
+                    "record -> 'grader_report' IS NOT NULL AND record -> 'grader_report' != 'null'::jsonb "
+                    "AS has_grader_report FROM rl_runs ORDER BY run_id, attempt_id"
+                )
             ).mappings()
             for row in rows:
                 try:
@@ -128,7 +134,27 @@ def create_api(services):
                     )
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
+                if row["has_grader_report"]:
+                    record["has_grader_report"] = True
                 records.append(record)
         return {"runs": records, "skipped_records": skipped}
+
+    @api.get("/graders")
+    def graders(run_id: str, attempt_id: str):
+        with engine.connect() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT record ->> 'label' AS label, record -> 'grader_report' AS report "
+                        "FROM rl_runs WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                    ),
+                    {"run_id": run_id, "attempt_id": attempt_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            raise HTTPException(404, detail="Unknown native attempt")
+        return dict(row)
 
     return api

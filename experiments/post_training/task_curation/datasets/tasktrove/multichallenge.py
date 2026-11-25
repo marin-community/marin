@@ -17,7 +17,7 @@ from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import GraderMachine, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
@@ -77,7 +77,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     package = verifyit_package(
         JudgeSpec(criteria=criteria, context=CONTEXT_FILE, rubric=RUBRIC_CHECKLIST),
         (inline_resource(CONTEXT_FILE, conversation), inline_resource("source/judge.toml", judge_toml)),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)

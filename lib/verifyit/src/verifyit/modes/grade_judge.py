@@ -50,11 +50,10 @@ from verifyit.grade import (
     scored,
 )
 from verifyit.json_objects import unique_object
-from verifyit.judge_contract import validated_judge_spec
+from verifyit.judge_contract import answer_text, validated_judge_spec
 from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.ifeval import Check
-from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_ANSWERS,
     RUBRIC_LABELS,
@@ -138,6 +137,8 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
+    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
 
 
 @dataclass(frozen=True)
@@ -219,7 +220,12 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     try:
         with client:
             completion = _label_completion(
-                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens, spec.temperature
+                spec,
+                client.with_options(max_retries=0),
+                model,
+                messages,
+                spec.max_completion_tokens,
+                spec.sampling.temperature,
             )
     except GradingInfraError as error:
         raise GradingInfraError(str(error), model=model, **error.detail) from error
@@ -257,7 +263,8 @@ def grade_judge_candidate(
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
-    candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
+    for step in validated.candidate_steps:
+        candidate = step(candidate)
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[: spec.context_char_limit]
@@ -301,26 +308,6 @@ def grade_judge_candidate(
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
-def _answer_text(
-    text: str,
-    strip_reasoning: bool,
-    *,
-    strip_outer: bool = True,
-    unfinished_error: str | None = None,
-) -> str:
-    if not strip_reasoning:
-        return text.strip() if strip_outer else text
-    for opening, closing in REASONING_DELIMITERS:
-        text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
-    closing = max((text.rfind(end) + len(end) for _, end in REASONING_DELIMITERS if end in text), default=0)
-    text = text[closing:]
-    if any(opening in text for opening, _ in REASONING_DELIMITERS):
-        if unfinished_error is not None:
-            raise RuntimeError(unfinished_error)
-        return ""
-    return text.strip().removesuffix("<|eot_id|>").strip()
-
-
 def _judge_labels(
     spec: JudgeSpec, reference: str, context: str, candidate: str, client: openai.OpenAI, model: str
 ) -> Reward:
@@ -336,20 +323,10 @@ def _judge_labels(
             model,
             messages,
             attempt_detail={"parse_attempt": parse_attempt + 1, "previous_parse_attempts": list(parse_history)},
-            temperature=spec.temperature,
+            temperature=spec.sampling.temperature,
         )
-        if spec.label_scan == "whole":
-            final = answer
-            observed = {answer}
-        else:
-            final = answer.rsplit("\n", 1)[-1].strip()
-            completed_lines = {line.strip() for line in answer.splitlines()}
-            observed = {
-                label
-                for label in labels
-                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
-            }
-        if final not in labels or observed != {final}:
+        final = _reply_label(spec, answer, labels)
+        if final is None:
             if parse_attempt + 1 < spec.parse_attempts:
                 parse_history.append({"attempt": parse_attempt + 1, "completion": detail["completion"]})
                 continue
@@ -361,14 +338,18 @@ def _judge_labels(
     raise RuntimeError("judge exhausted parse attempts")
 
 
+def _label_cased(spec: JudgeSpec, text: str) -> str:
+    return text.upper() if spec.label_case == "upper" else text
+
+
 def _case_normalized(spec: JudgeSpec, table: dict[str, Any]) -> dict[str, Any]:
-    return {label.upper() if spec.label_case == "upper" else label: value for label, value in table.items()}
+    return {_label_cased(spec, label): value for label, value in table.items()}
 
 
 def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatCompletionMessageParam]:
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
-        messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
+        messages.append({"role": spec.system_role, "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
     return messages
 
@@ -382,7 +363,7 @@ def _judged_answer(
     attempt_detail: dict[str, Any],
     temperature: float | None,
 ) -> tuple[str, dict[str, Any]]:
-    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets.
+    """The judge's final answer after retrying incomplete replies with larger budgets.
 
     ``temperature=None`` leaves sampling to the judge's defaults.
     """
@@ -405,11 +386,43 @@ def _judged_answer(
             if index + 1 < len(budgets):
                 continue
             raise GradingInfraError("judge completion is incomplete", **detail)
-        answer = _answer_text(
+        answer = answer_text(
             completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
         )
-        return (answer.upper() if spec.label_case == "upper" else answer), detail
+        return answer, detail
     raise RuntimeError("judge exhausted completion budgets")
+
+
+def _reply_label(spec: JudgeSpec, answer: str, labels: dict[str, float]) -> str | None:
+    if spec.label_scan == "json":
+        member = _json_member(answer, spec.label_field)
+        if member is None:
+            return None
+        final = _label_cased(spec, member)
+        return final if final in labels else None
+    answer = _label_cased(spec, answer)
+    if spec.label_scan == "whole":
+        return answer if answer in labels else None
+    final = answer.rsplit("\n", 1)[-1].strip()
+    completed_lines = {line.strip() for line in answer.splitlines()}
+    observed = {
+        label for label in labels if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+    }
+    return final if final in labels and observed == {final} else None
+
+
+def _json_member(reply: str, field: str) -> str | None:
+    """Read a string or boolean member from a JSON object, optionally fenced in Markdown."""
+    if reply.startswith("```"):
+        reply = reply.split("```")[1].removeprefix("json")
+    try:
+        value = json.loads(reply, object_pairs_hook=unique_object)
+    except ValueError:
+        return None
+    member = value.get(field) if isinstance(value, dict) else None
+    if isinstance(member, bool):
+        return json.dumps(member)
+    return member if isinstance(member, str) else None
 
 
 def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
@@ -421,8 +434,10 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
         messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
-        answer, detail = _judged_answer(spec, client, model, messages, attempt_detail={}, temperature=spec.temperature)
-        verdict = _pairwise_verdict(answer, spec.verdict_patterns)
+        answer, detail = _judged_answer(
+            spec, client, model, messages, attempt_detail={}, temperature=spec.sampling.temperature
+        )
+        verdict = _pairwise_verdict(_label_cased(spec, answer), spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
         score_a = float(labels[verdict])
@@ -731,12 +746,19 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
+    http_client = None
+    if connection is not None and connection.transport is not None:
+        # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
+        import httpx  # noqa: PLC0415
+
+        http_client = httpx.Client(transport=connection.transport)
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     return (
         openai.OpenAI(
             base_url=base_url,
             api_key=(connection.api_key if connection else os.environ.get(API_KEY_ENV) or "unused"),
             max_retries=0,
+            http_client=http_client,
         ),
         model,
     )
@@ -839,7 +861,7 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
     return _chat_result(
-        spec, client, model, [{"role": "user", "content": prompt}], budget, temperature=spec.temperature
+        spec, client, model, [{"role": "user", "content": prompt}], budget, temperature=spec.sampling.temperature
     ).response
 
 
@@ -847,6 +869,8 @@ def _chat_result(
     spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, temperature: float | None
 ) -> _ChatResult:
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+    if spec.response_format:
+        options["response_format"] = spec.response_format
     if spec.chat_template_kwargs:
         options["extra_body"] = {"chat_template_kwargs": spec.chat_template_kwargs}
     if temperature is not None:

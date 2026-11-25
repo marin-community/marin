@@ -22,6 +22,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
             ("setup_commands", requirements.setup_commands),
             ("environment_variables", requirements.environment_variables),
             ("tool_providers", requirements.tool_providers),
+            ("services", requirements.services),
+            ("readiness", requirements.readiness),
         )
         if value
     ]
@@ -30,8 +32,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
     if specification.output_paths:
         features.append("output_paths")
     grader = specification.grader
-    if isinstance(grader, ScriptGrader | VerifyitGrader) and grader.environment is not None:
-        features.append("grader.environment")
+    if isinstance(grader, ScriptGrader | VerifyitGrader) and grader.placement is not None:
+        features.append("grader.placement")
     resources = specification.resources
     if resources.all or resources.worker or resources.oracle:
         features.append("resources")

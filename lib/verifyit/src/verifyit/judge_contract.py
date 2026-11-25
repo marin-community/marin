@@ -6,11 +6,13 @@
 import math
 import re
 import string
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from verifyit.grade import InvalidTask, empty_output_policy
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.modes.ifeval import Check
+from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
@@ -18,9 +20,13 @@ from verifyit.spec import (
     RUBRIC_PAIRWISE,
     RUBRIC_REFERENCE,
     RUBRICS,
+    CandidateStep,
     Constraint,
+    ExtractGroup,
     JudgeCompletionPolicy,
     JudgeSpec,
+    StripOuterWhitespace,
+    StripReasoningBlocks,
 )
 
 ANSWERS_FIELDS = frozenset({"question", "references", "candidate"})
@@ -35,6 +41,7 @@ class ValidatedJudgeSpec:
     references: tuple[str, ...]
     criteria: tuple[str, ...]
     checks: list[tuple[Constraint, Check]]
+    candidate_steps: tuple[Callable[[str], str], ...]
 
 
 def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
@@ -45,11 +52,8 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask("the judge harness supports exactly one conversation turn")
     if type(spec.parse_attempts) is not int or spec.parse_attempts < 1:
         raise InvalidTask("judge parse attempts must be positive")
-    if spec.temperature is not None and (
-        isinstance(spec.temperature, bool)
-        or not isinstance(spec.temperature, (int, float))
-        or not 0 <= spec.temperature <= 2
-    ):
+    temperature = spec.sampling.temperature
+    if temperature is not None and (type(temperature) not in (int, float) or not 0 <= temperature <= 2):
         raise InvalidTask("judge temperature must be finite and between zero and two")
     if spec.chat_template_kwargs and spec.api != "chat_completions":
         raise InvalidTask("chat template options require Chat Completions")
@@ -72,8 +76,12 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask("label_case must be sensitive or upper")
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
-    if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
-        raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
+    if spec.system_role not in ("system", "developer"):
+        raise InvalidTask("judge system_role must be system or developer")
+    if not isinstance(spec.response_format, dict):
+        raise InvalidTask("judge response_format must be a table")
+    if spec.response_format and (spec.rubric != RUBRIC_LABELS or spec.api != "chat_completions"):
+        raise InvalidTask("judge response_format requires the labels rubric over Chat Completions")
     if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
@@ -119,7 +127,10 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         if spec.rubric != RUBRIC_LABELS or not spec.exact_gate_answers or spec.exact_gate_label not in spec.label_scores:
             raise InvalidTask("label exact gate requires answers and a declared label")
     return ValidatedJudgeSpec(
-        references=references, criteria=criteria, checks=resolve_checks(spec.constraints) if spec.constraints else []
+        references=references,
+        criteria=criteria,
+        checks=resolve_checks(spec.constraints) if spec.constraints else [],
+        candidate_steps=tuple(_candidate_step(step) for step in spec.candidate_steps),
     )
 
 
@@ -129,11 +140,45 @@ def validate_judge_spec(spec: JudgeSpec) -> None:
     empty_output_policy(spec)
 
 
+def answer_text(text: str, strip_reasoning: bool, *, unfinished_error: str | None = None) -> str:
+    """Strip outer whitespace and optionally remove the reasoning preceding an answer."""
+    if not strip_reasoning:
+        return text.strip()
+    for opening, closing in REASONING_DELIMITERS:
+        text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
+    closing = max((text.rfind(end) + len(end) for _, end in REASONING_DELIMITERS if end in text), default=0)
+    text = text[closing:]
+    if any(opening in text for opening, _ in REASONING_DELIMITERS):
+        if unfinished_error is not None:
+            raise RuntimeError(unfinished_error)
+        return ""
+    return text.strip().removesuffix("<|eot_id|>").strip()
+
+
+def _candidate_step(step: CandidateStep) -> Callable[[str], str]:
+    match step:
+        case StripReasoningBlocks():
+            return lambda text: answer_text(text, strip_reasoning=True)
+        case StripOuterWhitespace():
+            return str.strip
+        case ExtractGroup(pattern=pattern):
+            try:
+                compiled = re.compile(pattern)
+            except re.error as error:
+                raise InvalidTask(f"malformed extract_group pattern: {error}") from error
+            if not compiled.groups:
+                raise InvalidTask("extract_group pattern must capture the answer in a group")
+            return lambda text: found[1] if (found := compiled.search(text)) else text
+    raise InvalidTask(f"unknown candidate step {step!r}")
+
+
 def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
     if len(references) != 1 or len(spec.references) != 1 or not spec.prompt_template.strip() or not spec.label_scores:
         raise InvalidTask("label rubric requires one reference, a prompt template and labels")
-    if not isinstance(spec.label_scan, str) or spec.label_scan not in {"literal", "lines", "whole"}:
-        raise InvalidTask("label_scan must be literal, lines or whole")
+    if not isinstance(spec.label_scan, str) or spec.label_scan not in {"literal", "lines", "whole", "json"}:
+        raise InvalidTask("label_scan must be literal, lines, whole or json")
+    if not isinstance(spec.label_field, str) or (spec.label_scan == "json") != bool(spec.label_field.strip()):
+        raise InvalidTask("label_field names the verdict member exactly when label_scan is json")
     if type(spec.strip_reasoning_blocks) is not bool:
         raise InvalidTask("strip_reasoning_blocks must be boolean")
     _validate_verdict_labels(spec)
