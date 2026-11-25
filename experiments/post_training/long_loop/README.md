@@ -1650,6 +1650,9 @@ and never writes `correctness-passed.json`. Request concurrency does not fix
 the realized GPU batch shape, and successive conditions share a cache whose
 eviction is not controlled. Use serving-only INTERACTIVE or BATCH jobs for
 this investigation and retain all task completion and graph-capture evidence.
+The diagnostic spec must set `plain_prefix_caching` explicitly. Use `false`
+for a separate cache-disabled arm with all other settings unchanged; the
+qualification and benchmark paths continue to enable prefix caching.
 
 The inference-stats callback records cumulative draft/accepted-token counts,
 acceptance rate and mean acceptance length at each training step. Use per-engine

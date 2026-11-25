@@ -55,7 +55,7 @@ def checked_json(uri: str, sha256: str) -> dict:
     return json.loads(payload)
 
 
-def engine_config(spec: dict, draft: Path | None) -> VllmEngineConfig:
+def engine_config(spec: dict, draft: Path | None, *, prefix_caching: bool) -> VllmEngineConfig:
     arguments = (
         "--enable-expert-parallel",
         "--attention-backend",
@@ -69,7 +69,7 @@ def engine_config(spec: dict, draft: Path | None) -> VllmEngineConfig:
         json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
         "--gpu-memory-utilization",
         str(spec["gpu_memory_utilization"]),
-        "--enable-prefix-caching",
+        "--enable-prefix-caching" if prefix_caching else "--no-enable-prefix-caching",
         "--scheduling-policy",
         "priority",
         "--compilation-config",
@@ -235,8 +235,12 @@ async def investigate_plain_batching(environment: VllmEnvironment, spec: dict, c
             "conditions": summary,
             "comparisons": comparisons,
             "engine_options_unchanged": True,
-            "prefix_caching_enabled": True,
-            "cache_state": "Later sweeps share a cache touched by the inventory; eviction is not controlled",
+            "prefix_caching_enabled": spec["plain_prefix_caching"],
+            "cache_state": (
+                "Later sweeps share a cache touched by the inventory; eviction is not controlled"
+                if spec["plain_prefix_caching"]
+                else "Prefix caching is disabled for every condition"
+            ),
             "comparison_reference": "Second sweep of each condition; first sweep retained separately",
             "limitation": "Request concurrency is controlled, not an exact realized GPU microbatch shape",
             "qualification_passed": False,
@@ -298,7 +302,12 @@ def run(spec: dict, purpose: GatePurpose) -> None:
         for stage in stages:
             speculative = stage.startswith("dspark")
             with iris_vllm_launch(geometry, instance_name=f"vllm-{stage}") as launch:
-                with VllmBackend(engine_config(spec, draft if speculative else None)).start(
+                config = engine_config(
+                    spec,
+                    draft if speculative else None,
+                    prefix_caching=spec["plain_prefix_caching"] if purpose == GatePurpose.PLAIN_BATCHING else True,
+                )
+                with VllmBackend(config).start(
                     ModelSpec(**spec["model"]),
                     extra_args=launch.extra_cli_args,
                     subprocess_env=launch.subprocess_env,

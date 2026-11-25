@@ -117,7 +117,12 @@ def test_plain_investigation_retains_failed_controls_and_pins_requested_rank(tmp
         "probes": [{"identity": f"prompt-{i}@0", "prompt": [i + 1, 7], "token": 7} for i in range(2)],
         "fixed_bounds": {"max_absolute_logprob_error": 0.1},
     }
-    spec = {"output": str(tmp_path), "calibration_sha256": "frozen", "model": {"weights": "s3://local/V5"}}
+    spec = {
+        "output": str(tmp_path),
+        "calibration_sha256": "frozen",
+        "model": {"weights": "s3://local/V5"},
+        "plain_prefix_caching": True,
+    }
     asyncio.run(gate.investigate_plain_batching(SimpleNamespace(server_url="http://plain/v1"), spec, calibration))
     summary = json.loads((tmp_path / "plain-batching/investigation-complete.json").read_text())
     repeated = json.loads((tmp_path / "plain-batching/auto-c16-1.json").read_text())
