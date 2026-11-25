@@ -1720,6 +1720,44 @@ def test_apply_sandbox_apt_config_writes_the_no_sandbox_configuration(tmp_path):
     assert 'APT::Sandbox::User "root";' in config.read_text()
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="Mapping the parent's image IDs requires root")
+def test_prepared_image_preserves_numeric_file_ownership_in_a_private_user_namespace(executable_oci_image):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
+    factory = make_factory(umoci=Path(umoci))
+    host_user_namespace = os.readlink("/proc/self/ns/user")
+
+    async def scenario():
+        machine = await factory.create(MachineSpec(executable_oci_image))
+        try:
+            result = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-ec",
+                        "mkdir /app/owned; printf original >/app/owned/result; "
+                        "/bin/busybox chown -R 1000:1000 /app/owned; "
+                        "printf updated >/app/owned/result; /bin/busybox chmod 640 /app/owned/result; "
+                        "/bin/busybox stat -c '%u:%g:%a' /app/owned/result; "
+                        "cat /app/owned/result; printf '\\n'; "
+                        "/bin/busybox readlink /proc/self/ns/user; "
+                        "/bin/busybox grep -E '^(CapEff|CapBnd|NoNewPrivs):' /proc/self/status",
+                    )
+                )
+            )
+            assert result.exit_code == 0, result.stderr
+            ownership, content, user_namespace, *privileges = result.stdout.decode().splitlines()
+            assert ownership == "1000:1000:640"
+            assert content == "updated"
+            assert user_namespace != host_user_namespace
+            assert set(privileges) == {"CapEff:\t000000000000000b", "CapBnd:\t000000000000000b", "NoNewPrivs:\t1"}
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 def test_apply_sandbox_apt_config_skips_images_without_apt(tmp_path):
     machine_module._apply_sandbox_apt_config(tmp_path)
     assert not (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()

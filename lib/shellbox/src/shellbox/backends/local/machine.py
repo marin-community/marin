@@ -584,6 +584,7 @@ class LocalMachine:
         self._owned_namespaces: tuple[int, ...] = ()
         self._network_namespaces: tuple[int, ...] = ()
         self._root_fd: int | None = None
+        self._image_ownership = False
         self._commands: set[asyncio.subprocess.Process] = set()
         self._sessions: set[SubprocessSession] = set()
         self._watcher: asyncio.Task[None] | None = None
@@ -683,7 +684,16 @@ class LocalMachine:
     async def _allocate_keeper(
         self, arguments: list[str], peer: "LocalMachine | None", block_read: int, block_write: int
     ) -> None:
-        with tempfile.TemporaryFile() as information:
+        with ExitStack() as stack:
+            information = stack.enter_context(tempfile.TemporaryFile())
+            mapping_fds: tuple[int, ...] = ()
+            mapping_ready = None
+            if self.image is not None and os.geteuid() == 0:
+                mapping_read, mapping_write = os.pipe()
+                stack.callback(os.close, mapping_read)
+                mapping_ready = stack.enter_context(os.fdopen(mapping_write, "wb", buffering=0))
+                mapping_fds = (mapping_read,)
+                arguments += ["--userns-block-fd", str(mapping_read)]
             arguments += [
                 "--block-fd",
                 str(block_read),
@@ -713,7 +723,7 @@ class LocalMachine:
                     "-c",
                     LAUNCH_SOURCE,
                     str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), information.fileno(), block_read, *prefix),
+                    pass_fds=(configuration.fileno(), information.fileno(), block_read, *prefix, *mapping_fds),
                     env=CONTROL_ENVIRONMENT,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.DEVNULL,
@@ -732,6 +742,19 @@ class LocalMachine:
                             pid = status["child-pid"]
                             if self._init_pidfd is None:
                                 self._init_pidfd = _pin_init(pid, status["pid-namespace"])
+                            if mapping_ready is not None and not self._image_ownership:
+                                # Keep the parent's valid IDs inside a distinct guest user
+                                # namespace. bwrap's default maps only root, so native OCI
+                                # setup such as chown 1000:1000 fails with EINVAL.
+                                for name in ("uid_map", "gid_map"):
+                                    parent = Path(f"/proc/self/{name}").read_text().splitlines()
+                                    identity = "".join(
+                                        f"{start} {start} {length}\n"
+                                        for start, _, length in (line.split() for line in parent)
+                                    )
+                                    Path(f"/proc/{pid}/{name}").write_text(identity)
+                                mapping_ready.write(b"1")
+                                self._image_ownership = True
                             # info-fd is written before bwrap finishes mounting
                             # and pivoting. Pinning root earlier would capture
                             # the host root rather than the guest root.
@@ -943,6 +966,7 @@ class LocalMachine:
                 self.spec.storage_mb * 1024 * 1024 if self.spec.storage_mb is not None else FILE_SIZE_LIMIT
             ),
             "account": account,
+            "capabilities": list(launch.IMAGE_FILESYSTEM_CAPABILITIES) if self._image_ownership else [],
             "script": RUN_SCRIPT,
             "cwd": command.cwd or self.spec.workdir or "/",
             "argv": command.argv,

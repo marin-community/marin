@@ -664,12 +664,53 @@ class BackendFixIdentity(BaseModel):
     files_sha256: dict[str, str] = Field(min_length=1)
 
 
+class LocalOwnershipBootstrapFailure(BaseModel):
+    """Exact archived setup failure before an original oracle's payload ran."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["local_image_unmapped_ownership_bootstrap"] = "local_image_unmapped_ownership_bootstrap"
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    oracle_script_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    setup_script_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_uid: int = Field(gt=0)
+    target_gid: int = Field(gt=0)
+    archive: ContentEvidenceReference
+    oracle_log: ContentEvidenceReference
+    result_member: str
+    oracle_exit_member: str
+    reproduction: ContentEvidenceReference
+    decision: ContentEvidenceReference
+
+    def require_parent(self, parent: OracleTrialReceipt) -> None:
+        lines = parent.failure_log.splitlines()
+        prefix = "chown: changing ownership of '"
+        suffix = "': Invalid argument"
+        ownership_errors = all(line.startswith(prefix) and line.endswith(suffix) for line in lines)
+        if (
+            self.result_sha256 != parent.result_sha256
+            or parent.oracle_exit_code != 1
+            or parent.result.get("config", {}).get("environment", {}).get("type") != "local"
+            or parent.result.get("exception_info") is not None
+            or ((parent.result.get("verifier_result") or {}).get("rewards") or {}).get("reward") != 0
+            or not lines
+            or not ownership_errors
+            or hashlib.sha256(parent.failure_log.encode()).hexdigest() != self.oracle_log.sha256
+        ):
+            raise ValueError("Ownership bootstrap evidence differs from the exact pre-payload backend failure")
+
+
 class InfrastructureRetryApproval(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     classification: Literal["our_infrastructure"]
     parent_result_sha256: str
     failure_signature: str = Field(min_length=1)
     decision_ref: str = Field(min_length=1)
+    bootstrap_failure: LocalOwnershipBootstrapFailure | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class NegativeControlInfrastructureApproval(BaseModel):
@@ -831,7 +872,11 @@ def require_infrastructure_retry_parent(
         and bool((final.result.get("verifier_result") or {}).get("rewards"))
     )
     if final.scored or recorded_grade:
-        raise ValueError("Infrastructure retry approval cannot replace a scored source result")
+        if approval.bootstrap_failure is None:
+            raise ValueError("Infrastructure retry approval cannot replace a scored source result")
+        approval.bootstrap_failure.require_parent(final)
+        if approval.decision_ref != approval.bootstrap_failure.decision.uri:
+            raise ValueError("Bootstrap infrastructure retry differs from its recorded decision")
     if any(attempt.prior_phase_failure is not None for attempt in calibration.attempts):
         raise ValueError("Infrastructure retry cannot replay an observed source-declared phase deadline")
     if approval.parent_result_sha256 != final.result_sha256:
