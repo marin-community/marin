@@ -27,6 +27,9 @@ evaluations:
   frontierscience-research:
     benchmark: frontierscience-research
     run: *together_judge
+  abstentionbench:
+    benchmark: abstentionbench
+    run: *together_judge
   simpleqa-verified:
     benchmark: simpleqa-verified
     run: *together_judge

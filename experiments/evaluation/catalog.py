@@ -8,6 +8,7 @@ from functools import cache, partial
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
+    abstentionbench,
     agentic,
     arc_agi,
     biomedical,
@@ -77,6 +78,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             frontierscience,
             genomeqa,
             simpleqa,
+            abstentionbench,
             multichallenge,
             econevals,
             long_context,
