@@ -164,8 +164,8 @@ def _mark_aborted_choice[Choice: CompletionChoice | ChatCompletionChoice](
 
 
 class PauseGenerationRequest(BaseModel):
-    mode: str
-    clear_cache: bool
+    mode: Literal["abort"]
+    clear_cache: Literal[True]
 
 
 class AbortRequest(BaseModel):
@@ -1189,9 +1189,7 @@ class InferenceServer:
             return _health_check()
 
         @app.post("/pause_generation")
-        async def pause_generation(request: PauseGenerationRequest):
-            if request.mode != "abort" or not request.clear_cache:
-                raise HTTPException(status_code=400, detail="Native serving requires mode=abort and clear_cache=true")
+        async def pause_generation(_request: PauseGenerationRequest):
             await asyncio.to_thread(inference_context.pause_generation)
             return CONTROL_SUCCESS
 

@@ -1085,10 +1085,11 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
         {"mode": "keep", "clear_cache": True},
         {"mode": "wait", "clear_cache": True},
         {"mode": "abort", "clear_cache": False},
+        {"mode": "abort", "clear_cache": "yes"},
     ],
 )
 def test_unsupported_pause_policy_keeps_admission_open(greedy_client, policy):
-    assert greedy_client.post("/pause_generation", json=policy).status_code == 400
+    assert greedy_client.post("/pause_generation", json=policy).status_code == 422
     response = greedy_client.post(
         "/v1/completions", json={"model": TEST_MODEL_NAME, "prompt": "A B", "max_tokens": 1, "temperature": 0}
     )
