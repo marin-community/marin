@@ -87,8 +87,10 @@ async def check_runtime_handoff():
     expected = None
 
     async def start_worker(*args, **kwargs):
-        worker = Path(__file__).with_name("native_harbor_worker.py")
-        return await original_exec(sys.executable, str(worker), args[-1], json.dumps(expected), **kwargs)
+        return await original_exec(
+            sys.executable, "-I", "-m", "cloud.iris.tests.native_harbor_worker",
+            args[-1], json.dumps(expected), **kwargs
+        )
 
     asyncio.create_subprocess_exec = start_worker
     try:

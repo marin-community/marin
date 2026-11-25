@@ -26,11 +26,8 @@ provide torch with the production NCCL build; the pinned image digest is the
         --task-image "$IMAGE" \
         --cpu 8 --memory 32GB --disk 200GB \
         --no-sync -- \
-        bash -c 'cd /app/vendor/skyrl && \
-        bash cloud/iris/bootstrap_runtime.sh /app/vendor/skyrl "$IRIS_VENV" \
-        /app/vendor/skyrl/.iris-runtime-env megatron production && \
-        source /app/vendor/skyrl/.iris-runtime-env && \
-        exec python /app/experiments/post_training/nccl_transport_probe.py'
+        bash /app/vendor/skyrl/cloud/iris/setup_task_runtime.sh megatron \
+        python /app/experiments/post_training/nccl_transport_probe.py
 
 The variants cover the recipe workaround (`NCCL_NET=Socket`,
 `NCCL_IB_DISABLE=1`, `NCCL_SOCKET_FAMILY=AF_INET`) as one overlay and each
@@ -60,7 +57,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
 from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
@@ -515,6 +512,12 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
+def gate_endpoint_name(job_info: JobInfo) -> str:
+    """Give each GPU gang its own rendezvous within the coordinator namespace."""
+    job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
+    return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
+
+
 def run_gate(args: argparse.Namespace) -> None:
     """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
 
@@ -548,7 +551,7 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    endpoint_name = gate_endpoint_name(job_info)
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

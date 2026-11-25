@@ -173,6 +173,12 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+Iris invokes SkyRL's checked-in task setup script with the selected runtime
+profile. The GPU node entry point prepares local Ray spill storage, loads the
+runtime, and runs the transport probe before starting the controller. Training
+and generation include the vLLM transport check. Checkpoint export runs the
+PyTorch transport check with its export profile.
+
 ## Publish a checkpoint export
 
 The checkpoint-export GPU job stops after writing and verifying the object-store
@@ -304,6 +310,12 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
+
+For a single immutable Parquet task selection, the SkyRL driver caches validated rows and prompt
+lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
+selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
+and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
+A cache miss runs the original selection validation before publishing prepared rows.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then

@@ -1968,15 +1968,13 @@ def test_daytona_network_policy_parses_declarative_fields() -> None:
 
 
 def test_connection_hides_the_api_key_from_every_representation() -> None:
-    connection = DaytonaConnection(
-        api_key="synthetic-secret-key", api_url="https://fixture.invalid/api", target="fixture"
-    )
+    connection = DaytonaConnection(api_key="synthetic-secret-key")
     factory = connection.client_factory()
 
     assert "synthetic-secret-key" not in repr(connection)
     assert "synthetic-secret-key" not in repr(factory)
-    with pytest.raises(ValueError, match="explicit api_key, api_url and target"):
-        DaytonaConnection(api_url="https://fixture.invalid/api", target="fixture").client_factory()
+    with pytest.raises(ValueError, match="explicit api_key"):
+        DaytonaConnection().client_factory()
 
 
 def test_connection_module_imports_without_the_daytona_sdk() -> None:
@@ -1986,7 +1984,7 @@ def test_connection_module_imports_without_the_daytona_sdk() -> None:
             "sys.modules['daytona'] = None  # the optional extra is absent",
             "import shellbox.backends.daytona.connection",
             "connection = shellbox.backends.daytona.connection.DaytonaConnection(",
-            "    api_key='synthetic-secret-key', api_url='https://fixture.invalid/api', target='fixture'",
+            "    api_key='synthetic-secret-key'",
             ")",
             "factory = connection.client_factory()",
             "assert callable(factory)",

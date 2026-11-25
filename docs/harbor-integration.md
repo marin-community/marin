@@ -104,16 +104,9 @@ environment:
     image_build: declarative
 ```
 
-Set the target before launching:
-
-```bash
-export DAYTONA_TARGET=us
-```
-
-The host entry point reads `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
-once. The API URL defaults to `https://app.daytona.io/api`. Missing credentials or target
-fail before allocation. SDK `.env` files, JWT credentials and other connection overrides
-are not read.
+The host entry point reads `DAYTONA_API_KEY` once. The API URL and target region are
+constants (`https://app.daytona.io/api` and `us`). Missing credentials fail before
+allocation. SDK `.env` files, JWT credentials and other connection overrides are not read.
 
 The launcher does not change a policy's provider. Remove unsupported settings from the
 policy and prepare any missing task images before launching. Harbor rejects `--no-delete` and

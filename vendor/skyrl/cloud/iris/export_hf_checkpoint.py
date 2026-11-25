@@ -52,7 +52,7 @@ from rigging.timing import Duration
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
-from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
+from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_command
 from cloud.iris.submission import submission_client
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_checkpoint
 from marinskyrl.resource_locator import ModelLocatorError
@@ -436,7 +436,7 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
             entrypoint=Entrypoint.from_callable(publish_verified_hf_export, spec.request, SCRATCH_CACHE_PATH),
             task_image=IRIS_TASK_IMAGE,
             resources=ResourceSpec(cpu=4, memory="8GB", disk=disk_bytes),
-            environment=EnvironmentSpec(setup_scripts=[task_setup_script(RuntimeProfile.HUB_PUBLISH)]),
+            environment=EnvironmentSpec(setup_scripts=[task_setup_command(RuntimeProfile.HUB_PUBLISH)]),
             constraints=constraints,
             max_retries_failure=1,
             max_task_failures=1,

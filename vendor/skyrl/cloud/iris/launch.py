@@ -32,7 +32,8 @@ from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_model
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_path, selected_export_checkpoint
-from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
+from marinskyrl.hf_model import validate_portable_hf_model_files
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict

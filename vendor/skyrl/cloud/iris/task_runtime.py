@@ -50,6 +50,7 @@ from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -84,8 +85,6 @@ from marinskyrl.environment_contract import (
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
-    HuggingFaceModelCache,
-    immutable_model_cache_key,
     validate_hf_model_weights,
 )
 from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -368,9 +367,7 @@ def stage_hugging_face_models(config: DictConfig) -> None:
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
-    return os.path.join(
-        tempfile.gettempdir(), "marinskyrl", "model_metadata", immutable_model_cache_key(source_uri, identity)
-    )
+    return str(Path(tempfile.gettempdir()) / model_metadata_relative_path(source_uri, identity))
 
 
 @dataclass(frozen=True)
@@ -487,7 +484,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
         return None
 
     revision = args.policy_tokenizer_revision
-    local_path = _metadata_path(tokenizer_path, revision or "main")
+    local_path = _metadata_path(tokenizer_path, revision or DEFAULT_TOKENIZER_REVISION)
     target = Path(local_path)
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)
@@ -1369,32 +1366,19 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     """
     if not rendezvous_dir:
         return
-    import subprocess as _sp
-
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
     ts = int(time.time())
-
-    def _run(cmd: str, timeout: int = 7) -> str:
-        try:
-            return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            return f"<{cmd!r} failed: {exc}>"
-
-    summary = "\n".join(
-        [
-            f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
-            "--- df -h /tmp /dev/shm ---",
-            _run("df -h /tmp /dev/shm 2>&1"),
-            "--- top /tmp disk hogs (ephemeral-storage eviction cause) ---",
-            _run("du -sh /tmp/* /tmp/ray/session*/logs /tmp/ray/session*/*spill* 2>/dev/null | sort -rh | head -25", 9),
-            "--- nvidia-smi (VRAM OOM cause) ---",
-            _run("nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv 2>&1"),
-            "--- top RSS procs (host-RAM OOM cause) ---",
-            _run("ps -eo pid,rss,comm --sort=-rss 2>/dev/null | head -12"),
-            "--- dmesg OOM/kill tail ---",
-            _run("dmesg 2>/dev/null | grep -iE 'oom|killed process|out of memory|Xid' | tail -10"),
-        ]
-    )
+    summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
+    try:
+        diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
+        summary += subprocess.run(
+            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        summary += (exc.stdout or b"").decode(errors="replace")
+        summary += "\n<termination diagnostics timed out>\n"
+    except OSError as exc:
+        summary += f"<termination diagnostics failed: {exc}>\n"
     try:
         uri = f"{rendezvous_dir.rstrip('/')}/term_artifacts/{task_id}_{ts}.txt"
         fs, path = fs_and_path(uri)

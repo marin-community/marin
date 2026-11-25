@@ -48,9 +48,9 @@ if [[ -z "$system_python" ]]; then
   exit 1
 fi
 
-system_python_version="$($system_python -c 'import platform; print(platform.python_version())')"
-if [[ "$system_python_version" != "$required_python_minor".* ]]; then
-  echo "required system interpreter Python $required_python_minor, found Python $system_python_version at $system_python ($(uv --version))" >&2
+system_python_version="$("$system_python" --version)"
+if [[ "$system_python_version" != "Python $required_python_minor".* ]]; then
+  echo "required system interpreter Python $required_python_minor, found $system_python_version at $system_python ($(uv --version))" >&2
   exit 1
 fi
 
@@ -66,15 +66,14 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
+checks="$project_root/cloud/iris/runtime_checks.py"
+printf 'PATH=%s\0' "$environment/bin" > "$runtime_file"
 if [[ "$profile" == hub-publish ]]; then
-  printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" > "$runtime_file"
-  "$python" -c "from skyrl_train.hf_publisher import publish_verified_hf_export"
+  "$python" "$checks" hub-publish
   exit 0
 fi
 "$python" "$project_root/marinskyrl/environment_contract.py" write-frozen-cuda-runtime "$runtime_file"
-# Native JITs invoke tools such as ninja by name after bootstrap completes.
-printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" >> "$runtime_file"
-source "$runtime_file"
+source "$project_root/cloud/iris/load_runtime_environment.sh" "$runtime_file"
 # FlashInfer's CUDA 13 JIT still links through CUDA_HOME/lib64, while the
 # NVIDIA wheel installs its libraries in CUDA_HOME/lib.
 if [[ ! -e "$CUDA_HOME/lib64" ]]; then
@@ -96,23 +95,13 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-run_check flash-attention "$python" -c '
-import platform
-
-# Check the attention package selected by the locked profile before starting Ray.
-if platform.machine() == "aarch64":
-    from flash_attn.cute.interface import flash_attn_varlen_func
-else:
-    from flash_attn_interface import flash_attn_varlen_func
-'
-if [[ "$profile" == megatron || "$profile" == megatron-export ]]; then
-  run_check megatron "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
-fi
+run_check flash-attention "$python" "$checks" flash-attention
+run_check megatron "$python" "$checks" megatron
 if [[ "$profile" == *-export ]]; then
-  run_check export "$python" -c "import ray, torch; from skyrl_train.checkpoint_exporter import CheckpointExporter"
+  run_check export "$python" "$checks" export
 else
-  run_check agents "$python" -c "import memray; from shellbox.backends.daytona.machine import DaytonaMachineFactory; from shellbox.backends.shellsim.machine import ShellSimMachineFactory; from rolloutengine.engine import RolloutEngine"
-  run_check vllm "$python" -c "import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); print('[rl-iris] frozen runtime ready:', torch.__version__, vllm.__version__)"
+  run_check agents "$python" "$checks" agents
+  run_check vllm "$python" "$checks" vllm
 fi
 
 check_status=0

@@ -9,7 +9,7 @@ import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from time import monotonic, sleep
+from time import monotonic
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -44,6 +44,7 @@ from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -119,6 +120,58 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypa
         recorded_runs("speed-medium", candidate, speed=speed, metrics={KL: kl})
         result = compare("speed-medium", "--candidate", candidate)
         assert (result["verdict"], result["effect"]) == (verdict, effect), result
+
+
+def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/staged-metadata", speed=102)
+    wrong_tokenizer = recorded_runs(preset, "users/test/wrong-staged-tokenizer", speed=102)
+    for root in (*control_roots, candidate, wrong_tokenizer):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            model = launch["inputs"]["model"]
+            staging_root = Path("/tmp/skyrl-worker")
+            model_path = str(staging_root / model_metadata_relative_path(model["uri"], model["identity"]))
+            tokenizer_revision = (
+                "different" if root == wrong_tokenizer else model["tokenizer_revision"] or DEFAULT_TOKENIZER_REVISION
+            )
+            tokenizer_path = str(staging_root / model_metadata_relative_path(model["tokenizer_uri"], tokenizer_revision))
+            for role in ("policy", "ref"):
+                launch["skyrl"]["trainer"][role]["model"].update(
+                    path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
+                )
+
+    assert compare(preset, "--candidate", "users/test/staged-metadata")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-staged-tokenizer")
+    assert invalid["verdict"] == "invalid" and "skyrl.trainer.policy.model.tokenizer_path" in invalid["reason"]
+
+
+def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/mirrored-draft", speed=102)
+    wrong_mirror = recorded_runs(preset, "users/test/wrong-draft-mirror", speed=102)
+    for root in (*control_roots, candidate, wrong_mirror):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            draft = launch["skyrl"]["generator"]["speculative_decoding"]["model"]
+            commit = draft["source_identity"]
+            uri, identity = "s3://test-bucket/draft-mirror", "sha256:" + "f" * 64
+            launch["inputs"]["hugging_face_models"] = [
+                {
+                    "model_id": draft["source_uri"].removeprefix("hf://"),
+                    "revision": commit,
+                    "resolved_revision": "a" * 40 if root == wrong_mirror else commit,
+                    "uri": uri,
+                    "identity": identity,
+                }
+            ]
+            draft.update(source_uri=uri, source_identity=identity)
+
+    assert compare(preset, "--candidate", "users/test/mirrored-draft")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-draft-mirror")
+    assert invalid["verdict"] == "invalid" and "skyrl.generator.speculative_decoding.model" in invalid["reason"]
 
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
@@ -548,28 +601,23 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
+@pytest.mark.timeout(15)
 @pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
 def test_native_failure_stops_build_child(tmp_path, exit_early):
     lock = tmp_path / "build.lock"
     lock.touch()
-    fixture = Path(__file__).with_name("native_build_child.py")
+    worker = Path(__file__).with_name("native_build_child.py")
     failure = "exited with status 7" if exit_early else "timed out after 2 s"
     deadline = monotonic() + 6
     with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
         gate._native_command_json(
             "Prepare test environment",
-            [sys.executable, "-I", str(fixture), "wrapper", str(lock), str(exit_early)],
+            [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)],
             env=gate.skyrl_cpu_environment(),
             timeout=2,
         )
     with lock.open("r+") as stream:
-        while True:
-            try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                assert monotonic() < deadline, "native build child still holds the lock"
-                sleep(0.02)
+        fcntl.flock(stream, fcntl.LOCK_EX)
     assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
@@ -697,7 +745,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         cache_native_compositions(monkeypatch)
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
         run_native = gate._run_native_process
-        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "whitespace", "oserror", "bootstrap"):
+        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -711,20 +759,18 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
                         if diagnostic == "timeout":
                             interrupted_secret = secret.replace("sk-", "sk\x1b-")
-                            stderr = (
-                                f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
-                            ).encode()
+                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
                             raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "last-phase":
                             stderr = (
                                 f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
                                 f"{gate._NATIVE_PHASE}Read native schema defaults\n"
-                            ).encode()
+                            )
                             raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
-                        if diagnostic == "whitespace":
-                            raise subprocess.CalledProcessError(1, command, "", "\n")
+                        if diagnostic == "empty-stderr":
+                            raise subprocess.CalledProcessError(1, command, "", "")
                         return "not JSON" if diagnostic == "invalid-json" else ""
                     return run_native(command, *args, **kwargs)
 

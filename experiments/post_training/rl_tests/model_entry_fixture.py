@@ -3,7 +3,6 @@
 
 """Model entry used by the detached launch and coordinator reentry test."""
 
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,8 +21,7 @@ def following_step(_):
     return apply("tests/following", fail_following, version="2026.11.20.1")
 
 
-def main() -> int:
-    config = json.loads(Path(__file__).with_suffix(".json").read_text())
+def main(config: dict, argv: list[str]) -> int:
     table = snowball_rl.SNOWBALL
     step = ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=Artifact)
     init: ArtifactHfModel | SkyRLPolicyModel = ArtifactHfModel(
@@ -54,11 +52,8 @@ def main() -> int:
         table = replace(table, presets=tuple(replace(preset, then=following_step) for preset in table.presets))
     return rl.main(
         table,
+        argv=argv,
         init=init if config["use_init"] else None,
         forward_env=tuple(config["forward_env"]),
         entry_module=config["entry_module"],
     )
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

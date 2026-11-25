@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import shlex
 from enum import StrEnum
 
 
 MARINSKYRL_TASK_ROOT = "/app/vendor/skyrl"
-MARINSKYRL_ACTIVATION_FILE = f"{MARINSKYRL_TASK_ROOT}/.iris-runtime-env"
-MARINSKYRL_BOOTSTRAP_SCRIPT = "cloud/iris/bootstrap_runtime.sh"
 CHECKPOINT_EXPORT_ENTRYPOINT = "skyrl_train.entrypoints.checkpoint_export"
 # Ray requires the exact Python patch version on every node. Use one multi-arch
 # task image digest so a gang cannot mix cached versions of the mutable tag.
@@ -44,19 +41,6 @@ def runtime_profile_for_strategy(
     raise ValueError(f"Unsupported training strategy: {strategy}")
 
 
-def task_setup_script(profile: RuntimeProfile) -> str:
-    """Install SkyRL's frozen profile and editable dependencies from the Marin workspace."""
-    checkout = MARINSKYRL_TASK_ROOT
-    activation_file = MARINSKYRL_ACTIVATION_FILE
-    bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"
-    return f"""set -euo pipefail
-checkout={shlex.quote(checkout)}
-cd "$checkout"
-bash {shlex.quote(bootstrap_script)} \
-  "$checkout" \
-  "$IRIS_VENV" \
-  {shlex.quote(activation_file)} \
-  {shlex.quote(profile.value)} \
-  production
-source {shlex.quote(activation_file)}
-"""
+def task_setup_command(profile: RuntimeProfile) -> str:
+    """Return the Iris setup invocation for the selected frozen profile."""
+    return f"bash {MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh {profile.value}"
