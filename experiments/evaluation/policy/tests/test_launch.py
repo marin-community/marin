@@ -11,8 +11,10 @@ from iris.rpc import job_pb2
 from experiments.evaluation.evals import JUDGES
 from experiments.evaluation.policy.launch import launch_specs, server_groups
 from experiments.evaluation.policy.resolve import resolve
-from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
+from experiments.evaluation.policy.versions import POLICIES
 
+POLICY = POLICIES["marin-2026-11-20-trial"]
+QWEN = next(candidate for candidate in POLICY.candidates if candidate.name == "qwen3.6-35b-a3b")
 RESOLVED = {item.evaluation.name: item for item in resolve(POLICY, QWEN)}
 SERVED = QWEN.model.serve.max_model_len
 
