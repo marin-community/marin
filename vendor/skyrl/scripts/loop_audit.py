@@ -301,6 +301,17 @@ class AgentIncidence:
     cost: TrialCost | None = None
 
 
+def _outcome_reward(score: Any) -> float | None:
+    """The row's outcome reward: a scalar score, or the last element of a per-token list."""
+    if isinstance(score, bool):
+        return None
+    if isinstance(score, (int, float)):
+        return float(score)
+    if isinstance(score, list) and score and all(isinstance(value, (int, float)) for value in score):
+        return float(score[-1])
+    return None
+
+
 def _wall_seconds(row: Mapping[str, Any]) -> float | None:
     metrics = row.get("env_metrics")
     if not isinstance(metrics, Mapping):
@@ -400,9 +411,9 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
             turn_counts.append(trial.assistant_turns)
             if trial.duplicate_fraction is not None:
                 duplicate_fractions.append(trial.duplicate_fraction)
-            score = row.get("score")
-            if isinstance(score, (int, float)) and not isinstance(score, bool):
-                rewards.append(float(score))
+            score = _outcome_reward(row.get("score"))
+            if score is not None:
+                rewards.append(score)
             if valid_tokens:
                 lengths.append(len(tokens))
             wall = _wall_seconds(row)

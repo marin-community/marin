@@ -1,0 +1,98 @@
+{
+  "tblite": {
+    "rows_file": "ot-tblite-recovery.jsonl",
+    "incidence": {
+      "N": 30,
+      "confirmed": 1,
+      "unassessed": 14,
+      "UB": 15,
+      "passes": 8,
+      "unavailable": 0,
+      "errors": 14,
+      "length_stop": 8,
+      "open_think": 0
+    },
+    "agent": {
+      "loop_trials": 1,
+      "trial_share": 0.0625,
+      "trial_share_ub": 0.5,
+      "repeat_turn_share": 0.07142857142857142,
+      "dup_tool_call_frac_median": 0.018518518518518517,
+      "dup_tool_call_frac_p90": 0.1111111111111111,
+      "interrupt_trial_share": null,
+      "interrupt_repeat_share": null,
+      "rule_fires": {
+        "stall": 0,
+        "run8": 0,
+        "frequent": 0,
+        "terminus8": 1,
+        "interrupt": 0,
+        "tail": 1
+      },
+      "rule_tail_overlap": {
+        "stall": 0,
+        "run8": 0,
+        "frequent": 0,
+        "terminus8": 0
+      },
+      "mean_reward": 0.48875,
+      "stop_reasons": {
+        "stop": 15,
+        "length": 1
+      },
+      "cost": {
+        "turns_p50": 10.5,
+        "tokens_p50": 9230.5,
+        "wall_seconds_p50": null
+      }
+    }
+  },
+  "tb2": {
+    "rows_file": "tb2-recovery.jsonl",
+    "incidence": {
+      "N": 30,
+      "confirmed": 3,
+      "unassessed": 20,
+      "UB": 23,
+      "passes": 5,
+      "unavailable": 0,
+      "errors": 20,
+      "length_stop": 5,
+      "open_think": 2
+    },
+    "agent": {
+      "loop_trials": 0,
+      "trial_share": 0.0,
+      "trial_share_ub": 0.6666666666666666,
+      "repeat_turn_share": 0.0,
+      "dup_tool_call_frac_median": 0.0,
+      "dup_tool_call_frac_p90": 0.10500000000000001,
+      "interrupt_trial_share": 0.0,
+      "interrupt_repeat_share": 0.0,
+      "rule_fires": {
+        "stall": 0,
+        "run8": 0,
+        "frequent": 0,
+        "terminus8": 0,
+        "interrupt": 0,
+        "tail": 3
+      },
+      "rule_tail_overlap": {
+        "stall": 0,
+        "run8": 0,
+        "frequent": 0,
+        "terminus8": 0
+      },
+      "mean_reward": 0.5,
+      "stop_reasons": {
+        "stop": 7,
+        "length": 3
+      },
+      "cost": {
+        "turns_p50": 6.5,
+        "tokens_p50": 10294.5,
+        "wall_seconds_p50": null
+      }
+    }
+  }
+}
