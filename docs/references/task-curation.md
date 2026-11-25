@@ -407,8 +407,9 @@ recipes, corpora and catalog joins canonicalize both sides, publication re-keys
 a matched prior row onto its generated identity, and the Atlas load compares a
 selected assessment's source through the same aliases, so historical keys
 select renamed sources. Every source states its `data_restriction` tier
-explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store,
-and the declaration and every derived artifact inherit it. `current_release`
+explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store
+whatever else changes, and the tier travels with the qualified declaration the
+source's ingestion publishes, not with this catalog row. `current_release`
 pins the exact release consumed for training, separately from the upstream
 provenance URL, and `license_receipt` references the stage-0 license resolution
 that ingest and admission rest on (`RlDataSource.require_license` fails closed

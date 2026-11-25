@@ -347,7 +347,7 @@ SOURCE_ID_ALIASES: dict[str, str] = {
     "Campaign Release:tasktrove-safety-qa": "TaskTrove:tasktrove-safety-qa",
     "Campaign Release:tasktrove-knowledge-openqa-qa": "TaskTrove:tasktrove-knowledge-openqa-qa",
     "Campaign Release:tasktrove-science-openqa-qa": "TaskTrove:tasktrove-science-openqa-qa",
-    # Historical publications restored through the retired native-source ledger.
+    # Historical publications whose declarations no longer exist in the current tree.
     "Campaign Release:smartie-calibforge-shared-v2": "TaskTrove:smartie-calibforge-shared-v2",
     "Campaign Release:smartie-swesmith-admitted": "TaskTrove:smartie-swesmith-admitted",
     "Harbor Hub:skill2env": "Harbor Hub:skill2env/skill2env",
@@ -431,9 +431,9 @@ SOURCE_ID_ALIASES: dict[str, str] = {
     "Task Trove:SWE-Gym__SWE-Gym": "TaskTrove:SWE-Gym__SWE-Gym",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
-    # The identity rewrite of main's declarations renamed these published IDs; the
-    # checked-in rename join (tests/source_id_renames.json) asserts the table
-    # resolves every one of them.
+    # Aliases for published IDs the generated identity renamed. The checked-in
+    # rename join (tests/source_id_renames.json) asserts the table resolves every
+    # one of them to its exact target.
     "Campaign Release:smartie-calibforge-admitted": "TaskTrove:smartie-calibforge-admitted",
     "Campaign Release:smartie-swesmith-staged-v1": "TaskTrove:smartie-swesmith-staged-v1",
     "Campaign Release:smartie-swesmith-staged-v2": "TaskTrove:smartie-swesmith-staged-v2",

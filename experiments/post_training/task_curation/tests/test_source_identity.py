@@ -3,7 +3,6 @@
 
 """Generated source identity: ids and titles derive from the upstream keys."""
 
-import pytest
 from finestore.rl.curation import SourceOrigin
 from finestore.rl.status_taxonomy import DataRestriction
 
@@ -31,8 +30,3 @@ def test_a_variant_changes_the_generated_identity():
     info = source(upstream_dataset="hardmath", upstream_name="hardmath", variant="rhs")
     assert info.id == "Marin:hardmath@rhs"
     assert info.title == "hardmath · rhs"
-
-
-def test_the_origin_must_be_a_source_origin():
-    with pytest.raises(ValueError, match="upstream SourceOrigin"):
-        source(origin="Marin")

@@ -153,8 +153,8 @@ class SourceInfo:
     """The source's typed restriction tier, set explicitly on every source.
 
     ``PRIVATE_ALWAYS`` keeps the source's content in its private store no matter
-    what else changes; the declaration and every derived artifact inherit it and
-    a downgrade is refused.
+    what else changes. The tier travels with the qualified declaration the
+    source's ingestion publishes; this legacy catalog row does not carry it.
     """
     current_release: DatasetRelease | None = None
     """The exact release consumed for training, separately from upstream provenance."""
@@ -205,10 +205,6 @@ class SourceInfo:
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.origin, SourceOrigin):
-            raise ValueError("origin must be an upstream SourceOrigin")
 
     @property
     def id(self) -> str:
