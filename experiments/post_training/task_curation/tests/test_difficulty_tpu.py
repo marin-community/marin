@@ -349,3 +349,25 @@ def test_tpu_judge_remediation_never_attempts_a_gpu_fallback(tmp_path, monkeypat
     )
     assert result["status"] == "blocked"
     assert result["reason"] == GapReason.JUDGE_ROUTE_UNQUALIFIED
+
+
+def test_full_allocation_waits_for_cancelled_pilot_tasks_to_release_chips(tmp_path, monkeypatch):
+    (tmp_path / "pools").mkdir()
+    for solver in tpu.SHAPES:
+        (tmp_path / "pools" / f"{solver.value}.json").write_text(
+            json.dumps({"replicas": [{"engine_jobs": [solver.value]}]})
+        )
+    checks = []
+
+    def status(command, **kwargs):
+        checks.append(command[-1])
+        state = "running" if len(checks) <= 3 else "killed"
+        return SimpleNamespace(stdout=json.dumps({"job": {"task_state_counts": {state: 2}}}))
+
+    monkeypatch.setattr(tpu_launch.subprocess, "run", status)
+    monkeypatch.setattr(tpu_launch.time, "sleep", lambda seconds: None)
+    tpu_launch.await_pilot_teardown(str(tmp_path))
+    assert len(checks) == 6
+    with pytest.raises(TimeoutError, match="refusing full allocation"):
+        checks.clear()
+        tpu_launch.await_pilot_teardown(str(tmp_path), timeout_seconds=0)

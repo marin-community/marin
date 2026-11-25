@@ -754,10 +754,15 @@ def run_batch(args: argparse.Namespace) -> None:
                     "solver_pool": pool,
                     "judge_serving_jobs": judge_jobs,
                     "placement": {
-                        "root_target_cluster": "cw-us-east-08a" if args.solver_pool is not None else TARGET_CLUSTER,
-                        "child_region_constraint": None,
+                        "root_target_cluster": (
+                            "marin" if campaign else "cw-us-east-08a" if args.solver_pool is not None else TARGET_CLUSTER
+                        ),
+                        "child_region_constraint": "us-central2" if campaign else None,
+                        "zone": "us-central2-b" if campaign else None,
                         "model_cache_root": (
-                            "s3://marin-us-east-08a" if args.solver_pool is not None else MODEL_CACHE_ROOT
+                            "gs://marin-us-central2"
+                            if campaign
+                            else "s3://marin-us-east-08a" if args.solver_pool is not None else MODEL_CACHE_ROOT
                         ),
                         "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                     },
@@ -766,7 +771,11 @@ def run_batch(args: argparse.Namespace) -> None:
                     "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
                     "judge": judge_metadata,
                     "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
-                    "compilation_and_cuda_graphs_requested": True,
+                    **(
+                        {"compilation_requested": True, "cuda_graphs_requested": False}
+                        if campaign
+                        else {"compilation_and_cuda_graphs_requested": True}
+                    ),
                     "vllm_gpu_release": gpu_release,
                     **probe,
                 },

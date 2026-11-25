@@ -158,11 +158,13 @@ print(json.dumps([connection.api_key, connection.api_url, connection.target]))
 
 @pytest.mark.parametrize("pooled_snowball", [False, True])
 @pytest.mark.parametrize("judge_model", [None, difficulty_runtime.GLM_MODEL, "Qwen/Qwen3.5-9B"])
+@pytest.mark.parametrize("tpu_campaign", [False, True])
 def test_campaign_qualifies_only_required_judge_routes(
-    tmp_path, monkeypatch, difficulty_source, judge_model, pooled_snowball
+    tmp_path, monkeypatch, difficulty_source, judge_model, pooled_snowball, tpu_campaign
 ):
     candidate_solver = Solver.SNOWBALL if pooled_snowball else Solver.SMALL
     with_judge = judge_model is not None
+    pooled = pooled_snowball or tpu_campaign
     task = TaskSpec.model_validate(json.loads(prebuilt_task("selected-task")["lowered_task_spec"])["task"])
     if with_judge:
         task = task.model_copy(
@@ -225,24 +227,26 @@ def test_campaign_qualifies_only_required_judge_routes(
                 workload="task_spec",
                 backend="local",
                 reason=None,
-                judge_model=judge_model,
+                judge_model=difficulty_runtime.SUBSTITUTE_JUDGE_MODEL if tpu_campaign and with_judge else judge_model,
             )
         ],
     )
     monkeypatch.setattr(difficulty_runtime, "hf_hub_download", download)
     monkeypatch.setattr(difficulty_runtime, "worker_limits", limits)
-    monkeypatch.setattr(difficulty_runtime, "prepare_source", lambda source, root: prepared)
+    monkeypatch.setattr(difficulty_runtime, "prepare_source", lambda source, root, **kwargs: prepared)
+    if tpu_campaign:
+        monkeypatch.setattr(difficulty_runtime, "campaign_record", lambda ledger: {"campaign_id": "fixture-tpu-version"})
     monkeypatch.setattr(difficulty_runtime, "solver_endpoint", endpoint)
     monkeypatch.setattr(difficulty_runtime, "probe_endpoint", probe)
     monkeypatch.setattr(difficulty_runtime, "probe_declared_judge_endpoint", declared_probe)
     monkeypatch.setattr(difficulty_runtime, "require_secret", secret)
     monkeypatch.setattr(difficulty_runtime, "run_trial_worker", launch)
-    if pooled_snowball:
+    if pooled:
         monkeypatch.setattr(difficulty_runtime, "solver_pool_record", lambda solver, registry: {"effective_serving": {}})
         monkeypatch.setattr(
             difficulty_runtime,
             "solver_pool_connection",
-            lambda record: difficulty_runtime.OpenAIEndpoint(
+            lambda record, *args: difficulty_runtime.OpenAIEndpoint(
                 base_url="https://solver.fixture/v1", model="fixture-snowball"
             ),
         )
@@ -251,7 +255,11 @@ def test_campaign_qualifies_only_required_judge_routes(
         json.dumps(
             {
                 "sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}],
-                "vllm_release_tag": difficulty_runtime.VLLM_GPU_RELEASE.release_tag,
+                "vllm_release_tag": (
+                    difficulty_runtime.TPU_SERVING_ID
+                    if tpu_campaign
+                    else difficulty_runtime.VLLM_GPU_RELEASE.release_tag
+                ),
             }
         )
     )
@@ -262,7 +270,7 @@ def test_campaign_qualifies_only_required_judge_routes(
             "difficulty_runtime",
             "--solver",
             candidate_solver.value,
-            *(["--solver-pool", "s3://fixtures/pool"] if pooled_snowball else []),
+            *(["--solver-pool", "s3://fixtures/pool"] if pooled else []),
             "--sources",
             str(source_path),
             "--sources-sha256",
@@ -284,14 +292,28 @@ def test_campaign_qualifies_only_required_judge_routes(
         ],
     )
     difficulty_runtime.main()
-    declared = judge_model in difficulty_runtime.DECLARED_JUDGE_PINS
-    assert declared_probes == ([judge_model] if declared else [])
-    assert probes == ([candidate_solver, Solver.HOSTED] if with_judge and not declared else [candidate_solver])
+    declared = judge_model in difficulty_runtime.DECLARED_JUDGE_PINS and not tpu_campaign
+    expected_declared = (
+        [difficulty_runtime.SUBSTITUTE_JUDGE_MODEL] if tpu_campaign and with_judge else [judge_model] if declared else []
+    )
+    assert declared_probes == expected_declared
+    assert probes == (
+        [candidate_solver, Solver.HOSTED] if with_judge and not declared and not tpu_campaign else [candidate_solver]
+    )
     expected_solvers = {candidate_solver, Solver.HOSTED} if with_judge else {candidate_solver}
     assert set(downloads) == {difficulty_runtime.SOLVER_MODELS[solver] for solver in expected_solvers}
     assert secrets == ([difficulty_runtime.TOGETHER_API_KEY_ENV] if with_judge else [])
     (config,) = launches
     serving = json.loads((output / "serving.json").read_text())
+    if tpu_campaign:
+        assert serving["placement"]["root_target_cluster"] == "marin"
+        assert serving["placement"]["model_cache_root"] == "gs://marin-us-central2"
+        assert serving["placement"]["child_region_constraint"] == "us-central2"
+        assert serving["compilation_requested"] and not serving["cuda_graphs_requested"]
+        assert config.gpu_count == 0
+        if with_judge:
+            assert config.judge.identity.revision == "opaque-provider"
+            assert serving["judge"]["judge_version"] == difficulty_runtime.JUDGE_VERSION
     if with_judge:
         assert config.judge.provider_limits.request_timeout == (30 if declared else 600)
         assert serving["judge_provider_limits"] == {

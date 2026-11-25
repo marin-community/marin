@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from finestore.rl.difficulty import Solver
@@ -141,6 +142,48 @@ def validate_pilot(root: str) -> None:
         raise ValueError("Full layout does not fit the 256-chip allocation")
 
 
+def await_pilot_teardown(root: str, timeout_seconds: float = 600) -> None:
+    """Do not overlap the 40-chip pilots with the 256-chip full allocation."""
+    children = []
+    for solver in SHAPES:
+        receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
+        children.extend(job for replica in receipt["replicas"] for job in replica["engine_jobs"])
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        active = []
+        for child in children:
+            result = subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "--no-sync",
+                    "iris",
+                    "--cluster",
+                    "marin",
+                    "rpc",
+                    "controller",
+                    "get-job-status",
+                    "--job-id",
+                    child,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            status = json.loads(result.stdout)["job"]
+            if any(
+                count and state not in {"succeeded", "failed", "killed"}
+                for state, count in status["task_state_counts"].items()
+            ):
+                active.append(child)
+        if not active:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Pilot tasks still hold TPU chips; refusing full allocation: {active}")
+        print(json.dumps({"waiting_for_pilot_task_teardown": active}), flush=True)
+        time.sleep(5)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("stage", "pilot", "full", "controller"))
@@ -199,6 +242,7 @@ def main() -> None:
                 check=True,
                 env={**environment, "IRIS_AGENT_PREFIX": "/benfeuer/atlas-difficulty-engines-"},
             )
+        await_pilot_teardown(root)
     for command in commands:
         subprocess.run(command, check=True, env=environment)
 
