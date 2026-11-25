@@ -29,7 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.6"
+RUN_VERSION = "2026.11.25.7"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -137,6 +137,8 @@ PANEL_ENVIRONMENT = RecipePatch(
                 "eval_api_key_env": "DAYTONA_EVAL_API_KEY",
                 "ttl_minutes": PANEL_DAYTONA_TTL_MINUTES,
                 "eval_ttl_minutes": PANEL_DAYTONA_TTL_MINUTES,
+                "image_build": "declarative",
+                "eval_image_build": "declarative",
             },
             "agent_harnesses": {
                 "pi": {
