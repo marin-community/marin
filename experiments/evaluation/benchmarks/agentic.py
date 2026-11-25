@@ -501,6 +501,12 @@ BIXBENCH_PI = PiAgent(version="0.87.1", setup_timeout=360, compaction_reserve_to
 BIXBENCH_32K_PROTOCOL = "pi-32k"
 BIXBENCH_PI_32K = PiAgent(version="0.87.1", setup_timeout=360, compaction_reserve_tokens=LONG_MAX_OUTPUT_TOKENS)
 """The same profile for models with a 32,768-token window, whose reserve the campaign halved."""
+PYTHON3_INSTALL = (
+    "RUN if ! command -v python3 >/dev/null; then apt-get update"
+    " && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3"
+    " && rm -rf /var/lib/apt/lists/*; fi\n"
+)
+"""Dockerfile instructions that install Python 3, which the machine-local model relay of a Pi episode runs on."""
 TERMINUS_DATASETS = (
     TERMINAL_BENCH_2,
     SWEBENCH_VERIFIED,
@@ -574,13 +580,13 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
-        # Pi with BixBench's profile, installed over each task's image, under the packages' own timeouts.
+        # Pi with BixBench's profile, installed with Python 3 over each task's image, under the packages' own timeouts.
         *(
             harbor_source(
                 dataset,
                 BIXBENCH_PI,
                 max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
-                job=JobSettings(agent_install=pi_install(BIXBENCH_PI)),
+                job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
             )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
