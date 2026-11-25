@@ -271,6 +271,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "rolloutengine-unit": (
         "lib/rolloutengine/",
+        "lib/finelog/",
         "lib/taskcompendium/",
         "lib/verifyit/",
         "lib/rigging/",

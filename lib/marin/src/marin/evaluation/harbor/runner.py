@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from evalrecords.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
@@ -180,6 +180,12 @@ class HarborResumeIdentity(BaseModel):
     model: ModelConfigRef
     judge: ModelConfigRef | None
     evaluator_identity: str
+
+    @field_validator("model", "judge")
+    @classmethod
+    def omit_request_deadline(cls, config: ModelConfigRef | None) -> ModelConfigRef | None:
+        """Deadlines may increase when resuming the same scoring configuration."""
+        return None if config is None else config.model_copy(update={"evaluation_request_timeout": None})
 
 
 def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity) -> None:
