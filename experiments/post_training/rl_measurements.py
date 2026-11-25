@@ -383,6 +383,7 @@ class RunMeasurements:
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
+    evaluation_task_set: str | None
     gpu_hours: float | None
     engine: dict
     attempt_id: str
@@ -392,6 +393,7 @@ class EvaluationStatus(BaseModel):
     evaluations: tuple[Comparison, ...] = ()
     evaluation_invariants: tuple[Invariant, ...] = ()
     evaluation_error: str | None = None
+    evaluation_task_set: str | None = None
 
 
 def evaluation_status(
@@ -405,6 +407,7 @@ def evaluation_status(
         data = read_measurements(path, effective, attempt=attempt)
         return EvaluationStatus(
             evaluations=data.evaluations,
+            evaluation_task_set=data.evaluation_task_set,
             evaluation_invariants=tuple(
                 fact
                 for fact in data.invariants
@@ -541,6 +544,7 @@ def read_measurements(
             values[key + "/gain"] = values[key] - value
     gpu_hours = native_gpu_hours(terminal, launch)
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
+    task_sets = [(name, recorded.task_set_sha256) for name, recorded in sorted(recorded_task_sets.items())]
     return RunMeasurements(
         config=terminal.native.config,
         recorded=launch,
@@ -552,6 +556,7 @@ def read_measurements(
         evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
+        evaluation_task_set=hashlib.sha256(json.dumps(task_sets).encode()).hexdigest() if task_sets else None,
         gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,

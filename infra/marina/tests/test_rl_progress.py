@@ -14,6 +14,7 @@ pytestmark = pytest.mark.integration
 def _projection(record: dict) -> dict:
     projected = record.copy()
     projected["has_grader_report"] = projected.pop("grader_report", None) is not None
+    projected.pop("launch_config", None)
     return projected
 
 
@@ -79,19 +80,21 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     }
     publish(failed)
     changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
+    changed.update(
+        issue=456, label="corrected label", model="snowball", launch_config={"skyrl": {"trainer": {"max_steps": 25}}}
+    )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
+    config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
+    assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        for field in ("issue", "gate", "gate_result", "model", "evaldash_run_ids"):
+        for field in ("issue", "gate", "gate_result", "model", "launch_config"):
             if omit_issue:
                 missing_issue.pop(field)
             else:
                 missing_issue[field] = None
         assert publish(missing_issue) == changed
-    changed["evaldash_run_ids"] = ["eval-finish"]
-    assert publish(changed) == changed
     unknown = record | {
         "run_id": "test/unknown",
         "attempt_id": "unknown",
@@ -102,7 +105,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "optimizer_steps": None,
         "evidence": ["Checkpoint lineage timing is unknown: a native time window is missing."],
     }
-    legacy = {key: value for key, value in unknown.items() if key not in {"model", "evaldash_run_ids", "issue"}}
+    legacy = {key: value for key, value in unknown.items() if key not in {"model", "issue"}}
     request(
         "http://localhost",
         "POST",

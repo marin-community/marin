@@ -298,7 +298,7 @@ export interface RunMetricRow {
 // the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
   run_id: string
-  rl_attempt?: { run_id: string; attempt_id: string; step?: number | null } | null
+  rl_attempt?: { run_id: string; attempt_id: string } | null
   group_id: string
   version: string | null
   description: string | null

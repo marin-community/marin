@@ -336,20 +336,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     report, first_gate = saved_gate()
     interrupted = {"once": True}
     logical_id = "snowball-learning-medium-tester-1234abcd"
-    native_id = f"tests/publication-0-{recipe.RUN_ARTIFACT_VERSION}"
-    automatic_links = ["linked-export", "native-export"]
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
-        if method == "GET" and path == "/evaldash/api/runs":
-            if kwargs["params"]["rl_attempt"] == "native-0":
-                assert kwargs["params"]["rl_run"] == logical_id
-                assert kwargs["params"]["rl_native_run"] == native_id
-            return [
-                {"run_id": "linked-export", "rl_run_id": logical_id, "rl_attempt_id": "native-0"},
-                {"run_id": "native-export", "rl_run_id": native_id, "rl_attempt_id": "native-0"},
-                {"run_id": "cached-export", "rl_run_id": logical_id, "rl_attempt_id": "earlier-attempt"},
-                {"run_id": "other-run", "rl_run_id": "unrelated", "rl_attempt_id": "native-0"},
-            ]
         response = request(origin, method, path, json_body=json_body)
         if method == "POST" and path.endswith("/api/runs") and interrupted["once"]:
             interrupted["once"] = False
@@ -387,8 +375,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
-    assert persisted["native-0"]["evaldash_run_ids"] == automatic_links
-    assert persisted["native-1"]["evaldash_run_ids"] is None
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
@@ -398,19 +384,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
         ).isoformat()
 
-    def unavailable_catalog(origin, method, path, **kwargs):
-        if method == "GET" and path == "/evaldash/api/runs":
-            raise RuntimeError("EvalDash unavailable")
-        return request(origin, method, path, **kwargs)
-
-    monkeypatch.setattr("marina.client.marina_request", unavailable_catalog)
     repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-0"]["evaldash_run_ids"] == automatic_links
-    assert "EvalDash catalog lookup was unavailable." in rows["native-0"]["evidence"]
     assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
     assert repeated.urls[str(sources[0])].endswith(f"#run={logical_id}&attempt=native-0")
 
@@ -448,8 +426,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
 
-    run_ids = ("eval-initial-policy", "eval-terminal-policy")
-    monkeypatch.setattr("marina.client.marina_request", unavailable_catalog)
     for index in range(2):
 
         @click.command()
@@ -469,7 +445,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         f"native-{index}",
                         "--issue",
                         str(73 + index),
-                        *[value for run_id in run_ids for value in ("--evaldash-run-id", run_id)],
                     ],
                     init=ArtifactHfModel(
                         ArtifactStep.adopt("tests/unbuilt-init", "2026.11.17", "s3://unused/init", kind=Artifact)
@@ -483,7 +458,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
         assert publication.lineage_issue(str(sources[index] / "exports")) == 73 + index
-        assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -545,20 +519,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
-    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
-        publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
-    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
-        publication.publish_runs(
-            list(map(str, sources)), preset, table=table, attempt_id="native-retry", evaldash_run_ids=run_ids
-        )
-    linked = publication.publish_runs(
-        [str(sources[0])], preset, table=table, attempt_id="native-retry", evaldash_run_ids=("eval-for-retry",)
-    )
-    assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
-    linked_rows = stored()
-    assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
+    assert historical["issue"] == 73
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))

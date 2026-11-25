@@ -154,15 +154,18 @@ class AttemptSummary(BaseModel):
     control: ControlReplicate | None = None
     control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_task_set: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     is_control: bool = False
     user: Identity | None = None
     branch: str | None = None
+    commit: Identity | None = None
+    settings: list[str] = Field(default_factory=list)
+    launch_config: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     dirty: bool | None = None
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     cluster: Identity | None = None
     issue: StrictInt | None = None
-    evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None

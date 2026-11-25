@@ -53,9 +53,6 @@ const limit = computed({
   },
 })
 const group = computed(() => queryValue('group'))
-const rlRun = computed(() => queryValue('rl_run'))
-const rlNativeRun = computed(() => queryValue('rl_native_run'))
-const rlAttempt = computed(() => queryValue('rl_attempt'))
 type View = 'launches' | 'runs'
 const view = computed<View>({
   get: () => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches',
@@ -68,9 +65,6 @@ function requestParams(): URLSearchParams {
   for (const [key, value] of Object.entries(selected.value)) {
     if (value) params.set(key, value)
   }
-  if (rlRun.value) params.set('rl_run', rlRun.value)
-  if (rlNativeRun.value) params.set('rl_native_run', rlNativeRun.value)
-  if (rlAttempt.value) params.set('rl_attempt', rlAttempt.value)
   params.set('limit', String(limit.value))
   return params
 }

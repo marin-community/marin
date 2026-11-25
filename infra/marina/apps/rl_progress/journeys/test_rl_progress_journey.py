@@ -4,7 +4,7 @@
 from copy import deepcopy
 from urllib.parse import urlencode
 
-from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, Comparison
+from finestore.rl.rl_progress import Comparison
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -18,7 +18,6 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "native_run_id": "native/journey/run",
         "label": "Learning fixture",
         "model": "snowball",
-        "evaldash_run_ids": ["first-evaluation", "second-evaluation"],
         "grader_report": grader_report(),
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?from=1&to=now&var-run=journey%2Frun",
         "evaluations": [
@@ -58,21 +57,6 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     expect(dialog.get_by_role("link", name="Grafana")).to_have_attribute("href", record["grafana_url"])
     expect(dialog.get_by_role("link", name=f"Experiment #{record['issue']}")).to_have_attribute(
         "href", f"https://github.com/marin-community/marin/issues/{record['issue']}"
-    )
-    for evaluation_id in record["evaldash_run_ids"]:
-        expect(dialog.get_by_role("link", name=f"EvalDash {evaluation_id}")).to_have_attribute(
-            "href", f"https://marina.oa.dev/evaldash/runs/{evaluation_id}"
-        )
-    filters = urlencode(
-        [
-            ("rl_run", record["run_id"]),
-            ("rl_attempt", record["attempt_id"]),
-            ("view", "runs"),
-            ("rl_native_run", record["native_run_id"]),
-        ]
-    )
-    expect(dialog.get_by_role("link", name="All EvalDash evaluations of this attempt")).to_have_attribute(
-        "href", f"https://marina.oa.dev/evaldash/runs?{filters}"
     )
     native_route = urlencode({"run": record["native_run_id"], "attempt": record["attempt_id"]})
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{native_route}", wait_until="domcontentloaded")
@@ -138,104 +122,76 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     expect(journey.page.get_by_role("button", name="Mochi fixture")).to_have_count(0)
 
 
-def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journey: Journey) -> None:
+def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
-    overall, family = "eval_lite/family_mean", "eval_lite/family/small/mean"
-    revisions = [f"2026.11.{day}" for day in (1, 2, 3, 4)]
-    commits = [letter * 10 for letter in "abcd"]
+    metric = "eval_lite/family_mean"
 
-    def attempt(name, revision, day, raw):
+    def attempt(name, day, raw):
         return progress_record() | {
             "run_id": name,
             "attempt_id": name,
             "label": name,
             "model": "snowball",
-            "preset_version": revision,
+            "branch": "main",
+            "dirty": False,
+            "is_control": True,
+            "preset_version": f"bbbbbbb{day}",
+            "artifact_uri": f"s3://example/runs/{name}",
             "started_at": f"2026-11-0{day}T00:00:00Z",
             "completed_at": f"2026-11-0{day}T01:00:00Z",
             "gate_result": None,
             "evaluations": [
-                Comparison(
-                    metric=metric.replace("eval_lite/", "eval_lite@25/"), role="slice", run=raw, n_run=1, n_control=0
-                ).model_dump(mode="json")
-                for metric in (overall, family)
+                Comparison(metric="eval_lite@25/family_mean", role="slice", run=raw, n_run=1, n_control=0).model_dump(
+                    mode="json"
+                )
             ],
         }
 
-    def link(run, base, delta, *, overlap=True):
-        return progress_record()["gate_result"] | {
-            "attempt_ids": [run],
-            "control_commit": commits[base],
-            "control_version": revisions[base],
-            "invariants": [
-                {
-                    "name": f"eval_lite/{SHARED_TASKS_INVARIANT}",
-                    "value": 18 if overlap else 15,
-                    "limit": 18,
-                    "comparator": ">=",
-                    "holds": overlap,
-                    "replicate": 0,
-                },
-            ],
-            "comparisons": [
-                Comparison(metric=metric, role="slice", delta=delta, n_run=1, n_control=1).model_dump(mode="json")
-                for metric in (overall, family)
-            ],
-            "verdict": "pass",
+    controls = [
+        attempt(f"control-{i}", i + 1, raw)
+        | {
+            "evaluation_data_identity": f"panel@selection-v{i}",
+            "evaluation_task_set": "tasks-a" if i < 2 else "tasks-b",
+            "evaluation_protocol_identity": "grader-a" if i < 3 else "grader-b",
         }
-
-    for i, (revision, raw) in enumerate(zip(revisions, (0.5, 0.4, 0.7, 0.75), strict=True)):
-        name = f"control-{i}"
-        record = attempt(name, revision, i + 1, raw) | {
-            "artifact_uri": f"s3://example/arbitrary/{name}",
-            "control": {"commit": commits[i], "version": revision, "replicate": 0},
-            "evaluation_data_identity": f"panel@{revisions[min(i, 2)]}",
-            "evaluation_protocol_identity": "protocol-a" if i < 2 else "protocol-b",
-            "gate_result": link(name, i - 1, 0.1, overlap=i != 3) if i else None,
-        }
-        response = journey.page.request.post(api, data=record)
-        assert response.ok, response.text()
-
-    retry = attempt("control-0-retry", revisions[0], 1, 0.7) | {
-        "artifact_uri": "s3://example/arbitrary/control-retry",
-        "control": {"commit": commits[0], "version": revisions[0], "replicate": 1},
-        "branch": "control-proof",
-        "dirty": False,
-        "source_revision": commits[0],
-        "evaluation_data_identity": f"panel@{revisions[0]}",
-        "evaluation_protocol_identity": "protocol-a",
-    }
-    feature_control = attempt("feature-control", "dev", 2, 0.95) | {
-        "artifact_uri": "s3://example/control/learning-medium-fffaaaa000-r0/dev",
-        "branch": "feature",
-    }
-    unmatched = attempt("unknown-base", "dev", 6, 0.8) | {"branch": "older-branch"}
-    for record in (retry, feature_control, unmatched):
-        response = journey.page.request.post(api, data=record)
-        assert response.ok, response.text()
-
-    branch = attempt("branch-at-first-preset", "dev", 4, 0.55) | {
+        for i, raw in enumerate((0.5, 0.4, 0.7, 0.75))
+    ]
+    branch = attempt("branch-at-first-preset", 5, 0.55) | {
         "branch": "experiment",
-        "base_preset_version": revisions[0],
-        "gate_result": link("branch-at-first-preset", 1, -0.15),
+        "is_control": False,
+        "commit": "d" * 40,
+        "base_preset_version": controls[0]["preset_version"],
+        "settings": ["trainer.max_steps=25"],
+        "launch_config": {"skyrl": {"trainer": {"max_steps": 25}}},
+        "wandb_url": "https://wandb.ai/marin-community/marin-rl/runs/fixture",
+        "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?var-run=fixture",
+        "gate_result": progress_record()["gate_result"],
     }
-    response = journey.page.request.post(api, data=branch)
-    assert response.ok, response.text()
+    for record in (*controls, branch):
+        response = journey.page.request.post(api, data=record)
+        assert response.ok, response.text()
 
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/", wait_until="domcontentloaded")
     journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · learning-medium")
-    chart = journey.page.get_by_role("group", name=overall, exact=True)
+    chart = journey.page.get_by_role("group", name=metric, exact=True)
+    expect(chart.locator("line.history-global")).to_have_count(3)
     expect(chart.locator("line.history-chain")).to_have_count(1)
-    expect(chart.locator("line[aria-label='Evaluation set changed']")).to_have_count(1)
-    expect(chart.locator("line[aria-label='Protocol changed']")).to_have_count(1)
-    expect(chart.locator("circle.history-global > title").last).to_contain_text("Experiment global 55.0%")
-    expect(chart.locator("circle.history-global > title").first).to_contain_text("Global 60.0%")
-    expect(chart.locator("circle.history-global > title").nth(2)).to_contain_text("Global 70.0%")
-    expect(chart.locator("circle.history-global > title").nth(3)).to_contain_text("Global 75.0%")
-    expect(chart.locator("line.history-global > title").first).to_contain_text("50.0%\u201370.0%")
-    expect(chart.get_by_role("link", name="unknown-base · 80.0%")).to_be_visible()
-    expect(journey.page.get_by_role("group", name=family, exact=True).locator("line.history-chain")).to_have_count(1)
-    experiment = chart.get_by_role("link", name="branch-at-first-preset · 25.0%").locator("circle").first
-    assert experiment.get_attribute("cx") == chart.locator("circle.history-global").first.get_attribute("cx")
-    experiment.click()
-    expect(journey.page.get_by_role("dialog")).to_contain_text(revisions[0])
+    expect(chart.locator("line.history-marker")).to_have_count(2)
+    expect(chart.get_by_role("link")).to_have_count(4)
+    journey.shoot("preset-main-controls")
+
+    toggle = journey.page.get_by_role("checkbox", name="Show branch runs")
+    toggle.check()
+    expect(chart.get_by_role("link")).to_have_count(5)
+    expect(chart.locator("line.history-global")).to_have_count(3)
+    journey.shoot("preset-branch-runs")
+    chart.get_by_role("link", name="branch-at-first-preset · 55.0%").click()
+    dialog = journey.page.get_by_role("dialog")
+    expect(dialog).to_contain_text(branch["base_preset_version"])
+    expect(dialog).to_contain_text(branch["commit"])
+    expect(dialog).to_contain_text("trainer.max_steps=25")
+    expect(dialog.get_by_role("link", name="W&B run")).to_have_attribute("href", branch["wandb_url"])
+    expect(dialog.get_by_role("link", name="Grafana")).to_have_attribute("href", branch["grafana_url"])
+    dialog.get_by_text("Composed launch configuration", exact=True).click()
+    expect(dialog.locator("pre")).to_contain_text('"max_steps": 25')
+    journey.shoot("branch-run-detail")
