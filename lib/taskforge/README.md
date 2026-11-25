@@ -178,8 +178,13 @@ While a driver is working on a workpiece, its `status.json` reads `terminal: nul
 
 Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
 with the storage credentials above. It reads published snapshots and event parts concurrently,
-then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
-stage durations, and consecutive-event latency proxies. Replayed results do not add token
+computes one `WorkpieceMetrics` row per workpiece (`src/taskforge/metrics.py`), and prints each
+summary for all workpieces and again for each origin (`proposal`, or `source` for a repaired task),
+every line prefixed `origin=`. A summary has terminal/reason counts, accepted/hour over 1/6/24 hours,
+accepted tasks without an author session, author sessions per accepted task, `author.image`
+fallbacks, timed-out author and adversary commands, tokens by role in total and per accepted task,
+end-to-end seconds of finished workpieces, the solve rate of accepted tasks as first validated and
+as accepted, stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
 their scopes. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;

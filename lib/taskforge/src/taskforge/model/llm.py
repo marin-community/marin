@@ -54,6 +54,14 @@ class Usage:
     reasoning_tokens: int = 0
     cached_tokens: int = 0
 
+    def __add__(self, other: "Usage") -> "Usage":
+        return Usage(
+            self.prompt_tokens + other.prompt_tokens,
+            self.completion_tokens + other.completion_tokens,
+            self.reasoning_tokens + other.reasoning_tokens,
+            self.cached_tokens + other.cached_tokens,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Completion:

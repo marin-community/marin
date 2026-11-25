@@ -38,6 +38,9 @@ from taskforge.resources.env import (
 from taskforge.resources.execution import close_resource
 from taskforge.stages.summary import validation_path
 
+AUTHOR_IMAGE_FALLBACK = "Author falls back to author.image"
+"""The prefix of the note an author session records when it leaves its task's failed environment."""
+
 
 def system_prompt(policy: Policy, machine: EnvironmentRequirements) -> str:
     """Render the author reference from the current task and control schemas, for the author's ``machine``."""
@@ -208,7 +211,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                 tuple(tool.schema for tool in tools.values()),
             )
             if setup_failure is not None:
-                await ctx.emit(Note(f"Author falls back to author.image: {setup_failure}"))
+                await ctx.emit(Note(f"{AUTHOR_IMAGE_FALLBACK}: {setup_failure}"))
                 notice = policy.prompt("author.environment_failure").render(
                     error=setup_failure, image=machine.docker_image or "ShellSim"
                 )
