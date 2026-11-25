@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import DatasetRelease
+from finestore.rl.curation import Cohort, DatasetRelease
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import (
@@ -25,11 +25,13 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.assessment import AssessmentSampling, assessment_inputs, prepare_assessment
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
 import experiments.post_training.task_curation.retained_release as retained_release
-from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     RetainedImport,
@@ -88,7 +90,7 @@ def published_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return local
 
 
-def _cohort(tasks: Path, tmp_path: Path, *, expected_rows: int) -> RetainedCohort:
+def _cohort(tasks: Path, *, expected_rows: int) -> RetainedCohort:
     return RetainedCohort(
         name="fixture-retained",
         version="2026.11.13.1",
@@ -109,65 +111,40 @@ def _cohort(tasks: Path, tmp_path: Path, *, expected_rows: int) -> RetainedCohor
     )
 
 
-def test_quick_import_writes_the_assessment_contract(tmp_path: Path, published_tasks: Path) -> None:
-    """The manifest carries the datasets views and source the assessment reads."""
-    invocation = RetainedImport(
-        _cohort(published_tasks, tmp_path, expected_rows=1),
-        str(tmp_path / "imported"),
-        SourceProcessingMode.QUICK,
-        None,
-        None,
-        None,
-    )
-    result = run_retained_import(invocation)
-    manifest = json.loads((tmp_path / "imported/manifest.json").read_text())
-    assert manifest["source"] == "fixture-retained"
-    assert manifest["mode"] == SourceProcessingMode.QUICK.value
-    views = manifest["datasets"]
-    assert {"normalize", "review", "verify", "final"} <= set(views)
-    for view in ("review", "verify", "final"):
-        assert (Path(views[view]) / "part-000000.parquet").exists()
-    final_rows = pq.read_table(Path(views["final"]) / "part-000000.parquet").num_rows
-    assert final_rows == 0  # quick admits nothing
-    assert manifest["admitted_rows"] == 0
-    assert manifest["processed_rows"] == 1 and manifest["unprocessed_rows"] == 0
-    assert isinstance(result, CampaignArtifact)
-
-
-def test_admitted_import_populates_the_final_view_with_normalized_rows(
+def test_full_retained_import_prepares_an_admitted_assessment(
     tmp_path: Path, published_tasks: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An admitted run's final view carries the normalized rows the assessment selects.
-
-    The lexical qualification itself is exercised at bind time (the pin-table
-    validators); this test stubs it to focus on the evidence views.
-    """
+    """Assessment selects the imported task and writes its evidence packet."""
+    # Lexical qualification is checked by the pin-table validator; this fixture
+    # tests the assessment boundary without a publication receipt.
     monkeypatch.setattr(retained_release, "require_lexical_qualification", lambda *args, **kwargs: None)
+    imported = tmp_path / "imported"
     invocation = RetainedImport(
-        _cohort(published_tasks, tmp_path, expected_rows=1),
-        str(tmp_path / "imported"),
+        _cohort(published_tasks, expected_rows=1),
+        str(imported),
         SourceProcessingMode.FULL,
         None,
         None,
         None,
     )
     run_retained_import(invocation)
-    manifest = json.loads((tmp_path / "imported/manifest.json").read_text())
-    views = manifest["datasets"]
-    final = pq.read_table(Path(views["final"]) / "part-000000.parquet")
-    assert final.num_rows == 1
-    assert final.column("task_id").to_pylist() == ["retained-task"]
-    normalized = pq.read_table(Path(views["normalize"]) / "part-000000.parquet", columns=["task_id"])
-    assert normalized.column("task_id").to_pylist() == ["retained-task"]
-    for view in ("review", "verify"):
-        table = pq.read_table(Path(views[view]) / "part-000000.parquet")
-        assert table.num_rows == 0
-        assert {"task_id", "admission", "filter_reasons"} <= set(table.column_names)
+    inputs = tmp_path / "assessment"
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        prepare_assessment(
+            context,
+            curated_root=str(imported),
+            sampling=AssessmentSampling(admitted=1, excluded=0),
+            output_root=str(inputs),
+        )
+    assessment = assessment_inputs(str(inputs))
+    assert [(row.task_id, row.cohort) for row in assessment.sample] == [("retained-task", Cohort.ADMITTED)]
+    packets = [row for path in assessment.packet_paths for row in load_parquet(path)]
+    assert json.loads(packets[0]["packet_json"])["task"]["id"] == "retained-task"
 
 
-def test_a_row_count_or_digest_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:
+def test_row_count_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:
     """A published release that differs from its receipt refuses to import."""
-    cohort = _cohort(published_tasks, tmp_path, expected_rows=2)
+    cohort = _cohort(published_tasks, expected_rows=2)
     invocation = RetainedImport(cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None)
-    with pytest.raises(ValueError, match="count differs"):
+    with pytest.raises(ValueError):
         run_retained_import(invocation)

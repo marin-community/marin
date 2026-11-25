@@ -3,8 +3,7 @@
 
 """Regenerate the Atlas source-coverage fixture and republish its pinned reference.
 
-The fixture pins one origin/atlas-env-audit revision (``atlas_revision``) and one
-r40.json artifact version. Its bytes live in the public dataset
+The fixture records the Atlas-admitted sources and R40 targets. Its bytes live in the public dataset
 ``open-athena/atlas-source-pins``; the repository commits only the immutable
 reference (revision, sha256, byte size) in ``test_atlas_source_coverage.py``.
 Regenerate whenever the Atlas admits more sources or main's declarations change:

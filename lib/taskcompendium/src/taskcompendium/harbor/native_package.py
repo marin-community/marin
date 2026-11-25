@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate original native Harbor packages without executing or rewriting them.
-
-The package writer (``write_native_task`` and the Docker-build materialization it
-uses) lands with the native reader port; the validation here already checks the
-complete declared package against the TaskSpec alone.
-"""
+"""Validate original native Harbor packages without executing or rewriting them."""
 
 import tomllib
 

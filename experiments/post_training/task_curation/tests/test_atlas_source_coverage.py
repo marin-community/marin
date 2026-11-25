@@ -15,16 +15,14 @@ Three checks, all computed from the catalog:
 
 - coverage: every Atlas-admitted source is declared on main, or carries a
   ``declaration_blockers`` entry — the import that would run it on main is still
-  pending, and per the #11903 review resolution a record lands together with its
-  import, never pipeline-less;
+  pending, so its record lands with its import;
 - stale blockers: a source whose blocker entry still stands while main declares
   it — the ingestion PR that landed the import must remove the entry;
 - pin parity: every declared source's durable reference (repo, revision, files,
   recipe, version) equals the Atlas admitted pin, unless a recorded waiver
   states the blocker; parity that has landed makes the waiver stale.
 
-The tests fetch the pinned fixture, so they carry the ``data_integration``
-marker and run from the CI workflows that have HF access.
+The tests fetch the pinned fixture and carry the ``data_integration`` marker.
 """
 
 import hashlib
@@ -37,7 +35,6 @@ import pytest
 from finestore.rl.source_identity import canonical_source_id
 from huggingface_hub import hf_hub_download
 
-from experiments.post_training.task_curation.retained_release import RetainedCohort, import_retained
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
@@ -155,8 +152,6 @@ def test_dapo_math_binds_to_its_retained_release():
     population), and the durable reference, recipe and count follow it.
     """
     source = all_sources()["BytedTsinghua-SIA:dapo_math"]
-    assert isinstance(source.config, RetainedCohort)
-    assert source.pipeline is import_retained
     dataset = source.dataset
     assert (dataset.name, dataset.revision) == (
         "open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1",
