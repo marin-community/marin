@@ -353,9 +353,10 @@ def _publish(
         curriculum_key=alignment.curriculum_key,
         population=population,
         sample_size=sample_size,
-        # Release totals stay the curriculum-processed population; per-source counts live
-        # beside the total so coverage statistics and the release total agree.
-        task_count=sum(row.task_count for row in sources if row.basis == "matched"),
+        # Release totals stay the curriculum-processed population; every published row is
+        # alignment-measured, so the per-source counts sum to the total the coverage
+        # statistics and the release total agree on.
+        task_count=sum(row.task_count for row in sources),
         ready_count=sum(row.ready_count for row in sources),
         insufficient_context_count=sum(row.insufficient_context_count for row in sources),
         sources=sources,

@@ -99,20 +99,25 @@ def published_task_count(
     summary: CurationSummary | None,
     attempt: AssessmentAttempt | None,
     prior: SnapshotSource | None,
-    unchanged: bool,
 ) -> int | None:
     """The published row's task count: the measurement that identifies the published declaration.
 
     A COMPLETE attempt publishes its own measurement when its document names the
-    declaration's pin and recipe; a failed or skipped attempt keeps the prior
-    row's measurement while the pin and recipe are unchanged, as does a complete
-    attempt whose document describes another pin.
+    declaration's pin and recipe; otherwise a prior row keeps its measurement
+    only while its pin and recipe match the declaration's.
     """
     if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
         measured = measured_task_count(declaration, summary)
         if measured is not None:
             return measured
-    return prior.declaration.task_count if unchanged else None
+    if prior is None:
+        return None
+    if (
+        prior.declaration.pipeline != declaration.pipeline
+        or prior.declaration.dataset_revision != declaration.dataset_revision
+    ):
+        return None
+    return prior.declaration.task_count
 
 
 def archive_files(store: DataStore, root: str, prefix: str, patterns: tuple[str, ...]) -> list[ArchivedFile]:
@@ -323,7 +328,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
-                measured = published_task_count(declaration, summary, attempt, prior, unchanged)
+                measured = published_task_count(declaration, summary, attempt, prior)
                 rows.append(
                     SnapshotSource(
                         snapshot_id=run_id,

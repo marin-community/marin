@@ -485,7 +485,7 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     return RawSample(population_count, sorted(rows, key=partial(_raw_order, seed=policy.seed)))
 
 
-def _census_declared_rows(run: _SourceRun, sample: RawSample) -> RawSample:
+def _census_payload_rows(run: _SourceRun, sample: RawSample) -> RawSample:
     """Measure the staged payload's rows from their format metadata and require the reader to yield them.
 
     A source read one row per payload record has an exact format-level count: parquet footers,
@@ -509,12 +509,12 @@ def _census_declared_rows(run: _SourceRun, sample: RawSample) -> RawSample:
     counts = count_source_files(files, spec.format)
     if any(count is None for count in counts.values()):
         return sample
-    declared = sum(counts.values())
-    if sample.population_count != declared:
+    measured = sum(counts.values())
+    if sample.population_count != measured:
         raise ValueError(
-            f"The staged payload holds {declared} rows but the source reader produced {sample.population_count}"
+            f"The staged payload holds {measured} rows but the source reader produced {sample.population_count}"
         )
-    return RawSample(declared, sample.rows)
+    return RawSample(measured, sample.rows)
 
 
 def _sample_panel(run: _SourceRun) -> _Panel:
@@ -542,7 +542,7 @@ def _sample_panel(run: _SourceRun) -> _Panel:
                 ),
                 telemetry=phase,
             ).results[0]
-            sample = _census_declared_rows(run, sample)
+            sample = _census_payload_rows(run, sample)
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
     with run.telemetry.phase("panel_normalize") as phase:
