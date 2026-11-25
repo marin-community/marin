@@ -1,11 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lexical admission checks shared by curation and the catalog app.
+"""Lexical admission checks over published-release evidence, shared by curation and the catalog app.
 
-The retained-release reader calls these at import time; the packaged app imports
-the same checks for its admission gates. Every dependency is a lib type, so the
-checks import nothing from ``experiments/``.
+Every dependency is a lib type: the checks import nothing from ``experiments/``.
 """
 
 from finestore.rl.curation import (
@@ -15,6 +13,9 @@ from finestore.rl.curation import (
     SourceUse,
     require_decontamination,
 )
+
+PRIVATE_RELEASE_NAMESPACE = "open-athena/"
+"""The private publisher whose TaskCompendium releases the Atlas admits."""
 
 
 def require_private_release(
@@ -26,11 +27,15 @@ def require_private_release(
     receipt = evidence.receipt
     release = receipt.release
     assert release is not None
-    if not release.private or release.format != "taskcompendium" or not release.dataset_id.startswith("open-athena/"):
+    if (
+        not release.private
+        or release.format != "taskcompendium"
+        or not release.dataset_id.startswith(PRIVATE_RELEASE_NAMESPACE)
+    ):
         raise ValueError("Atlas admission requires a private open-athena TaskCompendium release")
     if receipt.status is DeconReceiptStatus.REMEDIATED:
         assert release.original_private_dataset_id is not None
-        if not release.original_private_dataset_id.startswith("open-athena/"):
+        if not release.original_private_dataset_id.startswith(PRIVATE_RELEASE_NAMESPACE):
             raise ValueError("Atlas remediation requires the original private open-athena snapshot")
 
 

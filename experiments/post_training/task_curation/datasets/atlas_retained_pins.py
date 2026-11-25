@@ -10,12 +10,13 @@ public dataset ``open-athena/atlas-source-pins`` at the pinned revision below;
 this module reads it and binds each entry onto main's raw declaration at
 ``all_sources()`` time, so main's durable reference is the Atlas admitted version
 and selection runs the retained reader. The table is published by the Atlas
-release step on ``atlas-env-audit``.
+release step that owns the sealed receipts.
 """
 
 import json
 from dataclasses import replace
 from functools import cache
+from types import MappingProxyType
 
 from finestore.rl.curation import (
     DatasetRelease,
@@ -36,7 +37,10 @@ from experiments.post_training.task_curation.retained_release import (
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
+from infra.marina.apps.rl_data_catalog.server.admission import (
+    PRIVATE_RELEASE_NAMESPACE,
+    require_lexical_qualification,
+)
 
 PINS_REPO = "open-athena/atlas-source-pins"
 PINS_REVISION = "5ab081a1db11de1f5a3fa07563b8944b86d15541"
@@ -117,7 +121,7 @@ class RetainedPin(BaseModel):
             raise ValueError(f"Retained census does not cover the retained population: {self.source_id}")
         if self.retained_dedup_duplicates != 0:
             raise ValueError(f"The retained population is not the deduplicated population: {self.source_id}")
-        if not self.release_repo.startswith("open-athena/"):
+        if not self.release_repo.startswith(PRIVATE_RELEASE_NAMESPACE):
             raise ValueError(f"Retained release is not a private open-athena publication: {self.source_id}")
         if (self.license.dataset_id, self.license.revision) != (self.release_repo, self.release_revision):
             raise ValueError(f"License receipt certifies another pin: {self.source_id}")
@@ -155,21 +159,21 @@ def _pin_table_reference() -> PinnedHfFile:
 
 
 @cache
-def atlas_retained_pins() -> dict[str, RetainedPin]:
+def atlas_retained_pins() -> MappingProxyType[str, RetainedPin]:
     """The pinned pin table, validated entry by entry at first read."""
     document = json.loads(read_pinned_hf_file(_pin_table_reference()))
-    pins = {source_id: RetainedPin.model_validate(entry) for source_id, entry in document["pins"].items()}
-    if len(pins) != len(document["pins"]):
+    entries = document["pins"]
+    if len(entries) != len(set(entries)):
         raise ValueError("Retained-pin table repeats a source id")
-    return pins
+    return MappingProxyType({sid: RetainedPin.model_validate(entry) for sid, entry in entries.items()})
 
 
 def bind_retained_pins(sources: list[RlDataSource]) -> list[RlDataSource]:
     """Swap each pinned declaration to its Atlas-retained pin and the retained reader.
 
     A declaration whose lineage does not match its entry keeps the raw pin with a
-    recorded note; the parity test fails on the drifted pin, so the drift stays
-    visible instead of blocking every other binding.
+    recorded note instead of failing the whole catalog; qualification and license
+    failures propagate.
     """
     pins = atlas_retained_pins()
     bound = []
@@ -190,29 +194,16 @@ class RetainedLineageDrift(ValueError):
     """The declaration's lineage does not match the sealed receipt; binding skips it."""
 
 
-def _pipeline_version_drift(source: RlDataSource, pin: RetainedPin) -> str | None:
-    """Fail the binding unless the declaration is the sealed conversion, at the sealed version.
+def _check_pipeline_lineage(source: RlDataSource, pin: RetainedPin) -> None:
+    """Fail the binding unless the declaration projects the sealed conversion pipeline.
 
-    The dataset pin, the pipeline name, the consumed files and the converter
-    version are the lineage identity: main's declaration must be the exact
-    conversion input the receipt sealed, or the retained release would be
+    The declaration's pipeline reference carries the dataset pin, the pipeline
+    name, the consumed files and the converter version: main's declaration must
+    project exactly what the receipt sealed, or the retained release would be
     attributed to a conversion that did not produce it.
     """
-    dataset = source.dataset
-    configured = None
-    if source.pipeline is not None:
-        configured = (
-            source.name,
-            dataset.name if dataset else None,
-            dataset.revision if dataset else None,
-            source.version,
-            tuple(source.files),
-        )
-    sealed = pin.original_pipeline
-    observed = (sealed.name, sealed.source, sealed.revision, sealed.version, tuple(sealed.files))
-    if configured != observed:
+    if source.declaration.pipeline != pin.original_pipeline:
         raise RetainedLineageDrift(f"retention lineage belongs to another conversion pipeline: {source.info.id}")
-    return None
 
 
 def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
@@ -226,13 +217,12 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         raise RetainedLineageDrift(
             f"retention belongs to another conversion input: expected {expected}, sealed {observed}"
         )
-    version_note = _pipeline_version_drift(source, pin)
+    _check_pipeline_lineage(source, pin)
     require_lexical_qualification(pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value))
 
     config = pin.cohort(name=source.name)
     release = pin.release
     inherited = source.current_release if source.declaration.status == "Available" else None
-    drift = "" if version_note is None else f"{version_note}. "
     info = replace(
         source.info,
         current_release=release,
@@ -246,7 +236,7 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         daytona_count_basis=pin.retained_census.count_basis,
         daytona_execution_failures=pin.retained_census.execution_failures,
         notes=(
-            drift + "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+            "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
             f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
             + source.info.notes
         ),

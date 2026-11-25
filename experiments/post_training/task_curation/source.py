@@ -205,18 +205,10 @@ class SourceInfo:
     """
 
     lexical_contamination: LexicalContaminationEvidence | None = None
-    """The lexical measurement the source's current pin was admitted on.
-
-    The retained-release binding carries the publication's evidence here, so the
-    import gate and the catalog show the measurement that qualifies this pin.
-    """
+    """The lexical measurement that qualifies the source's current pin."""
 
     inherited_admission: DatasetRelease | None = None
-    """The release whose admission the source inherits through its subset lineage.
-
-    A retained population admits through the original source's admission chain;
-    the release records that lineage instead of claiming a fresh one.
-    """
+    """The release whose admission the source inherits through its subset lineage."""
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
