@@ -33,7 +33,7 @@ run_phase() {
   local attempt=0 rc=0
   while :; do
     echo "=== $name attempt $attempt start $(date -u +%FT%T)"
-    XLA_FLAGS="$flags" srun_with_startup_retry "logs/e2e/$name" \
+    XLA_FLAGS="$flags" srun_with_hang_recovery "logs/e2e/$name" \
       $PY -m experiments.amd.june_67b_a2b.rehearsal --log-dir "logs/e2e/$name-jsonlogs" --data-root "$DATA" \
         --validation-root "$VAL" --output-root "$OUT" ${STEPS:+--steps "$STEPS"} "$@"
     rc=$?

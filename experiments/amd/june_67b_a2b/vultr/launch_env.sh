@@ -2,7 +2,7 @@
 # at the checkout root, before the first srun:
 #   source experiments/amd/june_67b_a2b/vultr/launch_env.sh
 # It sets PY (the pinned JAX stack), PYTHONPATH, the RCCL, XLA and JAX settings, W&B paths and the open-file limit,
-# and defines srun_with_startup_retry. rehearsal.py refuses to start multi-node without the settings marked
+# and defines srun_with_hang_recovery. rehearsal.py refuses to start multi-node without the settings marked
 # "checked" below and logs them all at startup.
 
 WORK=/work/openathena-ihodes/asartran
@@ -52,32 +52,78 @@ mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$WANDB_DATA_DIR"
 STUCK_TIMEOUT=${STUCK_TIMEOUT:-300}
 STARTUP_TIMEOUT=${STARTUP_TIMEOUT:-3600}
 STARTUP_RETRIES=${STARTUP_RETRIES:-2}
+# A collective can also hang mid-run, with no abort and no non-finite value. The longest gap between two logged
+# steps of a healthy 67B run is a checkpoint save plus an eval; HANG_TIMEOUT must exceed it.
+HANG_TIMEOUT=${HANG_TIMEOUT:-2700}
+# entity/project/run-id of a W&B run to post an alert to when a hang is detected; unset, the alert is only logged.
+HANG_ALERT_WANDB=${HANG_ALERT_WANDB:-}
 
-# srun_with_startup_retry LOG_PREFIX ARGS...: srun one process per node with all 8 GPUs, writing each task's output
-# to LOG_PREFIX-<task>.log (tasks 0-9). If no task logs step 0 within STUCK_TIMEOUT seconds of the first "Initialize clique ...
-# may be stuck" warning, or within STARTUP_TIMEOUT seconds of launch, it kills the step and launches again, up to
-# STARTUP_RETRIES times; a hung attempt's logs are kept as LOG_PREFIX-<task>.hung<N>.log. Returns srun's status.
-srun_with_startup_retry() {
+# last_logged_step LOG...: the highest step any of the logs has logged metrics for, empty if none.
+last_logged_step() {
+  tail -qc 1000000 "$@" 2>/dev/null | grep -o '"event": "log", "step": [0-9]*' | grep -o '[0-9]*$' | sort -n | tail -1
+}
+
+# hang_alert TEXT: log TEXT and, with HANG_ALERT_WANDB set, post it as a W&B alert on that run.
+hang_alert() {
+  echo "=== ALERT $1 at $(date -u +%FT%T)"
+  [ -n "$HANG_ALERT_WANDB" ] || return 0
+  timeout 180 "$PY" - "$HANG_ALERT_WANDB" "$1" <<'PYEOF'
+import sys
+
+import wandb
+
+entity, project, run_id = sys.argv[1].split("/")
+run = wandb.init(entity=entity, project=project, id=run_id, resume="allow")
+run.alert(title="MI355X run hung", text=sys.argv[2], level=wandb.AlertLevel.WARN)
+run.finish()
+PYEOF
+}
+
+# stop_srun PID: stop an srun step, killing its tasks if they ignore SIGTERM for 30 s.
+stop_srun() {
+  kill -TERM "$1"
+  sleep 30
+  kill -KILL "$1" 2>/dev/null
+  wait "$1"
+}
+
+# srun_with_hang_recovery LOG_PREFIX ARGS...: srun one process per node with all 8 GPUs, writing each task's output
+# to LOG_PREFIX-<task>.log (tasks 0-9).
+# Startup: if no task logs a step within STUCK_TIMEOUT seconds of the first "Initialize clique ... may be stuck"
+# warning, or within STARTUP_TIMEOUT seconds of launch, it kills the step and launches again, up to STARTUP_RETRIES
+# times; a hung attempt's logs are kept as LOG_PREFIX-<task>.hung<N>.log.
+# Mid-run: once a step is logged, if no later step is logged within HANG_TIMEOUT seconds, it raises hang_alert,
+# kills the step and returns 125, so the caller restarts from the latest checkpoint. Otherwise returns srun's status.
+srun_with_hang_recovery() {
   local prefix=$1; shift
-  local retry=0 pid start stuck_since rc
+  local retry=0 pid start stuck_since step last_step progress_at
   while :; do
     srun --ntasks-per-node=1 --gpus-per-node=8 --kill-on-bad-exit=1 --output="$prefix-%t.log" "$@" &
     pid=$!
     start=$SECONDS
     stuck_since=
+    last_step=
     while kill -0 "$pid" 2>/dev/null; do
       sleep 10
-      grep -qs '"event": "log", "step": 0,' "$prefix"-[0-9].log && break
+      step=$(last_logged_step "$prefix"-[0-9].log)
+      if [ -n "$step" ]; then
+        if [ "$step" != "$last_step" ]; then
+          last_step=$step
+          progress_at=$SECONDS
+        elif [ $((SECONDS - progress_at)) -ge "$HANG_TIMEOUT" ]; then
+          hang_alert "job $SLURM_JOB_ID ($prefix) logged no step after step $last_step for $((SECONDS - progress_at)) s; killing it to resume from the latest checkpoint"
+          stop_srun "$pid"
+          return 125
+        fi
+        continue
+      fi
       if [ -z "$stuck_since" ] && grep -qs 'Initialize clique.*may be stuck' "$prefix"-[0-9].log; then
         stuck_since=$SECONDS
       fi
       if { [ -n "$stuck_since" ] && [ $((SECONDS - stuck_since)) -ge "$STUCK_TIMEOUT" ]; } ||
         [ $((SECONDS - start)) -ge "$STARTUP_TIMEOUT" ]; then
-        echo "=== startup hang after $((SECONDS - start)) s (retry $retry of $STARTUP_RETRIES) at $(date -u +%FT%T)"
-        kill -TERM "$pid"
-        sleep 30
-        kill -KILL "$pid" 2>/dev/null
-        wait "$pid"
+        hang_alert "job $SLURM_JOB_ID ($prefix) startup hang after $((SECONDS - start)) s (retry $retry of $STARTUP_RETRIES)"
+        stop_srun "$pid"
         for f in "$prefix"-[0-9].log; do mv -f "$f" "${f%.log}.hung$retry.log"; done
         retry=$((retry + 1))
         [ "$retry" -gt "$STARTUP_RETRIES" ] && return 124
@@ -85,7 +131,6 @@ srun_with_startup_retry() {
       fi
     done
     wait "$pid"
-    rc=$?
-    return $rc
+    return $?
   done
 }

@@ -13,6 +13,9 @@ does not fire it again):
   non-finite, the trainer stops before the state can be checkpointed, and the restart resumes from the last checkpoint.
 * ``--abort-at STEP``: ``os.abort()`` (exit 134, as the attention kernel's check aborts) in process
   ``--abort-process`` after that step is dispatched.
+* ``--hang-at STEP``: process ``--hang-process`` sleeps forever after that step is dispatched, and the other
+  processes wait in the next step's collectives, as in a hung collective. Pass ``--step-timeout 0`` so only the
+  launcher's watchdog (``srun_with_hang_recovery``) can end it.
 
 Every skipped step is reported with the input arrays that failed and their first damaged values, read from the
 batch, which the drill keeps for two steps. Launch one process per node (``--gpus-per-node 8``).
@@ -24,6 +27,7 @@ import dataclasses
 import functools
 import logging
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -70,6 +74,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nan-at", type=int)
     parser.add_argument("--abort-at", type=int)
     parser.add_argument("--abort-process", type=int, default=0)
+    parser.add_argument("--hang-at", type=int)
+    parser.add_argument("--hang-process", type=int, default=0)
     return parser.parse_args(argv)
 
 
@@ -133,6 +139,8 @@ class _Faults:
         planned += [("nan", args.nan_at)] if args.nan_at is not None else []
         if args.abort_at is not None and jax.process_index() == args.abort_process:
             planned.append(("abort", args.abort_at))
+        if args.hang_at is not None and jax.process_index() == args.hang_process:
+            planned.append(("hang", args.hang_at))
         # Read once at start, before any process can write a marker in this attempt.
         self.pending = {(kind, step) for kind, step in planned if not self._marker(kind, step).exists()}
         logger.info("DRILL faults pending %s", sorted(self.pending, key=lambda f: f[1]))
@@ -146,7 +154,7 @@ class _Faults:
         if (kind, step) not in self.pending:
             return False
         self.pending.discard((kind, step))
-        if self.marker_dir is not None and (jax.process_index() == 0 or kind == "abort"):
+        if self.marker_dir is not None and (jax.process_index() == 0 or kind in ("abort", "hang")):
             self.marker_dir.mkdir(parents=True, exist_ok=True)
             self._marker(kind, step).touch()
         logger.warning("DRILL firing %s at step %d", kind, step)
@@ -205,6 +213,9 @@ def _drill_step(make_step, faults: _Faults):
                     )
             if faults.fire("abort", step):
                 os.abort()
+            if faults.fire("hang", step):
+                while True:
+                    time.sleep(3600)
             return out
 
         return drill_step
