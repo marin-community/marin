@@ -14,7 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -412,12 +412,14 @@ def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
 class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
-    # Batch at the training length; other lengths preserve this total token budget.
+    # Batch at the training length; multi-length evals use this token budget as a ceiling.
     eval_batch_size: int = 512
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
-    # None evaluates only at the training length. Each explicit length gets its own metric namespace.
-    seq_lens: tuple[int, ...] | None = None
+    # Pin single-length eval packing across checkpoints trained at different context lengths.
+    max_seq_len: int | None = None
+    # The default keeps the single-length recipe and its existing artifact fingerprint.
+    seq_lens: tuple[int, ...] | None = field(default=None, metadata={"fingerprint_omit_value": None})
     prefix: str = "eval"
     # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
     # the live parameters and `eval_ema` the EMA parameters; either one schedules the
@@ -434,6 +436,10 @@ class GrugEvalConfig:
     # Run the evals once after the first optimization step, for a baseline at the start of the loss
     # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
     eval_at_first_step: bool = False
+
+    def __post_init__(self):
+        if self.seq_lens is not None and self.max_seq_len is not None:
+            raise ValueError("Specify either max_seq_len or seq_lens for evaluation")
 
 
 @dataclass(frozen=True)
@@ -686,7 +692,7 @@ def build_tagged_evaluator(
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len)
+    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
@@ -753,12 +759,11 @@ def _mesh_eval_hook(
     mesh: Mesh,
     prefix: str,
     training_length_prefix: str | None,
-    eval_current: bool,
-    eval_ema: bool,
+    model_fields: tuple[Literal["model", "eval_model"], ...],
 ) -> Callable[..., None]:
     last_step: int | None = None
 
-    def evaluate(step, *args, **kwargs):
+    def evaluate(step):
         nonlocal last_step
         step_count = int(step.step)
         if step_count < 0 or step_count == last_step:
@@ -772,12 +777,9 @@ def _mesh_eval_hook(
             set_mesh(mesh),
             jax_config.enable_pgle(False),
         ):
-            sources = []
-            if eval_current:
-                sources.append((step.model, ""))
-            if eval_ema:
-                sources.append((step.eval_model, "/ema"))
-            for source, suffix in sources:
+            for field_name in model_fields:
+                source = getattr(step, field_name)
+                suffix = "/ema" if field_name == "eval_model" else ""
                 # Release the resharded copy before the next evaluator or training step.
                 model = source if mesh == train_mesh else _move_tree_to_eval_mesh(source, train_mesh)
                 metrics = eval_model(evaluator, model, prefix=prefix + suffix)
@@ -805,19 +807,30 @@ def build_eval_hooks(
     eval_ema: bool,
 ) -> list[Callable[..., None]]:
     """Build one evaluator per length and backend, with independent step deduplication."""
-    seq_lens = tuple(dict.fromkeys(eval_cfg.seq_lens if eval_cfg.seq_lens is not None else (train_seq_len,)))
+    single_seq_len = train_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len
+    seq_lens = (single_seq_len,) if eval_cfg.seq_lens is None else tuple(dict.fromkeys(eval_cfg.seq_lens))
     if not seq_lens or any(length < 2 for length in seq_lens):
         raise ValueError("Evaluation sequence lengths must contain at least two tokens")
     token_budget = eval_cfg.eval_batch_size * train_seq_len
     dropless_mesh = expert_collapsed_eval_mesh(mesh) if eval_cfg.dropless_eval and mesh.shape["expert"] > 1 else None
+    model_fields: tuple[Literal["model", "eval_model"], ...] = ("model",) if eval_cfg.eval_current else ()
+    if eval_ema:
+        model_fields += ("eval_model",)
+    if not model_fields and dropless_mesh is None:
+        return []
+
     hooks = []
     for seq_len in seq_lens:
         if seq_len % mesh.shape["context"]:
             raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
-        length_cfg = replace(
-            eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
-        )
-        if eval_cfg.eval_current or eval_ema:
+        length_cfg = eval_cfg
+        if eval_cfg.seq_lens is not None and seq_len != train_seq_len:
+            length_cfg = replace(
+                eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
+            )
+        length_key = f"seq_len_{seq_len}"
+        log_unqualified = eval_cfg.seq_lens is None or seq_len == train_seq_len
+        if model_fields:
             with set_mesh(mesh):
                 evaluator = build_tagged_evaluator(
                     data_config=data_config, max_seq_len=seq_len, mesh=mesh, eval_cfg=length_cfg, mp=mp
@@ -828,10 +841,9 @@ def build_eval_hooks(
                         evaluator,
                         train_mesh=mesh,
                         mesh=mesh,
-                        prefix=f"{eval_cfg.prefix}/seq_len_{seq_len}",
-                        training_length_prefix=eval_cfg.prefix if seq_len == train_seq_len else None,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
+                        prefix=f"{eval_cfg.prefix}/{length_key}",
+                        training_length_prefix=eval_cfg.prefix if log_unqualified else None,
+                        model_fields=model_fields,
                     )
                 )
         if dropless_mesh is not None:
@@ -854,10 +866,9 @@ def build_eval_hooks(
                         evaluator,
                         train_mesh=mesh,
                         mesh=dropless_mesh,
-                        prefix=f"{prefix}/seq_len_{seq_len}",
-                        training_length_prefix=prefix if seq_len == train_seq_len else None,
-                        eval_current=True,
-                        eval_ema=False,
+                        prefix=f"{prefix}/{length_key}",
+                        training_length_prefix=prefix if log_unqualified else None,
+                        model_fields=("model",),
                     )
                 )
     return hooks

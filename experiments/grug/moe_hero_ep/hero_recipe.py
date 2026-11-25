@@ -87,7 +87,7 @@ def hero_rack_batch_size(seq_len: int) -> int:
 
 
 def hero_eval_seq_lens(train_seq_len: int) -> tuple[int, ...]:
-    """Evaluate fixed contexts already reached by training and the current context."""
+    """Return the current context and any fixed eval lengths already reached by training."""
     return tuple(length for length in sorted({train_seq_len, *HERO_FIXED_EVAL_SEQ_LENS}) if length <= train_seq_len)
 
 

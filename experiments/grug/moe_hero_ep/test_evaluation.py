@@ -24,9 +24,21 @@ from tokenizers.models import WordLevel
 from experiments.grug.moe_hero_ep import model, train
 
 
+@pytest.fixture
+def short_paloma(tmp_path):
+    tokenizer = Tokenizer(WordLevel({"<unk>": 0, **{str(i): i for i in range(1, 32)}}, unk_token="<unk>"))
+    tokenizer.save(str(tmp_path / "tokenizer.json"))
+    cache_path = str(tmp_path / "tiny")
+    write_levanter_cache([{"input_ids": np.array([1, 2, 3], dtype=np.int32)}], cache_path + "/validation", metadata={})
+    return LmDataConfig(
+        components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
+        tokenizer=str(tmp_path),
+    )
+
+
 @pytest.mark.multidevice
 @pytest.mark.timeout(180)
-def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_mesh(tmp_path, caplog):
+def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_mesh(short_paloma, caplog):
     with use_test_devices(4) as devices:
         mesh = Mesh(
             np.asarray(devices).reshape(1, 1, 2, 2, 1),
@@ -34,7 +46,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             axis_types=(AxisType.Explicit,) * 5,
         )
         config = model.GrugModelConfig(
-            vocab_size=128,
+            vocab_size=32,
             hidden_dim=32,
             intermediate_dim=16,
             shared_expert_intermediate_dim=16,
@@ -60,22 +72,12 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
         caplog.set_level(logging.INFO, logger=logger_name)
         events = []
         with jax.set_mesh(mesh):
-            tokenizer = Tokenizer(WordLevel({"<unk>": 0, **{str(i): i for i in range(1, 128)}}, unk_token="<unk>"))
-            tokenizer.save(str(tmp_path / "tokenizer.json"))
-            cache_path = str(tmp_path / "tiny")
-            write_levanter_cache(
-                [{"input_ids": np.array([1, 2, 3], dtype=np.int32)}], cache_path + "/validation", metadata={}
-            )
-            data = LmDataConfig(
-                components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
-                tokenizer=str(tmp_path),
-            )
             transformer = model.Transformer.init(config, key=jax.random.key(0))
             tokens = jnp.asarray(np.tile([1, 2, 3, 4], (2, 4)).astype(np.int32))
             logits = jax.jit(lambda params, ids: params.logits(ids))
             before = np.asarray(logits(transformer, tokens))
             hooks = train.build_eval_hooks(
-                data_config=data,
+                data_config=short_paloma,
                 train_seq_len=16,
                 mesh=mesh,
                 eval_cfg=train.GrugEvalConfig(
@@ -94,7 +96,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             with current_tracker(tracker):
                 for hook in hooks:
                     hook(step)
-                    hook(step, force=True)
+                    hook(step)
             after = np.asarray(logits(transformer, tokens))
 
         records = [json.loads(record.message) for record in caplog.records if record.name == logger_name]
@@ -120,15 +122,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
         assert events == [ProgressEvent.EVALUATION_STARTED, ProgressEvent.EVALUATION_FINISHED] * 4
 
 
-def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path, caplog):
-    tokenizer = Tokenizer(WordLevel({"<unk>": 0, **{str(i): i for i in range(1, 32)}}, unk_token="<unk>"))
-    tokenizer.save(str(tmp_path / "tokenizer.json"))
-    cache_path = str(tmp_path / "tiny")
-    write_levanter_cache([{"input_ids": np.array([1, 2, 3], dtype=np.int32)}], cache_path + "/validation", metadata={})
-    data = LmDataConfig(
-        components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
-        tokenizer=str(tmp_path),
-    )
+def test_multilength_evaluation_logs_current_and_ema_metrics_separately(short_paloma, caplog):
     mesh = Mesh(
         np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
         ("replica_dcn", "data", "context", "expert", "model"),
@@ -162,7 +156,7 @@ def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path
         transformer = model.Transformer.init(config, key=jax.random.key(0))
         ema = model.Transformer.init(config, key=jax.random.key(1))
         hooks = train.build_eval_hooks(
-            data_config=data,
+            data_config=short_paloma,
             train_seq_len=4,
             mesh=mesh,
             eval_cfg=train.GrugEvalConfig(eval_batch_size=4, seq_lens=(4, 8), compute_bpb=False),
@@ -173,7 +167,7 @@ def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path
         with current_tracker(tracker):
             for hook in hooks:
                 hook(step)
-                hook(step, force=True)
+                hook(step)
 
     records = [json.loads(record.message) for record in caplog.records if record.name == logger_name]
     logs = [record for record in records if record["event"] == "log"]
