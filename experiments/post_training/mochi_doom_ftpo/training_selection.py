@@ -19,6 +19,7 @@ from taskcompendium.models import TaskSpec
 
 from experiments.post_training.mochi_doom_ftpo.cohorts import publish_task_files
 from experiments.post_training.mochi_doom_ftpo.constants import REGIONAL_ROOT, SELECTION_NAME, SELECTION_ROOT, VERSION
+from experiments.post_training.mochi_doom_ftpo.grades import full_credit_task
 
 logger = logging.getLogger(__name__)
 BATCH_SIZE = 64
@@ -66,6 +67,30 @@ def selected_training(rows: list[dict[str, Any]], groups: Mapping[str, int]) -> 
     return selected
 
 
+def full_credit_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**row, "task_spec": full_credit_task(TaskSpec.model_validate_json(row["task_spec"])).model_dump_json()}
+        for row in rows
+    ]
+
+
+def effective_panels(
+    full: list[dict[str, Any]], manifest: dict[str, Any], baseline: dict[str, Any]
+) -> dict[str, list[dict[str, Any]]]:
+    """Select the exact measured cohorts, adding reserves only where baseline required them."""
+    by_id = {TaskSpec.model_validate_json(row["task_spec"]).id: row for row in full}
+    files = {"math16k": [], "panel32k": []}
+    for name, cohort in manifest["cohorts"].items():
+        rows = cohort["rows"]
+        if baseline["domains"][name]["N"] != len(rows):
+            rows = [*rows, *cohort["reserve"]]
+        if baseline["domains"][name]["N"] != len(rows):
+            raise ValueError(f"Incorrect effective cohort size for {name}")
+        destination = "math16k" if name == "math16k" else "panel32k"
+        files[destination].extend(by_id[row["task_id"]] for row in rows)
+    return files
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True)
@@ -86,13 +111,16 @@ def main() -> None:
         if count != len(rows) or digest != baseline["cohort_hashes"][name]:
             raise ValueError(f"baseline identity does not match the frozen {name} cohort")
     groups = training_groups(baseline["target_status"])
-    train = selected_training(list(parquet_rows(parent / "train.parquet")), groups)
-    full = list(parquet_rows(parent / "full_validation.parquet"))
-    pilot = [
-        row
-        for row in parquet_rows(parent / "validation.parquet")
-        if ("struct32k" if row["family"] in STRUCT_COMPONENTS else row["family"]) in groups
-    ]
+    train = full_credit_records(selected_training(list(parquet_rows(parent / "train.parquet")), groups))
+    full = full_credit_records(list(parquet_rows(parent / "full_validation.parquet")))
+    pilot = full_credit_records(
+        [
+            row
+            for row in parquet_rows(parent / "validation.parquet")
+            if ("struct32k" if row["family"] in STRUCT_COMPONENTS else row["family"]) in groups
+        ]
+    )
+    panels = effective_panels(full, manifest, baseline)
     parent_summary = json.loads((parent / "summary.json").read_text())
     recipe = {
         **parent_summary["recipe"],
@@ -100,6 +128,8 @@ def main() -> None:
         "target_status": baseline["target_status"],
         "groups_per_family": groups,
         "domain_pool_limit": DOMAIN_POOL_LIMIT,
+        "correctness": "native full credit; Verifyit=1, StdoutReward.pass_at_least=1",
+        "effective_cohort_hashes": baseline["cohort_hashes"],
         "exclusions": [
             *parent_summary["recipe"]["exclusions"],
             {
@@ -120,7 +150,7 @@ def main() -> None:
                 root,
                 name,
                 args.version,
-                {"train": rows, "validation": pilot, "full_validation": full},
+                {"train": rows, "validation": pilot, "full_validation": full, **panels},
                 recipe,
                 "sealed baseline targets; per-update groups recorded in recipe",
             )

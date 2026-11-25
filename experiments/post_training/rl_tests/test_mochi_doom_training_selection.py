@@ -5,12 +5,13 @@ from collections import Counter
 
 from finestore.rl.strata import TaskStrata, read_selection_manifest
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.models import Source
+from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.mochi_doom_ftpo.cohorts import publish_task_files
 from experiments.post_training.mochi_doom_ftpo.training_selection import (
+    effective_panels,
     selected_training,
     training_groups,
 )
@@ -76,3 +77,21 @@ def test_selected_pool_publication_preserves_balanced_structure_and_native_famil
     assert Counter(uid.split("-")[0] for uid in structured_ids) == {"calendar": 10, "closure": 10}
     assert not any(uid.startswith("rgym32k-") for uid in manifest.tasks)
     assert "heldout" in manifest.tasks
+
+    panels = effective_panels(
+        rows,
+        {
+            "cohorts": {
+                "math16k": {"rows": [{"task_id": "math-0"}], "reserve": []},
+                "if32k": {"rows": [{"task_id": "if32k-0"}], "reserve": [{"task_id": "if32k-1"}]},
+                "rgym32k": {"rows": [{"task_id": "rgym32k-0"}], "reserve": [{"task_id": "rgym32k-1"}]},
+            }
+        },
+        {"domains": {"math16k": {"N": 1}, "if32k": {"N": 1}, "rgym32k": {"N": 2}}},
+    )
+    assert [TaskSpec.model_validate_json(row["task_spec"]).id for row in panels["math16k"]] == ["math-0"]
+    assert [TaskSpec.model_validate_json(row["task_spec"]).id for row in panels["panel32k"]] == [
+        "if32k-0",
+        "rgym32k-0",
+        "rgym32k-1",
+    ]
