@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "b888c27dfc8e8a9171566a3e6411e6d44a686911",
+  "revision": "4e618a14b0218a97b01e664e91d6fb12b8e8d318",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
@@ -37,6 +37,12 @@
       "revision": "b888c27dfc8e8a9171566a3e6411e6d44a686911",
       "path": "hierarchy_20261125_b_v2/part-005.json",
       "sha256": "72039559663c33d478cb3f6e55b577f03896e4104288858e1dd07fd0059817f6"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "4e618a14b0218a97b01e664e91d6fb12b8e8d318",
+      "path": "hierarchy_20261125_b_v2/part-006.json",
+      "sha256": "b0f6c63deb4ae1ab113a59050be40ac9754c8850f5afe116266eb89cfc0e27c8"
     }
   ]
 }

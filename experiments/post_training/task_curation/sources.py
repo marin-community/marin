@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.datasets.lean import numina as lean
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.litecoder import tasks as litecoder
+from experiments.post_training.task_curation.datasets.litmus import tasks as litmus
 from experiments.post_training.task_curation.datasets.mcp_atlas_easy import tasks as mcp_atlas_easy
 from experiments.post_training.task_curation.datasets.mimo import tasks as mimo
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
@@ -211,6 +212,7 @@ R41_PENDING_SOURCE_IDS = (
 )
 
 PENDING_MEASUREMENT_SOURCES = (
+    *litmus.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),

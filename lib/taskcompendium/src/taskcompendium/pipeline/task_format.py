@@ -117,8 +117,12 @@ def _is_harbor_row(row: FormatRow) -> bool:
 
 
 def _is_taskspec_row(row: FormatRow) -> bool:
-    """A TaskSpec row that is not a Harbor package."""
-    return _parsed_task(row) is not None and not _is_harbor_row(row)
+    """A plain TaskSpec is the payload only when the raw record has no native blend structure.
+
+    QUICK also supplies the converted TaskSpec for raw blend records. That conversion
+    is not a second input format. A native Harbor package still matches independently.
+    """
+    return not _is_blend_record(row.raw) and _parsed_task(row) is not None and not _is_harbor_row(row)
 
 
 def _is_marinskyrl_row(row: FormatRow) -> bool:
