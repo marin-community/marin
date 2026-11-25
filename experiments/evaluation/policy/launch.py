@@ -6,13 +6,14 @@
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 
-from evalrecords.records import EvaluationSelection, PromptFormat
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
+from marin.evaluation.model_config import prompt_format
 from marin.evaluation.serving_config import resolved_serve_config
 
 from experiments.evaluation.curated import resolve_selection, runs_agent, selection_dataset
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, benchmark_window, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
@@ -30,37 +31,21 @@ class ServerGroup:
     evaluations: tuple[ResolvedPolicyEvaluation, ...]
 
 
-def _model_format(item: ResolvedPolicyEvaluation) -> PromptFormat:
-    return PromptFormat.CHAT if item.candidate.model.apply_chat_template else PromptFormat.COMPLETION
-
-
 def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe:
     """The catalog dataset, with its protocol, that the evaluation runs as for the candidate."""
-    return selection_dataset(item.evaluation.selection, _model_format(item))
-
-
-def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
-    """The input window the benchmark enforces on any server: its agent's input limit, else its protocol's window."""
-    config = evaluation_dataset(item)
-    if config.agent is not None:
-        return config.agent.max_input_tokens
-    return config.protocol.context_window
+    return selection_dataset(item.evaluation.selection, prompt_format(item.candidate.model))
 
 
 def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
-    """Choose a server window from the declared benchmark window and policy context.
+    """Choose a server window for a resolved evaluation.
 
-    Benchmarks with a declared window request ``served``, the candidate's window after the checkpoint
-    clamps it; others request a server at the policy context.
+    Benchmarks that enforce their own window, which ``resolve`` made the evaluation's context, request
+    ``served``, the candidate's window after the checkpoint clamps it; others request a server at the
+    evaluation's context.
     """
-    own = benchmark_window(item)
+    own = benchmark_window(item.evaluation, item.candidate)
     if own is None:
         return item.context
-    if own != item.context:
-        raise ValueError(
-            f"{item.candidate.name} on {item.evaluation.name}: the policy's context {item.context} is not the "
-            f"window {own} the benchmark enforces"
-        )
     if served is None or served < own:
         raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {own}")
     return served
@@ -73,7 +58,7 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | Non
     """
     groups: dict[tuple[int, bool], list[ResolvedPolicyEvaluation]] = {}
     for item in items:
-        agentic = runs_agent(resolve_selection(item.evaluation.selection, _model_format(item)))
+        agentic = runs_agent(resolve_selection(item.evaluation.selection, prompt_format(item.candidate.model)))
         groups.setdefault((_server_window(item, served), agentic), []).append(item)
     return tuple(
         ServerGroup(window=window, agentic=agentic, evaluations=tuple(members))
