@@ -32,6 +32,15 @@ subnormal, then verifies that cleanup releases the mesh and client. The 82
 checkpoint and TensorStore tests pass. This fix has no GPU checkpoint-restore qualification and
 does not explain R8's first shutdown failure, which occurred before restoration.
 
+Checkpoint-validation runs now write bounded shutdown-phase records to
+`native-finalization/<pid>/shutdown-phases.jsonl` under the existing debug
+artifact directory, falling back to the Iris output directory when no debug
+directory is configured. Each record is closed before ACK; ACK, atexit and
+watchdog events retain their existing stderr behavior and add no file writes.
+The artifact is limited to 64 records and 32 KiB per native process. Missing
+or incomplete phase evidence cannot qualify a diagnostic. This adds evidence
+collection; the full-model shutdown failure remains unresolved.
+
 | Gate | Integrated path |
 | --- | --- |
 | Paged inference | Snowball initializes KV pages and runs prefill and decode with GPU and TPU implementations. Tests cover mixed requests, compact short-window KV, and reuse of retained prompt pages. |

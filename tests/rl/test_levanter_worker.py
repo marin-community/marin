@@ -375,6 +375,118 @@ def test_native_child_import_time_stdout_does_not_corrupt_response(tmp_path, cap
     assert "native startup stdout" in capfd.readouterr().out
 
 
+@pytest.mark.parametrize("blocked_sink", [False, True])
+def test_native_shutdown_phase_artifact_preserves_real_cpu_natural_exit(tmp_path, blocked_sink):
+    (tmp_path / "phase_sink_runtime.py").write_text(
+        """
+import jax
+import numpy as np
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime, main
+
+def runtime_factory():
+    runtime = NativePolicyRuntime()
+    runtime.settings = {'runtime': {'validate_checkpoint_roundtrip': True,
+                                   'diagnostic_shutdown_observer': False},
+                        'distributed': {'process_id': 0}}
+    runtime.state = {'owned_buffer': jax.device_put(np.ones((2, 2), dtype=np.float32))}
+    return runtime
+
+main(runtime_factory)
+"""
+    )
+    destination = tmp_path / "artifacts"
+    if blocked_sink:
+        destination.write_text("A file prevents creation of the diagnostic directory.")
+    child = LearnerProcess(
+        sys.executable,
+        environment={
+            **os.environ,
+            "JAX_PLATFORMS": "cpu",
+            "PYTHONPATH": str(tmp_path),
+            "SKYRL_DEBUG_ARTIFACT_DIR": str(destination),
+            "IRIS_OUTPUT_DIR": str(tmp_path / "iris-output"),
+        },
+        timeout_seconds=30,
+        runtime_module="phase_sink_runtime",
+    )
+    try:
+        assert child.request("shutdown", {}) is None
+        # This exercises the real protocol's unchanged five-second natural wait.
+        assert child.process.returncode == 0
+        if blocked_sink:
+            assert destination.is_file()
+            assert not (tmp_path / "iris-output").exists()
+        else:
+            path = destination / "native-finalization" / str(child.process.pid) / "shutdown-phases.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            assert rows[-1]["event"] == "process_exit_begin" and rows[-1]["reason"] == "shutdown"
+            assert {row["phase"] for row in rows if row["event"] == "cleanup_phase_end"} == {
+                "synchronize",
+                "trainer_exit",
+                "release_owned_resources",
+                "clear_haliax_caches",
+                "clear_jax_caches",
+                "collect_python_resources",
+                "release_backend_clients",
+                "distributed_shutdown",
+            }
+            assert all(row["pid"] == child.process.pid and row["process_id"] == 0 for row in rows)
+            assert all(
+                row["event"] in {"cleanup_phase_begin", "cleanup_phase_end", "process_exit_begin"} for row in rows
+            )
+            assert [row["monotonic_ns"] for row in rows] == sorted(row["monotonic_ns"] for row in rows)
+    finally:
+        child.close()
+
+
+def test_native_shutdown_phase_artifact_is_bounded_and_excludes_payloads(tmp_path, monkeypatch):
+    monkeypatch.delenv("SKYRL_DEBUG_ARTIFACT_DIR", raising=False)
+    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "stderr", None)
+    runtime = NativePolicyRuntime()
+    runtime.settings = {"runtime": {"validate_checkpoint_roundtrip": True}, "distributed": {"process_id": 3}}
+    for _ in range(100):
+        runtime.shutdown_receipt(
+            "cleanup_phase_error",
+            phase="synchronize",
+            error_type="RuntimeError",
+            model_payload=object(),
+            message="This diagnostic field must never enter the artifact.",
+            pid="Caller fields must not replace the real process identity.",
+        )
+    path = tmp_path / "native-finalization" / str(os.getpid()) / "shutdown-phases.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 64 and path.stat().st_size <= 32 << 10
+    assert all(
+        set(row) == {"event", "phase", "error_type", "pid", "process_id", "thread_id", "time_ns", "monotonic_ns"}
+        for row in rows
+    )
+    assert all(row["pid"] == os.getpid() and row["process_id"] == 3 for row in rows)
+    assert all(row["error_type"] == "RuntimeError" and row["phase"] == "synchronize" for row in rows)
+
+
+def test_native_shutdown_phase_artifact_does_no_io_for_post_ack_or_timer_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("SKYRL_DEBUG_ARTIFACT_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "stderr", None)
+    runtime = NativePolicyRuntime()
+    runtime.settings = {"runtime": {"validate_checkpoint_roundtrip": True}, "distributed": {"process_id": 0}}
+    runtime.shutdown_receipt("process_exit_begin", reason="shutdown")
+    path = tmp_path / "native-finalization" / str(os.getpid()) / "shutdown-phases.jsonl"
+    before = path.read_bytes()
+    attempted_paths = []
+
+    def unavailable_file(path, *args, **kwargs):
+        attempted_paths.append(path)
+        raise OSError("Unexpected filesystem work after ACK or on the timer")
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr(Path, "open", unavailable_file)
+        for event in ("shutdown_ack_written", "python_atexit_begin", "request_stalled"):
+            runtime.shutdown_receipt(event, phase="synchronize", error_type="RuntimeError")
+    assert attempted_paths == []
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("watched_writable", [True, False])
 def test_native_finalization_watchdog_survives_atexit_without_forcing_exit(tmp_path, watched_writable):
     if not watched_writable:

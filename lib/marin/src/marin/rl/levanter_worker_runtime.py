@@ -63,6 +63,23 @@ from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
 _DIAGNOSTIC_STALL_SECONDS = 120.0
 _FINALIZATION_TRACE_SECONDS = 3.0
+_SHUTDOWN_PHASE_MAX_EVENTS = 64
+_SHUTDOWN_PHASE_MAX_BYTES = 32 << 10
+_SHUTDOWN_PHASE_EVENTS = frozenset(
+    {"cleanup_phase_begin", "cleanup_phase_end", "cleanup_phase_error", "process_exit_begin"}
+)
+_SHUTDOWN_PHASE_NAMES = frozenset(
+    {
+        "synchronize",
+        "trainer_exit",
+        "release_owned_resources",
+        "clear_haliax_caches",
+        "clear_jax_caches",
+        "collect_python_resources",
+        "release_backend_clients",
+        "distributed_shutdown",
+    }
+)
 _FINITE_CHUNK_ELEMENTS = 1 << 20
 _FINITE_COMPONENTS = ("model", "opt_state", "training_key", "step", "model_averaging")
 
@@ -423,6 +440,9 @@ class NativePolicyRuntime:
         self.numpy_allocation_policy = None
         self._closed = False
         self._shutdown_observer_marker = None
+        self._shutdown_phase_events = 0
+        self._shutdown_phase_bytes = 0
+        self._shutdown_phase_sink_failed = False
 
     def initialize(self, config: dict) -> dict:
         if self.trainer is not None:
@@ -1169,30 +1189,81 @@ class NativePolicyRuntime:
                 fields["observer_marker_error_type"] = marker_error
         if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False) and marker_error is None:
             return
+        receipt = {
+            "event": event,
+            "pid": os.getpid(),
+            "process_id": self.settings.get("distributed", {}).get("process_id"),
+            "thread_id": threading.get_ident(),
+            "time_ns": time.time_ns(),
+            "monotonic_ns": time.monotonic_ns(),
+            **fields,
+        }
+        self._persist_shutdown_phase(receipt)
         if sys.stderr is None:
             return
         # No JAX calls here: this also runs after distributed shutdown and on
         # rejected initialization, when querying the backend would be unsafe.
         try:
             print(
-                "native_shutdown_receipt "
-                + json.dumps(
-                    {
-                        "event": event,
-                        "pid": os.getpid(),
-                        "process_id": self.settings.get("distributed", {}).get("process_id"),
-                        "thread_id": threading.get_ident(),
-                        "time_ns": time.time_ns(),
-                        "monotonic_ns": time.monotonic_ns(),
-                        **fields,
-                    }
-                ),
+                "native_shutdown_receipt " + json.dumps(receipt),
                 file=sys.stderr,
                 flush=True,
             )
         except Exception:
             # A broken diagnostic stream must not skip cleanup or mask its error.
             pass
+
+    def _persist_shutdown_phase(self, receipt: dict) -> None:
+        # These synchronous events precede the binary ACK. ACK/atexit/watchdog
+        # events must never add filesystem work to the original exit window.
+        event = receipt["event"]
+        if (
+            event not in _SHUTDOWN_PHASE_EVENTS
+            or self._shutdown_phase_sink_failed
+            or self._shutdown_phase_events >= _SHUTDOWN_PHASE_MAX_EVENTS
+        ):
+            return
+        try:
+            row = {
+                "event": event,
+                "pid": os.getpid(),
+                "thread_id": threading.get_ident(),
+                "time_ns": time.time_ns(),
+                "monotonic_ns": time.monotonic_ns(),
+            }
+            rank = self.settings.get("distributed", {}).get("process_id")
+            row["process_id"] = rank if type(rank) is int and rank >= 0 else None
+            if event == "process_exit_begin":
+                if receipt.get("reason") not in ("shutdown", "eof"):
+                    return
+                row["reason"] = receipt["reason"]
+            else:
+                if receipt.get("phase") not in _SHUTDOWN_PHASE_NAMES:
+                    return
+                row["phase"] = receipt["phase"]
+                error_type = receipt.get("error_type")
+                if isinstance(error_type, str) and len(error_type) <= 128 and error_type.isidentifier():
+                    row["error_type"] = error_type
+            encoded = (json.dumps(row, sort_keys=True) + "\n").encode()
+            if self._shutdown_phase_bytes + len(encoded) > _SHUTDOWN_PHASE_MAX_BYTES:
+                return
+            directory = os.environ.get("SKYRL_DEBUG_ARTIFACT_DIR") or os.environ.get("IRIS_OUTPUT_DIR")
+            if not directory:
+                return
+            path = Path(directory) / "native-finalization" / str(os.getpid()) / "shutdown-phases.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb" if self._shutdown_phase_events == 0 else "r+b") as output:
+                if output.seek(0, os.SEEK_END) != self._shutdown_phase_bytes:
+                    raise OSError("Shutdown phase artifact changed outside its owner")
+                output.write(encoded)
+            # Closing flushes each bounded record before proceeding. Avoid fsync
+            # latency; the existing artifact collector handles delivery.
+            self._shutdown_phase_events += 1
+            self._shutdown_phase_bytes += len(encoded)
+        except Exception:
+            # Evidence loss is nonqualifying, but must not replace a cleanup
+            # error, skip later phases, or change protocol/observer behavior.
+            self._shutdown_phase_sink_failed = True
 
     @contextlib.contextmanager
     def _shutdown_phase(self, phase: str):

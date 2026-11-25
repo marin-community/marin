@@ -14,6 +14,13 @@ pass. The tiny and full-model GPU evidence below covers the earlier
 This fix has no GPU checkpoint-restore qualification and does not explain R8's
 failure before restoration.
 
+Checkpoint-validation runs now write bounded pre-ACK shutdown-phase records to
+`native-finalization/<pid>/shutdown-phases.jsonl` under the existing debug
+artifact directory, or the Iris output directory when no debug directory is
+configured. The limit is 64 records and 32 KiB per native process. ACK, atexit
+and watchdog events add no file writes. Missing or incomplete phase evidence
+cannot qualify a diagnostic; no full-model shutdown fix is established.
+
 At runtime source `634a4baa9c`, the production observer-OFF one-H100 tiny
 Snowball run passed all 24 independent terminal checks with the deterministic
 compiler profile. Its genuine Ray `HostWorker` completed two finite updates;
