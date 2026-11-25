@@ -51,6 +51,7 @@ from levanter.checkpoint import (
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
+    resolve_checkpoint,
     save_checkpoint,
 )
 from levanter.trainer import TrainerConfig
@@ -943,6 +944,29 @@ def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_complete
     restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
     assert_trees_all_equal(restored, state)
     assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
+def test_checkpoint_promotion_preserves_model_metadata(tmp_path):
+    class Model:
+        def checkpoint_metadata(self):
+            return {"outputs": 2}
+
+    checkpointer = Checkpointer(tmp_path, None, [], metadata={"format": "test"})
+    state = {"model": jnp.asarray([1.0, 2.0])}
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=1, model=Model())
+    checkpointer.wait_until_finished()
+
+    temporary = resolve_checkpoint(tmp_path)
+    assert temporary.path == str(tmp_path / "step-1")
+    assert temporary.metadata["is_temporary"] is True
+    assert temporary.metadata["outputs"] == 2
+
+    checkpointer.save_final_checkpoint(tree=state, step=1)
+    permanent = resolve_checkpoint(temporary.path)
+    assert permanent.metadata["is_temporary"] is False
+    assert permanent.metadata["outputs"] == 2
+    assert permanent.metadata["format"] == "test"
 
 
 _FORCED_SAVE_CRASH_SCRIPT = """
