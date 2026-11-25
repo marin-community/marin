@@ -56,6 +56,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
                         "source": ["declared-source"],
                         "topic": ["algebra"],
                         "difficulty": ["hard"],
+                        "agentic": pa.array([None], type=pa.bool_()),
                     }
                 ),
                 path,
@@ -139,6 +140,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     mismatched = original.set_column(
         original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
     )
+    false_label = original.set_column(original.schema.get_field_index("agentic"), "agentic", pa.array([False]))
     membership_path = primary.parent / "validation.parquet"
     membership = pq.read_table(membership_path)
     changed_task = json.loads(membership["task_spec"][0].as_py())
@@ -146,6 +148,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     faults.extend(
         [
             (primary, mismatched, "row strata differ from selection manifest"),
+            (primary, false_label, "row strata differ from selection manifest"),
             (membership_path, pa.table({"task_spec": [json.dumps(changed_task)]}), "manifest population differs"),
         ]
     )
