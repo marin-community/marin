@@ -1481,18 +1481,22 @@ class FullDiskFactory(ShellSimMachineFactory):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("filled_by_agent", "outcomes"),
-    [(False, ["infra_error", "graded"]), (True, ["submission_failure"])],
-    ids=["before-the-agent", "by-the-agent"],
+    ("agent_failure", "outcomes"),
+    [
+        (None, ["infra_error", "graded"]),
+        (MachineDiskFull("The sandbox is full"), ["submission_failure"]),
+        (CommandOutputLost("Failed to measure command output: cannot open /tmp/out"), ["submission_failure"]),
+    ],
+    ids=["disk-full-before-the-agent", "disk-filled-by-the-agent", "output-lost-during-the-episode"],
 )
-async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
-    tmp_path, run_config, filled_by_agent, outcomes
+async def test_a_broken_machine_is_retried_only_when_it_broke_before_the_agent_ran(
+    tmp_path, run_config, agent_failure, outcomes
 ):
     corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
 
     async def run_pi(context, complete):
-        if filled_by_agent:
-            raise MachineDiskFull("The sandbox is full")
+        if agent_failure is not None:
+            raise agent_failure
         await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
 
     async def model(request):
@@ -1502,11 +1506,11 @@ async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
         update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
     )
     arguments = {
-        "machine_factories": {"shellsim": ShellSimMachineFactory() if filled_by_agent else FullDiskFactory()},
+        "machine_factories": {"shellsim": FullDiskFactory() if agent_failure is None else ShellSimMachineFactory()},
         "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
     }
     output = str(tmp_path / "results")
-    if not filled_by_agent:
+    if agent_failure is None:
         with pytest.raises(EvaluationInfrastructureError):
             await run_evaluation((corpus,), output, config, model, **arguments)
     await run_evaluation((corpus,), output, config, model, **arguments)
@@ -1952,30 +1956,3 @@ async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_c
         release()
 
     assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"
-
-
-@pytest.mark.asyncio
-async def test_an_episode_whose_command_output_is_lost_is_a_failed_submission(tmp_path, run_config):
-    corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
-
-    async def run_pi(context, complete):
-        raise CommandOutputLost("Failed to measure command output: /bin/sh: 1: cannot open /tmp/out: No such file")
-
-    async def model(request):
-        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
-
-    config = run_config.model_copy(
-        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
-    )
-    output = str(tmp_path / "results")
-    await run_evaluation(
-        (corpus,),
-        output,
-        config,
-        model,
-        machine_factories={"shellsim": ShellSimMachineFactory()},
-        harnesses={"pi": lambda _agent, _budget: AgentHarness(run_pi)},
-    )
-
-    finished = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
-    assert [row["outcome"] for row in finished] == ["submission_failure"]
