@@ -14,14 +14,13 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.training.drafting.dspark_data import TRAIN_SPLIT, VALIDATION_SPLIT
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 _VERSION = "2026.11.24"
 _SEED = 20261124
 _HOLDOUT_MODULUS = 20
 _OUTPUT_BATCH_ROWS = 256
-_TRAIN = "train"
-_VALIDATION = "validation"
 _NEMOTRON = "gs://marin-us-central2/normalized-chat/nemotron_sft_v3"
 
 
@@ -90,7 +89,7 @@ def _sample_splits(source: str, rows_per_shard: int, max_shards: int, rng: Rando
         prompt = "\n".join(part["text"] for part in user["content"])
         split = validation if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else train
         split.append(row)
-    for split, rows in ((_TRAIN, train), (_VALIDATION, validation)):
+    for split, rows in ((TRAIN_SPLIT, train), (VALIDATION_SPLIT, validation)):
         if not rows:
             raise ValueError(f"No {split} rows from {source}")
     return _SourceSplits(train, validation)
@@ -109,8 +108,8 @@ def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], seed: 
         _sample_splits(source, rows, max_shards, Random(f"{seed}:{name}")) for name, source, rows in sources
     ]
     for split, components in (
-        (_TRAIN, [source.train for source in source_splits]),
-        (_VALIDATION, [source.validation for source in source_splits]),
+        (TRAIN_SPLIT, [source.train for source in source_splits]),
+        (VALIDATION_SPLIT, [source.validation for source in source_splits]),
     ):
         directory = root / split
         directory.mkdirs()

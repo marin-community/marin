@@ -177,7 +177,7 @@ def start_iris_vllm_followers(launch: IrisGangIdentity) -> None:
     _wait_until(request_start, error_message="Timed out requesting vLLM follower startup")
 
 
-def wait_for_iris_vllm_start(launch: IrisGangIdentity) -> bool:
+def wait_for_iris_vllm_start_decision(launch: IrisGangIdentity) -> bool:
     """Return whether to launch vLLM once the leader starts or skips the server."""
     if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not wait for follower startup")

@@ -114,7 +114,7 @@ class DraftRecipe:
     total_variation_weight: float
     optimizer: Literal["muon", "adamw"]
     lr_schedule: Literal["linear", "cosine", "none"]
-    draft_layers: int = 3
+    draft_layers: int
     draft_intermediate_size: int | None = None
     draft_vocab_size: int = 32000
     block_size: int = 8

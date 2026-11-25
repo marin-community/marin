@@ -33,6 +33,8 @@ DRAFT_CONFIG_FILE = "draft_config.json"
 DRAFT_LAYER_TYPE = "qwen3"
 TOKEN_FREQUENCIES_FILE = "token_frequencies.json"
 SPLITS_FILE = "splits.json"
+TRAIN_SPLIT = "train"
+VALIDATION_SPLIT = "validation"
 _MAX_SAFETENSORS_HEADER = 100_000_000
 EMBEDDING = "model.embed_tokens.weight"
 LM_HEAD = "lm_head.weight"
@@ -272,7 +274,7 @@ def _tokenized_rows(
 def inspect_mix(root: StoragePath) -> tuple[list[StoragePath], list[StoragePath]]:
     """Find the train and validation Parquet shards of a completed mix."""
     train, validation = (
-        sorted((root / split / "**" / "*.parquet").glob(), key=str) for split in ("train", "validation")
+        sorted((root / split / "**" / "*.parquet").glob(), key=str) for split in (TRAIN_SPLIT, VALIDATION_SPLIT)
     )
     if not train or not validation:
         raise ValueError(f"The mix at {root} needs Parquet shards under train/ and validation/")

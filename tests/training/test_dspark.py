@@ -39,6 +39,7 @@ from transformers import PreTrainedTokenizerFast
 @pytest.fixture
 def recipe() -> DraftRecipe:
     return DraftRecipe(
+        draft_layers=3,
         data=DraftDataConfig(shape=GrugShape(16, 4, 2, 1, 8, 8), mask_token_id=7, max_sequence_length=16),
         feature_taps=(1, 3),
         max_anchors=8,

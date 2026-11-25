@@ -46,7 +46,7 @@ def test_healthy_follower_outlives_rendezvous_deadline(monkeypatch):
     assert not coordinator.followers_stopped((1,))
 
 
-def test_coordinator_waits_for_all_followers_to_stop():
+def test_coordinator_tracks_follower_stop_acknowledgements():
     coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
     coordinator.follower_stopped(1)
     assert not coordinator.followers_stopped((1, 2))
@@ -69,7 +69,7 @@ def test_follower_uses_the_leaders_startup_decision(monkeypatch, start):
                 coordinator.follower_stopped(1)
 
     monkeypatch.setattr("time.sleep", publish_startup_decision)
-    assert iris_vllm.wait_for_iris_vllm_start(follower) is start
+    assert iris_vllm.wait_for_iris_vllm_start_decision(follower) is start
 
 
 def test_leader_failure_leaves_follower_running_for_iris_retry(monkeypatch):
@@ -92,7 +92,7 @@ def test_leader_failure_leaves_follower_running_for_iris_retry(monkeypatch):
             raise RuntimeError("leader failed")
 
     monkeypatch.setattr("time.sleep", lambda _: iris_vllm.start_iris_vllm_followers(launch))
-    assert iris_vllm.wait_for_iris_vllm_start(replace(launch, task_index=1))
+    assert iris_vllm.wait_for_iris_vllm_start_decision(replace(launch, task_index=1))
 
 
 @pytest.mark.parametrize(

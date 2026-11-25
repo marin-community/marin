@@ -31,7 +31,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     start_iris_vllm_followers,
     wait_for_iris_vllm_shutdown,
-    wait_for_iris_vllm_start,
+    wait_for_iris_vllm_start_decision,
 )
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 from marin.training.drafting.activation_store import (
@@ -375,7 +375,7 @@ def prefill_mochi(
     with TemporaryDirectory(prefix="mochi-dspark-prefill-") as directory, iris_vllm_launch(geometry) as launch:
         scratch = Path(directory)
         if not launch.is_leader:
-            if wait_for_iris_vllm_start(launch):
+            if wait_for_iris_vllm_start_decision(launch):
                 with _teacher_environment(teacher, recipe, launch, scratch) as server:
                     wait_for_iris_vllm_shutdown(launch, server.check_alive)
             notify_iris_vllm_stopped(launch)
