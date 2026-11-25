@@ -1044,7 +1044,10 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     assert read_stored_skyrl_attempt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
     (tmp_path / "terminal.json").unlink()
-    assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
+    assert read_stored_skyrl_attempts(str(tmp_path)) == (
+        None,
+        {"earlier-failed-attempt": attempts["earlier-failed-attempt"]},
+    )
     assert read_skyrl_attempt(str(tmp_path)) is None
 
 
