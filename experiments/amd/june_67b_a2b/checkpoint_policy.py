@@ -14,7 +14,8 @@ Two kinds of checkpoint share ``/work`` (8 TB pooled quota, with about 3.8 TB of
 
 At most ``KEEP_LAST_TEMPORARY`` + 2 checkpoints are on ``/work`` at once: the kept temporaries, the one being saved
 and the newest milestone. A 67B-A2B checkpoint with MuonH state is 502 GiB (0.54 TB), so that is 2.7 TB, leaving
-about 1.1 TB of the quota spare for a milestone whose upload has not finished.
+about 1.4 TB of the quota spare (with 0.1 TB for code, venvs, logs and caches) for a milestone whose upload
+has not finished.
 """
 
 from datetime import timedelta
@@ -22,7 +23,8 @@ from datetime import timedelta
 from levanter.checkpoint import CheckpointerConfig
 
 KEEP_LAST_TEMPORARY = 3
-MILESTONE_EVERY = 1000
+# The June TPU run kept every 500th step, so milestones land on the same steps for comparison.
+MILESTONE_EVERY = 500
 
 
 def snowball_checkpointer(

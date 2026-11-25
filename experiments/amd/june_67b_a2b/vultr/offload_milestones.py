@@ -90,7 +90,9 @@ def offload_once(run_dir: Path, destination: str, *, delete_after_offload: bool,
             copied.append(checkpoint.step)
         newest_step = max(c.step for c in complete_checkpoints(run_dir))
         if delete_after_offload and checkpoint.step < newest_step:
-            logger.info("deleting offloaded step %d from %s (newest local step %d)", checkpoint.step, run_dir, newest_step)
+            logger.info(
+                "deleting offloaded step %d from %s (newest local step %d)", checkpoint.step, run_dir, newest_step
+            )
             delete_local(checkpoint)
     return copied
 
