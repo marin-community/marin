@@ -280,6 +280,8 @@ def rl_arm(name: str, *, antithrash: bool, updates: int) -> Preset:
         model=MODEL,
         sample_namespace="datasets/mochi-loop-guards",
         checkpoints="latest",
+        checkpoint_every=1,
+        keep_every=1,
         temporary_output=True,
         budget="60 GB200 per arm; N updates fixed at submit from S0's measured trial times",
     )
