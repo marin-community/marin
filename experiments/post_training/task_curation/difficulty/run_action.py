@@ -25,6 +25,8 @@ from experiments.post_training.task_curation.difficulty.remediate import repair_
 
 REGISTRY_AUTH_SECRET = "GHCR_REGISTRY_AUTHFILE"
 """Skopeo authfile JSON for private ghcr images; the controller bundle carries it."""
+TPU_ATTEMPT_WORKERS = 4
+"""Concurrent tasks per regional batch, validated on a frozen 20-task panel."""
 
 
 def attempt_command(
@@ -100,11 +102,7 @@ def main() -> None:
             # container root and /tmp are memory-backed on CoreWeave bare metal, so
             # pulled images and sandbox disks there are unreclaimable cgroup memory.
             local_root = (
-                Path(
-                    "/var/lib/iris-cache/atlas-difficulty/actions"
-                    if campaign_record(args.ledger)
-                    else "/cache/atlas-difficulty/actions"
-                )
+                Path("/var/lib/iris-cache/atlas-difficulty/actions" if campaign else "/cache/atlas-difficulty/actions")
                 / key
                 / "runtime"
             )
@@ -117,6 +115,8 @@ def main() -> None:
                 registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
                 serving_pool=args.serving_pool,
             )
+            if campaign:
+                command[command.index("--workers") + 1] = str(TPU_ATTEMPT_WORKERS)
             subprocess.run(command, check=True)
             result = {"status": "completed", "run_root": output, "local_root": str(local_root)}
         else:

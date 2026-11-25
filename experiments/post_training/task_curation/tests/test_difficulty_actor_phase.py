@@ -14,6 +14,7 @@ pytest.importorskip("harbor")
 
 from finestore.rl.difficulty import Solver
 
+from experiments.post_training.task_curation.difficulty import run_action
 from experiments.post_training.task_curation.difficulty.importer import receipt_row
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, SourceAttempts
 from experiments.post_training.task_curation.difficulty.run_action import REGISTRY_AUTH_SECRET, attempt_command
@@ -133,6 +134,41 @@ def test_attempt_batch_carries_its_registry_credential():
     assert with_auth[-2:] == ["--registry-auth-secret", REGISTRY_AUTH_SECRET]
     without_auth = attempt_command(action, "manifest.json", "ledger", "output", "/tmp/local", registry_auth=False)
     assert "--registry-auth-secret" not in without_auth
+
+
+@pytest.mark.parametrize("regional", [False, True])
+def test_native_action_entrypoint_bounds_only_regional_host_concurrency(monkeypatch, tmp_path, regional):
+    """A TPU host cap changes scheduling, preserving the frozen runtime command."""
+    source = SourceAttempts("source", "population", (("task", "b" * 64, 1),), "queue", "c" * 64, ())
+    action = AttemptBatch(Solver.SMALL, (source,), 1)
+    ledger = str(tmp_path / "ledger")
+    manifest, serving_pool = "manifest.json", "regional-pool"
+    monkeypatch.setattr(
+        "sys.argv", ["run_action", "--manifest", manifest, "--ledger", ledger, "--serving-pool", serving_pool]
+    )
+    monkeypatch.setattr(run_action, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(run_action, "load_action", lambda _: action)
+    monkeypatch.setattr(run_action, "campaign_record", lambda _: {"campaign_id": "frozen"} if regional else None)
+    monkeypatch.setattr(run_action, "marin_prefix", lambda: str(tmp_path))
+    monkeypatch.setattr(run_action, "get_secret", lambda _: "fixture")
+    calls = []
+    monkeypatch.setattr(run_action, "subprocess", SimpleNamespace(run=lambda command, **kwargs: calls.append(command)))
+    run_action.main()
+    assert len(calls) == 1
+    actual = calls[0]
+    assert actual[actual.index("--workers") + 1] == ("4" if regional else "16")
+    baseline = attempt_command(
+        action,
+        manifest,
+        ledger,
+        actual[actual.index("--output-root") + 1],
+        actual[actual.index("--local-root") + 1],
+        registry_auth=True,
+        serving_pool=serving_pool,
+    )
+    actual = list(actual)
+    actual[actual.index("--workers") + 1] = baseline[baseline.index("--workers") + 1]
+    assert actual == baseline
 
 
 def test_registry_reference_pins_its_digest(monkeypatch):
