@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 from rigging.training_journal import TrainingJournal
 
 from experiments.post_training.long_loop.archive import ArchiveInput, seal_archive, verify_archive
@@ -80,3 +81,22 @@ def test_interrupted_producer_attempt_blocks_complete_archive(tmp_path):
     TrainingJournal(str(sft), "cpu-fixture", "sft", "rank-0")
     with pytest.raises(ValueError, match="no completion receipt"):
         native_training_inputs(str(sft), str(rl), 1, 2)
+
+
+def test_declared_phase_gap_retains_verified_history_without_certifying_phase_coverage(tmp_path):
+    sft, rl = tmp_path / "sft", tmp_path / "rl"
+    produce(sft, "rank-0", "sft")
+    journal = produce(rl, "trainer", "rl", omit_phase="first_step")
+    produce(rl / "exports/step-2", "exporter", "rl_export")
+    with pytest.raises(ValueError, match="Missing native phases"):
+        native_training_inputs(str(sft), str(rl), 1, 2)
+    inputs, coverage = native_training_inputs(str(sft), str(rl), 1, 2, {"rl": ["first_step"]})
+    assert coverage["rl"]["missing_phases"] == ["first_step"]
+    assert coverage["sft"]["missing_phases"] == []
+    history = next(item for item in inputs if item["name"] == f"telemetry/rl/trainer/{journal.attempt}/history.jsonl")
+    assert StoragePath(history["source"]).read_bytes() == journal.history.read_bytes()
+    with pytest.raises(ValueError, match="Declared native phase gaps differ"):
+        native_training_inputs(str(sft), str(rl), 1, 2, {"rl": ["first_step", "steady_state"]})
+    (journal.destination / "history.jsonl").write_text("changed history")
+    with pytest.raises(ValueError, match="Telemetry file changed"):
+        native_training_inputs(str(sft), str(rl), 1, 2, {"rl": ["first_step"]})

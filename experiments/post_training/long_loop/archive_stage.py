@@ -404,9 +404,13 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
 
 
 def native_training_inputs(
-    sft_root: str, rl_root: str, sft_producers: int, selected_rl_step: int
+    sft_root: str,
+    rl_root: str,
+    sft_producers: int,
+    selected_rl_step: int,
+    accepted_missing_phases: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict], dict]:
-    """Require complete producer-owned histories and journals before archiving a new run."""
+    """Verify native histories and preserve explicitly declared phase gaps as partial evidence."""
     inputs, coverage = [], {}
     stages = {
         "sft": (
@@ -429,13 +433,32 @@ def native_training_inputs(
         ),
     }
     stages["rl_export"] = (prefix_join(rl_root, f"exports/step-{selected_rl_step}"), {"exporter"}, {"export"})
+    accepted = accepted_missing_phases or {}
+    if accepted.keys() - stages.keys():
+        raise ValueError("Unknown stage in declared native phase gaps")
     for stage, (root, producers, phases) in stages.items():
-        receipts = verify_training_journals(root, producers, phases)
+        missing = set(accepted.get(stage, []))
+        if missing - phases:
+            raise ValueError(f"Unknown native phase gap for {stage}")
+        receipts = verify_training_journals(root, producers, phases - missing)
+        if missing:
+            for receipt in receipts:
+                if receipt["status"] != "completed":
+                    continue
+                events = (StoragePath(receipt["source"]).parent / "phases.jsonl").read_bytes().splitlines()
+                completed = {
+                    event["kind"]
+                    for line in events
+                    if (event := json.loads(line))["event"] == "end" and event["status"] == "completed"
+                }
+                if phases - completed != missing:
+                    raise ValueError(f"Declared native phase gaps differ from the verified journal for {stage}")
         coverage[stage] = {
             "expected": len(producers),
             "verified": len({receipt["producer"] for receipt in receipts if receipt["status"] == "completed"}),
             "producers": sorted(producers),
             "runs": sorted({receipt["run"] for receipt in receipts}),
+            "missing_phases": sorted(missing),
         }
         for receipt in receipts:
             directory = StoragePath(receipt["source"]).parent
@@ -638,7 +661,13 @@ def derive_archive_plan(
             rl_telemetry,
             full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
             run.global_step,
+            settings.get("accepted_missing_native_phases"),
         )
+        phase_gaps = {stage: row["missing_phases"] for stage, row in timing_coverage.items() if row["missing_phases"]}
+        if phase_gaps:
+            missing["timing"] = "Declared missing native phase spans: " + json.dumps(phase_gaps, sort_keys=True)
+            blockers.append(missing["timing"])
+            limitations.append(missing["timing"])
         for stage, expected in {"sft": sft["id"], "rl": trainer["run_name"], "rl_export": trainer["run_name"]}.items():
             if timing_coverage[stage]["runs"] != [expected]:
                 raise ValueError(f"Native {stage} telemetry belongs to another run")

@@ -611,6 +611,11 @@ set `archive.sft_data_accounting.population_evidence` in the resolved recovery
 specification to filename/source/SHA-256 pins. The archive verifies these pins,
 requires the same population/padding/decision evidence, and records the supplement
 without changing the accounting producer.
+If a completed producer lacks native phase spans, record their exact names by
+stage in `archive.accepted_missing_native_phases`. The archive still verifies
+history hashes, producer identities and all existing spans, requires the declared
+gap to match the journal, and records incomplete timing coverage as a cleanup
+blocker. This preserves partial evidence without certifying complete phase timing.
 
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the
