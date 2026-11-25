@@ -65,6 +65,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
+        ("native-no-evaluation", 2, 3600, []),
         ("versioned-missing-evaluation", None, 3600, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
@@ -114,13 +115,21 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
         init=recipe.stored_initializer(recipe.published_model("weights@2026.11.10", preset=preset), preset=preset),
     )
+    native_table = table
+    if case == "native-no-evaluation":
+        without_evaluation = replace(preset, evaluations=(), checkpoints="none", checkpoint_every=None, export="none")
+        native_table = replace(
+            table, presets=tuple(without_evaluation if row.name == name else row for row in table.presets)
+        )
     source = recorded_runs(
         name,
         "tests/stored-progress",
         attempt_id="native-attempt",
         inputs=inputs,
+        table=native_table,
     )
     with edit_receipt(source) as receipt:
+        receipt["result"]["provenance"]["branch"] = "fixture/branch"
         if case in ("untracked-native", "versioned-missing-evaluation"):
             receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     metrics = read_skyrl_metrics(str(source))
@@ -210,11 +219,14 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert preset_label == name
     assert set(settings) == {*inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"}
     assert row["issue"] is None and row["gate_result"] is None
+    assert row["branch"] == "fixture/branch"
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert (row["planned_updates"], row["measured_updates"]) == ((1, [1]) if case == "updates-override" else (2, [1, 2]))
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded"), (row["failed_facts"], row["evidence"])
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
+    if case == "native-no-evaluation":
+        assert row["evaluations"] == []
     if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
         assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
     if case == "checkpoint-lineage":

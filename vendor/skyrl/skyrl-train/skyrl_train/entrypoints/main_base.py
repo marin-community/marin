@@ -391,10 +391,9 @@ class BasePPOExp:
                 max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
             )
         prompts_dataset = self.task_dataset(self.cfg.data.train_data)
-        # make sure the dataset is large enough to train on
-        assert (
-            len(prompts_dataset) >= self.cfg.trainer.train_batch_size
-        ), f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
+        batch_size = self.cfg.trainer.train_batch_size
+        if len(prompts_dataset) < batch_size:
+            raise ValueError(f"Training has {len(prompts_dataset)} prompts but needs {batch_size} for one batch")
         return prompts_dataset
 
     def task_dataset(self, data_files):

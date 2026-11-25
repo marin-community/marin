@@ -208,9 +208,9 @@ _TRAIN_LONG = Preset(
     accepts_init=True,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
-    tasks="snowball-100k@2026.11.19.1",
+    tasks="snowball-100k@2026.11.25.1",
     model=_MODEL,
-    held_out_tasks="eval-lite@2026.11.17.1",
+    held_out_tasks="eval-lite@2026.11.25.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
     sample_namespace="datasets/mochi-rl",
@@ -268,12 +268,15 @@ MOCHI = ModelPresets(
 )
 
 
-if __name__ == "__main__":
-
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.mochi_sft import MOCHI_SFT_PRESETS  # noqa: PLC0415
 
         return MOCHI_SFT_PRESETS
 
-    raise SystemExit(rl.main(MOCHI, sft_presets=sft_presets))
+    return rl.main(MOCHI, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

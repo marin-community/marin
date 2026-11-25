@@ -119,7 +119,10 @@ def _terminal_measurements(
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
     evaluation_task_set = None
-    if result.state == "succeeded" or attempt.metrics_started_at is not None:
+    has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
+        callback.type == "evaluation" for callback in launch.callbacks or ()
+    )
+    if has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
         status = evaluation_status(run_output, preset, attempt, launch)
         evaluations = list(status.evaluations)
         evaluation_task_set = status.evaluation_task_set
@@ -248,8 +251,6 @@ def build_record(
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
-    config = redact_value(attempt.native.config)
-    assert isinstance(config, dict)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
@@ -264,11 +265,11 @@ def build_record(
         evaluation_task_set=measured.evaluation_task_set,
         evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
-        branch=index.branch if index is not None else None,
+        branch=index.branch if index is not None else provenance.get("branch"),
         commit=index.source_revision if index is not None else provenance.get("base_commit"),
         settings=list(map(_visible_setting, inputs.settings)),
-        launch_config=config,
-        dirty=index.dirty if index is not None else None,
+        launch_config=cast(dict, redact_value(attempt.native.config)),
+        dirty=index.dirty if index is not None else provenance.get("dirty"),
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
         issue=lineage_issue(launch.export_root),

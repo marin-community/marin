@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import click
 import yaml

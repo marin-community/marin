@@ -61,7 +61,7 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
             check=True,
             timeout=120,
         )
-        (config,) = json.loads(result.stdout.splitlines()[-1])
+        (config,) = json.loads(result.stdout)
         return config
 
 

@@ -58,9 +58,9 @@ SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DEFAULT_SELECTION_VERSION = "2026.11.19.1"
+DEFAULT_SELECTION_VERSION = "2026.11.25.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
+DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
@@ -519,12 +519,16 @@ SNOWBALL = ModelPresets(
     namespace="snowball-rl",
 )
 
-if __name__ == "__main__":
 
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
 
         return SNOWBALL_SFT
 
-    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))
+    return rl.main(SNOWBALL, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
