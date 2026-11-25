@@ -698,21 +698,8 @@ class _ReadOperations:
         *,
         columns: Sequence[str] | None = None,
         where: list[tuple[str, str, object]] | None = None,
-    ) -> Iterator[dict]:
-        """Yield deduplicated rows from this view in primary-key order."""
-        return self._iter_rows(
-            table,
-            columns=columns,
-            where=where,
-        )
-
-    def _iter_rows(
-        self,
-        table: str,
-        *,
-        columns: Sequence[str] | None,
-        where: list[tuple[str, str, object]] | None,
     ) -> Generator[dict, None, None]:
+        """Yield deduplicated rows from this view in primary-key order."""
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
@@ -879,7 +866,7 @@ class _ReadOperations:
                         chunked[descriptor.name] = descriptor
                 if chunked:
                     with closing(
-                        self._iter_rows(
+                        self.iter_rows(
                             BlobTables.PARTS,
                             columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
                             where=[(BlobColumns.NAME, "in", list(chunked))],
@@ -932,7 +919,7 @@ class _ReadOperations:
             yield from _validated_blob_parts(descriptor, ())
             return
         with closing(
-            self._iter_rows(
+            self.iter_rows(
                 BlobTables.PARTS,
                 columns=[BlobColumns.PART, BlobColumns.DATA],
                 where=[(BlobColumns.NAME, "==", descriptor.name)],
