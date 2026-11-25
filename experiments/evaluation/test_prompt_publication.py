@@ -110,24 +110,27 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
         assert context.count("AUXILIARY_SENTINEL") == shots
         assert document["question"].strip() in context
     catalog_root = str(tmp_path / "catalog")
-    declared = replace(source, info=replace(source.info, count=2), config=replace(dataset, protocol=protocol))
+    measured = replace(source, config=replace(dataset, protocol=protocol))
     write_campaign_report(
         str(tmp_path / "campaign.json"),
         CampaignStatus.COMPLETED,
         mode="quick",
-        outcomes=[SourceOutcome(declared.name, str(output), "completed", pipeline_key="fixture")],
+        outcomes=[SourceOutcome(measured.name, str(output), "completed", pipeline_key="fixture")],
         run_id="published-eval",
         started_at="2026-11-05T00:00:00+00:00",
-        source_ids={declared.name: declared.info.id},
+        source_ids={measured.name: measured.info.id},
         execution={},
         catalog_root=catalog_root,
     )
-    snapshot = publish_catalog(catalog_root, "published-eval", [declared])
+    snapshot = publish_catalog(catalog_root, "published-eval", [measured])
     (published,) = CurationCatalog(catalog_root).sources(snapshot.snapshot_id)
     assert published.curation is not None
     assert published.curation.status == "completed"
     assert published.curation.processed_rows == 2
     assert published.curation.raw_population_count == 2
+    # A QUICK run records a SKIPPED assessment, so its measured population stays in the
+    # curation summary while the published task count stays empty.
+    assert published.declaration.task_count is None
     assert published.declaration.type == "eval"
 
 

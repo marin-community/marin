@@ -335,24 +335,6 @@ def _publish(
                 }
             )
         )
-    # Inventory-only pointers are carried at their published count so the Atlas lists
-    # them; that count exists only when a measurement identifies the pointer's pin, so
-    # unmeasured pointers do not appear. They have no embedded tasks, so no placement
-    # statistics exist for them.
-    sources.extend(
-        AlignmentSource(
-            source_id=row.id,
-            source_key=canonical_sha256(row.model_dump(mode="json")),
-            population=population,
-            intended_use=None,
-            task_count=row.task_count,
-            ready_count=0,
-            insufficient_context_count=0,
-            basis="inventory",
-        )
-        for row in inventory
-        if row.id not in curated_roots and row.task_count is not None
-    )
     curriculum_root = alignment.curriculum_vectors_root
     lineage = {
         key: alignment.model_dump()[key]
@@ -371,8 +353,8 @@ def _publish(
         curriculum_key=alignment.curriculum_key,
         population=population,
         sample_size=sample_size,
-        # Release totals stay the curriculum-processed population; declared counts live
-        # per source so coverage statistics and the release total agree.
+        # Release totals stay the curriculum-processed population; per-source counts live
+        # beside the total so coverage statistics and the release total agree.
         task_count=sum(row.task_count for row in sources if row.basis == "matched"),
         ready_count=sum(row.ready_count for row in sources),
         insufficient_context_count=sum(row.insufficient_context_count for row in sources),
