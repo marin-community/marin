@@ -719,7 +719,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
-        monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *_args, **_kwargs: sys.executable)
+        run_cpu = gate.run_skyrl_cpu
         for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
@@ -729,7 +729,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *, timeout, diagnostic=diagnostic):
-                    assert "schema-defaults" in command
+                    if "schema-defaults" not in command:
+                        return run_cpu(command, timeout=timeout)
                     if diagnostic == "timeout":
                         raise subprocess.TimeoutExpired(command, timeout)
                     if diagnostic == "oserror":
