@@ -180,9 +180,12 @@ WITH engine_rows AS (
 ), filtered AS (
     -- Reduce the scan to the narrow per-series facts the deltas need before any
     -- JSON work: the metric-name predicate prunes millions of rows cheaply, and
-    -- the run's trainer rows never carry these engine names.
-    SELECT service, execution_uid, node_name, process_index, name, timestamp_ms, value,
-           json_get(attributes_json, 'engine') AS engine,
+    -- the run's trainer rows never carry these engine names. The resource and
+    -- attribute hashes stand in for the old query's per-row JSON partition keys
+    -- so one engine actor per registry stays its own series.
+    SELECT service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
+           md5(resource_attributes_json) AS resource_key,
+           md5(attributes_json) AS attribute_key,
            json_get(attributes_json, 'finished_reason') AS finished_reason,
            CASE WHEN service = 'vllm' OR json_get(attributes_json, 'metric_source') = 'vllm'
                 THEN 1 ELSE 0 END AS is_engine
@@ -195,39 +198,46 @@ WITH engine_rows AS (
                     'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
            OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
 ), sampled AS (
-    -- One row per series and bucket. counter_end is the bucket's highest sample;
-    -- a reset inside the bucket leaves the pre-reset peak there, and the growth
-    -- CASE below treats the resulting drop as a reset. Grouping here keeps LAG
-    -- off the millions of scrape rows the filters select: a per-sample window
-    -- over them spills and misses the bridge query deadline.
+    -- One row per series and bucket, carrying the bucket's ordered first and last
+    -- samples beside its spread. Grouping here keeps LAG off the millions of scrape
+    -- rows the filters select: a per-sample window over them spills and misses the
+    -- bridge query deadline.
     SELECT {bucket} AS t,
            service, execution_uid, node_name, process_index,
-           name, engine, finished_reason, is_engine,
+           name, resource_key, attribute_key, finished_reason, is_engine,
            SUM(value) AS sum_value,
            COUNT(value) AS sample_count,
-           MIN(value) AS counter_start,
-           MAX(value) AS counter_end
+           first_value(value ORDER BY timestamp_ms, seq) AS counter_start,
+           last_value(value ORDER BY timestamp_ms, seq) AS counter_end,
+           MIN(value) AS counter_min,
+           MAX(value) AS counter_max
     FROM filtered
-    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
     -- An aggregate predicate, so the planner cannot push the is_engine check
     -- back under the scan and evaluate its json_get per scanned row.
     HAVING MIN(is_engine) = 1
 ), lagged AS (
     SELECT *, LAG(counter_end) OVER (
                PARTITION BY service, execution_uid, node_name, process_index,
-                            name, engine, finished_reason
+                            name, resource_key, attribute_key
                ORDER BY t
            ) AS previous_end
     FROM sampled
 ), growth AS (
     SELECT *,
-           -- A series' first bucket in the window has no predecessor: its growth is
-           -- the spread of its own samples, or nothing when one scrape stands alone.
+           -- The per-sample clamped sum, rebuilt from ordered aggregates: the step
+           -- across the bucket boundary plus the bucket's own ordered steps. A
+           -- reset inside the bucket (an ordered drop the spread cannot hide)
+           -- splits it at the drop: the pre-reset climb reaches counter_max and
+           -- the post-reset climb starts at counter_min. More than one reset in
+           -- one bucket collapses to the outermost pair.
            CASE
-               WHEN previous_end IS NULL AND sample_count > 1 THEN counter_end - counter_start
-               WHEN previous_end IS NULL THEN NULL
-               WHEN counter_end >= previous_end THEN counter_end - previous_end
-               ELSE counter_end
+               WHEN previous_end IS NULL AND sample_count = 1 THEN NULL
+               WHEN counter_start > counter_min OR counter_end < counter_max
+                    THEN COALESCE(GREATEST(counter_start - previous_end, 0), 0)
+                     + (counter_max - counter_start) + (counter_end - counter_min)
+               ELSE COALESCE(GREATEST(counter_start - previous_end, 0), 0)
+                    + (counter_end - counter_start)
            END AS growth
     FROM lagged
 )

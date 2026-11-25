@@ -12,7 +12,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 from config import ClusterTarget
-from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros
+from conftest import bridge_config, dashboard_panels, finelog_sql_for_duckdb, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
 from rl_execution_observability import (
     _METRIC_NAMES,
@@ -99,7 +99,7 @@ def query(database, title, *, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
 
 
 def _duckdb_sql(sql: str) -> str:
-    return sql.replace("FIRST_VALUE(", "FIRST(")
+    return finelog_sql_for_duckdb(sql)
 
 
 class TelemetryRow(NamedTuple):

@@ -11,7 +11,13 @@ from urllib.parse import parse_qs, urlparse
 import duckdb
 import pytest
 from config import ClusterTarget
-from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
+from conftest import (
+    bridge_config,
+    dashboard_panels,
+    finelog_sql_for_duckdb,
+    install_finelog_dialect_macros,
+    queried_namespace,
+)
 from dashboard_stitch import stitch_all
 from rl_observability import RL_PRODUCER_ROW_NAMES, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
@@ -349,7 +355,7 @@ def _view_sql(view: str, endpoint: str) -> str:
     build = {"/v1/rl/overview": rl_overview_dataset, "/v1/rl/gpu": rl_gpu_dataset}[endpoint]
     dataset = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
-    return f"WITH {sources}\n{dataset.views[view]}"
+    return finelog_sql_for_duckdb(f"WITH {sources}\n{dataset.views[view]}")
 
 
 @pytest.mark.parametrize("build", [rl_overview_dataset, rl_gpu_dataset])
@@ -374,7 +380,9 @@ def test_selected_rl_views_preserve_combined_results_with_uneven_device_samples(
         selected = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000, view)
         results = []
         for dataset in (combined, selected):
-            sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+            sources = finelog_sql_for_duckdb(
+                ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+            )
             rows = store.execute(f"WITH {sources}\n{dataset.views[view]}").fetchall()
             results.append(sorted(rows, key=lambda row: tuple(str(value) for value in row[:2])))
         assert len(results[0]) == len(results[1]), view
@@ -400,7 +408,7 @@ def test_critical_path_sources_exclude_other_clocks_and_phases(store, view):
     ]
     store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', irrelevant)
     selected = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000, view)
-    source_rows = store.execute(selected.sources[0].sql).fetch_arrow_table().to_pylist()
+    source_rows = store.execute(finelog_sql_for_duckdb(selected.sources[0].sql)).fetch_arrow_table().to_pylist()
     assert {(row["clock_domain"], row["phase"]) for row in source_rows} == {
         ("critical_path", "rollout_or_inference_wait"),
         ("critical_path", "train_step"),
@@ -408,7 +416,7 @@ def test_critical_path_sources_exclude_other_clocks_and_phases(store, view):
     combined = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000)
     results = []
     for dataset in (combined, selected):
-        sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+        sources = finelog_sql_for_duckdb(",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources))
         rows = store.execute(f"WITH {sources}\n{dataset.views[view]}").fetchall()
         results.append(sorted(rows, key=lambda row: tuple(str(value) for value in row[:2])))
     assert results[0] == results[1]
@@ -423,7 +431,7 @@ def _panel_sql(title: str) -> str:
 
 def _request_rows(store, path, params):
     def query_source(sql, *, max_rows):
-        return store.execute(sql).fetch_arrow_table()
+        return store.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
 
     source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
     app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
@@ -579,7 +587,7 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store, contende
             row["section"] = view
 
     def query(sql, *, max_rows):
-        return store.execute(sql).fetch_arrow_table()
+        return store.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
 
     source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
     app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
@@ -782,6 +790,87 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
     rates = [round(row[1], 4) for row in throughput]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
+    assert len(rates) == 5
+
+
+def _fresh_store() -> duckdb.DuckDBPyConnection:
+    database = duckdb.connect()
+    for stream in sorted(set(_SEMANTIC_STREAM.values())):
+        database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
+    install_finelog_dialect_macros(database)
+    return database
+
+
+def _seed_rows(database, rows: list[tuple]) -> None:
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    service_index = _COLUMNS.index("service")
+    routed: dict[str, list] = {}
+    for row in rows:
+        routed.setdefault(_SEMANTIC_STREAM[row[service_index]], []).append(row)
+    for stream, stream_rows in routed.items():
+        database.executemany(f'INSERT INTO "{stream}" VALUES ({placeholders})', stream_rows)
+
+
+def test_engine_growth_counts_a_reset_inside_its_bucket() -> None:
+    """A counter that resets inside one bucket grows by its ordered steps, not by
+    the spread of its samples: 1000, 1010, 0, 10 is 20, not 1010."""
+    database = _fresh_store()
+    _seed_rows(
+        database,
+        [
+            _row(
+                service="vllm",
+                name="generation_tokens_total",
+                value=value,
+                moment=WINDOW_START + timedelta(seconds=10 * index),
+                seq=index,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="inference",
+                attributes={"metric_source": "vllm", "engine": "0"},
+            )
+            for index, value in enumerate((1000.0, 1010.0, 0.0, 10.0))
+        ],
+    )
+
+    (row,) = _overview_rows(database, "engine_tokens")
+
+    assert row["t"] == _WINDOW_START_MS
+    assert row["generation"] == pytest.approx(20 / 300)
+
+
+def test_engine_rates_keep_two_actors_that_differ_only_by_resource() -> None:
+    """`engine` is unique within the registry that published it, so two actors can
+    both report engine 0 from one node and differ only in their resource
+    attributes; the series key must keep them apart or their counters get
+    differenced against each other."""
+    database = _fresh_store()
+    _seed_rows(
+        database,
+        [
+            (
+                CLUSTER,
+                "vllm",
+                RUN_ID,
+                None,
+                "iris:two-actors",
+                NODES[0],
+                None,
+                "generation_tokens_total",
+                base + 1024.0 * (bucket + 1),
+                _millis(WINDOW_START + timedelta(minutes=5 * bucket)),
+                bucket,
+                json.dumps({"role": "inference", "training_type": "sync", "actor_uid": actor}),
+                json.dumps({"metric_source": "vllm", "engine": "0"}),
+            )
+            for actor, base in (("a", 0.0), ("b", 50_000.0))
+            for bucket in range(6)
+        ],
+    )
+
+    rates = [round(row["generation"], 4) for row in _overview_rows(database, "engine_tokens")]
+
+    assert rates == [round(2 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
 
 
