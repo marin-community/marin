@@ -26,7 +26,8 @@ import os
 import time
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
@@ -210,6 +211,11 @@ class EvaluationStopConfig:
             raise ValueError("evaluation stop thresholds must be finite")
 
 
+def metric_drop_exceeds_limit(value: float, baseline: float, maximum_drop: float) -> bool:
+    """Compare reported decimal metrics without binary subtraction moving an inclusive boundary."""
+    return Decimal(str(baseline)) - Decimal(str(value)) > Decimal(str(maximum_drop))
+
+
 @register_callback("best_checkpoint")
 class BestCheckpointCallback(TrainerCallback):
     """Persist the best sufficiently covered verifier score, retaining the initial policy on ties."""
@@ -267,7 +273,7 @@ class BestCheckpointCallback(TrainerCallback):
             value = metrics[key]
             if not math.isfinite(value):
                 raise ValueError(f"Nonfinite preservation metric: {key}")
-            if value < self.preservation_baseline[key] - maximum_drop:
+            if metric_drop_exceeds_limit(value, self.preservation_baseline[key], maximum_drop):
                 return control
         score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
@@ -320,50 +326,50 @@ def _harbor_telemetry_config() -> dict[str, str] | None:
     }
 
 
+@dataclass(frozen=True)
+class FtpoPilotState:
+    baseline_pass_rate: float
+    best_upper_bound: float
+    stagnant_evaluations: int
+
+
 @register_callback("ftpo_pilot")
 class FtpoPilotCallback(TrainerCallback):
     """Stop on a correctness breach or the configured number of non-improving pilots."""
 
+    error_behavior = CallbackErrorBehavior.RAISE
+
     def __init__(self, *, patience_evaluations: int, max_pass_rate_drop: float):
         self.patience_evaluations = patience_evaluations
         self.max_pass_rate_drop = max_pass_rate_drop
-        self.baseline_pass_rate: float | None = None
-        self.best_upper_bound: float | None = None
-        self.stagnant_evaluations = 0
+        self.stage: FtpoPilotState | None = None
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         path = join_resource_path(trainer.cfg.trainer.export_path, "ftpo_pilot_state.json")
         upper_bound = metrics["eval/all/loop_upper_bound"]
         pass_rate = metrics["eval/all/fail_closed_pass_rate"]
         if state.global_step == 0:
-            self.baseline_pass_rate = pass_rate
-            self.best_upper_bound = upper_bound
-            self.stagnant_evaluations = 0
+            self.stage = FtpoPilotState(pass_rate, upper_bound, 0)
         else:
-            if self.baseline_pass_rate is None and io.exists(path):
+            if self.stage is None and io.exists(path):
                 with io.open_file(path, "r") as stream:
                     saved = json.load(stream)
-                self.baseline_pass_rate = saved["baseline_pass_rate"]
-                self.best_upper_bound = saved["best_upper_bound"]
-                self.stagnant_evaluations = saved["stagnant_evaluations"]
-            if self.baseline_pass_rate is None or self.best_upper_bound is None:
+                self.stage = FtpoPilotState(**saved["stage"])
+            if self.stage is None:
                 raise ValueError("FTPO pilot stopping requires a step-zero evaluation or saved stage baseline")
-            if upper_bound < self.best_upper_bound:
-                self.best_upper_bound = upper_bound
-                self.stagnant_evaluations = 0
+            if upper_bound < self.stage.best_upper_bound:
+                self.stage = replace(self.stage, best_upper_bound=upper_bound, stagnant_evaluations=0)
             else:
-                self.stagnant_evaluations += 1
-            if pass_rate < self.baseline_pass_rate - self.max_pass_rate_drop:
+                self.stage = replace(self.stage, stagnant_evaluations=self.stage.stagnant_evaluations + 1)
+            if metric_drop_exceeds_limit(pass_rate, self.stage.baseline_pass_rate, self.max_pass_rate_drop):
                 control.should_training_stop = True
                 logger.info("FTPO pilot correctness fell beyond the stage limit")
-            elif self.stagnant_evaluations >= self.patience_evaluations:
+            elif self.stage.stagnant_evaluations >= self.patience_evaluations:
                 control.should_training_stop = True
                 logger.info("FTPO pilot loop upper bound reached its stage plateau")
         payload = {
             "step": state.global_step,
-            "baseline_pass_rate": self.baseline_pass_rate,
-            "best_upper_bound": self.best_upper_bound,
-            "stagnant_evaluations": self.stagnant_evaluations,
+            "stage": asdict(self.stage),
             "upper_bound": upper_bound,
             "pass_rate": pass_rate,
             "stopped": control.should_training_stop,

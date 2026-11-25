@@ -245,5 +245,47 @@ async def test_ftpo_pilot_stops_at_plateau_or_correctness_breach_after_resume(tm
     result = await evaluate(9, last_upper_bound, last_pass_rate)
     assert result.should_training_stop is True
     record = json.loads((tmp_path / "ftpo_pilot_state.json").read_text())
-    assert record["baseline_pass_rate"] == 0.80
+    assert record["stage"]["baseline_pass_rate"] == 0.80
     assert record["stopped"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pass_rate,eligible", [(0.35, True), (0.3375, False)])
+async def test_pilot_and_checkpoint_preservation_allow_exactly_five_points_of_loss(tmp_path, pass_rate, eligible):
+    saved = []
+
+    async def save_checkpoints():
+        saved.append(True)
+
+    config = OmegaConf.create({"trainer": {"callbacks": [
+        {"type": "best_checkpoint", "initial_model_uri": "base-model", "expected_tasks": 80,
+         "minimum_scored_tasks": 80, "selection_metric": "identity",
+         "preservation_max_drop": {"eval/all/fail_closed_pass_rate": 0.05}},
+        {"type": "ftpo_pilot", "patience_evaluations": 2, "max_pass_rate_drop": 0.05},
+    ]}})
+    trainer = SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(
+        ckpt_path=str(tmp_path), export_path=str(tmp_path / "exports"))), save_checkpoints=save_checkpoints)
+    handler = CallbackHandler(create_callbacks_from_config(config))
+
+    async def evaluate(step, rate):
+        return await handler.call_event_async("on_evaluate", TrainerState(step, 0, 12, 12), TrainerControl(),
+            trainer=trainer, metrics={"eval/all/num_attempted": 80, "eval/all/num_scored": 80,
+                "identity": 0.1 + step / 10, "eval/all/loop_upper_bound": 10 - step,
+                "eval/all/fail_closed_pass_rate": rate})
+
+    assert not (await evaluate(0, 0.4)).should_training_stop
+    result = await evaluate(1, pass_rate)
+    assert result.should_training_stop is not eligible
+    assert bool(saved) is eligible
+    assert json.loads((tmp_path / BEST_CHECKPOINT_FILENAME).read_text())["step"] == int(eligible)
+
+
+@pytest.mark.asyncio
+async def test_pilot_guard_missing_stage_baseline_stops_the_callback_handler(tmp_path):
+    config = OmegaConf.create({"trainer": {"callbacks": [{"type": "ftpo_pilot",
+        "patience_evaluations": 2, "max_pass_rate_drop": 0.05}]}})
+    handler = CallbackHandler(create_callbacks_from_config(config))
+    trainer = SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(export_path=str(tmp_path))))
+    with pytest.raises(ValueError, match="step-zero evaluation or saved stage baseline"):
+        await handler.call_event_async("on_evaluate", TrainerState(6, 0, 12, 12), TrainerControl(),
+            trainer=trainer, metrics={"eval/all/loop_upper_bound": 8, "eval/all/fail_closed_pass_rate": 0.8})
