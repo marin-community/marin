@@ -20,6 +20,7 @@ from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 from experiments.sft.launcher import PreparedData
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
+MIX_MANIFEST = "mix.json"
 
 
 @pytest.mark.parametrize("model", ("mochi", "snowball"))
@@ -38,8 +39,8 @@ def test_arm_loads_versioned_mix_and_keeps_unbuilt_sft_dependency(
     )
     root = tmp_path / "v5"
     root.mkdir()
-    (root / "mix.json").write_text(json.dumps(draccus.encode(data)))
-    mix = PreparedData(ArtifactStep.adopt("tests/sft-v5", "2026.11.25", str(root)), "mix.json", tokenizer)
+    (root / MIX_MANIFEST).write_text(json.dumps(draccus.encode(data)))
+    mix = PreparedData(ArtifactStep.adopt("tests/sft-v5", "2026.11.25", str(root)), MIX_MANIFEST, tokenizer)
     arm = build_arm(
         sft,
         table.by_name["train-long"],

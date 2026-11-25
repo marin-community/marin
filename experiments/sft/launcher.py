@@ -579,7 +579,7 @@ class PreparedData:
     file: str
     tokenizer: str
 
-    def mix_name(self) -> str:
+    def mix_fingerprint(self) -> str:
         """Identify a versioned mix without reading its unbuilt manifest."""
         if is_mutable_version(self.step.version):
             raise ValueError("SFT data mixes require an immutable artifact version")
@@ -661,7 +661,7 @@ class SFTSpec:
 
     def with_data_mix(self, data: PreparedData) -> SFTSpec:
         """Replace only the data input and give the changed run its own identity."""
-        return replace(self, name=f"{self.name}-mix-{data.mix_name()}", datasets=(), prepared_data=data)
+        return replace(self, name=f"{self.name}-mix-{data.mix_fingerprint()}", datasets=(), prepared_data=data)
 
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None

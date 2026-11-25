@@ -33,7 +33,7 @@ def build_arm(
     rl_steps: int,
     tasks: ArtifactStep | None = None,
 ) -> rl.RLExperiment:
-    """Train a mix with preset hyperparameters, then select and export the best RL policy."""
+    """Build an SFT-to-RL graph with a versioned mix and best-policy export."""
     if is_mutable_version(version):
         raise ValueError("Long-loop arms require an immutable version")
     recipe = sft.recipe.with_data_mix(data_mix)

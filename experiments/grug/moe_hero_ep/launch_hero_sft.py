@@ -363,7 +363,7 @@ def build_sft_run(
     """
     allocation = sft_resources(dp_racks)
     if prepared_data is not None:
-        prepared_data.mix_name()
+        prepared_data.mix_fingerprint()
         if prepared_data.tokenizer != SFT_TOKENIZER:
             raise ValueError("prepared_data.tokenizer must match the Mochi SFT tokenizer")
     if muon_lr <= 0 or adam_lr <= 0:
@@ -431,8 +431,12 @@ def build_sft_run(
     train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = validation_datasets() if eval_every > 0 else []
-    length_statistics = harrier_length_statistics()
+    if prepared_data is None:
+        validation = validation_datasets() if eval_every > 0 else []
+        length_statistics = harrier_length_statistics()
+        data_deps = (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
+    else:
+        data_deps = (prepared_data.step,)
     logger.info(
         "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
         "router bias %s, capacity factor %g",
@@ -547,7 +551,7 @@ def build_sft_run(
                     compute_bpb=True,
                     dropless_eval=True,
                 )
-                if validation
+                if eval_every > 0
                 else None
             ),
             stop_after_steps=stop_step,
@@ -560,11 +564,7 @@ def build_sft_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(
-            (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
-            if prepared_data is None
-            else (prepared_data.step,)
-        ),
+        deps=data_deps,
         runtime_args={"train_resources": train_resources},
     )
 
