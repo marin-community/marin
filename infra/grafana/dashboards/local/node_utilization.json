@@ -102,6 +102,23 @@
   },
   "panels": [
     {
+      "id": 9,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "description": "The selected node, as text to copy. It is also in the page URL as var-node.",
+      "options": {
+        "mode": "markdown",
+        "content": "**Node:** `${node}`"
+      }
+    },
+    {
       "id": 1,
       "type": "timeseries",
       "title": "Jobs on the node",
