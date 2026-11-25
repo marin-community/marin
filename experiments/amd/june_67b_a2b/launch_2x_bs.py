@@ -65,6 +65,8 @@ class AmdLaunchConfig2xBS:
     step_timeout: float | None = None
     checkpoint_keep: list[dict] | None = None
     save_interval: timedelta = timedelta(minutes=30)
+    keep_last_temporary_checkpoints: int = 1
+    """Temporary checkpoints kept on disk; ``checkpoint_policy.KEEP_LAST_TEMPORARY`` for the Snowball run."""
     initialize_from_path: str | None = None
     """Source checkpoint, loaded only when ``checkpoint_dir`` has no checkpoint of this run."""
     source_batch_size: int | None = None
@@ -107,6 +109,7 @@ def build_2x_bs_run_config(config: AmdLaunchConfig2xBS) -> GrugRunConfig:
             append_run_id_to_base_path=False,
             save_interval=config.save_interval,
             keep=config.checkpoint_keep,
+            keep_last_temporary_checkpoints=config.keep_last_temporary_checkpoints,
         ),
         # Search only this run's checkpoint directory; when it is empty, start from initialize_from.
         load_checkpoint=None,

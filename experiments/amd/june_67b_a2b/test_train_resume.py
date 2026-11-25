@@ -150,6 +150,8 @@ def _final_state(checkpoint_dir: Path, mesh: tuple[int, int, int, bool]):
         return load_checkpoint(_checkpointed(exemplar), str(checkpoint_dir / f"step-{TOTAL_STEPS}"), mesh=grug_mesh)
 
 
+# Each case compiles the step three times (one per process) on four CPU devices: about 75 s.
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh", MESHES.values(), ids=MESHES.keys())
 def test_resume_from_checkpoint_is_bitwise_identical(tmp_path, mesh):
     with use_test_devices(DEVICES):
