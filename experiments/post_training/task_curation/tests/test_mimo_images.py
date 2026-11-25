@@ -69,6 +69,7 @@ class FakeTools:
         self.base_manifest = base_manifest
         self.pushed = {}
         self.fail_on = set()
+        self.rootfs_seen = None
 
     def __call__(self, command, *, env=None, timeout=None):
         self.commands.append(command)
@@ -88,6 +89,9 @@ class FakeTools:
         if command[0] == "umoci" and command[1] in ("config", "repack"):
             return ""
         if command[0].endswith("/chroot") or command[0] == "chroot":
+            rootfs = Path(command[1])
+            if self.rootfs_seen is None or (rootfs / "workspace" / "repo").is_dir():
+                self.rootfs_seen = rootfs
             return ""
         if command[0] == "skopeo" and "copy" in command:
             source, destination = self.copy_arguments(command)
@@ -213,9 +217,10 @@ def test_entry_point_builds_one_task_end_to_end_and_resumes(tmp_path, monkeypatc
         if destination.startswith("docker://"):
             pushes.append(destination)
     assert len(pushes) == 1 and pushes[0].startswith("docker://" + PACKAGE)
-    # The retry reproduction: the workdir the base occupied with a file is now a directory.
-    rootfs = next(Path(command[1]) for command in tools.commands if command[0].endswith("/chroot"))
-    assert rootfs.is_dir() and (rootfs / "workspace" / "repo").is_dir()
+    # The retry reproduction: the workdir the base occupied with a file is now a directory
+    # when the RUN steps execute.
+    assert tools.rootfs_seen is not None
+    assert (tools.rootfs_seen / "workspace" / "repo").is_dir()
 
     # A resume run re-reads the registry instead of rebuilding.
     resume = FakeTools(manifest)
