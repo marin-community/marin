@@ -279,7 +279,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         shutil.copytree(tokenizer_source, local_dir, dirs_exist_ok=True)
 
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
-    monkeypatch.setattr(sft_recipe, "sft_model_config", lambda _: native.model)
+    monkeypatch.setattr(sft_recipe, "sft_model_config", lambda *_: native.model)
     output = Path(model.step.path().removeprefix("file://"))
     assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))

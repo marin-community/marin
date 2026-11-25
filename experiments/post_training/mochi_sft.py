@@ -30,7 +30,9 @@ MOCHI_SFT = MochiSFT(
     replay_fraction=0.2035,
     dp_racks=11,
     router_bias_mode=RouterBiasMode.FROZEN,
-    capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
+    # The v2 run's transport: the most capacity that fit in HBM, without shadowing.
+    capacity_factor=1.625,
+    shadow_experts=None,
     eval_every=500,
     checkpoints="periodic",
     expert_placement=ExpertPlacement.from_json(
@@ -57,7 +59,16 @@ def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
 
 def _short_preset(racks: int) -> SFTPreset[MochiSFT]:
     return _preset(
-        replace(MOCHI_SFT, run_id=f"mochi-sft-{racks}-rack", dp_racks=racks, stop_after_steps=3, checkpoints="none")
+        replace(
+            MOCHI_SFT,
+            run_id=f"mochi-sft-{racks}-rack",
+            dp_racks=racks,
+            # Smoke-test the transport of the next run.
+            capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
+            shadow_experts=launch_hero_sft.SFT_SHADOW_EXPERTS,
+            stop_after_steps=3,
+            checkpoints="none",
+        )
     )
 
 
