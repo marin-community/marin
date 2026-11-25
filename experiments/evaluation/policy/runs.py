@@ -66,7 +66,6 @@ class RunCheck:
     state: RunState
     problems: tuple[str, ...]
     warnings: tuple[str, ...]
-    """Results far outside expectations, such as replies cut off by their cap; they do not change the state."""
 
 
 def expected_runs(
@@ -113,7 +112,7 @@ class RunEvidence:
 
 
 def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence:
-    """Read a succeeded run's archive; each reply's cap is the run budget or its protocol's own, if lower."""
+    """Read a succeeded run's archive to summarize its context window and terminal replies."""
     reader = ReadView(record.results_path)
     payload = reader.read_blob(RUN_OBJECT)
     assert payload is not None, f"{record.results_path} has no {RUN_OBJECT}"
@@ -139,7 +138,7 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
 
 
 def run_warnings(evidence: RunEvidence) -> tuple[str, ...]:
-    """Flag a run whose replies mostly ran out of tokens or whose attempts mostly went unscored."""
+    """Flag capped replies and unscored attempts that exceed their warning thresholds."""
     warnings = []
     if evidence.capped > CAPPED_WARNING * evidence.replies:
         warnings.append(f"{evidence.capped}/{evidence.replies} replies hit their output cap")

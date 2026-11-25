@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Policy runs land at stable paths, and records are checked against what this checkout would launch."""
-
 from dataclasses import replace
 
 import pytest

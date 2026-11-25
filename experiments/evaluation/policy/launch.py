@@ -97,7 +97,7 @@ def launch_specs(
     ``evaluations`` narrows the launch to those names; ``limit`` caps items per task for a smoke run;
     ``federated_cluster`` overrides the fleet's GPU cluster.
     Unset seeds stay unset so each protocol decides them. Run IDs derive from the policy version and
-    each run's identity, so a relaunch finds finished runs at the same paths and reruns failed ones.
+    each run's identity.
     """
     resolved = resolve(policy, candidate)
     if evaluations is not None:

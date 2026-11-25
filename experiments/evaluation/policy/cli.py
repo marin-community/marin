@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Show, launch and check eval policies.
-
-``uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial``.
-"""
+"""Show, launch and check eval policies."""
 
 import logging
 from collections.abc import Mapping
