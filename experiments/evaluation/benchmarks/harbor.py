@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
@@ -63,7 +64,7 @@ from experiments.post_training.task_curation.pipeline import (
     HarborRepoSource,
     download_source,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 logger = logging.getLogger(__name__)
 
@@ -273,9 +274,12 @@ def harbor_source(
     episode = AgentEpisode(harness=agent, limits=limits, max_input_tokens=max_input_tokens)
     return RlDataSource(
         info=SourceInfo(
-            id=f"Harbor:{dataset.recipe}",
-            title=dataset.title,
-            origin="Harbor",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=dataset.recipe,
+            upstream_name=dataset.title,
+            subset=None,
+            build_path="Harbor",
+            origin=SourceOrigin.HARBOR,
             family="agentic",
             tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
             count=dataset.count,

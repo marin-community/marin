@@ -41,7 +41,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
-from skyrlrecipe.model_staging import model_metadata_subpath, tokenizer_metadata_subpath
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
@@ -139,8 +139,7 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
         return candidate
     defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
-    defaults = _control_defaults(preset, pin, defaults)
-    for index in range(len(pin.members)):
+    for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
@@ -424,40 +423,44 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
-def _matches_staged_metadata(value: object, subpath: PurePosixPath | None) -> bool:
-    if subpath is None or not isinstance(value, str):
-        return False
-    path = PurePosixPath(value)
-    return path.is_absolute() and path.parts[-len(subpath.parts) :] == subpath.parts
-
-
-def _normalize_staged_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
-    policy = "skyrl.trainer.policy.model"
-    model_metadata = None
-    if (
-        get_path(config, f"{policy}.source_uri") == recorded.model_uri
-        and get_path(config, f"{policy}.source_identity") == recorded.model_identity
-    ):
-        model_metadata = model_metadata_subpath(recorded.model_uri, recorded.model_identity)
-    model_input = config["inputs"]["model"]
-    tokenizer_uri = model_input.get("tokenizer_uri")
+def _normalize_model_bindings(config: dict, recorded: RecordedLaunch) -> None:
+    aliases = [recorded.model_uri, recorded.model_local_path]
+    model_metadata = model_metadata_relative_path(recorded.model_uri, recorded.model_identity)
+    model = config["inputs"]["model"]
+    tokenizer_uri = model.get("tokenizer_uri")
     tokenizer_metadata = (
-        tokenizer_metadata_subpath(tokenizer_uri, model_input.get("tokenizer_revision"))
+        model_metadata_relative_path(tokenizer_uri, model.get("tokenizer_revision") or DEFAULT_TOKENIZER_REVISION)
         if tokenizer_uri
         else model_metadata
     )
-    for role in ("policy", "ref"):
-        base = f"skyrl.trainer.{role}.model"
-        path = f"{base}.path"
-        if _matches_staged_metadata(get_path(config, path), model_metadata):
-            set_path(config, path, recorded.model_local_path)
-        path = f"{base}.tokenizer_path"
-        if _matches_staged_metadata(get_path(config, path), tokenizer_metadata):
-            revision = f"{base}.tokenizer_revision"
-            if get_path(config, revision) is not None:
-                raise InvalidComparison(f"native staged tokenizer has a local revision: {revision}")
-            set_path(config, path, recorded.model_local_path)
-            set_path(config, revision, recorded.model_identity)
+    model_staging = "<model-staging>"
+    model["local_path"] = model_staging
+    for path, metadata in (
+        ("skyrl.trainer.policy.model.path", model_metadata),
+        ("skyrl.trainer.ref.model.path", model_metadata),
+        ("skyrl.trainer.policy.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.trainer.ref.model.tokenizer_path", tokenizer_metadata),
+        ("skyrl.generator.model_name", None),
+        ("skyrl.generator.trajectory_retention.model_path", None),
+    ):
+        value = get_path(config, path)
+        if value is MISSING:
+            continue
+        staged = (
+            metadata is not None
+            and isinstance(value, str)
+            and PurePosixPath(value).is_absolute()
+            and PurePosixPath(value).parts[-len(metadata.parts) :] == metadata.parts
+        )
+        if value not in aliases and not staged:
+            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
+        if staged and path.endswith(".tokenizer_path"):
+            revision_path = path.removesuffix("tokenizer_path") + "tokenizer_revision"
+            if get_path(config, revision_path) is not None:
+                raise InvalidComparison(f"native tokenizer revision differs from the staged tokenizer: {revision_path}")
+            # Staging resolves the revision into the path, so the worker no longer needs it.
+            set_path(config, revision_path, recorded.model_identity)
+        set_path(config, path, model_staging)
 
 
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
@@ -466,6 +469,17 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     config = deepcopy(launch)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
         del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
+    data = config["skyrl"]["data"]
+    # Saved controls still record unused task-cache and source-binding defaults.
+    data.pop("task_cache_dir", None)
+    if data.get("terminal_bench_data") == []:
+        del data["terminal_bench_data"]
+    task_sessions = config["skyrl"].get("environment", {}).get("task_sessions", {})
+    if task_sessions.get("agent_harnesses") == {}:
+        del task_sessions["agent_harnesses"]
+    trajectory_runner = config["skyrl"].get("trajectory_runner", {})
+    if trajectory_runner.get("max_concurrent_training_machine_tasks") is None:
+        trajectory_runner.pop("max_concurrent_training_machine_tasks", None)
     inputs = launch["inputs"]
 
     def replace_alias(path, aliases, replacement):
@@ -521,26 +535,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                     )
                 )
 
-    _normalize_staged_model_bindings(config, recorded)
-    aliases = [recorded.model_uri, recorded.model_local_path]
-    config["inputs"]["model"]["local_path"] = "<model-staging>"
-    for path in (
-        "skyrl.trainer.policy.model.path",
-        "skyrl.trainer.ref.model.path",
-        "skyrl.trainer.policy.model.tokenizer_path",
-        "skyrl.trainer.ref.model.tokenizer_path",
-        "skyrl.generator.model_name",
-        "skyrl.generator.trajectory_retention.model_path",
-    ):
-        value = get_path(config, path)
-        if value is MISSING:
-            continue
-        if value not in aliases:
-            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
-        set_path(config, path, "<model-staging>")
+    _normalize_model_bindings(config, recorded)
     replace_alias(
         "skyrl.generator.engine_init_kwargs.served_model_name",
-        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
+        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in (recorded.model_uri, recorded.model_local_path)],
         "<served-model-name>",
     )
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
@@ -581,6 +579,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 raise InvalidComparison(f"native resume binding differs from declared inputs: skyrl.runtime.{field}")
     if not runtime:
         config["skyrl"].pop("runtime", None)
+    # Grader reports are attempt diagnostics, like other launch-output destinations.
+    trainer = config["skyrl"]["trainer"]
+    trainer.pop("grader_report_dir", None)
+    trainer.pop("dump_grader_report", None)
     for section in ("trainer", "checkpoint_export"):
         export = config["skyrl"].get(section, {})
         if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):
@@ -594,8 +596,36 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     return _config_values(_comparison_document(launch, recorded))
 
 
-def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
+def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
+    """Normalize a draft mirror when its receipt matches the planned Hub source and revision."""
+    path = "skyrl.generator.speculative_decoding.model"
+    draft, expected = get_path(config, path), get_path(expected_launch, path)
+    if not isinstance(draft, dict) or not isinstance(expected, dict):
+        return
+    expected_uri = expected["source_uri"]
+    model_id = expected_uri.removeprefix("hf://")
+    if model_id == expected_uri:
+        return
+    mirrors = config["inputs"].get("hugging_face_models", [])
+    matches = [
+        index
+        for index, mirror in enumerate(HuggingFaceModelCache(**row) for row in mirrors)
+        if mirror.uri == draft["source_uri"]
+        and mirror.identity == draft["source_identity"]
+        and mirror.model_id == model_id
+        and mirror.revision == mirror.resolved_revision == expected["source_identity"]
+    ]
+    if len(matches) == 1:
+        draft.update(source_uri=expected_uri, source_identity=expected["source_identity"])
+        del mirrors[matches[0]]
+
+
+def _gate_config(
+    launch: dict, recorded: RecordedLaunch | None = None, *, expected_launch: dict | None = None
+) -> dict[str, object]:
     config = _comparison_document(launch, recorded)
+    if expected_launch is not None:
+        _normalize_draft_mirror(config, expected_launch)
     config["iris"].pop("priority", None)
     return _config_values(config)
 
@@ -626,14 +656,6 @@ def _compose_plans(
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
 
         return compose_configs(paths)
-
-
-def _control_defaults(preset: presets.Preset, pin: ControlPin, defaults: dict) -> dict:
-    placed = _control_placement(preset, pin)
-    if placed is preset:
-        return defaults
-    (config,) = _compose_plans(placed, (RunInputs(preset_name=placed.name),))
-    return config
 
 
 def _native_json(*command: str, timeout: int = 120):
@@ -745,7 +767,8 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
 def _check_control_config(
     config: dict, current_config: dict, recorded: RecordedLaunch | None = None, *, preset: presets.Preset
 ) -> None:
-    observed, current = _gate_config(config, recorded), _gate_config(current_config)
+    observed = _gate_config(config, recorded, expected_launch=current_config)
+    current = _gate_config(current_config)
     differences = _changed_config_keys(observed, current)
     missing = {key for key in differences if key not in observed}
     if missing:
@@ -830,14 +853,14 @@ def _write_gate(
         explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
-            differences = _changed_config_keys(_gate_config(candidate.config, candidate.recorded), expected)
+            observed = _gate_config(candidate.config, candidate.recorded, expected_launch=expected_config)
+            differences = _changed_config_keys(observed, expected)
             if differences:
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
-        control_config = _control_defaults(preset, control_pin, current_config)
         for candidate in controls:
-            _check_control_config(candidate.config, control_config, candidate.recorded, preset=preset)
+            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
         comparisons = _compare(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -871,7 +894,7 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
 
 
 def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidComparison:
-    name, replicas = (pin.preset, pin.initial_replicates) if pin else (preset.control_preset, 4)
+    name, replicas = (pin.preset, pin.replicates) if pin else (preset.control_preset, 4)
     return InvalidComparison(
         f"no control pin for {preset.name} with preset revision {preset.revision}; "
         f"recorded control revision={pin.revision if pin else None}; "
@@ -887,21 +910,8 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
     return pin
 
 
-def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    replicate, retry = pin.members[index]
-    name = control_name(pin.preset, pin.commit, replicate, table=table)
-    return f"{name}-retry{retry}" if retry else name
-
-
-def _control_placement(preset: presets.Preset, pin: ControlPin) -> presets.Preset:
-    layout = preset.recipe.layout
-    if pin.cluster is None or pin.cluster == layout.cluster:
-        return preset
-    return replace(preset, recipe=replace(preset.recipe, layout=replace(layout, cluster=pin.cluster)))
-
-
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(_control_placement(preset, pin), _pinned_control_name(pin, index, table=table), pin.revision)
+    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
 
 
 def _gate_artifact(
@@ -917,16 +927,14 @@ def _gate_artifact(
 ) -> ArtifactStep[GateReport]:
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
-        canonical_json(
-            (defaults.fingerprint(), defaults.runtime_args, pin, Provenance.capture(recipe.REPO_ROOT).tree_hash)
-        )
+        canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(recipe.REPO_ROOT).tree_hash))
     )
     controls = tuple(
         (
-            f"{_pinned_control_name(pin, index, table=table)}@{pin.revision}",
+            f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.revision}",
             control_path(preset, pin, index, table=table),
         )
-        for index in range(len(pin.members))
+        for index in range(pin.replicates)
         if index != leave_out
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
@@ -1011,8 +1019,8 @@ def command(table: ModelPresets) -> click.Command:
         "--leave-out",
         "leave_out",
         metavar="rN",
-        help="Compare pin slot N with the remaining controls and record its verdict. Keep every completed, "
-        "measured run. Give this or --candidate.",
+        help="Compare control replicate N against the remaining controls. Each replicate should PASS; use it "
+        "after pinning new controls. Give this or --candidate.",
     )
     @click.option(
         "--require",
@@ -1033,11 +1041,10 @@ def command(table: ModelPresets) -> click.Command:
         pin = control_pin(preset, table=table)
         index = None
         if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= len(pin.members):
-                raise click.BadParameter(f"choose r0 through r{len(pin.members) - 1}", param_hint="--leave-out")
+            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
+                raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
-            candidate_name = _pinned_control_name(pin, index, table=table)
-            preset = _control_placement(preset, pin)
+            candidate_name = control_name(pin.preset, pin.commit, index, table=table)
         name, separator, version = candidate_name.partition("@")
         source = recipe.run_path(preset, name, version if separator else preset.revision)
         namespace = user_owned_name(

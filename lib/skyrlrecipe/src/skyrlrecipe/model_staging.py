@@ -1,22 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cache identities for native model and tokenizer staging."""
+"""Model staging paths and Hub mirror records shared by SkyRL launch and comparison."""
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+DEFAULT_TOKENIZER_REVISION = "main"
 
-def immutable_model_cache_key(source: str, identity: str) -> str:
-    """Return a stable cache key for one immutable model source."""
+
+@dataclass(frozen=True)
+class HuggingFaceModelCache:
+    """CPU mirror bound to an immutable commit and its requested ref."""
+
+    model_id: str
+    revision: str
+    uri: str
+    identity: str
+    resolved_revision: str
+
+
+def model_cache_key(source: str, identity: str) -> str:
+    """Hash a model source and its revision or artifact identity."""
     return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
 
 
-def model_metadata_subpath(source: str, identity: str) -> PurePosixPath:
-    """Return the staging path relative to the native task's temporary directory."""
-    return PurePosixPath("marinskyrl", "model_metadata", immutable_model_cache_key(source, identity))
-
-
-def tokenizer_metadata_subpath(source: str, revision: str | None) -> PurePosixPath:
-    """Return the staging path for a separately declared tokenizer."""
-    return model_metadata_subpath(source, revision or "main")
+def model_metadata_relative_path(source: str, identity: str) -> PurePosixPath:
+    """Return the metadata path relative to the worker's temporary directory."""
+    return PurePosixPath("marinskyrl", "model_metadata", model_cache_key(source, identity))

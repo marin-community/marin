@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from huggingface_hub import HfApi
@@ -38,7 +39,7 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_e
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 AGENT = AgentEpisode(
     harness=TerminusAgent(),
@@ -94,7 +95,16 @@ def episode_item(task: TaskSpec, *, agent: AgentEpisode = AGENT) -> EvaluationIt
 def agent_source() -> RlDataSource[EvaluationCorpusRecipe]:
     """A one-row corpus that runs Terminus-2 and reports a primary reward and a solved rate."""
     return RlDataSource(
-        info=SourceInfo(id="terminal-agent", title="Agent fixture", origin="test", family="test", tags=(), count=1),
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="terminal-agent",
+            upstream_name="terminal-agent",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            family="test",
+            tags=(),
+            count=1,
+        ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="terminal-agent",

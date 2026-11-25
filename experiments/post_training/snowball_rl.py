@@ -33,7 +33,7 @@ from experiments.post_training.rl_agentic_recipe import (
 )
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
-    HARBOR_EVALUATION,
+    CHECKPOINT_EVALUATION,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
@@ -65,6 +65,15 @@ DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+    ),
+    num_speculative_tokens=4,
+)
 
 _DEFAULT_MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -216,6 +225,11 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_REPORTING_P40 = replace(
+    _ASYNC_P40,
+    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
+)
+
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
@@ -238,9 +252,10 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.3",
+    revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
+    default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -250,12 +265,11 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.4",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -278,16 +292,16 @@ _LEARNING_MEDIUM = _snowball(
 _TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.21.2",
+    revision="2026.11.25.1",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
     export="best",
     name="train-long",
     recipe=replace(
-        _ASYNC_P40,
+        _REPORTING_P40,
         layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
-        config=_ASYNC_P40.config.merge(
+        config=_REPORTING_P40.config.merge(
             RecipePatch(
                 trainer=sections.Trainer(
                     use_sample_packing=True,
@@ -361,12 +375,11 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.5",
-        recipe=replace(_ASYNC_P40, layout=_AGENTIC_LAYOUT),
+        recipe=replace(_REPORTING_P40, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
+        gaps=tuple(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS),
     ),
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
@@ -393,10 +406,9 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
-        revision="2026.11.20.1",
         recipe=replace(
-            _ASYNC_P40,
-            config=_ASYNC_P40.config.merge(
+            _REPORTING_P40,
+            config=_REPORTING_P40.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(
                         policy=sections.Policy(
@@ -426,7 +438,11 @@ _PRESETS = (
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
         checkpoints="none",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        recipe=replace(
+            _GENERATING,
+            fixed_reply_tokens=4096,
+            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+        ),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
@@ -472,7 +488,7 @@ _PRESETS = (
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="asynchronous runtime unmeasured",
+        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
     ),
     _snowball(
         evaluations=(),
@@ -504,11 +520,10 @@ _PRESETS = (
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
-        name="train-long-harbor",
-        revision="2026.11.20.7",
-        recipe=_ASYNC_P40,
-        harbor=HARBOR_EVALUATION,
-        gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
+        name="train-long-checkpoint-eval",
+        recipe=_REPORTING_P40,
+        checkpoint_evaluation=CHECKPOINT_EVALUATION,
+        gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -529,19 +544,13 @@ SNOWBALL = ModelPresets(
     presets=_PRESETS,
     namespace="snowball-rl",
     control_pins={
-        pin.preset: pin
-        for pin in (
-            ControlPin("speed-short", "4a4e8f0a81", "2026.11.20.3", ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0))),
-            ControlPin("data-short", "4a4e8f0a81", "2026.11.20.3", ((0, 0), (1, 0), (2, 0), (3, 0))),
-            ControlPin("speed-medium", "4a4e8f0a81", "2026.11.20.3", ((0, 0), (1, 0), (2, 0), (3, 0))),
-            ControlPin(
-                "learning-medium",
-                "e6e6ccd80e",
-                "2026.11.20.4",
-                ((0, 2), (1, 0), (2, 0), (3, 0), (0, 0), (0, 1)),
-                cluster="cw-rno2a",
-            ),
-            ControlPin("speed-long", "98da6db1de", "2026.11.20.3", ((0, 0), (1, 0), (2, 0), (3, 1), (3, 0))),
+        name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
+        for name, count in (
+            ("speed-short", 5),
+            ("data-short", 4),
+            ("speed-medium", 4),
+            ("learning-medium", 4),
+            ("speed-long", 4),
         )
     },
 )

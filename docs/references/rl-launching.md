@@ -92,16 +92,18 @@ uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpo
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The nested runtime uses the checkout's RolloutEngine for task execution and model requests.
-Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
-See [task rollouts](task-rollouts.md) for task execution and backend limits.
+SkyRL runs prepared TaskSpecs through RolloutEngine and Shellbox. It supplies the serving engine's
+sampled token IDs and log probabilities to the same session for shell, Pi, and Terminus-2 tasks.
+The launch recipe binds agent settings, machine resources, and separately scoped training and
+checkpoint evaluation Daytona credentials. See [task rollouts](task-rollouts.md) for execution
+and backend limits.
 
 The launcher runs the vendored uv version through `uv tool run`, then starts
 SkyRL's frozen CPU environment with `uv run --project vendor/skyrl`. Both uv
 selections prefer a compatible system interpreter over cached managed builds,
 matching Iris task setup. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
-installs Marin libraries and Harbor from editable paths in the checkout.
+installs the Marin libraries from editable paths in the checkout.
 Marin calls SkyRL through the executable.
 
 Iris submits the Marin repository through its standard workspace bundle.
@@ -146,6 +148,21 @@ existing direct-Hub download. Draft locators are rewritten to the mirror before
 submission; warm drafts read it without a cache lock. If any listed draft file or
 the completion marker is missing, node preparation repairs the mirror through
 the existing Hub cache path. Local and object-store inputs keep their loading paths.
+
+Coordinated vLLM data-parallel startup uses `trainer.model_load_retry` for both
+staged local weights and S3 streaming. An actor startup failure recreates the
+whole engine gang with fresh rendezvous ports, within the existing
+`generator.engine_init_timeout_seconds` deadline.
+
+DP rendezvous ports are bound and held on the engine's target node, excluding
+that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
+ports, and Iris's default named-port range. Kernel reservations also cover
+deployment-specific named-port ranges published by Iris's worker bootstrap.
+The same reserved RPC and process-group port vector is passed explicitly to
+every rank. Rank zero releases the sockets immediately before vLLM binds them;
+excluding the kernel's ephemeral range prevents outbound connections from
+taking those ports during the handoff. The former fixed 20000–29999 pool
+overlapped Iris's widened ephemeral range.
 
 `prepare` only validates the config. Submitting Hub models requires Iris job
 context; run the [experiment entry point](#experiment-entry-point) with `--run`
@@ -304,6 +321,15 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
+
+For a single immutable Parquet task selection, the SkyRL driver caches validated rows and prompt
+lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
+selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
+and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
+A cache miss validates the selection, writes batches of prepared rows and lengths to driver-local disk,
+and publishes the Parquet object when complete. A hit decodes the object in batches to driver-local
+disk. The driver memory-maps the prepared rows during training, so its local disk needs space for
+the uncompressed dataset as well as the staged Parquet file.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then

@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.source_identity import canonical_source_id
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
@@ -338,7 +339,7 @@ def test_harbor_emitted_wrapper_grades_text_and_private_resources(
 
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
-    source = all_sources()["Task Trove:" + row["source_row"].split("/", 1)[0]]
+    source = all_sources()[canonical_source_id("Task Trove:" + row["source_row"].split("/", 1)[0])]
     unsupported = converted.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
     input_root, output_root = tmp_path / "input", tmp_path / "output"
     normalized = input_root / "normalize"

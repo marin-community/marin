@@ -19,10 +19,7 @@ from typing import Any
 from daytona import AsyncDaytona
 from daytona.common.snapshot import Snapshot
 
-from shellbox.backends.daytona.connection import (
-    DEFAULT_DAYTONA_API_URL,
-    DaytonaConnection,
-)
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.snapshot import (
     SNAPSHOT_STALE_AFTER,
     SnapshotClassification,
@@ -52,9 +49,7 @@ def _connection(arguments: argparse.Namespace) -> DaytonaConnection:
     api_key = os.environ.get(arguments.api_key_env)
     if not api_key:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
-    if not arguments.target:
-        raise SystemExit("Set --target or DAYTONA_TARGET")
-    return DaytonaConnection(api_key=api_key, api_url=arguments.api_url, target=arguments.target)
+    return DaytonaConnection(api_key=api_key)
 
 
 def _row(name: str, state: str, cpus: int | None, memory: int | None, disk: int | None) -> tuple[str, ...]:
@@ -205,16 +200,6 @@ def _parser() -> argparse.ArgumentParser:
         "--api-key-env",
         required=True,
         help="Environment variable holding the selected account's API key.",
-    )
-    parser.add_argument(
-        "--api-url",
-        default=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
-        help="Daytona API URL.",
-    )
-    parser.add_argument(
-        "--target",
-        default=os.environ.get("DAYTONA_TARGET"),
-        help="Daytona target region (defaults to DAYTONA_TARGET).",
     )
     parser.add_argument(
         "--min-idle-seconds",

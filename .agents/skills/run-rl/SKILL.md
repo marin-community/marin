@@ -12,7 +12,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 Map requests for a short loop, quick loop or long loop to the corresponding presets.
 
 - **Short loop** (also called **quick loop**) uses gated presets to compare one change against control runs. Use `speed-*`, `data-*` or `learning-medium`.
-- **Long loop** uses ungated training to build a model and retain its best eligible checkpoint. Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
+- **Long loop** uses ungated training to build a model and retain its best eligible checkpoint. Use `train-long` for EvalLite or `train-long-checkpoint-eval` to add the agentic cohorts.
 
 ## Plan and submit
 
@@ -24,9 +24,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    They need an immutable recipe, the same development panel, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
 3. A default plan uses the declared control pin. Gated execution and planning with `--require`
-   need a pin at the preset's current revision. Controls are collected after merge. Keep every completed,
-   measured control run regardless of verdict. Resubmit only after an infrastructure failure such as
-   preemption, a node or network error, or a run that ended before any measured update. `--control`
+   need a pin at the preset's current revision. Controls are collected after merge. `--control`
    and train-long need no pin. Print the plan:
 
    ```bash
@@ -39,7 +37,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
    either train-long preset or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
    `WANDB_ENTITY` chooses the team, defaulting to `marin-community`.
-   For `train-long-harbor`, check the recipe's [Daytona requirements](../../../docs/recipes/rl-experiments.md#harbor-evaluation).
+   For `train-long-checkpoint-eval`, check the recipe's [Daytona requirements](../../../docs/recipes/rl-experiments.md#agentic-checkpoint-evaluation).
 5. Pass `--issue ISSUE_NUMBER` if the experimenter supplied an issue number. If the context leaves
    tracking undecided, ask whether to open a new issue, use an existing one, or run without an issue.
    Replace `--plan` with `--run` to submit and add `--wait` for the final report.

@@ -69,7 +69,7 @@ from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
-    with_fixture_control_pins,
+    with_current_control_revisions,
     write_training_families,
 )
 from experiments.post_training.task_curation.selection import (
@@ -97,13 +97,6 @@ def shrink_recorded_panel(binding: str) -> None:
     summary = json.loads(summary_path.read_text())
     summary.update(validation_rows=2, full_validation_rows=2)
     write_json(summary_path, summary)
-
-
-def small_learning_trial(preset: presets.Preset) -> presets.Preset:
-    """Exercise initial and terminal scores in three updates and shrink the recorded held-out selection."""
-    assert preset.held_out_tasks is not None
-    shrink_recorded_panel(preset.held_out_tasks)
-    return replace(preset, updates=3, measured=range(1, 4))
 
 
 def cache_native_compositions(monkeypatch) -> None:
@@ -296,7 +289,7 @@ def controls(write, name, **kwargs):
             score=0.49 + index * 0.01,
             **kwargs,
         )
-        for index in range(len(pin.members))
+        for index in range(pin.replicates)
     ]
 
 
@@ -410,7 +403,7 @@ def evaluation_task_rows(
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_fixture_control_pins(snowball_model.SNOWBALL))
+    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -504,7 +497,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         attempt_id="recorded-attempt",
     ):
         preset = snowball_model.SNOWBALL.by_name[preset_name]
-        root = Path(recipe.run_path(preset, name, preset.revision))
+        root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or RunInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs)
@@ -581,7 +574,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         default, selected = recipe.task_selections(
             preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
         )
-        evaluations = []
         for index, evaluation in enumerate(preset.evaluations):
             source = recipe.evaluation_source(evaluation, selected, default, preset.held_out_tasks)
             sources = (
@@ -606,7 +598,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 sessions = [(step, score) for step in range(evaluation.every, max_steps, evaluation.every)] + sessions
             if evaluation.at_start:
                 sessions.insert(0, (0, initial_score))
-            manifest = read_selection_manifest(str(directory))
             for step, average in sessions:
                 rows = [
                     answer(
@@ -618,15 +609,14 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for sample in range(evaluation.answers)
                 ]
                 evaluation_name = f"eval/{evaluation.name}/" if index else "eval/"
-                evaluations.extend(
-                    evaluation_task_rows(
-                        rows,
-                        attempt_id=attempt,
-                        step=step,
-                        evaluation=evaluation_name,
-                        selection=manifest,
-                    )
+                task_rows = evaluation_task_rows(
+                    rows,
+                    attempt_id=attempt,
+                    step=step,
+                    evaluation=evaluation_name,
+                    selection=read_selection_manifest(str(directory)),
                 )
+                write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
                 values.update(
@@ -635,8 +625,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                         for value in (*Outcome, "rollout_failure")
                     }
                 )
-        if evaluations:
-            write_evaluations(str(root / "exports"), evaluations)
         for values in stored_metrics.values():
             values.update(metrics or {})
             values["attempt_id"] = attempt

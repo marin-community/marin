@@ -60,7 +60,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
 from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
@@ -515,6 +515,12 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
+def gate_endpoint_name(job_info: JobInfo) -> str:
+    """Give each GPU gang its own rendezvous within the coordinator namespace."""
+    job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
+    return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
+
+
 def run_gate(args: argparse.Namespace) -> None:
     """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
 
@@ -548,8 +554,7 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    # Iris endpoint namespaces are shared with sibling jobs under the same coordinator.
-    endpoint_name = job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}").to_wire()
+    endpoint_name = gate_endpoint_name(job_info)
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

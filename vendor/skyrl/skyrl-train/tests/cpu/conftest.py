@@ -25,7 +25,6 @@ import zstandard  # noqa: E402
 from marinskyrl.environment_contract import TrainingType  # noqa: E402
 from skyrl_train import telemetry as training_telemetry  # noqa: E402
 from skyrl_train.distillation import ChosenTokenTeacherEvidence  # noqa: E402
-from skyrl_train.trajectory_runners.types import TrajectoryID, VerifierTestCollection  # noqa: E402
 from tests.cpu.cat_count_policy import download_policy  # noqa: E402
 from tests.cpu.task_specs import lowered_task  # noqa: E402
 from tests.cpu.util import stub_megatron_modules  # noqa: E402
@@ -168,27 +167,6 @@ def local_distillation_config():
         return config
 
     return configure
-
-
-@pytest.fixture
-def verifier_test_collection_factory():
-    def build(trial: int, outcomes: dict[str, str], *, complete: bool = True) -> VerifierTestCollection:
-        return {
-            "parser": "test",
-            "complete": complete,
-            "tests": [
-                {
-                    "record_id": f"trial-{trial}:{test_id}",
-                    "trial_id": TrajectoryID(instance_id="task", repetition_id=trial),
-                    "test_id": test_id,
-                    "outcome": outcome,
-                    "output": f"{test_id}: {outcome}",
-                }
-                for test_id, outcome in outcomes.items()
-            ],
-        }
-
-    return build
 
 
 def _kill_registry_actors() -> None:

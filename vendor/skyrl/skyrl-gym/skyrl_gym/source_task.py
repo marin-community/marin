@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from taskcompendium.chat import chat_input
 from taskcompendium.grader import grader_config
 from taskcompendium.models import (
+    SUBSET_LABEL,
     AnswerType,
     EnvironmentRequirements,
     PlainText,
@@ -40,6 +41,7 @@ def source_task(
 ) -> TaskSpec:
     """Preserve source semantics without selecting a session or machine backend."""
     parameters = SessionParameters(extras=extras, config=config)
+    subset_id = extras.get(SUBSET_LABEL)
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=chat_input(prompt),
@@ -49,4 +51,5 @@ def source_task(
         grader=NoGrader(reason="SkyRL grades each task turn", contract=parameters.model_dump()),
         resources=ResourceGroups(verifier=(inline_resource("config.json", parameters.model_dump_json().encode()),)),
         source=source,
+        labels={SUBSET_LABEL: subset_id} if isinstance(subset_id, str) and subset_id else {},
     )

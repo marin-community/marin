@@ -148,6 +148,14 @@ custom_roles:
   permissions:
   - iap.webServices.getIamPolicy
   - iap.webServices.setIamPolicy
+- role_id: marinInfra
+  title: Marin Infra
+  description: Deploy Iris GCE hub controllers through VM metadata, administrator SSH, and IAP tunnels.
+  permissions:
+  - compute.instances.osAdminLogin
+  - compute.instances.osLogin
+  - compute.instances.setMetadata
+  - iap.tunnelInstances.accessViaIAP
 - role_id: marinPulumiAdmin
   title: Marin Pulumi Admin
   description: Apply resources and IAM bindings owned by the marin-iac marin stack. Pair with the Marin Dev role.
@@ -914,6 +922,12 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+- role: projects/hai-gcp-models/roles/marinInfra
+  members:
+  - principal: human-032
+  - principal: human-064
+  - principal: human-075
+  - principal: human-082
 - role: projects/hai-gcp-models/roles/marinPulumiAdmin
   members:
   - principal: human-076

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import asdict, fields, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -19,7 +19,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -29,7 +29,7 @@ from marin.execution.artifact import (
     validate_path_segment,
 )
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -48,6 +48,8 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rolloutengine.agents.pi.agent import PI_HARNESS
+from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
@@ -56,6 +58,14 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training import rl_presets as presets
+from experiments.post_training.rl_checkpoint_eval import (
+    CHECKPOINT_DAYTONA_TTL,
+    CHECKPOINT_HARNESS_OPTIONS,
+    CHECKPOINT_PROFILE,
+    CHECKPOINT_REPLY_TOKENS,
+    CHECKPOINT_TASKS_FILENAME,
+    checkpoint_tasks,
+)
 from experiments.post_training.rl_presets import Evaluation, HfInitializer, PolicyInitializer, Preset, StoredInitializer
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
@@ -65,6 +75,7 @@ from experiments.post_training.task_curation.selection import (
     TASK_SPEC_COLUMN,
     GraderKind,
 )
+from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
@@ -217,9 +228,6 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     if preset.gated:
         owned_keys |= _GATED_KEYS
     owners = {
-        "Harbor evaluation requires generator.enable_http_endpoint": (
-            preset.harbor is not None and generator.get("enable_http_endpoint") is False
-        ),
         "use the preset's declared owned keys": any(has(path) for path in owned_keys),
         "network transport is fixed by the preset recipe": any(
             key.startswith("NCCL_") for key in values.get("extra_env", {})
@@ -404,17 +412,32 @@ def utc_millis(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
+def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator) -> RecipePatch:
+    workload = preset.recipe.layout.workload
+    if isinstance(workload, presets.Training) and workload.plan.colocate_all:
+        return preset.recipe.config
+    draft = preset.default_speculative_decoding
+    if draft is not None and (
+        model == preset.model
+        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
+    ):
+        return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=draft)))
+    return preset.recipe.config
+
+
 def _training_config(
     preset: presets.Preset,
     settings: tuple[str, ...],
+    model: SkyRLModelSource | ResolvedModelLocator,
 ) -> RecipePatch:
     recipe = preset.recipe
-    authored = recipe.config.to_skyrl()
+    recipe_config = _recipe_config_for_model(preset, model)
+    authored = recipe_config.to_skyrl()
     if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
-    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe.config)
+    micro_batch, _ = recipe.layout.workload.batch_parameters(recipe_config)
     geometry = asdict(recipe.layout.megatron)
-    budget = recipe.config.context_budget
+    budget = recipe_config.context_budget
     assert budget is not None
     if recipe.fixed_reply_tokens is not None:
         budget = budget.replace(max_new_tokens_per_turn=recipe.fixed_reply_tokens)
@@ -439,9 +462,7 @@ def _training_config(
         for key, value in recipe.training_plan.config_values().items():
             if key.startswith("trainer."):
                 set_path(training_geometry, key, value)
-        recipe_config = recipe.config.merge(RecipePatch.from_document(training_geometry))
-    else:
-        recipe_config = recipe.config
+        recipe_config = recipe_config.merge(RecipePatch.from_document(training_geometry))
     config = recipe_config.merge(
         RecipePatch(
             context_budget=budget,
@@ -457,14 +478,48 @@ def _training_config(
             presets.validate_agentic_recipe(config)
         except ValueError as error:
             raise click.BadParameter(str(error)) from error
-    if preset.harbor is not None:
-        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
     return config
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
     if summary["grader_kind_counts"][filename].get(GraderKind.REMOTE_JUDGE, 0):
         raise click.BadParameter("task selections must contain no AI-judge-graded tasks")
+
+
+def _training_selection(selection: ArtifactStep, summary: dict, authored: dict) -> ArtifactStep:
+    legacy = set(summary.get("harness_graded_datasets", ()))
+    if not legacy:
+        return selection
+    if unsupported := legacy - {SWESMITH_DATASET}:
+        raise click.BadParameter(f"Unsupported training datasets with harness graders: {', '.join(sorted(unsupported))}")
+    spec_path = "environment.task_sessions.task_spec"
+    harness = get_path(authored, f"{spec_path}.harness_by_dataset.{SWESMITH_DATASET}")
+    machine = get_path(authored, f"{spec_path}.task_machine_by_dataset.{SWESMITH_DATASET}")
+    if harness != PI_HARNESS or machine is MISSING:
+        raise click.BadParameter("SWESmith training requires the Pi harness and a task machine")
+    return native_swesmith_selection(selection)
+
+
+def _checkpoint_session_patch(config: RecipePatch) -> RecipePatch:
+    budget = config.context_budget
+    assert budget is not None
+    if CHECKPOINT_REPLY_TOKENS >= budget.effective_serving_window_tokens:
+        raise click.BadParameter("Checkpoint reply tokens must leave room for input in the serving window")
+    daytona = {
+        "eval_api_key_env": DAYTONA_EVAL_API_KEY_ENV,
+        "eval_ttl_minutes": CHECKPOINT_DAYTONA_TTL,
+        "eval_image_build": "declarative",
+    }
+    if get_path(config.to_skyrl(), "environment.task_sessions.daytona.api_key_env") is MISSING:
+        daytona.update(api_key_env=DAYTONA_EVAL_API_KEY_ENV, ttl_minutes=CHECKPOINT_DAYTONA_TTL)
+    return RecipePatch(
+        environment=sections.Environment(
+            task_sessions={
+                "daytona": daytona,
+                "agent_harnesses": {TERMINUS_HARNESS: dict(CHECKPOINT_HARNESS_OPTIONS)},
+            }
+        )
+    )
 
 
 def run_spec(
@@ -478,7 +533,18 @@ def run_spec(
     model_name: str | None = None,
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
-    config = _training_config(preset, settings)
+    model = (resume.model if resume is not None else None) or init or preset.model
+    config = _training_config(preset, settings, model)
+    if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
+        workers = config.trajectory_runner.rollout_workers
+        required_cpus = workers.num_workers * workers.cpus_per_worker
+        driver_cpus = preset.recipe.layout.host_cpu
+        if required_cpus > driver_cpus:
+            raise click.BadParameter(
+                f"trajectory_runner.rollout_workers requests {required_cpus} CPUs "
+                f"({workers.num_workers} workers x {workers.cpus_per_worker}); "
+                f"the driver task's Iris CPU request is {driver_cpus}."
+            )
     explicit = override_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
@@ -498,15 +564,7 @@ def run_spec(
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")
-    harness_by_dataset = get_path(authored, "environment.task_sessions.task_spec.harness_by_dataset")
-    harnesses = harness_by_dataset if isinstance(harness_by_dataset, Mapping) else {}
-    if missing_harnesses := sorted(
-        dataset for dataset in summary.get("harness_graded_datasets", ()) if harnesses.get(dataset) != "harbor_trial"
-    ):
-        raise click.BadParameter(
-            f"training datasets with harness graders require harbor_trial in harness_by_dataset: "
-            f"{', '.join(missing_harnesses)}"
-        )
+    training_selection = _training_selection(selection, summary, authored)
     chosen = preset.evaluations
     if preset.batch_mix is not None:
         assert isinstance(workload, presets.Training)
@@ -520,7 +578,6 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    model = (resume.model if resume is not None else None) or init or preset.model
     initial_model_uri = None
     if preset.checkpoints == "best":
         prefix = run_prefix(preset)
@@ -563,6 +620,13 @@ def run_spec(
                 n_samples_per_prompt=evaluation.answers,
                 schedule=workload.additional_schedule,
             )
+    if preset.checkpoint_evaluation:
+        config = config.merge(_checkpoint_session_patch(config))
+        for cohort in preset.checkpoint_evaluation:
+            evaluation_data.append(
+                (cohort.name, (ArtifactDataSource(checkpoint_tasks(cohort), relative_path=CHECKPOINT_TASKS_FILENAME),))
+            )
+            profiles[cohort.name] = CHECKPOINT_PROFILE
     config = config.merge(
         RecipePatch(
             trainer=sections.Trainer(
@@ -583,7 +647,7 @@ def run_spec(
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
         model=model,
         model_name=model_name,
-        train_data=workload.training_data(selection),
+        train_data=workload.training_data(training_selection),
         validation_data=validation_data,
         evaluation_data=tuple(evaluation_data),
         topology=SkyRLTopology(
@@ -629,10 +693,6 @@ def run_step(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
-    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
-        required_env += (DAYTONA_TARGET_ENV,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,
