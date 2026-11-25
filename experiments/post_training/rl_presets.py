@@ -13,6 +13,7 @@ from fractions import Fraction
 from typing import Annotated, ClassVar, Literal
 
 from finestore.rl.rl_progress import Invariant
+from iris.rpc import job_pb2
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -341,6 +342,7 @@ class Layout:
     coordinator_timeout_hours: int
     job_timeout_seconds: int
     role_topology: RoleTopologyMode | None = None
+    container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
 
 
 @dataclass(frozen=True)

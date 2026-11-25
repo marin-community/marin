@@ -5,6 +5,7 @@
 
 from dataclasses import replace
 
+from iris.rpc import job_pb2
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
@@ -35,14 +36,16 @@ LAYOUT = Layout(
     priority="interactive",
     coordinator_timeout_hours=2,
     job_timeout_seconds=1800,
+    container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
 )
+RNO_PAIR_LAYOUT = replace(LAYOUT, name="qwen-h100x2-rno", cluster="cw-rno2a")
 RNO_LAYOUT = replace(
-    LAYOUT,
+    RNO_PAIR_LAYOUT,
     name="qwen-h100x8-rno",
     workload=Training(replace(ROLE_PLAN, policy_num_gpus_per_node=8, num_inference_engines=8)),
-    cluster="cw-rno2a",
     host_cpu=80,
     host_memory="512GB",
+    container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
 )
 EVAL = Evaluation(
     "qwen_lab",
@@ -129,7 +132,11 @@ QWEN_SAMPLER = ModelPresets(
     namespace="qwen-sampler",
     presets=tuple(
         sampler_preset(f"{prefix}{stage}-{arm}{suffix}", updates, kind, epsilon, seed, layout=layout, revision=revision)
-        for prefix, layout, revision in (("", LAYOUT, "2026.11.25.2"), ("rno-", RNO_LAYOUT, "2026.11.25.3"))
+        for prefix, layout, revision in (
+            ("", LAYOUT, "2026.11.25.4"),
+            ("rno-pair-", RNO_PAIR_LAYOUT, "2026.11.25.4"),
+            ("rno-", RNO_LAYOUT, "2026.11.25.3"),
+        )
         for stage, updates, seed, suffix in (("smoke", 4, 17, ""), ("pilot", 32, 17, ""), ("pilot", 32, 29, "-seed29"))
         for arm, kind, epsilon in (
             ("fixed", "adaptive-source", 1.0),
