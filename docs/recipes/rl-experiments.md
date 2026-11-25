@@ -188,6 +188,33 @@ presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs 
 These training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
+## Qwen sampler development loop
+
+The Qwen3-0.6B loop runs on two colocated H100s at interactive priority. Its fixed pool contains
+4,608 training prompts across arithmetic, string transformations and list operations. Each family
+includes three complexity levels. A private script scores the extracted answer in ShellSim with
+guest networking disabled. The 36-task fast evaluation and 144-task full evaluation use a separate
+seed. The fast panel is a subset of the full panel.
+
+Publish the pool once, then reuse it across runs. Use the eastern CoreWeave storage prefix and
+the usual Iris hub and W&B credentials.
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+uv run python -m experiments.post_training.task_curation.qwen_sampler_lab --run
+uv run python -m experiments.post_training.qwen_sampler --preset smoke-fixed \
+  --version 2026.11.25.1 --issue 12201 --priority interactive --plan
+```
+
+Replace `--plan` with `--run --wait` to execute. Choose `smoke-fixed` or `smoke-thompson` for four
+updates and `pilot-fixed` or `pilot-thompson` for 32. Each update draws 16 groups of four completions.
+Greedy validation runs at the start and end. The 64-token response cap, non-thinking chat template
+and disabled checkpoint and trajectory exports keep short runs focused on sampler behavior.
+The model and tokenizer come from the regional Qwen artifact at revision `c1899de`. SkyRL caches
+the lowered and tokenized training rows across sampler policies with the same immutable data,
+tokenizer, task settings and preparation code. Compare elapsed time from submission, worker start
+and first optimizer update when measuring the cost of an iteration.
+
 ## Four-source Snowball sampler experiment
 
 The opt-in `experiments.post_training.snowball_sampler` entry trains the Datakit SFT checkpoint
