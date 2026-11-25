@@ -233,6 +233,7 @@ def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evi
             origin=SourceOrigin.TASKTROVE,
             upstream_dataset="fixture",
             oversight=None,
+            title=None,
             actor_census_input=ActorCensusInput(
                 dataset_id=sample_panel.dataset_id,
                 dataset_revision=sample_panel.dataset_revision,
@@ -290,6 +291,7 @@ def test_byte_identical_repin_panel_binds_current_pin_over_the_lineage_label(
             origin=SourceOrigin.TASKTROVE,
             upstream_dataset="fixture",
             oversight=None,
+            title=None,
             actor_census_input=ActorCensusInput(
                 dataset_id="fixture/repinned",
                 dataset_revision="repinned-revision",
