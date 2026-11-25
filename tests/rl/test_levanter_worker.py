@@ -16,17 +16,7 @@ import numpy as np
 import pytest
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.binary import (
-    EXPERT_IDS,
-    EXPERT_VALID,
-    LOGPROB_MODE,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    choice_tensor_key,
-    encode_frame,
-)
+from levanter.inference import inference_pb2
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from tokenizers import Tokenizer, models
@@ -71,17 +61,26 @@ def _hf_initializer(path):
 def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
     valid = np.ones(tokens.size, dtype=bool)
     valid[-1] = False
-    fields = {
-        TOKEN_IDS: tokens[-scores.size :],
-        POLICY_LOGPROBS: scores,
-        EXPERT_IDS: np.broadcast_to(np.asarray(expert_ids, np.uint8), (2, tokens.size, 2)),
-        EXPERT_VALID: valid,
-    }
-    return encode_frame(
-        {"choices": [{POLICY_ID: policy_id}], LOGPROB_MODE: "policy"},
-        {PROMPT_TOKEN_IDS: tokens[: -scores.size]}
-        | {choice_tensor_key(0, name): values for name, values in fields.items()},
+    ids = np.broadcast_to(np.asarray(expert_ids, np.uint32), (2, tokens.size, 2))
+    response = inference_pb2.GenerateResponse(
+        prompt_token_ids=tokens[: -scores.size].tolist(),
+        logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+        choices=[
+            inference_pb2.Choice(
+                token_ids=tokens[-scores.size :].tolist(),
+                policy_logprobs=scores,
+                policy_id=policy_id,
+                router_replay=inference_pb2.RouterReplay(
+                    num_layers=2,
+                    num_positions=tokens.size,
+                    experts_per_token=2,
+                    expert_ids=ids.ravel().tolist(),
+                    valid=valid.tolist(),
+                ),
+            )
+        ],
     )
+    return response.SerializeToString()
 
 
 def _request_all(children, method, payloads):
@@ -196,7 +195,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
                 (_rollout_with_routes(row[1:], values, expert_ids, policy_id), 0)
                 for row, values in zip(tokens, scores, strict=True)
             ]
-            return payload | {"policy_id": policy_id, "binary_rollouts": rollouts}
+            return payload | {"policy_id": policy_id, "grpc_rollouts": rollouts}
 
         replayed = _same_request(children, "forward", with_served_routes([0, 1]))[0]["output"]
         other = _same_request(children, "forward", with_served_routes([2, 3]))[0]["output"]
