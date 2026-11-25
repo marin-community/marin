@@ -29,9 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.4"
-EXCLUDED_NVLINK_DOMAIN = "DH1-136-US-EAST-08A"
-"""The live provider label for the rack called dh1-r136; affinity values are case-sensitive."""
+RUN_VERSION = "2026.11.25.5"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -76,16 +74,8 @@ PANEL_SAMPLING = EvalSamplingParams(
     skip_special_tokens=False,
 )
 
-# Layout: 4 GB200 per task, the GB200 variant, cw-us-east-08a, excluding the faulty rack,
-# and 72 h coordinator/job timeouts (#12264 §4). This mirrors Dr Doom's BASELINE_LAYOUT
-# plus the mochi-gb200-cw-us-east-08a serving profile's exclusion. UNVERIFIED RESOLVED
-# INFEASIBLE on main: role_topology=RoleTopologyMode.NVLINK_DOMAIN cannot plan a
-# generation-only job — the native role-plan validator requires exactly one 'policy' claim
-# (vendor/skyrl/cloud/iris/role_plan.py) and _launch_config_yaml reads
-# plan.policy_num_nodes, which a generation plan does not carry. Dr Doom's generation
-# support is not on main. The exclusion and the 72 h budgets still apply; the recorded
-# proposed change is to extend the native role plan to generation-only claims. See
-# PREP-STATUS.md.
+# Panel stages keep the coordinator-approved generation topology unset. All racks are
+# eligible per the coordinator's 2026-11-25 directive; no rack exclusions apply to any stage.
 GUARDS_LAYOUT = Layout(
     name="mochi-guards-generate-128",
     workload=Generation(
@@ -112,7 +102,6 @@ GUARDS_LAYOUT = Layout(
     priority="production",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
 
 RL_LAYOUT = replace(
@@ -125,9 +114,8 @@ RL_LAYOUT = replace(
     host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
-"""One 60-GB200 rack (48 policy + 12 inference) for each S2 arm, with the same exclusions."""
+"""One 60-GB200 rack (48 policy + 12 inference) for each S2 arm."""
 
 EXPORT_LAYOUT = replace(
     mochi_rl.THREE_RACK,
@@ -137,7 +125,6 @@ EXPORT_LAYOUT = replace(
     host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
 """The 96-GPU export grid for the S2x exports (two arms of 48 pipeline-parallel GPUs)."""
 
