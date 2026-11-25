@@ -281,7 +281,8 @@ def run_workers(
     expected_documents: int = EXPECTED_DOCUMENTS,
 ) -> list[dict]:
     """Embed every corpus shard once across the visible GPUs, then verify each part."""
-    preflight(config.embed_python)
+    if device == "cuda":
+        preflight(config.embed_python)
     staged_output = work / "embedding-output"
     staged_output.mkdir(parents=True, exist_ok=False)
     uploaded = adopt_regional_parts(output, staged_output)
@@ -305,7 +306,7 @@ def run_workers(
             )
         )
         # The worker log handle lives as long as the subprocess; closed after wait().
-        worker_logs.append(open(work / f"worker-{worker}.log", "wb"))
+        worker_logs.append(open(work / f"worker-{worker}.log", "wb"))  # noqa: SIM115
         workers.append(
             subprocess.Popen(
                 [
