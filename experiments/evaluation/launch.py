@@ -91,6 +91,7 @@ from experiments.evaluation.curated import (
     record_ref_for,
     resolve_selection,
     runs_agent,
+    selected_sources,
     settings_for,
 )
 from experiments.evaluation.evals import (
@@ -107,6 +108,7 @@ from experiments.evaluation.policy_finalization import (
     requires_policy_judge,
 )
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.pipeline import download_hosts
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -327,6 +329,12 @@ def _resolve_definitions(
             }
             egress_allow = (
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
+            )
+            egress_allow += tuple(
+                host
+                for source in selected_sources(protocol)
+                if source.config is not None
+                for host in download_hosts(source.config.recipe)
             )
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]

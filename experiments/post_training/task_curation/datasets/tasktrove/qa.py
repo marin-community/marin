@@ -12,6 +12,7 @@ multiple-choice source grades the option letter in process.
 import re
 from dataclasses import replace
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -26,7 +27,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
 
@@ -235,9 +236,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "knowledge-openqa",
             "laion__nemotron-gym-knowledge-openqa-v4",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
-                title="laion/nemotron-gym-knowledge-openqa-v4",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-knowledge-openqa-v4",
+                upstream_name="laion/nemotron-gym-knowledge-openqa-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
                 count=122357,
@@ -251,9 +255,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "science-openqa",
             "laion__nemotron-gym-science-so-openq-v3",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
-                title="laion/nemotron-gym-science-so-openq-v3",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-science-so-openq-v3",
+                upstream_name="laion/nemotron-gym-science-so-openq-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
                 count=150644,
@@ -284,9 +291,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{MCQA_CONFIG}",
-                title="laion/nemotron-gym-knowledge-mcqa-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset=MCQA_CONFIG,
+                upstream_name=MCQA_CONFIG,
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
                 count=616888,

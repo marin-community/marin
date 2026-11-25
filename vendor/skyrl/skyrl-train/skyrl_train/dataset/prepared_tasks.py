@@ -2,8 +2,8 @@
 
 import hashlib
 import json
-from collections.abc import Mapping
-from contextlib import nullcontext
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import closing, nullcontext
 from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from datasets import Dataset
 from finestore.rl.strata import SELECTION_MANIFEST_FILENAME, SELECTION_SUMMARY_FILENAME, read_selection_definition
 from loguru import logger
 from marinskyrl.task_sources import PreparedTaskCacheSource
@@ -21,8 +22,7 @@ from transformers import PreTrainedTokenizerBase
 from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
 _CACHE_KEY_METADATA = b"skyrl.prepared_task_key"
-# Large verifier payloads make a single row group too costly to decode on a cache hit.
-_ROW_GROUP_SIZE = 2048
+PREPARED_TASK_BATCH_SIZE = 1024
 PROMPT_LENGTH_COLUMN = "_prompt_token_count"
 
 # Include the installed preparation code so experimental branches can share the cache safely.
@@ -137,8 +137,31 @@ def _tokenizer_key(tokenizer: PreTrainedTokenizerBase, chat_template_kwargs: dic
     }
 
 
-def load_prepared_tasks(path: StoragePath, key: str, required_columns: set[str], row_count: int) -> pa.Table | None:
-    """Read a complete cache object, returning a miss for unavailable or damaged objects."""
+def load_prepared_tasks(
+    path: StoragePath, key: str, required_columns: set[str], row_count: int, arrow_path: Path
+) -> Dataset | None:
+    """Return a disk-backed dataset, or None if the shared cache is missing or invalid."""
+    with closing(_read_prepared_task_batches(path, key, required_columns, row_count)) as batches:
+        first = next(batches, None)
+        if first is None:
+            return None
+        with pa.ipc.new_stream(arrow_path, first.schema) as writer:
+            writer.write_batch(first)
+            rows_written = first.num_rows
+            del first
+            for batch in batches:
+                writer.write_batch(batch)
+                rows_written += batch.num_rows
+    # A corrupt file can fail after yielding valid batches.
+    if rows_written != row_count:
+        arrow_path.unlink()
+        return None
+    return Dataset.from_file(str(arrow_path), in_memory=False)
+
+
+def _read_prepared_task_batches(
+    path: StoragePath, key: str, required_columns: set[str], row_count: int
+) -> Generator[pa.RecordBatch, None, None]:
     try:
         filesystem, filename = filesystem_for(str(path))
         with nullcontext() if path.is_local else TemporaryDirectory() as directory:
@@ -146,25 +169,28 @@ def load_prepared_tasks(path: StoragePath, key: str, required_columns: set[str],
                 local_path = str(Path(directory) / "prepared.parquet")
                 filesystem.get_file(filename, local_path)
                 filename = local_path
-            table = pq.read_table(filename, memory_map=True, page_checksum_verification=True)
-        if (
-            (table.schema.metadata or {}).get(_CACHE_KEY_METADATA) != key.encode()
-            or not required_columns.issubset(table.column_names)
-            or len(table) != row_count
-        ):
-            raise ValueError("prepared task cache does not match the source or expected schema")
-        lengths = table.column(PROMPT_LENGTH_COLUMN)
-        if lengths.type != pa.int64() or lengths.null_count:
-            raise ValueError("prepared task cache contains invalid prompt lengths")
+            with pq.ParquetFile(filename, page_checksum_verification=True) as parquet:
+                schema = parquet.schema_arrow
+                if (
+                    (schema.metadata or {}).get(_CACHE_KEY_METADATA) != key.encode()
+                    or not required_columns.issubset(schema.names)
+                    or parquet.metadata.num_rows != row_count
+                ):
+                    raise ValueError("prepared task cache does not match the source or expected schema")
+                lengths_index = schema.get_field_index(PROMPT_LENGTH_COLUMN)
+                if schema.field(lengths_index).type != pa.int64():
+                    raise ValueError("prepared task cache contains invalid prompt lengths")
+                for batch in parquet.iter_batches(batch_size=PREPARED_TASK_BATCH_SIZE):
+                    if batch.column(lengths_index).null_count:
+                        raise ValueError("prepared task cache contains null prompt lengths")
+                    yield batch
     except FileNotFoundError:
-        return None
+        return
     except (OSError, ValueError, MissingCredentials) as error:
         logger.warning("Could not read prepared task cache {}: {}", path, error)
-        return None
-    return table
 
 
-def write_prepared_tasks(path: StoragePath, key: str, table: pa.Table) -> None:
+def write_prepared_tasks(path: StoragePath, key: str, schema: pa.Schema, arrow_shards: Iterable[str]) -> None:
     """Publish a complete file so concurrent writers and retries cannot expose partial rows."""
     try:
         filesystem, filename = filesystem_for(str(path))
@@ -173,14 +199,18 @@ def write_prepared_tasks(path: StoragePath, key: str, table: pa.Table) -> None:
             parent.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=parent) as directory:
             temporary = Path(directory) / "prepared.parquet"
-            metadata = {**(table.schema.metadata or {}), _CACHE_KEY_METADATA: key.encode()}
-            pq.write_table(
-                table.replace_schema_metadata(metadata),
+            metadata = {**(schema.metadata or {}), _CACHE_KEY_METADATA: key.encode()}
+            with pq.ParquetWriter(
                 temporary,
+                schema.with_metadata(metadata),
                 compression="zstd",
-                row_group_size=_ROW_GROUP_SIZE,
                 write_page_checksum=True,
-            )
+            ) as writer:
+                for shard in arrow_shards:
+                    # Read one batch at a time so the export does not fault in all the mapped rows.
+                    with pa.input_stream(shard) as stream, pa.ipc.open_stream(stream) as reader:
+                        for batch in reader:
+                            writer.write_batch(batch)
             if parent is None:
                 filesystem.put_file(str(temporary), filename)
             else:
