@@ -1442,7 +1442,6 @@ def test_staged_weights_leave_admission_open_and_recheck_version(
     model, tokenizer = generated_model_and_tokenizer
     config = dataclasses.replace(inference_server_config, initial_policy_id="initial")
     server = InferenceServer.create(config, model, tokenizer)
-    context = server.inference_context
     entered, release = threading.Event(), threading.Event()
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
 
@@ -1463,26 +1462,27 @@ def test_staged_weights_leave_admission_open_and_recheck_version(
         )
         return response
 
-    with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
-        try:
-            staging = pool.submit(context.stage_policy, restore, expected_version=0, policy_id="staged")
-            assert entered.wait(5)
-            during_stage = pool.submit(generate, client, "initial").result(timeout=30)
-            assert during_stage.status_code == 200, during_stage.text
-            during_metadata, _ = decode_frame(during_stage.content)
-            assert during_metadata["choices"][0]["model_version"] == 0
-        finally:
-            release.set()
-        candidate = staging.result(timeout=30)
-
-        assert server.reload(lambda model: model, expected_version=0, policy_id="next") == 1
-        with pytest.raises(ValueError, match="Expected model version"):
-            context.install_policy(candidate)
-        with pytest.raises(ValueError, match="new, nonempty policy ID"):
-            context.stage_policy(lambda model: model, expected_version=1, policy_id="next")
-        assert generate(client, "staged").status_code == 409
-        response = generate(client, "next")
-        assert response.status_code == 200
-        metadata, _ = decode_frame(response.content)
-        assert metadata["choices"][0]["model_version"] == 1
-        assert metadata["choices"][0]["policy_id"] == "next"
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                staging = pool.submit(server.publish, restore, expected_version=0, policy_id="staged")
+                assert entered.wait(5)
+                during_stage = pool.submit(generate, client, "initial").result(timeout=30)
+                assert during_stage.status_code == 200, during_stage.text
+                during_metadata, _ = decode_frame(during_stage.content)
+                assert during_metadata["choices"][0]["model_version"] == 0
+                assert server.reload(lambda model: model, expected_version=0, policy_id="next") == 1
+            finally:
+                release.set()
+            with pytest.raises(ValueError, match="Expected model version"):
+                staging.result(timeout=30)
+            with pytest.raises(ValueError, match="new, nonempty policy ID"):
+                server.publish(lambda model: model, expected_version=1, policy_id="next")
+            assert generate(client, "staged").status_code == 409
+            response = generate(client, "next")
+            assert response.status_code == 200
+            metadata, _ = decode_frame(response.content)
+            assert metadata["choices"][0]["model_version"] == 1
+            assert metadata["choices"][0]["policy_id"] == "next"
+    finally:
+        server.shutdown()
