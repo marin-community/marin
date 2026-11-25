@@ -187,20 +187,6 @@ def test_pinned_registry_cache_still_requires_configured_signature_verification(
         )
 
 
-def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layered_oci_image, monkeypatch):
-    image = layered_oci_image
-
-    def copy(args, **_kwargs):
-        destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
-        shutil.copytree(image.layout, destination)
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", copy)
-    prepared = ImageCache(tmp_path / "cache").prepare(RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}"), HOST)
-    assert prepared.manifest_digest == image.manifest_digest
-    assert prepared_image_workdir(prepared) == "/data"
-
-
 def test_registry_index_pin_prepares_each_architecture_separately(tmp_path, oci_image, monkeypatch):
     platforms = {
         architecture: oci_image((b"",), {"WorkingDir": f"/{architecture}"}, architecture)

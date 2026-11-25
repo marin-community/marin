@@ -30,11 +30,10 @@ class ImageArchitecture(StrEnum):
 
 HOST_MACHINE_ARCHITECTURES = {
     "x86_64": ImageArchitecture.AMD64,
-    "amd64": ImageArchitecture.AMD64,
     "aarch64": ImageArchitecture.ARM64,
     "arm64": ImageArchitecture.ARM64,
 }
-"""``platform.machine()`` values mapped to the image architecture the host runs natively."""
+"""``platform.machine()`` values on Linux, and on macOS Docker hosts, mapped to the native architecture."""
 
 
 class ImageArchitectureMismatch(ValueError):
