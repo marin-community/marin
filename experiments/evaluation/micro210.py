@@ -240,7 +240,7 @@ def micro210_step(
 @click.option(
     "--smoke-row", multiple=True, type=click.IntRange(min=0), help="Prepared row index for a diagnostic smoke."
 )
-@click.option("--smoke-engines", default=1, type=click.IntRange(min=1))
+@click.option("--smoke-engines", type=click.IntRange(min=1))
 @rl_build_options
 def main(
     model_uri: str,
@@ -249,11 +249,13 @@ def main(
     tokenizer_revision: str,
     name: str,
     smoke_row: tuple[int, ...],
-    smoke_engines: int,
+    smoke_engines: int | None,
 ) -> ArtifactStep:
     configure_coreweave_s3()
     model = Micro210Model(model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
-    smoke = Micro210Smoke(smoke_row, smoke_engines) if smoke_row else None
+    if smoke_engines is not None and not smoke_row:
+        raise click.UsageError("--smoke-engines requires at least one --smoke-row")
+    smoke = Micro210Smoke(smoke_row, 1 if smoke_engines is None else smoke_engines) if smoke_row else None
     return micro210_step(model, name=name, version=resolve_version(name, None), smoke=smoke)
 
 
