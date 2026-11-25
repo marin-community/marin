@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import runpy
 import sys
 from copy import deepcopy
 from dataclasses import replace
 from fractions import Fraction
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 import click
@@ -23,7 +23,7 @@ from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
-from experiments.post_training import rl, rl_compose, rl_gate
+from experiments.post_training import mochi_rl, rl, rl_compose, rl_gate, snowball_rl
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
@@ -385,7 +385,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: durable)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
-    monkeypatch.delitem(sys.modules, module)
+    monkeypatch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(module, loader=None))
     submitted = []
 
     def submit(entry_module, handles, _max_concurrent, env, *, argv):
@@ -444,10 +444,9 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         return JobName.from_wire("/fixture/sft-then-rl")
 
     monkeypatch.setattr(rl, "submit_or_run", submit)
+    entry = snowball_rl.main if model == "snowball" else mochi_rl.main
     for _ in range(2):
-        with pytest.raises(SystemExit) as exit_:
-            runpy.run_module(module, run_name="__main__", alter_sys=True)
-        assert exit_.value.code == 0
+        assert entry() == 0
     assert submitted == [(submitted[0][0], argv)] * 2
 
 

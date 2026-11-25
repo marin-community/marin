@@ -31,7 +31,7 @@ def write_training_families(root: StoragePath, counts: Mapping[str, int]) -> Non
 def run_native_test(module: str, args: Sequence[str], *, uv_options: tuple[str, ...] = ()):
     """Run a checked-in test module in the locked SkyRL CPU environment."""
     try:
-        return gate._native_json(*uv_options, "python", "-I", "-m", module, *args, timeout=170)
+        return gate.run_native_json(*uv_options, "python", "-I", "-m", module, *args, timeout=170)
     except gate.InvalidComparison as error:
         cause = error.__cause__
         if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:
