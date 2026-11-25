@@ -735,6 +735,8 @@ def _wait_for_run(
     elif "verdict" not in snapshot and (coordinator_error is not None or gate_required):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
+    if click.get_current_context().params.get("control") and publication.unserved_records:
+        raise click.ClickException("Control publication is incomplete. Republish the stored attempts.")
     if _evaluation_failed(snapshot, preset):
         raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")
@@ -764,9 +766,7 @@ def _submit_from_launcher(
     module = _entry_module(module)
     submitted_at = datetime.now(UTC).isoformat()
     index: RunIndexIdentity = context.meta["rl_index"]
-    index = index.model_copy(
-        update={"submitted_at": submitted_at}
-    )
+    index = index.model_copy(update={"submitted_at": submitted_at})
     runs = _from_handles(rl_handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
@@ -941,7 +941,8 @@ def command(
         "A running source may prune the checkpoint before the coordinator starts it.",
     )
     @click.option(
-        "--control", metavar="BATCH",
+        "--control",
+        metavar="BATCH",
         help="Run a gated preset's defaults as named controls from a clean checkout.",
     )
     def run_command(

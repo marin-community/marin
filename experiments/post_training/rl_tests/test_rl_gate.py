@@ -6,7 +6,6 @@ import math
 import shutil
 import subprocess
 import sys
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -17,9 +16,6 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.rl.rl_progress import (
-    EVALUATION_PROTOCOL_DIFFERS,
-    SHARED_TASK_FRACTION_INVARIANT,
-    SHARED_TASKS_INVARIANT,
     ComparisonRole,
 )
 from finestore.rl.run_records import (
@@ -32,7 +28,6 @@ from finestore.rl.strata import (
     SelectionDefinition,
     SelectionParent,
     SelectionTaskRow,
-    TaskStrata,
     read_selection_manifest,
 )
 from finestore.schema import arrow_schema
@@ -41,9 +36,8 @@ from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
-from rigging.provenance import Provenance
 from scipy.stats import t
-from skyrlrecipe.documents import get_path, set_path
+from skyrlrecipe.documents import set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
@@ -73,7 +67,6 @@ from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TASK_MANIFEST_FILENAME,
-    VALIDATION_FILENAME,
 )
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -111,7 +104,11 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(rec
     report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert [attempt["attempt_id"] for attempt in report["control"]["attempts"]] == [
-        "control-r4", "control-r3", "control-r2", "control-r1", "control-r0",
+        "control-r4",
+        "control-r3",
+        "control-r2",
+        "control-r1",
+        "control-r0",
     ]
     assert str(extra) not in {attempt["path"] for attempt in report["control"]["attempts"]}
     artifact = Path(report.pop("report"))
@@ -230,7 +227,9 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         receipt["result"]["state"] = "failed"
     same_cohort = run(
         gate.gate_step(
-            preset, tuple(candidates), cohort=cohort,
+            preset,
+            tuple(candidates),
+            cohort=cohort,
             inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
         )
     )[0]

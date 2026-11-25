@@ -166,7 +166,9 @@ def test_insufficient_controls_restates_the_exact_base_version(recorded_runs, mo
 
     preset = table.by_name["learning-medium"]
     args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, mode]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(args), entry_module="experiments.post_training.snowball_rl"), args)
+    result = CliRunner().invoke(
+        snowball.command(table, argv=tuple(args), entry_module="experiments.post_training.snowball_rl"), args
+    )
     assert result.exit_code == exit_code, (result.output, result.exception)
     if mode == "--plan":
         status = printed_status(result.stdout.partition("\nStepSpec(")[0])
@@ -722,7 +724,9 @@ def test_submission_exit_codes_and_publication_retries(
     )
     source = sources[0] if sources else None
     if source is not None and preset.gated and not control:
-        built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort_from_fixtures(source)))
+        built = replace(
+            built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort_from_fixtures(source))
+        )
     for index, root in enumerate(sources):
         native = read_attempt(str(root / "exports"), f"native-{index}")
         write_attempt(str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73))

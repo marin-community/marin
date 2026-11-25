@@ -40,11 +40,12 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
-from experiments.post_training.rl_index import APPLET_ID
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
+from experiments.post_training.rl_index import APPLET_ID
+from experiments.post_training.rl_measurements import RunInputs, lineage_gpu_hours
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
+    cohort_from_fixtures,
     copy_evaluations,
     edit_receipt,
     replace_evaluations,
@@ -53,7 +54,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_receipt,
     write_skyrl_run_record,
 )
-from experiments.post_training.rl_tests.fixtures import cohort_from_fixtures, controls as write_controls
+from experiments.post_training.rl_tests.fixtures import controls as write_controls
 from experiments.post_training.skyrl_test_support import selection_summary
 from infra.marina.tests.rl_progress_fixtures import grader_report
 
@@ -323,8 +324,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
-                preset, handles, cohort=cohort_from_fixtures(sources[1]),
-                inputs=RunInputs(preset_name=preset.name, requirements=requirements)
+                preset,
+                handles,
+                cohort=cohort_from_fixtures(sources[1]),
+                inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )
         )[0]
         return report, str(report.path)
@@ -671,8 +674,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         attempt = read_stored_skyrl_attempts(str(root))[0]
         command = CliRunner().invoke(
             publication.command(table),
-            ["--preset", preset.name, "--marina-url", "http://localhost",
-             "--run-output", str(root), "--attempt", attempt],
+            [
+                "--preset",
+                preset.name,
+                "--marina-url",
+                "http://localhost",
+                "--run-output",
+                str(root),
+                "--attempt",
+                attempt,
+            ],
         )
         assert command.exit_code == 0, (command.output, command.exception)
     served_controls = [row for row in stored().values() if row["is_control"]]

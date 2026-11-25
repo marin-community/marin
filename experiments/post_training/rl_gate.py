@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from pathlib import Path, PurePosixPath
+from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict, completed_controls
@@ -42,21 +43,21 @@ from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt, re
 from pydantic import BaseModel, Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rigging.redaction import redact_string
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
-from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_index
+from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     RunMeasurements,
     read_measurements,
-    read_recorded_launch,
     read_run_inputs,
 )
 from experiments.post_training.rl_presets import ModelPresets
@@ -140,9 +141,7 @@ class ControlCohort(BaseModel, frozen=True):
     attempts: tuple[ControlAttempt, ...] = Field(min_length=CONTROL_COUNT, max_length=CONTROL_COUNT)
 
 
-def select_controls(
-    index: RunIndexIdentity, *, service_url: str | None = None, branch: str = "main"
-) -> ControlCohort:
+def select_controls(index: RunIndexIdentity, *, service_url: str | None = None, branch: str = "main") -> ControlCohort:
     """Freeze the latest five indexed controls at the candidate's base version."""
     version = index.base_preset_version
     if version is None:
@@ -159,7 +158,9 @@ def select_controls(
             branch=branch,
         )
     except (OSError, ValueError, RuntimeError) as error:
-        raise InvalidComparison(f"could not read controls for {index.model}/{index.preset} at version {version}: {error}") from error
+        raise InvalidComparison(
+            f"could not read controls for {index.model}/{index.preset} at version {version}: {error}"
+        ) from error
     if len(attempts) != CONTROL_COUNT:
         raise InvalidComparison(
             f"{index.model}/{index.preset} at base version {version}: "
@@ -170,9 +171,7 @@ def select_controls(
         if row.artifact_uri is None:
             raise InvalidComparison(f"indexed control has no output: {row.run_id}/{row.attempt_id}")
         members.append(ControlAttempt(run_id=row.run_id, attempt_id=row.attempt_id, path=row.artifact_uri))
-    return ControlCohort(
-        model=index.model, preset=index.preset, version=version, branch=branch, attempts=tuple(members)
-    )
+    return ControlCohort(model=index.model, preset=index.preset, version=version, branch=branch, attempts=tuple(members))
 
 
 def _control_measurements(preset: presets.Preset, cohort: ControlCohort, member: ControlAttempt) -> RunMeasurements:
@@ -196,9 +195,7 @@ def _control_measurements(preset: presets.Preset, cohort: ControlCohort, member:
     return data
 
 
-def validate_requirements(
-    preset: presets.Preset, requirements: Sequence[str], cohort: ControlCohort
-) -> None:
+def validate_requirements(preset: presets.Preset, requirements: Sequence[str], cohort: ControlCohort) -> None:
     """Check declared requirement keys against a stored control before submission."""
     if not requirements:
         return
@@ -1043,9 +1040,7 @@ def compare_attempt(
     recorded = read_run_inputs(source)
     if recorded.preset_name != preset.name:
         raise InvalidComparison(f"recorded preset is {recorded.preset_name}, expected {preset.name}")
-    inputs = recorded.model_copy(
-        update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))}
-    )
+    inputs = recorded.model_copy(update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))})
     for text in inputs.requirements:
         parse_requirement(text)
     name = user_owned_name(
@@ -1058,17 +1053,24 @@ def compare_attempt(
 def command(table: ModelPresets) -> click.Command:
     @click.command(cls=RLCommand, help=__doc__)
     @click.option(
-        "--preset", "preset_name", required=True,
+        "--preset",
+        "preset_name",
+        required=True,
         type=click.Choice(sorted(name for name, preset in table.by_name.items() if preset.gated)),
         help="Gated preset to compare.",
     )
     @click.option(
-        "--candidate", required=True, metavar="NAME[@VERSION]",
+        "--candidate",
+        required=True,
+        metavar="NAME[@VERSION]",
         help="Saved candidate name and optional artifact version.",
     )
     @click.option("--marina-url", help="Marina origin for the run index.")
     @click.option(
-        "--require", "requirements", multiple=True, metavar="KEY<=|>=BOUND",
+        "--require",
+        "requirements",
+        multiple=True,
+        metavar="KEY<=|>=BOUND",
         help="Add a condition to those recorded at launch. Repeatable.",
     )
     def main(preset_name: str, candidate: str, marina_url: str | None, requirements: tuple[str, ...]) -> None:
@@ -1081,10 +1083,14 @@ def command(table: ModelPresets) -> click.Command:
             raise InvalidComparison("candidate requires a matching non-control run index identity")
         cohort = select_controls(index, service_url=marina_url)
         report = compare_attempt(preset, source, cohort, requirements)
-        click.echo(json.dumps({
-            "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
-            **report.model_dump(mode="json", exclude={"path"}),
-        }))
+        click.echo(
+            json.dumps(
+                {
+                    "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
+                    **report.model_dump(mode="json", exclude={"path"}),
+                }
+            )
+        )
         raise click.exceptions.Exit(EXIT_CODES[report.verdict])
 
     return main

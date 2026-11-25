@@ -35,8 +35,19 @@ def _run_control(module: str, table: ModelPresets, preset: Preset, batch: str, *
     )
     count = max(1, rl_gate.CONTROL_COUNT - len(cohort))
     command = [
-        sys.executable, "-m", module, "--preset", preset.name, "--control", batch, "--replicates", str(count),
-        "--version", rl_compose.RUN_ARTIFACT_VERSION, "--run", "--wait",
+        sys.executable,
+        "-m",
+        module,
+        "--preset",
+        preset.name,
+        "--control",
+        batch,
+        "--replicates",
+        str(count),
+        "--version",
+        rl_compose.RUN_ARTIFACT_VERSION,
+        "--run",
+        "--wait",
     ]
     print(json.dumps({"model": table.model, "preset": preset.name, "version": version, "requested": count}), flush=True)
     return subprocess.run(command, check=False).returncode

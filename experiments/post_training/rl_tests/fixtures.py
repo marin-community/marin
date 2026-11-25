@@ -282,7 +282,10 @@ def edit_receipt(root: Path) -> Iterator[dict]:
 
 def controls(write, name, *, speed=None, score=None, **kwargs):
     def record(index):
-        options = {"speed": 100 + index if speed is None else speed, "score": 0.48 + index * 0.01 if score is None else score}
+        options = {
+            "speed": 100 + index if speed is None else speed,
+            "score": 0.48 + index * 0.01 if score is None else score,
+        }
         return write(
             name, f"controls/{name}/r{index}", control=True, attempt_id=f"control-r{index}", **(options | kwargs)
         )
@@ -292,7 +295,9 @@ def controls(write, name, *, speed=None, score=None, **kwargs):
 
 def cohort_from_fixtures(root: Path) -> gate.ControlCohort:
     """Select the same indexed cohort as the gate CLI for a recorded candidate."""
-    attempt = read_attempt(str(root / "exports"), json.loads((root / "terminal.json").read_text())["config"]["run"]["attempt_id"])
+    attempt = read_attempt(
+        str(root / "exports"), json.loads((root / "terminal.json").read_text())["config"]["run"]["attempt_id"]
+    )
     assert attempt is not None and attempt.index is not None
     return gate.select_controls(attempt.index)
 
@@ -560,13 +565,28 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
         if control:
             indexed_controls[run_id, attempt] = AttemptSummary(
-                run_id=run_id, native_run_id=run_id, attempt_id=attempt,
-                label=preset_name, series=preset_name, model=table.model, preset_version=version,
-                branch="main", dirty=False, is_control=True, status="succeeded",
-                run_date=result["started_at"], started_at=result["started_at"], completed_at=result["finished_at"],
-                elapsed_seconds=3600, timing_scope="fixture", optimizer_steps=max_steps,
-                source_revision="commit-one", data_identity=None, initializer_identity="fixture",
-                artifact_uri=str(root), evidence=[],
+                run_id=run_id,
+                native_run_id=run_id,
+                attempt_id=attempt,
+                label=preset_name,
+                series=preset_name,
+                model=table.model,
+                preset_version=version,
+                branch="main",
+                dirty=False,
+                is_control=True,
+                status="succeeded",
+                run_date=result["started_at"],
+                started_at=result["started_at"],
+                completed_at=result["finished_at"],
+                elapsed_seconds=3600,
+                timing_scope="fixture",
+                optimizer_steps=max_steps,
+                source_revision="commit-one",
+                data_identity=None,
+                initializer_identity="fixture",
+                artifact_uri=str(root),
+                evidence=[],
             )
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
