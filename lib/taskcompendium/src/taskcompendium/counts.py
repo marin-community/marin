@@ -5,14 +5,12 @@
 
 Each format uses its cheapest exact measurement: parquet footer metadata (no
 data-page read), streamed non-empty lines for JSONL — gzipped or plain, exactly
-the lines the JSONL reader yields — the top-level element count of a JSON
-record array, task packages for Harbor-style task directories, and parquet
-shard footers for a store table directory. Every function reads through
-:class:`StoragePath`, so remote payloads — a pinned
-``hf://datasets/<repo>@<revision>/...`` path among them — count identically to
-local ones. Formats without a fixed row count (procedural generators) and
-dialects whose line count lies (CSV quoting, XML) report ``None`` rather than
-an approximation.
+the lines the JSONL reader yields — and the top-level element count of a JSON
+record array. Every function reads through :class:`StoragePath`, so remote
+payloads — a pinned ``hf://datasets/<repo>@<revision>/...`` path among them —
+count identically to local ones. Formats without a fixed row count (procedural
+generators) and dialects whose line count lies (CSV quoting, XML) report
+``None`` rather than an approximation.
 """
 
 import json
@@ -23,9 +21,6 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import open_file
 
 from taskcompendium.pipeline.inputs import SourceFormat
-
-TASK_PACKAGE_PATTERN = "*/task.toml"
-"""One Harbor-style task package per directory that holds ``task.toml``."""
 
 
 def count_parquet_rows(path: StoragePath) -> int:
@@ -51,16 +46,6 @@ def count_json_elements(path: StoragePath) -> int:
     if not isinstance(payload, list):
         raise ValueError(f"Expected a JSON record array in {path}")
     return len(payload)
-
-
-def count_task_packages(root: StoragePath) -> int:
-    """The number of Harbor-style task packages directly under ``root``."""
-    return len((root / TASK_PACKAGE_PATTERN).glob())
-
-
-def count_table_rows(root: StoragePath) -> int:
-    """The row count of a store table directory: the sum of its parquet shards' footer rows."""
-    return sum(count_parquet_rows(shard) for shard in (root / "*.parquet").glob())
 
 
 def count_source_rows(path: StoragePath, source_format: SourceFormat) -> int | None:
