@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets import (
     structure_closure,
     terminus_pivot,
     thoughtcrime,
+    workplace,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.cascade import tasks as cascade
@@ -245,6 +246,7 @@ def configured_sources() -> list[RlDataSource]:
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
         *nemo_structured.sources(),
+        *workplace.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *ifbench.sources(),
         *openresearcher.sources(),
