@@ -72,11 +72,25 @@ class RunCheck:
 
 
 def expected_runs(
-    policy: EvalPolicy, candidate: PolicyCandidate, *, limit: int | None, evaluations: Collection[str] | None = None
+    policy: EvalPolicy,
+    candidate: PolicyCandidate,
+    *,
+    limit: int | None,
+    evaluations: Collection[str] | None = None,
+    priority_band: int = job_pb2.PRIORITY_BAND_BATCH,
+    federated_cluster: str | None = None,
 ) -> tuple[ExpectedRun, ...]:
-    """Every run ``policy launch`` would submit for ``candidate`` at ``limit``, resolved as a dry run does."""
+    """Every run ``policy launch`` would submit for ``candidate`` at ``limit``, resolved as a dry run does.
+
+    Priority and cluster place the servers but do not change any run's path.
+    """
     specs = launch_specs(
-        policy, candidate, evaluations=evaluations, limit=limit, priority_band=job_pb2.PRIORITY_BAND_BATCH
+        policy,
+        candidate,
+        evaluations=evaluations,
+        limit=limit,
+        priority_band=priority_band,
+        federated_cluster=federated_cluster,
     )
     return tuple(
         ExpectedRun(batch=batch, evaluation=evaluation)

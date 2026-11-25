@@ -20,10 +20,10 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
-from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
+from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group
 from experiments.evaluation.models import models
 from experiments.evaluation.policies import POLICIES
-from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs, model_candidate
+from experiments.evaluation.policy.launch import evaluation_dataset, model_candidate
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
@@ -173,32 +173,24 @@ class _LaunchPlan:
     succeeded: Mapping[str, EvalRunRecord]
 
 
-def _batches(
-    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **launch
-) -> tuple[EvaluationBatch, ...]:
-    return tuple(
-        prepare_evaluation_batch(spec) for spec in launch_specs(policy, candidate, evaluations=evaluations, **launch)
-    )
-
-
 def _launch_plan(
-    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **launch
+    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **placement
 ) -> _LaunchPlan:
     """Resolve a candidate's launch, leaving out evaluations whose run at its path already succeeded.
 
     Run IDs depend only on each evaluation, so the evaluations left still group onto the same servers
-    under the same IDs.
+    under the same IDs. ``placement`` is the priority band and cluster ``expected_runs`` takes.
     """
     try:
-        batches = _batches(policy, candidate, evaluations, **launch)
-        git_sha = batches[0].provenance.git_sha
-        runs = [ExpectedRun(batch=batch, evaluation=evaluation) for batch in batches for evaluation in batch.evaluations]
+        runs = expected_runs(policy, candidate, evaluations=evaluations, **placement)
+        git_sha = runs[0].batch.provenance.git_sha
         succeeded = succeeded_runs(runs)
         if succeeded:
             remaining = [run.name for run in runs if run.name not in succeeded]
-            batches = _batches(policy, candidate, remaining, **launch) if remaining else ()
+            runs = expected_runs(policy, candidate, evaluations=remaining, **placement) if remaining else ()
     except ValueError as error:
         raise click.ClickException(f"{candidate.name}: {error}") from error
+    batches = tuple({id(run.batch): run.batch for run in runs}.values())
     return _LaunchPlan(candidate=candidate, git_sha=git_sha, batches=batches, succeeded=succeeded)
 
 
@@ -260,16 +252,16 @@ def _targets(
     all_candidates: bool,
     model_key: str | None,
     model_config: Path | None,
-    *,
-    default_all: bool,
-) -> tuple[PolicyCandidate, ...]:
-    """The candidates a command runs: named ones, every one, or a model outside the policy."""
+) -> tuple[PolicyCandidate, ...] | None:
+    """The candidates a command runs: named ones, every one, or a model outside the policy; None if none chosen."""
     if model_key is not None and model_config is not None:
         raise click.UsageError("--model and --model-config are mutually exclusive")
     model_given = model_key is not None or model_config is not None
     chosen = bool(candidate_names) + all_candidates + model_given
-    if chosen > 1 or (chosen == 0 and not default_all):
-        raise click.UsageError("name --candidate, --all-candidates, or one of --model and --model-config")
+    if chosen > 1:
+        raise click.UsageError("name only one of --candidate, --all-candidates, --model and --model-config")
+    if chosen == 0:
+        return None
     if model_given:
         if model_config is not None:
             model = load_model_config(model_config)
@@ -366,7 +358,9 @@ def launch(
     from its tag.
     """
     policy = POLICIES[version]
-    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config, default_all=False)
+    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config)
+    if candidates is None:
+        raise click.UsageError("name --candidate, --all-candidates, --model or --model-config")
     names = None if evaluations is None else {name.strip() for name in evaluations.split(",") if name.strip()}
     configure_coreweave_s3()
     plans = [
@@ -413,7 +407,7 @@ def status(
     or with other inputs, are not shown; verify checks those.
     """
     policy = POLICIES[version]
-    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config, default_all=True)
+    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config) or policy.candidates
     release = _release_commit(policy)
     configure_coreweave_s3()
     for candidate in candidates:
