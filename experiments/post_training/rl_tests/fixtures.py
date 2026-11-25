@@ -17,6 +17,7 @@ import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from click.testing import CliRunner
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
@@ -51,6 +52,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_skyrl_metrics
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -66,6 +68,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
@@ -616,3 +619,34 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         return root
 
     return write
+
+
+def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout.
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
+
+
+KL = "policy/mismatch/staleness0/kl_k3"
+
+
+def compare(preset, *args):
+    result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
+    assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
+    payload = json.loads(result.stdout.splitlines()[-1])
+    assert result.exit_code == EXIT_CODES[payload["verdict"]], (
+        result.output,
+        result.exception,
+    )
+    return payload
+
+
+def comparisons(report, role=None):
+    return {row["metric"]: row for row in report["comparisons"] if role is None or row["role"] == role}
+
+
+def edit_metrics(root, edit):
+    metrics = read_skyrl_metrics(str(root))
+    for values in metrics.values():
+        edit(values)
+    write_metrics(root, metrics)

@@ -101,7 +101,12 @@ MARIN_NATIVE_CONFIG_TESTS = {
         "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
     ),
     "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_presets.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_submission.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_train_long.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
     "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_gate_configuration.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_gate_report.py": _NATIVE_CONFIG,
     "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
 }
 
