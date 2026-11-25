@@ -290,6 +290,16 @@ def test_resume_inherits_the_source_runs_initializer(
         monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(resume_prefix))
 
     resume_args = ("--resume", f"{source.name}@{source.version}")
+    composed = []
+    if not explicit_init:
+        compose_candidate = rl_gate.compose_candidate
+
+        def record_composition(preset, inputs):
+            config = compose_candidate(preset, inputs)
+            composed.append(config)
+            return config
+
+        monkeypatch.setattr(rl_gate, "compose_candidate", record_composition)
     planned = plan(table, preset.name, *resume_args)
     assert planned.exit_code == 0, (planned.output, planned.exception)
     assert f"  model: {source_model['identity']}\n" in planned.output
@@ -300,9 +310,7 @@ def test_resume_inherits_the_source_runs_initializer(
     assert inputs["model"] == source_model
     assert inputs["starting_checkpoint"]["uri"] == str(checkpoint)
     if not explicit_init:
-        launch = tmp_path / "resumed.yaml"
-        launch.write_text(resumed_config.launch_config_yaml)
-        (plan_document,) = rl_gate.compose_configs([str(launch)])
+        (plan_document,) = composed
         worker_document = deepcopy(plan_document)
         runtime = worker_document["skyrl"].setdefault("runtime", {})
         runtime["model_source_identity"] = inputs["model"]["identity"]

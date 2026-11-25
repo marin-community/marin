@@ -25,15 +25,6 @@ _MODELS = {
 }
 
 
-def _read_control_index(jobs: list[tuple[str, ModelPresets, Preset]]) -> list[AttemptSummary]:
-    """Recover terminal receipts left by a previous workflow before counting controls."""
-    records = rl_index.list_attempts()
-    recovered = False
-    for _, table, preset in jobs:
-        recovered |= rl_publication.recover_control_outputs(preset, table)
-    return rl_index.list_attempts() if recovered else records
-
-
 def _run_control(module: str, table: ModelPresets, preset: Preset, batch: str, records: list[AttemptSummary]) -> int:
     launch = rl_gate.compose_preset(preset)
     version = rl_gate.config_version(launch)
@@ -80,7 +71,11 @@ def main() -> int:
     if not jobs:
         parser.error("the filters must select at least one gated preset")
     configure_coreweave_s3()
-    records = [] if proof else _read_control_index(jobs)
+    records = []
+    if not proof:
+        for _, table, preset in jobs:
+            rl_publication.recover_control_outputs(preset, table)
+        records = rl_index.list_attempts()
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         submitted = [
             (table.model, preset.name, pool.submit(_run_control, module, table, preset, args.batch, records))

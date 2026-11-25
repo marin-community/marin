@@ -12,7 +12,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import pyarrow as pa
@@ -94,11 +94,17 @@ def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | Non
     return windows
 
 
+def recorded_lineage(attempt: AttemptRecord, launch: RecordedLaunch) -> tuple[LineageEntry, ...]:
+    """Use the selected terminal receipt for the head of the stored checkpoint lineage."""
+    history = attempt_lineage(launch.export_root, attempt.attempt_id)
+    return (replace(history[0], record=attempt), *history[1:]) if history else ()
+
+
 def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
     """Sum native allocations over the complete recorded checkpoint lineage."""
     if not attempt.native.result.state.is_terminal:
         return None
-    windows = lineage_windows(attempt_lineage(launch.export_root, attempt.attempt_id))
+    windows = lineage_windows(recorded_lineage(attempt, launch))
     return sum(window.seconds * window.gpus for window in windows) / 3600 if windows else None
 
 

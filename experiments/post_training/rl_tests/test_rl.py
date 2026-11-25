@@ -700,6 +700,12 @@ def test_submission_exit_codes_and_publication_retries(
         controls(recorded_runs, preset.name)
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
+    if control:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        clean_main = Provenance("tree-one", "commit-one", False, "main", "test")
+        monkeypatch.setattr(Provenance, "capture", lambda *_: clean_main)
+        monkeypatch.setattr(snowball, "_base_preset", lambda *_: ("commit-one", "current-version"))
+        monkeypatch.setattr(snowball.rl_publication, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
     built = snowball.build_experiment(
         preset,
         table=snowball_model.SNOWBALL,
@@ -841,6 +847,16 @@ def test_submission_exit_codes_and_publication_retries(
 
     client, job = fake_iris(monkeypatch, "dashboard-coordinator")
     client.job.return_value.state_only.side_effect = lambda: finish().state
+    if control:
+
+        def submit_control(**_):
+            (manifest,) = (tmp_path / "rl-control-submissions").glob("snowball/learning-medium/*/*.json")
+            entry = json.loads(manifest.read_text())
+            assert list(entry["outputs"]) == list(map(str, sources))
+            assert entry["commit"] == "commit-one"
+            return SimpleNamespace(job_id=job)
+
+        client.submit.side_effect = submit_control
     if case == "candidate-compose":
         client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     published = []

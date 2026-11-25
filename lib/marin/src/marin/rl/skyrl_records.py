@@ -3,7 +3,7 @@
 
 """Readers for native launch files and FineStore attempt records."""
 
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import yaml
 from finestore.rl.run_records import (
@@ -16,6 +16,7 @@ from finestore.rl.run_records import (
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, ValidationError
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from rigging.redaction import redact_value
 
 RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_RECEIPT_FILENAME = "terminal.json"
@@ -215,6 +216,7 @@ def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTr
         vllm_env={key: value for key, value in config.task_env.items() if key.startswith("VLLM_")},
         vllm_version=record.vllm_version,
     )
+    engine = cast(dict, redact_value(engine))
     project = record.index.wandb_project if record.index is not None else config.project_name
     wandb_url = (
         f"https://wandb.ai/{config.wandb_entity}/{project}/runs/{record.attempt_id}"

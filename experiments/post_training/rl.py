@@ -31,7 +31,7 @@ from typing import Protocol
 import click
 import yaml
 from finestore.rl.rl_progress import Verdict
-from finestore.rl.run_records import AttemptRecord, RunIndexIdentity
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, read_attempt_metrics
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
@@ -59,8 +59,8 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
+    RecordedLaunch,
     attempt_tracking,
-    read_skyrl_metrics,
     read_stored_skyrl_attempt,
 )
 from pydantic import BaseModel, TypeAdapter
@@ -332,14 +332,12 @@ def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
     )
 
 
-def _completed_update(
-    path: str, workload: presets.Training | presets.Generation, receipt: AttemptRecord | None
-) -> int | None:
-    if receipt is None:
+def _completed_update(workload: presets.Training | presets.Generation, launch: RecordedLaunch | None) -> int | None:
+    if launch is None:
         return None
     key = workload.completion_metric
     try:
-        metrics = read_skyrl_metrics(path, receipt.attempt_id)
+        metrics = read_attempt_metrics(launch.export_root, launch.attempt_id)
     except FileNotFoundError:
         return None
     for _, values in sorted(metrics.items(), reverse=True):
@@ -440,7 +438,7 @@ def _status(
                     else {}
                 ),
                 **best,
-                "latest_completed_update": _completed_update(path, preset.recipe.layout.workload, receipt),
+                "latest_completed_update": _completed_update(preset.recipe.layout.workload, launch),
                 "cluster": execution.cluster,
                 "allocation": {
                     **planned[-1]["iris"]["allocation"],
@@ -812,9 +810,12 @@ def _submit_from_launcher(
     index: RunIndexIdentity = context.meta["rl_index"]
     index = index.model_copy(update={"submitted_at": submitted_at})
     runs = _from_handles(rl_handles).runs
-    indexed_runs = {
-        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
+    prefix = recipe.run_prefix(preset)
+    native_ids = {
+        step.path(prefix): step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id
+        for step in runs
     }
+    indexed_runs = dict.fromkeys(native_ids.values(), index)
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
     environment = {**os.environ, RUN_INDEX_ENV: metadata}
     if cohort := context.meta.get("rl_control_cohort"):
@@ -824,10 +825,7 @@ def _submit_from_launcher(
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
     if index.is_control and index.branch == "main" and not index.dirty and environment.get("GITHUB_ACTIONS") == "true":
-        prefix = recipe.run_prefix(preset)
-        rl_publication.record_control_outputs(
-            preset, index.model, context.params["control"], tuple(step.path(prefix) for step in runs)
-        )
+        rl_publication.record_control_outputs(preset, index, context.params["control"], native_ids)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {

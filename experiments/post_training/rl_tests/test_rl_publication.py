@@ -398,22 +398,49 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
         base.model_copy(update={"run_id": "failed-control", "status": "failed"}),
     ]
     monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda _service_url=None: list(records))
-    monkeypatch.setattr(recipe, "run_prefix", lambda _preset: str(tmp_path))
+    monkeypatch.setattr(publication, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
     table = snowball_model.SNOWBALL
     preset = table.by_name["learning-medium"]
     output = str(tmp_path / "queued-control")
-    publication.record_control_outputs(preset, table.model, "previous-batch", (output,))
-    terminal = SimpleNamespace(
-        attempt_id=controls[2].attempt_id,
-        native=SimpleNamespace(result=SimpleNamespace(state=SimpleNamespace(is_terminal=True))),
+    pending = str(tmp_path / "pending-control")
+    index = RunIndexIdentity(
+        run_id="previous-batch",
+        model=table.model,
+        preset=preset.name,
+        preset_version="current",
+        is_control=True,
+        user="tester",
+        branch="main",
+        source_revision="main-source",
+        dirty=False,
     )
-    monkeypatch.setattr(publication, "read_stored_skyrl_attempt", lambda path: terminal if path == output else None)
+    submission = {output: controls[2].native_run_id, pending: controls[3].native_run_id}
+    publication.record_control_outputs(preset, index, "previous-batch", submission)
+    finished = {output: controls[2]}
+
+    def stored_attempts(path):
+        row = finished.get(path)
+        if row is None:
+            return None, {}
+        terminal = SimpleNamespace(
+            run_id=row.native_run_id,
+            attempt_id=row.attempt_id,
+            index=index,
+            native=SimpleNamespace(result=SimpleNamespace(state=SimpleNamespace(is_terminal=True))),
+        )
+        return None, {row.attempt_id: terminal}
+
+    monkeypatch.setattr(publication, "read_stored_skyrl_attempts", stored_attempts)
+    recovered = []
 
     def recover(paths, preset, *, table, attempt_id):
-        assert paths == [output] and attempt_id == controls[2].attempt_id
+        (path,) = paths
+        row = finished[path]
+        assert attempt_id == row.attempt_id
         assert table.model == "snowball" and preset.name == "learning-medium"
-        records.append(controls[2])
-        return publication.PublicationOutcome(served_records=[(controls[2].run_id, attempt_id)])
+        recovered.append(path)
+        records.append(row)
+        return publication.PublicationOutcome(served_records=[(row.run_id, attempt_id)])
 
     monkeypatch.setattr(publication, "publish_runs", recover)
     submissions = []
@@ -425,12 +452,15 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
     monkeypatch.setattr(nightly.subprocess, "run", submit)
 
     assert nightly.main() == 0
-    records.extend(controls[3:])
+    publication.record_control_outputs(preset, index, "previous-batch", submission)
+    records.append(controls[4])
+    finished[pending] = controls[3]
     assert nightly.main() == 0
     branch.branch = "pull-branch"
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
     assert nightly.main() == 0
 
+    assert recovered == [output, pending]
     assert [command[command.index("--replicates") + 1] for command in submissions] == ["2", "1", "5"]
     for command in submissions:
         assert command[1:5] == ["-m", "experiments.post_training.snowball_rl", "--preset", "learning-medium"]
@@ -765,7 +795,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     (sources[1] / "terminal.json").unlink()
     (sources[1] / "resolved-launch.yaml").unlink()
     missing_report, missing_gate = saved_gate()
-    assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry",)
+    assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry", None)
     missing = publish(missing_gate)
     assert str(sources[1]) in missing.unserved_records and any(
         "No stored native receipt" in error for error in missing.errors

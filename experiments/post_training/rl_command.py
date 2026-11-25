@@ -11,6 +11,7 @@ from finestore.rl.run_records import AttemptRecord
 from marin.rl.skyrl import SkyRLReceiptLookupError
 from marin.rl.skyrl_records import RecordedLaunch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from experiments.post_training.rl_compose import utc_millis
 from experiments.post_training.rl_measurements import InvalidComparison
@@ -18,6 +19,19 @@ from experiments.post_training.rl_measurements import InvalidComparison
 EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
 REFUSAL_EXIT_CODE = 4
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
+
+
+def visible_setting(text: str) -> str:
+    """Render an authored setting for publication without credential values."""
+    key, _, value = text.partition("=")
+    if is_sensitive_key_name(key):
+        return f"{key}={REDACTED_VALUE}"
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return f"{key}={redact_string(value)}"
+    redacted = redact_value(parsed)
+    return f"{key}={json.dumps(redacted)}" if redacted != parsed else text
 
 
 def grafana_url(

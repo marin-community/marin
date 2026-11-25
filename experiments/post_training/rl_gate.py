@@ -51,7 +51,7 @@ from tabulate import tabulate
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_index
 from experiments.post_training import rl_presets as presets
-from experiments.post_training.rl_command import EXIT_CODES, RLCommand
+from experiments.post_training.rl_command import EXIT_CODES, RLCommand, visible_setting
 from experiments.post_training.rl_measurements import (
     RunInputs,
     RunMeasurements,
@@ -261,7 +261,7 @@ class RunMetadata(RunInputs):
     replicates: int
     held_out_tasks: str | None = None
     engines: tuple[dict, ...] = ()
-    attempt_ids: tuple[str, ...] = ()
+    attempt_ids: tuple[str | None, ...] = ()
     config_changes: tuple[str, ...] = ()
 
 
@@ -896,14 +896,16 @@ def _write_gate(
     control_attempts: tuple[AttemptRecord | None, ...] = (),
 ) -> GateReport:
     preset_name = preset.name
-    metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
+    metadata = RunMetadata(
+        **inputs.model_dump(exclude={"settings"}),
+        settings=tuple(map(visible_setting, inputs.settings)),
+        replicates=len(run_paths),
+        attempt_ids=tuple(receipt.attempt_id if receipt is not None else None for receipt in run_attempts),
+    )
     control = ControlMetadata(version=cohort.version, attempts=cohort.attempts)
     invariants, comparisons = [], []
     verdict, effect, reason = Verdict.INVALID, None, None
     try:
-        metadata = metadata.model_copy(
-            update={"attempt_ids": tuple(receipt.attempt_id for receipt in run_attempts if receipt is not None)}
-        )
         control_paths = tuple(member.path for member in cohort.attempts)
         for paths, attempts in ((run_paths, run_attempts), (control_paths, control_attempts)):
             for path, receipt in zip(paths, attempts, strict=True):
@@ -921,7 +923,6 @@ def _write_gate(
                 update={
                     "held_out_tasks": runs[0].held_out_tasks,
                     "engines": tuple(run.engine for run in runs),
-                    "attempt_ids": tuple(run.attempt_id for run in runs),
                     **{field: runs[0].provenance[key] for field, key in provenance_fields.items()},
                 }
             )
@@ -1112,7 +1113,7 @@ def compare_attempt(
     cohort: ControlCohort,
     requirements: tuple[str, ...] = (),
     *,
-    attempt: AttemptRecord | None = None,
+    attempt: AttemptRecord,
 ) -> GateReport:
     """Run a comparison for a saved candidate using the supplied control cohort."""
     recorded = read_run_inputs(source)
@@ -1131,7 +1132,7 @@ def compare_attempt(
         inputs,
         run_paths=(source,),
         cohort=cohort,
-        run_attempts=(attempt,) if attempt is not None else None,
+        run_attempts=(attempt,),
     )
     return run(replace(step, output_path_prefix=recipe.run_prefix(preset)))[0]
 

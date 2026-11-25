@@ -25,7 +25,7 @@ from finestore.rl.rl_progress import (
 )
 from finestore.rl.run_records import (
     AttemptRecord,
-    attempt_lineage,
+    RunIndexIdentity,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
@@ -45,12 +45,11 @@ from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
+from rigging.redaction import redact_value
 
-from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
-from experiments.post_training.rl_command import attempt_grafana_url
+from experiments.post_training.rl_command import attempt_grafana_url, visible_setting
 from experiments.post_training.rl_index import publish_result
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
@@ -59,8 +58,10 @@ from experiments.post_training.rl_measurements import (
     evaluation_status,
     lineage_windows,
     read_run_inputs,
+    recorded_lineage,
     training_invariants,
 )
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 
 ISSUE_FILENAME = "issue.json"
 logger = logging.getLogger(__name__)
@@ -79,20 +80,8 @@ class PublicationOutcome(BaseModel):
         return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
 
 
-def _visible_setting(text: str) -> str:
-    key, _, value = text.partition("=")
-    if is_sensitive_key_name(key):
-        return f"{key}={REDACTED_VALUE}"
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return f"{key}={redact_string(value)}"
-    redacted = redact_value(parsed)
-    return f"{key}={json.dumps(redacted)}" if redacted != parsed else text
-
-
 def run_label(inputs: RunInputs) -> str:
-    parts = [inputs.preset_name, *map(_visible_setting, inputs.settings)]
+    parts = [inputs.preset_name, *map(visible_setting, inputs.settings)]
     if inputs.tasks:
         parts.append(f"tasks={inputs.tasks}")
     if inputs.init:
@@ -120,7 +109,7 @@ def _terminal_measurements(
 ) -> _TerminalMeasurements:
     attempt_id = launch.attempt_id
     result = attempt.native.result
-    history = attempt_lineage(launch.export_root, attempt_id)
+    history = recorded_lineage(attempt, launch)
     complete_history = (
         bool(history)
         and all(entry.record.metrics_started_at is not None for entry in history)
@@ -210,7 +199,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         reason=report.reason,
         invariants=list(report.invariants),
         comparisons=[*decisions, *history_scores],
-        attempt_ids=list(report.run.attempt_ids),
+        attempt_ids=[attempt for attempt in report.run.attempt_ids if attempt is not None],
         replicates=report.run.replicates,
         control_version=report.control.version,
     )
@@ -294,7 +283,7 @@ def build_record(
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else provenance.get("branch"),
         commit=index.source_revision if index is not None else provenance.get("base_commit"),
-        settings=list(map(_visible_setting, inputs.settings)),
+        settings=list(map(visible_setting, inputs.settings)),
         launch_config=cast(dict, redact_value(attempt.native.config)),
         dirty=index.dirty if index is not None else provenance.get("dirty"),
         pr_number=index.pr_number if index is not None else None,
@@ -509,7 +498,14 @@ def publish_runs(
     report = None
     report_error = None
     try:
-        current_ids = tuple(snapshot.current for snapshot in snapshots.values() if snapshot.current in snapshot.records)
+        current_ids = tuple(
+            (
+                snapshot.current
+                if (snapshot := snapshots.get(path)) is not None and snapshot.current in snapshot.records
+                else None
+            )
+            for path in outputs
+        )
         report = _read_publication_gate(gate_path, current_ids, len(outputs))
         result.gate_report = report
     except Exception as error:
@@ -580,39 +576,70 @@ def publish_runs(
 
 
 def _control_submissions(preset: presets.Preset, model: str) -> StoragePath:
-    return StoragePath(recipe.run_prefix(preset)) / "rl-control-submissions" / model / preset.name
+    return StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-control-submissions" / model / preset.name
 
 
-def record_control_outputs(preset: presets.Preset, model: str, batch: str, outputs: tuple[str, ...]) -> None:
+class _ControlSubmission(BaseModel, frozen=True):
+    version: str
+    commit: str
+    outputs: dict[str, str]
+
+
+def record_control_outputs(preset: presets.Preset, index: RunIndexIdentity, batch: str, outputs: dict[str, str]) -> None:
     """Persist output addresses before Iris submission so queued jobs can outlive the runner."""
-    day = _control_submissions(preset, model) / datetime.now(UTC).date().isoformat()
+    expires = datetime.now(UTC) + timedelta(hours=preset.recipe.layout.coordinator_timeout_hours, days=2)
+    day = _control_submissions(preset, index.model) / expires.date().isoformat()
     day.mkdirs()
-    (day / f"{sha256(batch.encode()).hexdigest()}.json").write_text(json.dumps(outputs))
+    manifest = conditional_object(str(day / f"{sha256(batch.encode()).hexdigest()}.json"))
+    entry = _ControlSubmission(version=index.preset_version, commit=index.source_revision, outputs=outputs)
+    try:
+        manifest.write(entry.model_dump_json().encode(), expected_version=None)
+    except ConditionalWriteError:
+        existing = manifest.read()
+        if existing is None:
+            raise
+        previous = _ControlSubmission.model_validate_json(existing.data)
+        if (
+            previous.version != entry.version
+            or previous.commit != entry.commit
+            or previous.outputs.items() - outputs.items()
+        ):
+            raise ValueError(f"Control batch {batch} already records different outputs") from None
 
 
-def recover_control_outputs(preset: presets.Preset, table: presets.ModelPresets) -> bool:
+def recover_control_outputs(preset: presets.Preset, table: presets.ModelPresets) -> None:
     """Publish terminal attempts from recent workflows and retain pending output addresses."""
     root = _control_submissions(preset, table.model)
-    today = datetime.now(UTC).date()
-    days = (preset.recipe.layout.coordinator_timeout_hours + 23) // 24 + 2
-    recovered = False
-    for offset in range(days):
-        day = today - timedelta(days=offset)
-        for manifest in (root / day.isoformat() / "*.json").glob():
-            outputs = json.loads(manifest.read_text())
-            pending = []
-            for output in outputs:
-                attempt = read_stored_skyrl_attempt(output)
-                if attempt is None or not attempt.native.result.state.is_terminal:
-                    pending.append(output)
-                    continue
+    today = datetime.now(UTC).date().isoformat()
+    for path in (root / "*" / "*.json").glob():
+        if path.parent.name < today:
+            continue
+        manifest = conditional_object(str(path))
+        snapshot = manifest.read()
+        if snapshot is None:
+            continue
+        submission = _ControlSubmission.model_validate_json(snapshot.data)
+        pending = {}
+        for output, native_id in submission.outputs.items():
+            _, attempts = read_stored_skyrl_attempts(output)
+            owned = [
+                attempt
+                for attempt in attempts.values()
+                if attempt.run_id == native_id
+                and attempt.index is not None
+                and attempt.index.source_revision == submission.commit
+                and attempt.index.preset_version == submission.version
+            ]
+            terminal = [attempt for attempt in owned if attempt.native.result.state.is_terminal]
+            if not terminal or len(terminal) != len(owned):
+                pending[output] = native_id
+            for attempt in terminal:
                 result = publish_runs([output], preset, table=table, attempt_id=attempt.attempt_id)
                 if result.unserved_records:
                     raise RuntimeError(f"Could not recover control {output}: {', '.join(result.errors)}")
-                recovered = True
-            if pending != outputs:
-                manifest.write_text(json.dumps(pending))
-    return recovered
+        if pending != submission.outputs:
+            updated = submission.model_copy(update={"outputs": pending})
+            manifest.write(updated.model_dump_json().encode(), expected_version=snapshot.version)
 
 
 def command(table: presets.ModelPresets) -> click.Command:
