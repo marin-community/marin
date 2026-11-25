@@ -13,8 +13,12 @@ restore. A separately read 321-byte checkpoint marker records step 1 and policy
 version 1; checkpoint arrays were not decoded. The shape-cache ownership fix did
 not resolve full-model shutdown. Both Iris jobs failed, all five GPU Pods are
 absent and all coordinator containers are terminal; no hardware remains active.
-A subsequent eight-H100 synthetic teardown diagnostic was cancelled without
-execution; it produced no GPU result.
+At later source `d4dcbb8cac`, an isolated eight-H100 diagnostic completed
+device-to-host transfer of 201.7 GB across 4,411 independent buffers and exited
+naturally. Shutdown request through process reap took 2.903 seconds under the
+original five-second contract. This diagnostic did not reproduce the full
+learner's failure; it omitted compiled training, checkpoint save and restore,
+multihost coordination, and policy publication and generation.
 Current-source full-model restore, update two, updated-policy publication and
 generation, and the matched 25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
@@ -25,7 +29,7 @@ reducer retained its mesh and backend client after cleanup. It now registers
 with JAX's backend-cache cleanup. A fresh-process CPU regression checks an exact
 replicated checkpoint round trip, including signed zero, a NaN payload and a
 subnormal, then verifies that cleanup releases the mesh and client. The 82
-checkpoint and TensorStore tests pass. This fix has no GPU qualification and
+checkpoint and TensorStore tests pass. This fix has no GPU checkpoint-restore qualification and
 does not explain R8's first shutdown failure, which occurred before restoration.
 
 | Gate | Integrated path |
@@ -404,9 +408,10 @@ output archives were unavailable: root and inference-head attempts advertised
 `EMPTY`, and the four coscheduling-failed native hosts advertised no archive.
 The evidence above comes from bounded, revision-checked durable debug objects
 and the original exceptions. No real learner C++ shutdown stack was captured.
-The next full-model diagnostic should enable the qualified observer and delivery
-path to capture this known failure, preserving the original workload and exit
-deadline. Successful instrumentation alone would not establish a shutdown fix.
+This result motivated the subsequent observer diagnostics. The later
+observer-ON tiny run failed observer retirement; production runs keep it
+disabled until that failure is resolved. Successful instrumentation alone
+would not establish a shutdown fix.
 [Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
 
 Observed run `2026.11.24.1` at `082025c4d8` scheduled the same 40-H100
@@ -695,10 +700,33 @@ was produced, so R8 remains the latest full-model scientific result.
 The reviewed manual 900-second unstarted-job guard was missed: cancellation was
 requested 1,969.5 seconds after its deadline. The SDK's configured 900-second
 scheduling timeout did not stop the Kueue-gated `BUILDING` task. These are
-operational guard failures, not learner or allocator measurements. The next work
-is source-only deadline-guard and admission investigation; no automatic retry or
-new hardware job is implied.
+operational guard failures, not learner or allocator measurements. A later
+independent deadline guard cancelled a second unstarted attempt within 2.743
+seconds of its deadline. Subsequent CW02 attempts used admission checks covering
+both Kueue reservations and actual Pod resource requests.
 [Unexecuted VMM diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-large-vmm-exit-rno-20261125-1)
+
+The latest isolated diagnostic, `native-large-vmm-exit-cw02-20261125-4`, ran
+source `d4dcbb8cac` on one host with eight H100s. Iris succeeded, the downloaded
+output archive passed independent inspection, and all four Pod containers
+terminated with exit code zero. Both large cases materialized 201,720,475,152
+bytes in 4,411 independent buffers and completed one canonical pageable
+device-to-host transfer. Both used the observer-OFF cleanup path. The diagnostic
+case allowed a 60-second post-ACK wait; the production-protocol case retained
+the original five-second wait. These names distinguish exit contracts, not
+full-model acceptance. The diagnostic case transferred in 195.872 seconds and
+exited naturally 1.165 seconds after ACK. The production case transferred in
+195.302 seconds and passed the unchanged five-second exit contract; shutdown
+request through process reap took 2.903 seconds. Its setup allowance was 360
+seconds after the preceding attempt's 180-second setup cap expired during
+transfer. The total harness and job caps remained 900 and 1,200 seconds.
+Allocator statistics were unavailable. These measurements establish neither
+physical memory residency nor fragmentation, and do not identify R8's cause.
+The diagnostic exercised neither real model training nor TensorStore checkpoint
+save or restore, multihost coordination, or Torch/NCCL publication and generation.
+R8 remains the latest full-model result, and no hardware job is active.
+[Completed isolated teardown diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-large-vmm-exit-cw02-20261125-4)
+
 [R8 coordinator](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9)
 · [Actual R8 GPU child](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-aa7e6e4857ca)
 

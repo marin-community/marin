@@ -9,8 +9,10 @@ The branch now registers the checkpoint replica-reducer cache with JAX's
 backend-cache cleanup, fixing a separately reproduced restore-time mesh and
 client ownership leak. A fresh-process CPU checkpoint regression fails without
 the registration and passes with it; all 82 checkpoint and TensorStore tests
-pass. GPU evidence below covers the earlier `634a4baa9c` source. This fix has no
-GPU qualification and does not explain R8's failure before restoration.
+pass. The tiny and full-model GPU evidence below covers the earlier
+`634a4baa9c` source. A later isolated teardown diagnostic covers `d4dcbb8cac`.
+This fix has no GPU checkpoint-restore qualification and does not explain R8's
+failure before restoration.
 
 At runtime source `634a4baa9c`, the production observer-OFF one-H100 tiny
 Snowball run passed all 24 independent terminal checks with the deterministic
@@ -111,10 +113,33 @@ was produced, so R8 remains the latest full-model scientific result.
 The reviewed manual 900-second unstarted-job guard was missed: cancellation was
 requested 1,969.5 seconds after its deadline. The SDK's configured 900-second
 scheduling timeout did not stop the Kueue-gated `BUILDING` task. These are
-operational guard failures, not learner or allocator measurements. The next work
-is source-only deadline-guard and admission investigation; no automatic retry or
-new hardware job is implied.
+operational guard failures, not learner or allocator measurements. A later
+independent deadline guard cancelled a second unstarted attempt within 2.743
+seconds of its deadline. Subsequent CW02 attempts used admission checks covering
+both Kueue reservations and actual Pod resource requests.
 [Unexecuted VMM diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-large-vmm-exit-rno-20261125-1)
+
+The latest isolated diagnostic, `native-large-vmm-exit-cw02-20261125-4`, ran
+source `d4dcbb8cac` on one host with eight H100s. Iris succeeded, the downloaded
+output archive passed independent inspection, and all four Pod containers
+terminated with exit code zero. Both large cases materialized 201,720,475,152
+bytes in 4,411 independent buffers and completed one canonical pageable
+device-to-host transfer. Both used the observer-OFF cleanup path. The diagnostic
+case allowed a 60-second post-ACK wait; the production-protocol case retained
+the original five-second wait. These names distinguish exit contracts, not
+full-model acceptance. The diagnostic case transferred in 195.872 seconds and
+exited naturally 1.165 seconds after ACK. The production case transferred in
+195.302 seconds and passed the unchanged five-second exit contract; shutdown
+request through process reap took 2.903 seconds. Its setup allowance was 360
+seconds after the preceding attempt's 180-second setup cap expired during
+transfer. The total harness and job caps remained 900 and 1,200 seconds.
+Allocator statistics were unavailable. These measurements establish neither
+physical memory residency nor fragmentation, and do not identify R8's cause.
+The diagnostic exercised neither real model training nor TensorStore checkpoint
+save or restore, multihost coordination, or Torch/NCCL publication and generation.
+R8 remains the latest full-model result, and no hardware job is active.
+[Completed isolated teardown diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-large-vmm-exit-cw02-20261125-4)
+
 [R8 coordinator](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9)
 · [Actual R8 GPU child](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-coordinator-8a5af5c9%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.25.8-aa7e6e4857ca)
 
@@ -1198,8 +1223,8 @@ The transport repair passes five pinned JAX/JAXLIB `0.11.0` cases: native
 import-time stdout isolation and four real CPU update/checkpoint/restart cases.
 Required lint/type checks, strict docs, and independent transport review pass.
 That historical attempt established no successful accelerator update.
-Run from the repository with the required storage, evaluation, and judge
-credentials loaded. The smoke command records the submitted attempt; use a
+Run from the repository with the required storage, evaluation, judge, and
+`WANDB_API_KEY` credentials loaded. The smoke command records the submitted attempt; use a
 fresh unused version for another attempt.
 Each uses 40 H100s at BATCH priority. The commands below explicitly disable
 automatic failure and preemption retries. The regional route
