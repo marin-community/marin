@@ -3,6 +3,7 @@
 
 """Lower evaluation model policy into remote-inference configuration."""
 
+import hashlib
 import json
 import logging
 import math
@@ -167,6 +168,29 @@ def _is_weight_file(name: str) -> bool:
     roughly double the measured size of the checkpoint.
     """
     return "/" not in name and name.endswith(_WEIGHT_FILE_SUFFIXES)
+
+
+_CHECKSUM_KEYS = ("ETag", "etag", "md5Hash", "crc32c", "checksum")
+
+
+def checkpoint_digest(location: str) -> str:
+    """A digest of an object-store checkpoint's files that changes when any of them is rewritten.
+
+    Reads each top-level file's object checksum (its ETag, or the store's MD5 or CRC) from a directory listing,
+    falling back to its size and modification time where the store reports none.
+    """
+    fs, path = filesystem_for(location)
+    files = []
+    for entry in fs.ls(path, detail=True):
+        if entry.get("type") == "directory":
+            continue
+        checksum = next((str(entry[key]) for key in _CHECKSUM_KEYS if entry.get(key)), None)
+        if checksum is None:
+            checksum = f"{entry.get('size')}:{entry.get('mtime') or entry.get('LastModified') or entry.get('updated')}"
+        files.append((PurePosixPath(entry["name"]).name, checksum))
+    if not files:
+        raise ValueError(f"{location}: no checkpoint files to identify")
+    return "sha256:" + hashlib.sha256(json.dumps(sorted(files)).encode()).hexdigest()
 
 
 @cache

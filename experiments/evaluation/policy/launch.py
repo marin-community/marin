@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend
-from marin.evaluation.serving_config import native_context_window, resolved_serve_config
+from marin.evaluation.serving_config import checkpoint_digest, native_context_window, resolved_serve_config
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 
 from experiments.evaluation.curated import pinned_model
@@ -42,9 +42,13 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[tuple[Re
 def model_candidate(model: ModelConfig) -> PolicyCandidate:
     """Wrap a supplied model, such as a training checkpoint, as a candidate.
 
-    Its revision is pinned, and its largest context is the window it is served at. A model that sets no
-    window is served at the one its checkpoint declares, stated in its config so records name it.
+    Its revision is pinned, and an object-store checkpoint without an ``identity`` gets one digested from its
+    files, so rewriting the checkpoint gives its runs new identities. Its largest context is the window it is
+    served at; a model that sets no window is served at the one its checkpoint declares, stated in its config so
+    records name it.
     """
+    if "://" in model.location and model.identity is None:
+        model = replace(model, identity=checkpoint_digest(model.location))
     model = pinned_model(model)
     window = resolved_serve_config(model).max_model_len
     if window is None:

@@ -248,19 +248,17 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun, *, release_commit: s
 
 
 def record_candidate(policy: EvalPolicy, record: EvalRunRecord) -> PolicyCandidate:
-    """The candidate a record ran: the policy's candidate at its location, else its model as recorded.
+    """The candidate a record ran: the policy's candidate of the same name and location, else its model as recorded.
 
-    Records launched outside the policy carry ad-hoc model names, so the location decides and the name only
-    tells apart candidates that share one.
+    A supplied model can share a declared candidate's location with other settings, so the location alone
+    does not decide.
     """
-    matches = [candidate for candidate in policy.candidates if candidate.model.location == record.model.location]
-    if len(matches) > 1:
-        matches = [candidate for candidate in matches if candidate.name == record.model.name]
-    if len(matches) == 1:
-        return matches[0]
+    for candidate in policy.candidates:
+        if candidate.name == record.model.name and candidate.model.location == record.model.location:
+            return candidate
     config = record.model.source_config or record.model.config
-    if matches or config is None:
-        raise ValueError(f"cannot tell which model {record.model.location} ran as")
+    if config is None:
+        raise ValueError(f"{record.run_id}: its record names no model config to check it against")
     return model_candidate(draccus.decode(ModelConfig, config.model_dump(mode="json")))
 
 

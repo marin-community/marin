@@ -10,7 +10,7 @@ from evalrecords.records import EvaluationOverrides, EvaluationSelection
 from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
+from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation, PolicyExclusion
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
 
@@ -77,6 +77,27 @@ def _context(policy: EvalPolicy, candidate: PolicyCandidate, evaluation: PolicyE
     return window
 
 
+def exclusions_for(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[PolicyExclusion, ...]:
+    """The evaluations the candidate does not run.
+
+    A declared candidate has the policy's exclusions. A supplied model, such as a training checkpoint, leaves out
+    the evaluations whose protocol window it is not served at, since the policy cannot name them for it.
+    """
+    if candidate in policy.candidates:
+        return tuple(exclusion for exclusion in policy.exclusions if exclusion.candidate == candidate)
+    window = serving_window(policy, candidate)
+    return tuple(
+        PolicyExclusion(
+            candidate=candidate,
+            evaluation=evaluation,
+            reason=f"served at {window}, below the benchmark's {protocol_window}-token window",
+        )
+        for evaluation in policy.in_distribution
+        if (protocol_window := catalog_variant(evaluation, candidate).protocol.context_window) is not None
+        and protocol_window > window
+    )
+
+
 def resolve(
     policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None = None
 ) -> tuple[ResolvedPolicyEvaluation, ...]:
@@ -86,7 +107,7 @@ def resolve(
     out, and a candidate's override replaces an evaluation's output limit. A candidate with no matching
     exclusions or overrides uses every policy evaluation.
     """
-    excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
+    excluded = {exclusion.evaluation.name for exclusion in exclusions_for(policy, candidate)}
     overrides = {item.evaluation.name: item for item in policy.overrides if item.candidate == candidate}
     resolved = []
     for evaluation in policy.in_distribution:

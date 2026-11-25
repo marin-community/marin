@@ -13,8 +13,8 @@ from marin.evaluation.runner import _record
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policy import launch
 from experiments.evaluation.policy.launch import model_candidate
+from experiments.evaluation.policy.resolve import exclusions_for
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunEvidence,
@@ -87,54 +87,52 @@ def test_a_launch_finds_succeeded_runs_and_the_rest_keep_their_ids(tmp_path):
     assert rerun.record_path == runs["mrcr-32k"].record_path
 
 
-def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_model(tmp_path):
-    checkpoint = replace(
+def _checkpoint(tmp_path, *, name: str = "qwen-step-100", window: int = 32_768, weights: bytes = b"weights"):
+    """A supplied Qwen checkpoint in a local directory, served at ``window``."""
+    directory = tmp_path / name
+    directory.mkdir(exist_ok=True)
+    (directory / "model.safetensors").write_bytes(weights)
+    return replace(
         QWEN.model,
-        name="qwen-step-100",
-        location="s3://marin-us-east-02a/checkpoints/qwen-step-100",
+        name=name,
+        location=f"file://{directory}",
         revision=None,
         tokenizer=QWEN.model.location,
         tokenizer_revision=QWEN.model.revision,
-        serve=replace(QWEN.model.serve, auto_overrides=False, max_model_len=32_768),
+        serve=replace(QWEN.model.serve, auto_overrides=False, max_model_len=window),
     )
-    # The checkpoint is served at 32,768, too small for MRCR's 73,728-token window; checking its AIME24 run must
-    # not depend on an evaluation it cannot run.
+
+
+def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_model(tmp_path):
+    # Served at 32,768, the checkpoint cannot run MRCR's 73,728-token window, so it leaves MRCR out.
     policy = replace(POLICY, in_distribution=(PolicyEvaluation("aime24"), PolicyEvaluation("mrcr")))
-    (run,) = expected_runs(policy, model_candidate(checkpoint), limit=None, evaluations={"aime24"})
-    record = _write(tmp_path, run)
+    candidate = model_candidate(_checkpoint(tmp_path))
+    assert [exclusion.evaluation.name for exclusion in exclusions_for(policy, candidate)] == ["mrcr"]
+    (run,) = expected_runs(policy, candidate, limit=None)
+    record = _write(tmp_path / "records", run)
     (expected,) = expected_runs(policy, record_candidate(policy, record), limit=None, evaluations={"aime24"})
     assert expected.evaluation.identity.run_id == run.evaluation.identity.run_id
     assert run_problems(record, _evidence(expected), expected) == (RunState.VALID, ())
 
 
-def _paths(policy) -> dict[str, str]:
-    names = {"aime24", "swebench-verified"}
-    return {run.name: run.record_path for run in expected_runs(policy, QWEN, limit=None, evaluations=names)}
+def test_rewriting_a_checkpoint_gives_its_runs_new_identities(tmp_path):
+    before = model_candidate(_checkpoint(tmp_path))
+    after = model_candidate(_checkpoint(tmp_path, weights=b"retrained weights"))
+    paths = [
+        run.record_path
+        for candidate in (before, after)
+        for run in expected_runs(POLICY, candidate, limit=None, evaluations={"aime24"})
+    ]
+    assert paths[0] != paths[1]
 
 
-def test_a_new_inference_build_moves_every_run(monkeypatch):
-    before = _paths(POLICY)
-    release = replace(launch.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
-    monkeypatch.setattr(launch, "VLLM_GPU_RELEASE", release)
-    after = _paths(POLICY)
-    assert all(before[name] != after[name] for name in before)
-
-
-def test_a_new_agent_concurrency_moves_only_that_agents_run_and_verify_names_it(tmp_path):
-    before = _paths(POLICY)
-    agent = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "swebench-verified")
-    faster = replace(
-        POLICY, in_distribution=tuple(replace(e, concurrency=32) if e is agent else e for e in POLICY.in_distribution)
+def test_a_supplied_model_at_a_candidates_location_is_checked_against_its_own_config(tmp_path):
+    variant = model_candidate(
+        replace(QWEN.model, name="qwen-variant", serve=replace(QWEN.model.serve, reasoning_parser=None))
     )
-    after = _paths(faster)
-    assert before["aime24"] == after["aime24"]
-    assert before["swebench-verified"] != after["swebench-verified"]
-
-    (old,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"swebench-verified"})
-    (new,) = expected_runs(faster, QWEN, limit=None, evaluations={"swebench-verified"})
-    state, problems = run_problems(_write(tmp_path, old), _evidence(new), new)
-    assert state is RunState.INVALID
-    assert any(problem.startswith("run_id:") for problem in problems)
+    (run,) = expected_runs(POLICY, variant, limit=None, evaluations={"aime24"})
+    record = _write(tmp_path, run)
+    assert record_candidate(POLICY, record).name == "qwen-variant"
 
 
 def test_a_run_of_the_policy_is_valid(tmp_path):

@@ -16,14 +16,16 @@ from marin.evaluation.model_config import load_model_config
 from marin.evaluation.runner import EvaluationBatch
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.launch import model_candidate
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, resolve
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, exclusions_for, resolve
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunCheck,
@@ -194,35 +196,64 @@ class _LaunchPlan:
     """The commit its records would name; None when the candidate has nothing to run."""
     batches: tuple[EvaluationBatch, ...]
     succeeded: Mapping[str, EvalRunRecord]
+    reruns: tuple[ExpectedRun, ...]
+    """Invalid runs named with ``--rerun``, whose records and archives the launch replaces."""
 
 
 def _launch_plan(
-    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **placement
+    policy: EvalPolicy,
+    candidate: PolicyCandidate,
+    evaluations: Collection[str] | None,
+    rerun: Collection[str],
+    **placement,
 ) -> _LaunchPlan:
     """Resolve a candidate's launch, leaving out evaluations whose run at its path already succeeded.
 
-    Run IDs depend only on each evaluation, so the evaluations left still group onto the same servers
-    under the same IDs. ``placement`` is the priority band and cluster ``expected_runs`` takes.
+    A run named in ``rerun`` runs again if its record is not valid. Run IDs depend only on each evaluation,
+    so the evaluations left still group onto the same servers under the same IDs. ``placement`` is the
+    priority band, cluster and release commit ``expected_runs`` takes.
     """
     try:
         runs = expected_runs(policy, candidate, evaluations=evaluations, **placement)
         git_sha = runs[0].batch.provenance.git_sha if runs else None
-        succeeded = succeeded_runs(runs)
+        reruns = tuple(run for run in runs if run.evaluation.identity.run_id in rerun)
+        for run in reruns:
+            record = expected_record(run)
+            if (
+                record is not None
+                and check_run(record, run, release_commit=placement["release_commit"]).state is RunState.VALID
+            ):
+                raise ValueError(f"{run.evaluation.identity.run_id} is valid; only an invalid run is run again")
+        succeeded = {
+            name: record for name, record in succeeded_runs(runs).items() if name not in {run.name for run in reruns}
+        }
         if succeeded:
             remaining = [run.name for run in runs if run.name not in succeeded]
             runs = expected_runs(policy, candidate, evaluations=remaining, **placement) if remaining else ()
     except ValueError as error:
         raise click.ClickException(f"{candidate.name}: {error}") from error
     batches = tuple({id(run.batch): run.batch for run in runs}.values())
-    return _LaunchPlan(candidate=candidate, git_sha=git_sha, batches=batches, succeeded=succeeded)
+    return _LaunchPlan(candidate=candidate, git_sha=git_sha, batches=batches, succeeded=succeeded, reruns=reruns)
+
+
+def _discard(run: ExpectedRun) -> None:
+    """Remove a run's directory, holding its record, archive and success marker, so its launch runs it again."""
+    path = prefix_join(run.batch.records_prefix, run.evaluation.identity.run_id)
+    fs, fs_path = url_to_fs(path)
+    if fs.exists(fs_path):
+        fs.rm(fs_path, recursive=True)
 
 
 def _print_launch(policy: EvalPolicy, plan: _LaunchPlan) -> None:
     model = plan.candidate.model
     click.echo(f"policy {policy.version} @ {(plan.git_sha or '-')[:10]}  candidate {plan.candidate.name}")
     click.echo(f"  model {model.location}@{model.revision}")
+    for exclusion in exclusions_for(policy, plan.candidate):
+        click.echo(f"  excluded {exclusion.evaluation.name}: {exclusion.reason}")
     for name, record in sorted(plan.succeeded.items()):
         click.echo(f"  skip {name}: succeeded @{record.provenance.git_sha[:7]}")
+    for run in plan.reruns:
+        click.echo(f"  rerun {run.name}: its invalid record and archive are replaced")
     if not plan.batches:
         click.echo("  nothing to submit")
     for index, batch in enumerate(plan.batches, start=1):
@@ -366,6 +397,12 @@ def _check_checkout(policy: EvalPolicy, *, recorded: str, smoke: bool) -> None:
 @click.option("--limit", type=click.IntRange(min=1), default=None, help="Cap items per task; marks a smoke run.")
 @click.option("--federated-cluster", default=None, help="GPU cluster to serve on; defaults to the fleet profile.")
 @click.option("--dry-run", is_flag=True, help="Resolve and print each server's launch without submitting.")
+@click.option(
+    "--rerun",
+    "rerun",
+    multiple=True,
+    help="Run ID of an invalid run to replace and run again; repeat for several.",
+)
 def launch(
     version: str,
     candidate_names: tuple[str, ...],
@@ -377,6 +414,7 @@ def launch(
     limit: int | None,
     federated_cluster: str | None,
     dry_run: bool,
+    rerun: tuple[str, ...],
 ) -> None:
     """Submit the policy's evaluations for each chosen model, one job per server, without waiting for results.
 
@@ -386,15 +424,17 @@ def launch(
     from its tag.
     """
     policy = POLICIES[version]
+    # A supplied checkpoint's config is read from object storage while its candidate is built.
+    configure_coreweave_s3()
     candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config)
     if candidates is None:
         raise click.UsageError("name --candidate, --all-candidates, --model or --model-config")
-    configure_coreweave_s3()
     plans = [
         _launch_plan(
             policy,
             candidate,
             evaluations,
+            frozenset(rerun),
             limit=limit,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
@@ -402,6 +442,8 @@ def launch(
         )
         for candidate in candidates
     ]
+    if unknown := set(rerun) - {run.evaluation.identity.run_id for plan in plans for run in plan.reruns}:
+        raise click.UsageError(f"--rerun names runs this launch does not make: {sorted(unknown)}")
     recorded = next((plan.git_sha for plan in plans if plan.git_sha is not None), None)
     if not dry_run and recorded is not None:
         _check_checkout(policy, recorded=recorded, smoke=limit is not None)
@@ -411,6 +453,9 @@ def launch(
         _print_launch(policy, plan)
     if dry_run or not any(plan.batches for plan in plans):
         return
+    for plan in plans:
+        for run in plan.reruns:
+            _discard(run)
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         for plan in plans:
             for batch in plan.batches:
@@ -436,9 +481,9 @@ def status(
     or with other inputs, are not shown; verify checks those.
     """
     policy = POLICIES[version]
-    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config) or policy.candidates
     release = _checked_release(policy)
     configure_coreweave_s3()
+    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config) or policy.candidates
     for candidate in candidates:
         smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit, release_commit=release)}
         rows = tuple(
@@ -447,6 +492,8 @@ def status(
         )
         click.echo(f"\n{policy.version}  candidate {candidate.name}")
         _print_table(("evaluation", "full run", f"smoke run (limit {limit})"), rows)
+        for exclusion in exclusions_for(policy, candidate):
+            click.echo(f"excluded: {exclusion.evaluation.name} ({exclusion.reason})")
 
 
 @cli.command()
