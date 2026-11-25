@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import datetime
 import json
 import math
@@ -18,18 +19,22 @@ from chex import assert_trees_all_close
 from haliax import Axis
 from haliax.quantization import QuantizationConfig
 
+import levanter.main.eval_lm as eval_lm
 import levanter.main.train_lm as train_lm
 from levanter.testing import tiny_corpus
 from levanter.adaptor import LoraAdaptorConfig
-from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
+from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path, load_checkpoint_metadata
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.layers.attention import AttentionBackend
+from levanter.models.llama_native_lm import NativeLlamaLmConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
 from levanter.testing.helpers import arrays_only
+from levanter.utils.mesh import MeshConfig
 
 
 def _array_leaves(tree):
@@ -207,6 +212,76 @@ def test_train_lm_direct_dataset():
         )
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
+
+
+@pytest.mark.multidevice
+def test_train_lm_native_rounds_odd_vocab_for_tensor_parallelism_and_resumes(tmp_path):
+    if len(jax.devices()) != 4:
+        pytest.skip("Requires four devices for DP2/TP2 placement")
+
+    vocab_size = 31
+    seq_len = 16
+    examples = [GrugLmExample.causal((jnp.arange(seq_len) + i) % vocab_size) for i in range(12)]
+    component = DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})
+    config = train_lm.TrainLmConfig(
+        data=LmDataConfig(components={"direct": component}, vocab_size=vocab_size, tokenizer="passthrough"),
+        model=NativeLlamaLmConfig(
+            hidden_dim=16,
+            intermediate_dim=24,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=2,
+            max_seq_len=seq_len,
+            attn_backend=AttentionBackend.VANILLA,
+        ),
+        trainer=train_lm.TrainerConfig(
+            id="native-odd-vocab",
+            num_train_steps=1,
+            train_batch_size=4,
+            mesh=MeshConfig(axes={"data": 2, "model": 2}),
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints"), append_run_id_to_base_path=False),
+            require_accelerator=False,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=tmp_path / "logs",
+        ),
+    )
+    train_lm.main(config)
+    first = latest_checkpoint_path(tmp_path / "checkpoints")
+    metadata = load_checkpoint_metadata(first)
+    assert config.model.checkpoint_vocab_size(metadata) == 32
+    assert len(config.data.the_tokenizer) == vocab_size
+
+    resumed = dataclasses.replace(
+        config,
+        trainer=dataclasses.replace(
+            config.trainer, num_train_steps=2, load_checkpoint=True, load_checkpoint_path=first
+        ),
+    )
+    train_lm.main(resumed)
+    latest = latest_checkpoint_path(tmp_path / "checkpoints")
+    metadata_after_resume = load_checkpoint_metadata(latest)
+    assert metadata_after_resume["step"] == metadata["step"] + 1
+    assert config.model.checkpoint_vocab_size(metadata_after_resume) == 32
+    _assert_training_recorded(str(tmp_path))
+
+    eval_output = tmp_path / "evaluation"
+    eval_lm.main(
+        eval_lm.EvalLmConfig(
+            checkpoint_path=latest,
+            trainer=dataclasses.replace(
+                resumed.trainer,
+                tracker=JsonFileTrackerConfig(output_path=str(eval_output)),
+                max_eval_batches=1,
+            ),
+            data=resumed.data,
+            model=resumed.model,
+            max_eval_length=seq_len,
+            eval_on_train=True,
+        )
+    )
+    metrics = json.loads((eval_output / "eval_results.json").read_text())
+    assert math.isfinite(metrics["eval/loss"])
 
 
 def _frozen_lm_config(tmpdir, data_config, *, out, seed, init_from=None, ckpt_base=None):

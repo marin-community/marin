@@ -4,13 +4,14 @@
 import abc
 import dataclasses
 from dataclasses import dataclass
-from typing import Generic, Optional, Protocol, Type, TypeVar, cast
+from typing import Any, Generic, Mapping, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
 import jax.numpy as jnp
 import haliax.nn as hnn
 from haliax.jax_utils import maybe_rng_split
+from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
 from jaxtyping import PRNGKeyArray
 from typing_extensions import Self
 
@@ -151,6 +152,25 @@ class LmExample(eqx.Module):
         return loss_weight
 
 
+@dataclass(frozen=True)
+class ModelPlacement:
+    """Framework mappings available to a model under the active device mesh."""
+
+    parameter_mapping: ResourceMapping
+    compute_mapping: ResourceMapping
+    batch_axis_name: str = "batch"
+
+    @property
+    def batch_axes(self):
+        return self.compute_mapping.get(self.batch_axis_name, self.compute_mapping.get("batch"))
+
+    def evaluation_mapping(self, mesh) -> ResourceMapping:
+        """Remove unit mesh axes from the batch placement used by named evaluation."""
+        batch = self.batch_axes
+        axes = (batch,) if isinstance(batch, str) else batch or ()
+        return {**self.compute_mapping, self.batch_axis_name: tuple(axis for axis in axes if mesh.shape[axis] > 1)}
+
+
 # TODO: for some reason, pyrefly doesn't like the discover_packages_path argument?
 @dataclass(frozen=True)
 class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_path="levanter.models"):  # type: ignore
@@ -180,6 +200,23 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         decide whether to set ``TrainerConfig.use_explicit_mesh_axes``.
         """
         return False
+
+    @property
+    def owns_parameter_placement(self) -> bool:
+        """Whether checkpoint templates carry the model's complete parameter placement."""
+        return False
+
+    def build_for_mesh(self, Vocab: Axis, *, key: PRNGKeyArray, placement: ModelPlacement) -> "LmT":
+        """Build a model with the placement policy of its config."""
+        return self.build(Vocab, key=key)
+
+    def vocab_axis_for_mesh(self, Vocab: Axis, placement: ModelPlacement) -> Axis:
+        """Round a fresh model vocabulary to its parameter partition size."""
+        return round_axis_for_partitioning(Vocab, placement.parameter_mapping)
+
+    def checkpoint_vocab_size(self, metadata: Mapping[str, Any]) -> int | None:
+        """Return the complete checkpoint vocabulary when the model records it."""
+        return None
 
     @property
     @abc.abstractmethod

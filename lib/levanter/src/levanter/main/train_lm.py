@@ -13,7 +13,7 @@ import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
-from haliax.partitioning import named_jit, round_axis_for_partitioning
+from haliax.partitioning import named_jit
 
 import levanter
 import levanter.analysis
@@ -27,17 +27,19 @@ from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint, resolve_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.main.model_init import ModelInitContext, prepare_model_init_context, load_model_from_source
+from jax.sharding import PartitionSpec as P
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, ModelPlacement, split_activations
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
-from levanter.trainer import Trainer, TrainerConfig
+from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
@@ -145,7 +147,23 @@ def _load_lm_model_from_configured_source(
     adapter_key,
     parameter_axis_mapping,
     trainer: Trainer,
+    placement: ModelPlacement | None = None,
 ) -> LmHeadModel:
+    if config.model.owns_parameter_placement:
+        assert placement is not None
+        source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
+        if config.initialize_from_hf or source is not None:
+            return load_model_from_source(
+                context=ModelInitContext(config.model, converter, config.use_hf_model_config),
+                Vocab=Vocab,
+                model_key=model_key,
+                parameter_axis_mapping=parameter_axis_mapping,
+                placement=placement,
+                mp=trainer.mp,
+                hf_ref=config.initialize_from_hf,
+                checkpoint_path=source,
+            )
+        return config.model.build_for_mesh(Vocab, key=model_key, placement=placement)
     if config.initialize_from_hf:
         assert converter is not None
         model = converter.load_pretrained(
@@ -178,6 +196,32 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    explicit = config.model.owns_parameter_placement
+    explicit_layout = None
+    if explicit:
+        if config.trainer.quantization is not None or not isinstance(config.adapter, NoAdaptorConfig):
+            raise ValueError("llama_native currently supports unquantized models without adapters")
+        if config.pad_tokenizer_to_match_model:
+            raise ValueError("llama_native requires an unchanged tokenizer")
+        if any(
+            (
+                config.hf_save_path,
+                config.hf_upload,
+                config.peft_save_path,
+                config.peft_hf_upload,
+                config.merged_hf_save_path,
+                config.merged_hf_upload,
+            )
+        ):
+            raise ValueError("llama_native HF export is not yet supported by this entrypoint")
+        if config.log_entropy or config.eval_harness is not None:
+            raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
+        config = dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(
+                config.trainer, use_explicit_mesh_axes=config.model.requires_explicit_mesh_axes
+            ),
+        )
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
         if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
             raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
@@ -201,12 +245,21 @@ def main(config: TrainLmConfig):
     if config.initialize_model_from_checkpoint_path is not None and config.trainer.initialize_from is not None:
         raise ValueError("Cannot specify both initialize_model_from_checkpoint_path and trainer.initialize_from")
 
+    if config.initialize_from_hf and config.trainer.initialize_from is not None:
+        raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
+
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
-    if config.initialize_from_hf:
-        if config.trainer.initialize_from is not None:
-            raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
-
+    if explicit:
+        context = prepare_model_init_context(
+            config.model,
+            tokenizer=tokenizer,
+            initialize_from_hf=config.initialize_from_hf,
+            use_hf_model_config=config.use_hf_model_config,
+        )
+        config = dataclasses.replace(config, model=context.model)
+        converter = context.converter
+    elif config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
         converter.warn_if_tokenizer_mismatch(tokenizer)
@@ -235,6 +288,11 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
+    placement = ModelPlacement(
+        config.trainer.parameter_axis_mapping, config.trainer.compute_axis_mapping, config.trainer.batch_axis_name
+    )
+    if explicit:
+        explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(placement.batch_axes, None))
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
@@ -245,7 +303,12 @@ def main(config: TrainLmConfig):
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
     with (
-        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        Trainer(
+            config.trainer,
+            optimizer,
+            loss_function,
+            layout=explicit_layout,
+        ) as trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
@@ -261,6 +324,8 @@ def main(config: TrainLmConfig):
         # This allows Zero-3-style parameter sharding, where we shard the parameters and optimizer state across the mesh
         compute_axis_mapping = trainer.compute_axis_mapping
         parameter_axis_mapping = trainer.parameter_axis_mapping
+        if explicit:
+            compute_axis_mapping = placement.evaluation_mapping(trainer.device_mesh)
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
@@ -284,9 +349,26 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        Vocab = config.model.vocab_axis_for_mesh(Axis("vocab", vocab_size), placement)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
+
+        if explicit:
+            checkpoint = trainer.explicit_checkpoint_to_load
+            initialization_source = (
+                config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
+            )
+            source_metadata = (
+                checkpoint.metadata
+                if checkpoint is not None
+                else (resolve_checkpoint(initialization_source).metadata if initialization_source is not None else {})
+            )
+            if source_metadata:
+                source_vocab = config.model.checkpoint_vocab_size(source_metadata)
+                if source_vocab is not None:
+                    if vocab_size > source_vocab:
+                        raise ValueError("Tokenizer vocabulary exceeds native checkpoint vocabulary")
+                    Vocab = Vocab.resize(source_vocab)
 
         # Get the training dataset
         train_dataset = config.data.train_set(
@@ -309,8 +391,9 @@ def main(config: TrainLmConfig):
             adapter_key=adapter_key,
             parameter_axis_mapping=parameter_axis_mapping,
             trainer=trainer,
+            placement=placement,
         )
-        _, resuming = trainer.checkpoint_load_plan()
+        resuming = trainer.explicit_checkpoint_to_load is not None if explicit else trainer.checkpoint_load_plan()[1]
         weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
         if weight_source and not resuming:
             logger.info("Initializing trainer state directly from pretrained weights")
@@ -321,7 +404,10 @@ def main(config: TrainLmConfig):
                 is_trainable=config.adapter.trainable_filter(initial_model),
             )
         elif isinstance(config.adapter, NoAdaptorConfig):
-            state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
+            state = trainer.initial_state(
+                training_key,
+                model_init=lambda: config.model.build_for_mesh(Vocab, key=model_key, placement=placement),
+            )
         else:
             initial_model = config.adapter.apply(
                 config.model.build(Vocab, key=model_key),
@@ -336,7 +422,7 @@ def main(config: TrainLmConfig):
 
         if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
-            state = load_checkpoint(state, checkpoint_path)
+            state = load_checkpoint(state, checkpoint_path, **({"mesh": trainer.device_mesh} if explicit else {}))
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
