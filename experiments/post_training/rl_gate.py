@@ -137,7 +137,9 @@ def validate_requirements(
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
     pin = control_pin(preset, table=table)
-    reference = with_objectives(read_measurements(control_path(preset, pin, 0, table=table), preset), preset)
+    reference = with_objectives(
+        read_measurements(control_path(preset, pin, 0, table=table), preset, gate_profiles=True), preset
+    )
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
@@ -871,7 +873,8 @@ def _write_gate(
                     raise InvalidComparison(f"no stored native attempt at {path}")
         runs = [
             with_requirements(
-                with_objectives(read_measurements(path, preset, inputs, attempt=receipt), preset), inputs.requirements
+                with_objectives(read_measurements(path, preset, inputs, attempt=receipt, gate_profiles=True), preset),
+                inputs.requirements,
             )
             for path, receipt in zip(run_paths, run_attempts, strict=True)
         ]
@@ -891,7 +894,7 @@ def _write_gate(
             for row in candidate.invariants
         ]
         controls = [
-            with_objectives(read_measurements(path, preset, attempt=receipt), preset)
+            with_objectives(read_measurements(path, preset, attempt=receipt, gate_profiles=True), preset)
             for path, receipt in zip(control_paths, control_attempts, strict=True)
         ]
         if not runs or not controls:

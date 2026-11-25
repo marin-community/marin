@@ -329,7 +329,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             **kwargs,
         )
 
-    write_controls(write_control, preset.name)
+    for control in write_controls(write_control, preset.name):
+        path = control / RUN_INPUTS_FILENAME
+        old_inputs = json.loads(path.read_text())
+        del old_inputs["evaluation_profiles"]
+        write_json(path, old_inputs)
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"

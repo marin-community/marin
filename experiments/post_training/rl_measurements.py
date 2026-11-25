@@ -488,12 +488,15 @@ def read_measurements(
     inputs: RunInputs | None = None,
     *,
     attempt: AttemptRecord | None = None,
+    gate_profiles: bool = False,
 ) -> RunMeasurements:
     if inputs is None:
         try:
             inputs = read_run_inputs(path)
         except FileNotFoundError:
             inputs = RunInputs(preset_name=preset.name)
+    if gate_profiles and inputs.evaluation_profiles is None:
+        inputs = inputs.model_copy(update={"evaluation_profiles": _declared_evaluations(preset)})
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
