@@ -6,10 +6,9 @@
 The fixture pins one Atlas cut (origin/atlas-env-audit revision and the R40 admit
 set); its ``atlas_revision`` and ``r40_plan`` fields record where each value came
 from. The fixture's bytes live in the pinned public Hugging Face dataset
-``open-athena/atlas-source-pins`` and this module commits only the immutable
-reference (revision, sha256, byte size), so refreshing the cut is one upload plus
-one constant bump. Regenerate and republish with
-``tests/generate_atlas_source_pins.py``.
+``open-athena/atlas-source-pins``; the repository commits only the immutable
+reference (revision, sha256, byte size), and the Atlas release step on
+``atlas-env-audit`` republishes a refreshed cut as a new revision.
 
 Three checks, all computed from the catalog:
 
@@ -25,15 +24,12 @@ Three checks, all computed from the catalog:
 The tests fetch the pinned fixture and carry the ``data_integration`` marker.
 """
 
-import hashlib
 import json
-from dataclasses import dataclass
 from functools import cache
-from pathlib import Path
 
 import pytest
+from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from finestore.rl.source_identity import canonical_source_id
-from huggingface_hub import hf_hub_download
 
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -43,23 +39,10 @@ ATLAS_SOURCE_PINS_SHA256 = "7eb5938b9c68735caa82a319f6f3741bec283ac4711c609ce326
 ATLAS_SOURCE_PINS_BYTES = 138035
 
 
-@dataclass(frozen=True)
-class AtlasSourcePinsReference:
-    """The immutable fixture reference this test gates against."""
-
-    repo: str
-    revision: str
-    sha256: str
-    byte_size: int
-
-    @property
-    def uri(self) -> str:
-        return f"hf://datasets/{self.repo}@{self.revision}/atlas_source_pins.json"
-
-
-ATLAS_SOURCE_PINS_REFERENCE = AtlasSourcePinsReference(
+ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
     repo=ATLAS_SOURCE_PINS_REPO,
     revision=ATLAS_SOURCE_PINS_REVISION,
+    filename="atlas_source_pins.json",
     sha256=ATLAS_SOURCE_PINS_SHA256,
     byte_size=ATLAS_SOURCE_PINS_BYTES,
 )
@@ -67,17 +50,8 @@ ATLAS_SOURCE_PINS_REFERENCE = AtlasSourcePinsReference(
 
 @cache
 def read_atlas_source_pins() -> dict:
-    """Download the pinned fixture through the cached HF login and verify its bytes."""
-    reference = ATLAS_SOURCE_PINS_REFERENCE
-    local = Path(
-        hf_hub_download(
-            repo_id=reference.repo, repo_type="dataset", revision=reference.revision, filename="atlas_source_pins.json"
-        )
-    )
-    raw = local.read_bytes()
-    if len(raw) != reference.byte_size or hashlib.sha256(raw).hexdigest() != reference.sha256:
-        raise ValueError("Atlas source-pins fixture differs from its pinned reference")
-    return json.loads(raw)
+    """Download the pinned fixture and verify its bytes against the reference."""
+    return json.loads(read_pinned_hf_file(ATLAS_SOURCE_PINS_REFERENCE))
 
 
 def _durable_ref(source) -> dict:
