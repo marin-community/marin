@@ -29,7 +29,9 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.3"
+RUN_VERSION = "2026.11.25.4"
+EXCLUDED_NVLINK_DOMAIN = "DH1-136-US-EAST-08A"
+"""The live provider label for the rack called dh1-r136; affinity values are case-sensitive."""
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -110,7 +112,7 @@ GUARDS_LAYOUT = Layout(
     priority="production",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=("dh1-r136-us-east-08a",),
+    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
 
 RL_LAYOUT = replace(
@@ -123,7 +125,7 @@ RL_LAYOUT = replace(
     host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=("dh1-r136-us-east-08a",),
+    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
 """One 60-GB200 rack (48 policy + 12 inference) for each S2 arm, with the same exclusions."""
 
@@ -135,7 +137,7 @@ EXPORT_LAYOUT = replace(
     host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
-    excluded_nvlink_domains=("dh1-r136-us-east-08a",),
+    excluded_nvlink_domains=(EXCLUDED_NVLINK_DOMAIN,),
 )
 """The 96-GPU export grid for the S2x exports (two arms of 48 pipeline-parallel GPUs)."""
 
