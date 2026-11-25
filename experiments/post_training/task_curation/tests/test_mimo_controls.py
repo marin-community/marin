@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from taskcompendium.harbor.adapter import declared_execution_limits
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
     AnswerType,
@@ -131,7 +131,10 @@ def test_control_request_carries_the_nop_agent_and_the_local_path(rows, tmp_path
     )
     assert request["trial"]["agent"] == {"name": "nop"}
     assert request["trial"]["environment"] == {"type": "local", "kwargs": {"disk_root": str(tmp_path / "disk")}}
-    assert request["trial"]["task"]["source_runtime"] == runtime
+    binding = request["trial"]["task"]["source_runtime"]
+    assert binding["runtime"] == runtime
+    assert binding["runtime_sha256"] == canonical_sha256(runtime)
+    assert binding["task_sha256"] == task_spec_sha256(task)
     assert request["source"]["task_checksum"] == "c" * 64
     assert request["source"]["source_task_checksum"] == "d" * 64
     assert request["source"]["execution_requirements"] == requirements.model_dump(mode="json")

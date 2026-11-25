@@ -129,7 +129,18 @@ def control_request(
     """One curation_control request: the repaired package with no agent on the LOCAL path."""
     return {
         "trial": {
-            "task": {"path": str(package), "source_runtime": runtime},
+            "task": {
+                "path": str(package),
+                "source_runtime": (
+                    {
+                        "task_sha256": task_spec_sha256(task),
+                        "runtime_sha256": canonical_sha256(runtime) if runtime else None,
+                        "runtime": runtime,
+                    }
+                    if runtime
+                    else None
+                ),
+            },
             "agent": {"name": NOP_AGENT},
             "environment": {"type": "local", "kwargs": environment_kwargs},
             "trials_dir": str(output_root / "trials"),
