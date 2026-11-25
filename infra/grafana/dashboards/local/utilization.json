@@ -1,7 +1,7 @@
 {
   "uid": "marin-utilization",
   "title": "Utilization (prototype)",
-  "description": "Fleet-wide CPU, memory and GPU use, with a table of nodes to inspect; the Node row below shows one node. Three hub queries per load, and three more when the Node row is open.",
+  "description": "Fleet-wide CPU, memory and GPU use, with a table of nodes to inspect; the Node section below shows the selected node. Three hub queries per load, and three more once a node is selected.",
   "tags": [
     "marin",
     "prototype"
@@ -168,7 +168,7 @@
       "id": 102,
       "type": "table",
       "title": "Nodes to inspect",
-      "description": "One row per GPU node in the range: its GPU type; GPUs held (GPUs that reported inventory in a bin, a GPU present for part of a bin counting fully) and GPUs busy and tensor-active (sums of each GPU's mean ratio in a bin), each averaged over the range's bins; and idle GPUs (held minus busy). Sorted by idle GPUs. Rack, slot, node pool, instance type and IB fabric come from Kubernetes node labels (/k8s/nodes, which needs the CoreWeave read token; empty without it). Click a node to open it in the Node row below. This panel's finelog query also feeds the GPU panel.",
+      "description": "One row per GPU node in the range: its GPU type; GPUs held (GPUs that reported inventory in a bin, a GPU present for part of a bin counting fully) and GPUs busy and tensor-active (sums of each GPU's mean ratio in a bin), each averaged over the range's bins; and idle GPUs (held minus busy). Sorted by idle GPUs. Rack, slot, node pool, instance type and IB fabric come from Kubernetes node labels (/k8s/nodes, which needs the CoreWeave read token; empty without it). Click a node to show it in the Node section below. This panel's finelog query also feeds the GPU panel.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -745,855 +745,854 @@
       "id": 200,
       "type": "row",
       "title": "Node: ${node}",
-      "collapsed": true,
+      "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 36
       },
-      "panels": [
+      "panels": []
+    },
+    {
+      "id": 209,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "description": "The selected node, as text to copy. It is also in the page URL as var-node.",
+      "options": {
+        "mode": "markdown",
+        "content": "**Node:** `${node}`"
+      }
+    },
+    {
+      "id": 201,
+      "type": "timeseries",
+      "title": "Jobs on the node",
+      "description": "One line per job: 1 while an attempt of the job runs on ${node}, 0 otherwise, stacked so two jobs at once read 2. The table below lists the attempts. Attempts whose newest row is older than 1 day before the range start are missed. This panel's query also feeds the table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE ${node:sqlstring} <> '' AND (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
         {
-          "id": 209,
-          "type": "text",
-          "title": "",
-          "transparent": true,
-          "gridPos": {
-            "h": 2,
-            "w": 24,
-            "x": 0,
-            "y": 37
-          },
-          "description": "The selected node, as text to copy. It is also in the page URL as var-node.",
-          "options": {
-            "mode": "markdown",
-            "content": "**Node:** `${node}`"
-          }
-        },
-        {
-          "id": 201,
-          "type": "timeseries",
-          "title": "Jobs on the node",
-          "description": "One line per job: 1 while an attempt of the job runs on ${node}, 0 otherwise, stacked so two jobs at once read 2. The table below lists the attempts. Attempts whose newest row is older than 1 day before the range start are missed. This panel's query also feeds the table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid\n```",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "WITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
-              },
-              "columns": [
-                {
-                  "selector": "minute",
-                  "text": "minute",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "attempt_uid",
-                  "text": "attempt_uid",
-                  "type": "string"
-                },
-                {
-                  "selector": "task_id",
-                  "text": "task_id",
-                  "type": "string"
-                },
-                {
-                  "selector": "attempt_id",
-                  "text": "attempt_id",
-                  "type": "number"
-                },
-                {
-                  "selector": "job_id",
-                  "text": "job_id",
-                  "type": "string"
-                },
-                {
-                  "selector": "user_id",
-                  "text": "user_id",
-                  "type": "string"
-                },
-                {
-                  "selector": "job_name",
-                  "text": "job_name",
-                  "type": "string"
-                },
-                {
-                  "selector": "state",
-                  "text": "state",
-                  "type": "string"
-                },
-                {
-                  "selector": "started_at",
-                  "text": "started_at",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "finished_at",
-                  "text": "finished_at",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "cpu_request",
-                  "text": "cpu_request",
-                  "type": "number"
-                },
-                {
-                  "selector": "memory_request_bytes",
-                  "text": "memory_request_bytes",
-                  "type": "number"
-                },
-                {
-                  "selector": "accelerator_kind",
-                  "text": "accelerator_kind",
-                  "type": "string"
-                },
-                {
-                  "selector": "accelerator_type",
-                  "text": "accelerator_type",
-                  "type": "string"
-                },
-                {
-                  "selector": "accelerators_per_task",
-                  "text": "accelerators_per_task",
-                  "type": "number"
-                },
-                {
-                  "selector": "category",
-                  "text": "category",
-                  "type": "string"
-                },
-                {
-                  "selector": "active",
-                  "text": "active",
-                  "type": "number"
-                }
-              ]
-            }
-          ],
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 37
-          },
-          "transformations": [
-            {
-              "id": "groupBy",
-              "options": {
-                "fields": {
-                  "minute": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "job_id": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "active": {
-                    "aggregations": [
-                      "max"
-                    ],
-                    "operation": "aggregate"
-                  }
-                }
-              }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "job_id"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "decimals": 0,
-              "min": 0,
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "stepAfter",
-                "fillOpacity": 30,
-                "showPoints": "never",
-                "stacking": {
-                  "mode": "normal",
-                  "group": "A"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 208,
-          "type": "table",
-          "title": "Task attempts on the node",
-          "description": "The attempts behind the job lines: job, request and usage category (empty until job tags are written). Reuses the job panel's query.",
-          "datasource": {
-            "type": "datasource",
-            "uid": "-- Dashboard --"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "datasource",
-                "uid": "-- Dashboard --"
-              },
-              "panelId": 201
-            }
-          ],
-          "gridPos": {
-            "h": 7,
-            "w": 24,
-            "x": 0,
-            "y": 44
-          },
-          "transformations": [
-            {
-              "id": "groupBy",
-              "options": {
-                "fields": {
-                  "attempt_uid": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "task_id": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "attempt_id": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "job_id": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "user_id": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "job_name": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "state": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "started_at": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "finished_at": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "cpu_request": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "memory_request_bytes": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "accelerator_kind": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "accelerator_type": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "accelerators_per_task": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  },
-                  "category": {
-                    "aggregations": [],
-                    "operation": "groupby"
-                  }
-                }
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": [
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "memory_request_bytes"
-                },
-                "properties": [
-                  {
-                    "id": "unit",
-                    "value": "bytes"
-                  }
-                ]
+                "key": "sql",
+                "value": "WITH attempt AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, task_id, attempt_id, attempt_uid, state, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE ${node:sqlstring} <> '' AND (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}), job AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, user_id, name,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__jobs\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), request AS ( SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,  accelerators_per_task FROM (  SELECT cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms, res_cpu_millicores, res_memory_bytes, accelerator_kind, accelerator_type,   accelerators_per_task,   row_number() OVER (PARTITION BY cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__job_config\"  WHERE ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}}   AND root_job_id IN (SELECT root_job_id FROM attempt) ) WHERE rn = 1), grid AS ( SELECT unnest(generate_series(date_bin(INTERVAL '1 minute', {{from}}, TIMESTAMP '1970-01-01 00:00:00'),  {{to}}, INTERVAL '1 minute')) AS minute) SELECT g.minute, a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.user_id, j.name AS job_name, a.state,  a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,  r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,  r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category,  CASE WHEN a.started_at < g.minute + INTERVAL '1 minute'   AND COALESCE(a.finished_at, {{to}}) > g.minute THEN 1 ELSE 0 END AS active FROM attempt a LEFT JOIN job j USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) LEFT JOIN request r USING (cluster, root_job_id, root_submitted_at_ms, job_id, submitted_at_ms) CROSS JOIN grid g WHERE g.minute < {{to}} ORDER BY g.minute, a.job_id, a.attempt_uid"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
               }
             ]
           },
-          "options": {
-            "showHeader": true
-          }
-        },
-        {
-          "id": 202,
-          "type": "timeseries",
-          "title": "GPU SM-active per GPU",
-          "description": "Per-minute SM-active ratio of each GPU on ${node} (CoreWeave nodes only). This panel's query also feeds the tensor-active, host CPU and host memory panels.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "targets": [
+          "columns": [
             {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
-              },
-              "columns": [
-                {
-                  "selector": "minute",
-                  "text": "minute",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "name",
-                  "text": "name",
-                  "type": "string"
-                },
-                {
-                  "selector": "gpu_index",
-                  "text": "gpu_index",
-                  "type": "string"
-                },
-                {
-                  "selector": "value",
-                  "text": "value",
-                  "type": "number"
-                }
-              ]
-            }
-          ],
-          "transformations": [
-            {
-              "id": "filterByValue",
-              "options": {
-                "type": "include",
-                "match": "any",
-                "filters": [
-                  {
-                    "fieldName": "name",
-                    "config": {
-                      "id": "equal",
-                      "options": {
-                        "value": "gpu_sm_active_ratio"
-                      }
-                    }
-                  }
-                ]
-              }
+              "selector": "minute",
+              "text": "minute",
+              "type": "timestamp_epoch"
             },
             {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "name",
-                  "gpu_index"
+              "selector": "attempt_uid",
+              "text": "attempt_uid",
+              "type": "string"
+            },
+            {
+              "selector": "task_id",
+              "text": "task_id",
+              "type": "string"
+            },
+            {
+              "selector": "attempt_id",
+              "text": "attempt_id",
+              "type": "number"
+            },
+            {
+              "selector": "job_id",
+              "text": "job_id",
+              "type": "string"
+            },
+            {
+              "selector": "user_id",
+              "text": "user_id",
+              "type": "string"
+            },
+            {
+              "selector": "job_name",
+              "text": "job_name",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "finished_at",
+              "text": "finished_at",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cpu_request",
+              "text": "cpu_request",
+              "type": "number"
+            },
+            {
+              "selector": "memory_request_bytes",
+              "text": "memory_request_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "accelerator_kind",
+              "text": "accelerator_kind",
+              "type": "string"
+            },
+            {
+              "selector": "accelerator_type",
+              "text": "accelerator_type",
+              "type": "string"
+            },
+            {
+              "selector": "accelerators_per_task",
+              "text": "accelerators_per_task",
+              "type": "number"
+            },
+            {
+              "selector": "category",
+              "text": "category",
+              "type": "string"
+            },
+            {
+              "selector": "active",
+              "text": "active",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "minute": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "active": {
+                "aggregations": [
+                  "max"
                 ],
-                "keepFields": false
+                "operation": "aggregate"
               }
-            }
-          ],
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 46
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percentunit",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              },
-              "min": 0,
-              "max": 1
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
             }
           }
         },
         {
-          "id": 203,
-          "type": "timeseries",
-          "title": "GPU tensor-active per GPU",
-          "description": "Per-minute tensor-active ratio of each GPU on ${node}. Reuses the SM-active panel's query.",
-          "datasource": {
-            "type": "datasource",
-            "uid": "-- Dashboard --"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "datasource",
-                "uid": "-- Dashboard --"
-              },
-              "panelId": 202
-            }
-          ],
-          "transformations": [
-            {
-              "id": "filterByValue",
-              "options": {
-                "type": "include",
-                "match": "any",
-                "filters": [
-                  {
-                    "fieldName": "name",
-                    "config": {
-                      "id": "equal",
-                      "options": {
-                        "value": "gpu_tensor_active_ratio"
-                      }
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "name",
-                  "gpu_index"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 46
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percentunit",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              },
-              "min": 0,
-              "max": 1
-            },
-            "overrides": []
-          },
+          "id": "partitionByValues",
           "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
+            "fields": [
+              "job_id"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
             }
           }
         },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 208,
+      "type": "table",
+      "title": "Task attempts on the node",
+      "description": "The attempts behind the job lines: job, request and usage category (empty until job tags are written). Reuses the job panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
         {
-          "id": 204,
-          "type": "timeseries",
-          "title": "Host CPU",
-          "description": "Per-minute host CPU utilization of ${node}. The node agent writes host rows only while it can read the node's host source (node-exporter on CoreWeave), so a node without one shows no data. Reuses the SM-active panel's query.",
+          "refId": "A",
           "datasource": {
             "type": "datasource",
             "uid": "-- Dashboard --"
           },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "datasource",
-                "uid": "-- Dashboard --"
-              },
-              "panelId": 202
-            }
-          ],
-          "transformations": [
-            {
-              "id": "filterByValue",
-              "options": {
-                "type": "include",
-                "match": "any",
-                "filters": [
-                  {
-                    "fieldName": "name",
-                    "config": {
-                      "id": "equal",
-                      "options": {
-                        "value": "node_cpu_utilization_percent"
-                      }
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "name",
-                  "gpu_index"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 0,
-            "y": 54
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
+          "panelId": 201
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "transformations": [
         {
-          "id": 205,
-          "type": "timeseries",
-          "title": "Host memory",
-          "description": "Per-minute host memory used and total on ${node}. Reuses the SM-active panel's query.",
-          "datasource": {
-            "type": "datasource",
-            "uid": "-- Dashboard --"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "datasource",
-                "uid": "-- Dashboard --"
-              },
-              "panelId": 202
-            }
-          ],
-          "transformations": [
-            {
-              "id": "filterByValue",
-              "options": {
-                "type": "include",
-                "match": "any",
-                "filters": [
-                  {
-                    "fieldName": "name",
-                    "config": {
-                      "id": "equal",
-                      "options": {
-                        "value": "node_memory_used_bytes"
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "name",
-                    "config": {
-                      "id": "equal",
-                      "options": {
-                        "value": "node_memory_total_bytes"
-                      }
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "name",
-                  "gpu_index"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 54
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "bytes",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
+          "id": "groupBy",
           "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 206,
-          "type": "timeseries",
-          "title": "CPU cores per attempt",
-          "description": "Per-minute CPU cores each attempt on ${node} used, from iris.task. This panel's query also feeds the memory panel.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, task_id, attempt_id, started_at, finished_at FROM (  SELECT cluster, task_id, attempt_id, attempt_uid, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}) SELECT date_bin(INTERVAL '1 minute', t.ts, TIMESTAMP '1970-01-01 00:00:00') AS minute,  t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,  avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" t JOIN attempt a  ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, {{to}}) WHERE t.ts >= {{from}} AND t.ts < {{to}}  AND t.task_id IN (SELECT task_id FROM attempt) GROUP BY 1, 2 ORDER BY 1, 2\n```",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "table",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "WITH attempt AS ( SELECT cluster, task_id, attempt_id, started_at, finished_at FROM (  SELECT cluster, task_id, attempt_id, attempt_uid, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}) SELECT date_bin(INTERVAL '1 minute', t.ts, TIMESTAMP '1970-01-01 00:00:00') AS minute,  t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,  avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" t JOIN attempt a  ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, {{to}}) WHERE t.ts >= {{from}} AND t.ts < {{to}}  AND t.task_id IN (SELECT task_id FROM attempt) GROUP BY 1, 2 ORDER BY 1, 2"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
+            "fields": {
+              "attempt_uid": {
+                "aggregations": [],
+                "operation": "groupby"
               },
-              "columns": [
-                {
-                  "selector": "minute",
-                  "text": "minute",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "attempt",
-                  "text": "attempt",
-                  "type": "string"
-                },
-                {
-                  "selector": "cpu_cores",
-                  "text": "cpu_cores",
-                  "type": "number"
-                },
-                {
-                  "selector": "memory_bytes",
-                  "text": "memory_bytes",
-                  "type": "number"
-                }
-              ]
-            }
-          ],
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "memory_bytes": true
-                }
-              }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "attempt"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 61
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 207,
-          "type": "timeseries",
-          "title": "Memory per attempt",
-          "description": "Per-minute memory each attempt on ${node} used, from iris.task. Reuses the CPU panel's query.",
-          "datasource": {
-            "type": "datasource",
-            "uid": "-- Dashboard --"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "datasource",
-                "uid": "-- Dashboard --"
+              "task_id": {
+                "aggregations": [],
+                "operation": "groupby"
               },
-              "panelId": 206
-            }
-          ],
-          "transformations": [
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "cpu_cores": true
-                }
+              "attempt_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "user_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "job_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "state": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "started_at": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "finished_at": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "cpu_request": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "memory_request_bytes": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerator_kind": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerator_type": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "accelerators_per_task": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "category": {
+                "aggregations": [],
+                "operation": "groupby"
               }
-            },
-            {
-              "id": "partitionByValues",
-              "options": {
-                "fields": [
-                  "attempt"
-                ],
-                "keepFields": false
-              }
-            }
-          ],
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 61
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "bytes",
-              "custom": {
-                "drawStyle": "line",
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right"
-            },
-            "tooltip": {
-              "mode": "multi"
             }
           }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "memory_request_bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 202,
+      "type": "timeseries",
+      "title": "GPU SM-active per GPU",
+      "description": "Per-minute SM-active ratio of each GPU on ${node} (CoreWeave nodes only). This panel's query also feeds the tensor-active, host CPU and host memory panels.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "minute",
+              "text": "minute",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_index",
+              "text": "gpu_index",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "name",
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": "gpu_sm_active_ratio"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "name",
+              "gpu_index"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 203,
+      "type": "timeseries",
+      "title": "GPU tensor-active per GPU",
+      "description": "Per-minute tensor-active ratio of each GPU on ${node}. Reuses the SM-active panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 202
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "name",
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": "gpu_tensor_active_ratio"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "name",
+              "gpu_index"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 204,
+      "type": "timeseries",
+      "title": "Host CPU",
+      "description": "Per-minute host CPU utilization of ${node}. The node agent writes host rows only while it can read the node's host source (node-exporter on CoreWeave), so a node without one shows no data. Reuses the SM-active panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 202
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "name",
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": "node_cpu_utilization_percent"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "name",
+              "gpu_index"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 54
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 205,
+      "type": "timeseries",
+      "title": "Host memory",
+      "description": "Per-minute host memory used and total on ${node}. Reuses the SM-active panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 202
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "name",
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": "node_memory_used_bytes"
+                  }
+                }
+              },
+              {
+                "fieldName": "name",
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": "node_memory_total_bytes"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "name",
+              "gpu_index"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 206,
+      "type": "timeseries",
+      "title": "CPU cores per attempt",
+      "description": "Per-minute CPU cores each attempt on ${node} used, from iris.task. This panel's query also feeds the memory panel.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH attempt AS ( SELECT cluster, task_id, attempt_id, started_at, finished_at FROM (  SELECT cluster, task_id, attempt_id, attempt_uid, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE ${node:sqlstring} <> '' AND (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}) SELECT date_bin(INTERVAL '1 minute', t.ts, TIMESTAMP '1970-01-01 00:00:00') AS minute,  t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,  avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" t JOIN attempt a  ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, {{to}}) WHERE t.ts >= {{from}} AND t.ts < {{to}}  AND t.task_id IN (SELECT task_id FROM attempt) GROUP BY 1, 2 ORDER BY 1, 2\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH attempt AS ( SELECT cluster, task_id, attempt_id, started_at, finished_at FROM (  SELECT cluster, task_id, attempt_id, attempt_uid, started_at, finished_at,   row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn  FROM \"iris.controller_db__task_attempts\"  WHERE ${node:sqlstring} <> '' AND (node_name = ${node:sqlstring} OR worker_id = ${node:sqlstring})   AND ts >= {{from}} - INTERVAL '1 day' AND ts < {{to}} ) WHERE rn = 1 AND started_at IS NOT NULL AND started_at < {{to}}   AND COALESCE(finished_at, {{to}}) > {{from}}) SELECT date_bin(INTERVAL '1 minute', t.ts, TIMESTAMP '1970-01-01 00:00:00') AS minute,  t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,  avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" t JOIN attempt a  ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, {{to}}) WHERE t.ts >= {{from}} AND t.ts < {{to}}  AND t.task_id IN (SELECT task_id FROM attempt) GROUP BY 1, 2 ORDER BY 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "minute",
+              "text": "minute",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "attempt",
+              "text": "attempt",
+              "type": "string"
+            },
+            {
+              "selector": "cpu_cores",
+              "text": "cpu_cores",
+              "type": "number"
+            },
+            {
+              "selector": "memory_bytes",
+              "text": "memory_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "memory_bytes": true
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "attempt"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 61
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 207,
+      "type": "timeseries",
+      "title": "Memory per attempt",
+      "description": "Per-minute memory each attempt on ${node} used, from iris.task. Reuses the CPU panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 206
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "cpu_cores": true
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "attempt"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 61
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     }
   ]
 }
