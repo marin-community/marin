@@ -25,6 +25,7 @@ from experiments.evaluation.policy.runs import (
     run_warnings,
     succeeded_runs,
 )
+from experiments.evaluation.policy.schema import PolicyEvaluation
 from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
 
 EVALUATIONS = {"aime24", "mrcr-32k"}
@@ -43,7 +44,13 @@ def _write(tmp_path, run: ExpectedRun, status: RunStatus = RunStatus.SUCCEEDED, 
 
 
 def _evidence(
-    run: ExpectedRun, *, attempted: int = 30, scored: int | None = None, window: int | None = None, capped: int = 0
+    run: ExpectedRun,
+    *,
+    attempted: int = 30,
+    scored: int | None = None,
+    window: int | None = None,
+    capped: int = 0,
+    undecided: int = 0,
 ) -> RunEvidence:
     return RunEvidence(
         coverage={
@@ -54,6 +61,7 @@ def _evidence(
         window=run.batch.model.serve.max_model_len if window is None else window,
         replies=attempted,
         capped=capped,
+        undecided={"d": undecided} if undecided else {},
     )
 
 
@@ -86,9 +94,12 @@ def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_mod
         tokenizer_revision=QWEN.model.revision,
         serve=replace(QWEN.model.serve, auto_overrides=False),
     )
-    (run,) = expected_runs(POLICY, model_candidate(checkpoint), limit=None, evaluations={"aime24"})
+    # AIME24 runs on an 8,192-token server, so its record names a model with that window; checking it must
+    # not depend on the policy's other evaluations, which need more.
+    policy = replace(POLICY, in_distribution=(PolicyEvaluation("aime24", context=8_192), PolicyEvaluation("math500")))
+    (run,) = expected_runs(policy, model_candidate(checkpoint), limit=None, evaluations={"aime24"})
     record = _write(tmp_path, run)
-    (expected,) = expected_runs(POLICY, record_candidate(POLICY, record), limit=None, evaluations={"aime24"})
+    (expected,) = expected_runs(policy, record_candidate(policy, record), limit=None, evaluations={"aime24"})
     assert expected.evaluation.identity.run_id == run.evaluation.identity.run_id
     assert run_problems(record, _evidence(expected), expected) == (RunState.VALID, ())
 
@@ -103,7 +114,7 @@ def test_a_run_of_the_policy_is_valid(tmp_path):
     [
         pytest.param(RunStatus.INFRA_FAILED, None, id="failed"),
         pytest.param(RunStatus.SUCCEEDED, {"window": 32768}, id="another-server-window"),
-        pytest.param(RunStatus.SUCCEEDED, {"attempted": 29}, id="full-run-missed-items"),
+        pytest.param(RunStatus.SUCCEEDED, {"undecided": 1}, id="full-run-left-items-undecided"),
     ],
 )
 def test_a_run_whose_outcome_falls_short_is_invalid(tmp_path, status, evidence):
@@ -122,6 +133,12 @@ def test_a_succeeded_run_without_an_archive_is_invalid(tmp_path):
     assert any(RUN_OBJECT in problem for problem in problems)
 
 
+def test_a_full_run_need_not_attempt_items_its_protocol_excludes(tmp_path):
+    # MRCR's selection drops conversations that do not fit its window; the run still covers the benchmark.
+    run = _expected(None)["mrcr-32k"]
+    assert run_problems(_write(tmp_path, run), _evidence(run, attempted=6), run) == (RunState.VALID, ())
+
+
 def test_a_smoke_run_need_not_attempt_every_item(tmp_path):
     run = _expected(20)["aime24"]
     assert run_problems(_write(tmp_path, run), _evidence(run, attempted=20), run) == (RunState.VALID, ())
@@ -138,6 +155,14 @@ def test_different_inputs_name_the_fields_and_are_stale_only_from_another_commit
     state, problems = run_problems(elsewhere, _evidence(full), full)
     assert state is RunState.STALE
     assert any(problem.startswith("eval.curated.settings.source_limit:") for problem in problems)
+
+
+def test_a_release_runs_at_its_own_paths_not_the_unreleased_versions():
+    # Runs made before the tag share the version; they must not occupy, or be skipped in place of, the release's.
+    (before,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
+    (released,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"}, release_commit="a" * 40)
+    (again,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"}, release_commit="a" * 40)
+    assert released.record_path == again.record_path != before.record_path
 
 
 def test_a_released_policys_runs_must_come_from_its_tagged_commit(tmp_path):
@@ -170,8 +195,11 @@ def test_runs_far_outside_expectations_are_flagged_but_stay_valid(tmp_path, evid
     assert bool(run_warnings(evidence)) is flagged
 
 
-def _archive(path, caps_and_tokens: list[tuple[int, int]]) -> None:
-    """Write a single-turn run archive whose items have the given output caps and reply lengths."""
+def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0, rows: int | None = None) -> None:
+    """Write a single-turn run archive whose items have the given output caps and reply lengths.
+
+    ``excluded`` more items are excluded by the protocol, and the dataset has ``rows`` items in all.
+    """
     protocol = selection_dataset(
         _expected(None)["aime24"].evaluation.identity.eval_ref.curated.selection, PromptFormat.CHAT
     ).protocol
@@ -218,9 +246,27 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]]) -> None:
                         completion_tokens=tokens,
                     ).model_dump(mode="json")
                 )
+            for index in range(len(caps_and_tokens), len(caps_and_tokens) + excluded):
+                transaction.table(SELECTIONS_TABLE).add(
+                    Selection(
+                        dataset="d",
+                        source_row=f"row:{index}",
+                        source_ordinal=index,
+                        status=SelectionStatus.EXCLUDED,
+                        reason="context_window",
+                        rank=index,
+                        context_window=1000,
+                        max_tokens=None,
+                        prompt_tokens=None,
+                        reference_tokens=None,
+                    ).model_dump(mode="json")
+                )
+            total = len(caps_and_tokens) + excluded if rows is None else rows
             run = {
                 "config": {"model": {"context_window": 1000}},
-                "datasets": [{"dataset": "d", "protocol": protocol.model_dump(mode="json")}],
+                "datasets": [
+                    {"dataset": "d", "manifest": {"rows": total}, "protocol": protocol.model_dump(mode="json")}
+                ],
             }
             transaction.write_object(RUN_OBJECT, json.dumps(run).encode())
 
@@ -231,6 +277,17 @@ def test_a_reply_counts_as_capped_against_its_own_items_cap(tmp_path):
     record = _write(tmp_path, _expected(None)["aime24"])
     evidence = run_evidence(record.model_copy(update={"results_path": str(tmp_path / "results")}), {})
     assert (evidence.replies, evidence.capped) == (3, 1)
+
+
+def test_items_the_protocol_excludes_are_decided_and_missing_ones_are_not(tmp_path):
+    record = _write(tmp_path, _expected(None)["aime24"])
+    _archive(tmp_path / "excluded", [(1000, 10)], excluded=2)
+    _archive(tmp_path / "missing", [(1000, 10)], excluded=2, rows=5)
+    evidence = {
+        name: run_evidence(record.model_copy(update={"results_path": str(tmp_path / name)}), {})
+        for name in ("excluded", "missing")
+    }
+    assert (evidence["excluded"].undecided, evidence["missing"].undecided) == ({}, {"d": 2})
 
 
 def test_an_archive_without_its_run_object_gives_no_evidence(tmp_path):

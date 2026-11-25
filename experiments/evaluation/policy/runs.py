@@ -4,6 +4,7 @@
 """Check eval records against the runs a policy launch from the current checkout would make."""
 
 import json
+from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -16,7 +17,7 @@ from finestore.reader import ReadView
 from iris.rpc import job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import Evaluation, EvaluationBatch
-from taskcompendium.evaluation.selection import SELECTIONS_TABLE
+from taskcompendium.evaluation.selection import SELECTIONS_TABLE, SelectionStatus
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
 from experiments.evaluation.launch import (
@@ -79,6 +80,7 @@ def expected_runs(
     evaluations: Collection[str] | None = None,
     priority_band: int = job_pb2.PRIORITY_BAND_BATCH,
     federated_cluster: str | None = None,
+    release_commit: str | None = None,
 ) -> tuple[ExpectedRun, ...]:
     """Every run ``policy launch`` would submit for ``candidate`` at ``limit``, resolved as a dry run does.
 
@@ -91,6 +93,7 @@ def expected_runs(
         limit=limit,
         priority_band=priority_band,
         federated_cluster=federated_cluster,
+        release_commit=release_commit,
     )
     return tuple(
         ExpectedRun(batch=batch, evaluation=evaluation)
@@ -119,19 +122,23 @@ def _short(value: object) -> str:
 
 @dataclass(frozen=True)
 class RunEvidence:
-    """What a succeeded run's archive shows: scored coverage, the window it read from the server, and how
-    many of its single-turn replies stopped at their output cap."""
+    """What a succeeded run's archive shows: scored coverage, the window it read from the server, how many
+    of its single-turn replies stopped at their output cap, and, by dataset, how many items its selection
+    left undecided."""
 
     coverage: Mapping[str, TaskCoverage]
     window: int | None
     replies: int
     capped: int
+    undecided: Mapping[str, int]
 
 
 def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence | None:
     """Read a succeeded run's archive, or None if it has no run object.
 
-    A single-turn reply counts as capped when it used the whole output cap the evaluator gave its item.
+    A single-turn reply counts as capped when it used the whole output cap the evaluator gave its item. An
+    item is undecided when the selection neither selected it nor excluded it under its protocol's rules,
+    which happens only under an item limit.
     """
     reader = ReadView(record.results_path)
     payload = reader.read_blob(RUN_OBJECT)
@@ -143,11 +150,13 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
         for entry in run["datasets"]
         if EvaluationProtocol.model_validate(entry["protocol"]).operation in _SINGLE_TURN
     }
+    selections = list(reader.iter_rows(SELECTIONS_TABLE))
     caps = {
         (row["dataset"], row["source_row"]): row["max_tokens"]
-        for row in reader.iter_rows(SELECTIONS_TABLE)
+        for row in selections
         if row["status"] == "selected" and row["dataset"] in single_turn and row["max_tokens"] is not None
     }
+    decided = Counter(row["dataset"] for row in selections if row["status"] != SelectionStatus.UNINSPECTED)
     tokens = [
         (row["completion_tokens"], caps[key])
         for row in terminal_attempts(reader).values()
@@ -158,6 +167,11 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
         window=run["config"]["model"]["context_window"],
         replies=len(tokens),
         capped=sum(used >= cap for used, cap in tokens),
+        undecided={
+            entry["dataset"]: missing
+            for entry in run["datasets"]
+            if (missing := entry["manifest"]["rows"] - decided[entry["dataset"]]) > 0
+        },
     )
 
 
@@ -205,11 +219,11 @@ def run_problems(
             faults.append("no coverage in the run's archive")
         curated = evaluation.identity.eval_ref.curated
         assert curated is not None, "policy evaluations are curated selections"
+        # Items the protocol excludes, such as ones too long for its window, are not missing from a full run.
         if curated.settings.source_limit is None:
             faults.extend(
-                f"{task}: attempted {coverage.n_attempted} of {coverage.n_benchmark} items"
-                for task, coverage in sorted(evidence.coverage.items())
-                if coverage.n_attempted != coverage.n_benchmark
+                f"{dataset}: the selection left {missing} items undecided"
+                for dataset, missing in sorted(evidence.undecided.items())
             )
     if faults and not drift and record.status is RunStatus.SUCCEEDED and record.version == batch.version:
         faults.append("a relaunch skips this run, since its record succeeded")

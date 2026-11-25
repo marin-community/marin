@@ -6,45 +6,8 @@ that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) throu
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
 both as TaskSpec entries of the [benchmark catalog](../../../catalog.py); the agentic ones are the
 campaign's curated protocols in [`benchmarks/agentic.py`](../../../benchmarks/agentic.py), which pin
-the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; print it with
-
-```bash
-uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial
-```
-
-## Running
-
-```bash
-uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
-  --candidate qwen3.6-35b-a3b --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
-uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
-uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
-```
-
-`launch` and `status` take the models to run in one of three ways:
-
-| Option | Runs |
-| --- | --- |
-| `--candidate NAME`, repeatable | the named candidates |
-| `--all-candidates` | every candidate (the default for `status`) |
-| `--model KEY` or `--model-config FILE` | a supplied model, such as a training checkpoint, evaluated against the policy; its window is its `serve.max_model_len`, else its checkpoint's |
-
-- `launch` resolves every model's launch before submitting any job. It leaves out evaluations whose
-  record already succeeded, and starts no server for a group with none left; the dry run lists them.
-  Failed runs rerun at their old paths. A run that succeeded but is invalid (for example, another
-  server window) is not rerun; `status` says so for each such run.
-- `status` shows each evaluation's full and smoke run: valid, invalid, not run, or differing from
-  this checkout (run at another commit with other inputs). A ⚠ marks a run
-  whose replies often hit their output cap or whose attempts often went unscored.
-- `verify` checks any run against the policy and names each field that differs. A run of a model
-  outside the policy is checked against the model its record names.
-
-A policy marked `released` launches only from a clean checkout of its tag, `eval-policy-<version>`,
-and `status` and `verify` mark its runs from any other commit invalid. A fix to a released policy is
-a new version, so its runs get new paths. This trial policy is not released and launches from any
-commit.
-
-All three need CoreWeave credentials.
+the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; the
+[policy README](../../README.md) explains the schema and the `policy` command.
 
 ## Candidates
 

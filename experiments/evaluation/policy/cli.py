@@ -71,7 +71,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
-    selection = item.evaluation.selection
+    selection = item.selection
     config = evaluation_dataset(item)
     protocol = config.protocol
     sampling = protocol.sampling
@@ -168,7 +168,8 @@ class _LaunchPlan:
     """One candidate's servers to submit, and the evaluations left out because their runs already succeeded."""
 
     candidate: PolicyCandidate
-    git_sha: str
+    git_sha: str | None
+    """The commit its records would name; None when the candidate has nothing to run."""
     batches: tuple[EvaluationBatch, ...]
     succeeded: Mapping[str, EvalRunRecord]
 
@@ -183,7 +184,7 @@ def _launch_plan(
     """
     try:
         runs = expected_runs(policy, candidate, evaluations=evaluations, **placement)
-        git_sha = runs[0].batch.provenance.git_sha
+        git_sha = runs[0].batch.provenance.git_sha if runs else None
         succeeded = succeeded_runs(runs)
         if succeeded:
             remaining = [run.name for run in runs if run.name not in succeeded]
@@ -196,7 +197,7 @@ def _launch_plan(
 
 def _print_launch(policy: EvalPolicy, plan: _LaunchPlan) -> None:
     model = plan.candidate.model
-    click.echo(f"policy {policy.version} @ {plan.git_sha[:10]}  candidate {plan.candidate.name}")
+    click.echo(f"policy {policy.version} @ {(plan.git_sha or '-')[:10]}  candidate {plan.candidate.name}")
     click.echo(f"  model {model.location}@{model.revision}")
     for name, record in sorted(plan.succeeded.items()):
         click.echo(f"  skip {name}: succeeded @{record.provenance.git_sha[:7]}")
@@ -371,11 +372,13 @@ def launch(
             limit=limit,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
+            release_commit=_release_commit(policy),
         )
         for candidate in candidates
     ]
-    if not dry_run:
-        _check_checkout(policy, recorded=plans[0].git_sha, smoke=limit is not None)
+    recorded = next((plan.git_sha for plan in plans if plan.git_sha is not None), None)
+    if not dry_run and recorded is not None:
+        _check_checkout(policy, recorded=recorded, smoke=limit is not None)
     for plan in plans:
         for batch in plan.batches:
             require_coreweave_credentials(batch)
@@ -411,10 +414,10 @@ def status(
     release = _release_commit(policy)
     configure_coreweave_s3()
     for candidate in candidates:
-        smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit)}
+        smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit, release_commit=release)}
         rows = tuple(
             (run.name, _expected_summary(run, release), _expected_summary(smoke[run.name], release))
-            for run in expected_runs(policy, candidate, limit=None)
+            for run in expected_runs(policy, candidate, limit=None, release_commit=release)
         )
         click.echo(f"\n{policy.version}  candidate {candidate.name}")
         _print_table(("evaluation", "full run", f"smoke run (limit {limit})"), rows)
@@ -443,6 +446,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
                 candidate,
                 limit=record.evaluation.curated.settings.source_limit,
                 evaluations={record.evaluation.name},
+                release_commit=release,
             )
         except ValueError as error:
             raise click.ClickException(f"{run_id}: {error}") from error

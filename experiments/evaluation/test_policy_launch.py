@@ -8,8 +8,11 @@ from dataclasses import replace
 import pytest
 from iris.rpc import job_pb2
 
+from experiments.evaluation.evals import JUDGES
+from experiments.evaluation.judges import ApiJudge
 from experiments.evaluation.policy.launch import launch_specs, server_groups
 from experiments.evaluation.policy.resolve import resolve
+from experiments.evaluation.policy.schema import PolicyExclusion
 from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
 
 RESOLVED = {item.evaluation.name: item for item in resolve(POLICY, QWEN)}
@@ -57,6 +60,23 @@ def test_an_agent_run_below_its_input_limit_gets_a_server_of_that_window():
     assert _windows(["swebench-verified"], **{"swebench-verified": 16_384}) == {(16_384, True, ("swebench-verified",))}
 
 
+def test_judges_with_different_keys_get_separate_servers():
+    # A launch hands its judges one key; evaluations without a judge join the first server.
+    other_key = ApiJudge(
+        identity=JUDGES["together"].identity, endpoint="https://judge.example/v1", api_key=("env:OTHER",)
+    )
+    olympiad = RESOLVED["olympiadbench"]
+    olympiad = replace(olympiad, evaluation=replace(olympiad.evaluation, judge=other_key))
+    groups = {
+        tuple(item.evaluation.name for item in group.evaluations)
+        for group in server_groups([RESOLVED["gsm8k-0shot"], RESOLVED["financebench"], olympiad], SERVED)
+    }
+    assert groups == {("gsm8k-0shot", "financebench"), ("olympiadbench",)}
+    assert (
+        len(server_groups([RESOLVED["gsm8k-0shot"], RESOLVED["financebench"], RESOLVED["olympiadbench"]], SERVED)) == 1
+    )
+
+
 def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
     specs = launch_specs(
         POLICY,
@@ -71,6 +91,13 @@ def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
 def test_unknown_evaluations_are_rejected(checkpoint_window):
     with pytest.raises(ValueError, match="bixbench"):
         launch_specs(POLICY, QWEN, evaluations={"bixbench"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH)
+
+
+def test_a_candidate_excluded_from_the_named_evaluations_has_nothing_to_launch(checkpoint_window):
+    aime24 = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "aime24")
+    excluded = replace(POLICY, exclusions=(PolicyExclusion(candidate=QWEN, evaluation=aime24, reason="test"),))
+    specs = launch_specs(excluded, QWEN, evaluations={"aime24"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH)
+    assert specs == ()
 
 
 def test_a_checkpoint_that_clamps_the_served_window_below_an_agent_window_is_rejected(checkpoint_window):
