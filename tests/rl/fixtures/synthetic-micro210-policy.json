@@ -56,10 +56,14 @@
       "n_samples_per_prompt": 1
     },
     "config": {
+      "entrypoint": "generate",
       "trainer": {
         "strategy": "megatron",
         "algorithm": {
           "use_kl_loss": false
+        },
+        "placement": {
+          "colocate_all": true
         }
       },
       "generator": {

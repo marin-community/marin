@@ -6,7 +6,7 @@
 import hashlib
 import json
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 
 import click
 import draccus
@@ -18,8 +18,8 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLSpec,
@@ -89,6 +89,20 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
+def generation_plan(role_plan: dict) -> SkyRLGenerationPlan:
+    """Read the frozen protocol's inference geometry; its training-role fields do not apply to generation."""
+    geometry = {item.name: role_plan[item.name] for item in fields(SkyRLGenerationPlan) if item.name != "gpus_per_node"}
+    return SkyRLGenerationPlan(gpus_per_node=role_plan["policy_num_gpus_per_node"], **geometry)
+
+
+def generation_config(config: dict) -> dict:
+    """Drop the frozen settings that the generation plan now derives: the entrypoint and colocated placement."""
+    config = deepcopy(config)
+    del config["entrypoint"]
+    del config["trainer"]["placement"]["colocate_all"]
+    return config
+
+
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
@@ -116,7 +130,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
-    roles = draccus.decode(SkyRLRolePlan, evaluation_policy["role_plan"])
+    plan = generation_plan(evaluation_policy["role_plan"])
     execution = IrisSkyRLExecution(
         **{
             **evaluation_policy["execution"],
@@ -130,15 +144,14 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
             version=version,
             config_yaml=yaml.safe_dump(
                 judge_runtime_config(
-                    evaluation_policy["config"], draccus.decode(JudgeConfig, evaluation_policy["judge"])
+                    generation_config(evaluation_policy["config"]),
+                    draccus.decode(JudgeConfig, evaluation_policy["judge"]),
                 )
             ),
             model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),
-            topology=SkyRLTopology(
-                roles.num_nodes, roles.policy_num_gpus_per_node, evaluation_policy["gpu_variant"], roles
-            ),
+            topology=SkyRLTopology(plan.num_nodes, plan.gpus_per_node, evaluation_policy["gpu_variant"], plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=evaluation_policy["seed"],
         ),
