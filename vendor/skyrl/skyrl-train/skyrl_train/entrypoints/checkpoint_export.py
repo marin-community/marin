@@ -10,6 +10,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from ray.util.queue import Queue
 
+from marinskyrl.driver_status import driver_progress_path
 from skyrl_train.checkpoint_exporter import checkpoint_exporter
 from skyrl_train.entrypoints.workload_progress import report_to_driver, workload_progress_queue, workload_result
 from skyrl_train.utils.utils import initialize_ray
@@ -31,8 +32,9 @@ def run(cfg: DictConfig) -> None:
 
     signal.signal(signal.SIGTERM, shutdown_on_sigterm)
     try:
-        with workload_progress_queue() as progress:
-            result = workload_result(run_checkpoint_export.remote(cfg, progress), progress)
+        with workload_progress_queue(driver_progress_path()) as progress:
+            export = run_checkpoint_export.remote(cfg, progress.queue if progress else None)
+            result = workload_result(export, progress)
         logger.info(f"Exported global_step_{result.step} to {result.export_path}")
     finally:
         ray.shutdown()

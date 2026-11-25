@@ -70,7 +70,7 @@ from cloud.iris.hf_model_cache import (
     stage_artifact_model_metadata,
     stage_model_metadata,
 )
-from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME
+from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME, ELAPSED_EXCLUDING_EVAL
 from marinskyrl.environment_contract import (
     DebugMode,
     EnvVarManager,
@@ -1417,13 +1417,28 @@ def kill_driver_process_group(process: subprocess.Popen) -> None:
         _log(f"Training driver did not become waitable within {DRIVER_KILL_TIMEOUT}s after SIGKILL")
 
 
-def log_failure_diagnostics(reason: str, timeout: float) -> None:
-    """Bound the time spent collecting diagnostics after a driver failure."""
-    artifact_thread = threading.Thread(target=log_termination_diagnostics, args=(reason,), daemon=True, name="failure-diagnostics")
+def log_failure_diagnostics(reason: str) -> None:
+    """Wait briefly for the daemon collecting failure diagnostics."""
+    artifact_thread = threading.Thread(
+        target=log_termination_diagnostics, args=(reason,), daemon=True, name="failure-diagnostics"
+    )
     artifact_thread.start()
-    artifact_thread.join(timeout)
+    artifact_thread.join(FAILURE_DIAGNOSTICS_TIMEOUT)
     if artifact_thread.is_alive():
-        _log(f"Failure diagnostics exceeded {timeout}s; continuing task teardown")
+        _log(f"Failure diagnostics exceeded {FAILURE_DIAGNOSTICS_TIMEOUT}s; continuing task teardown")
+
+
+def publish_trainer_timing(status_dir: Path, timing_uri: str | None) -> None:
+    """Copy the driver's completed training duration to the grader report."""
+    timing_path = status_dir / DRIVER_TIMING_FILENAME
+    if timing_uri is None or not timing_path.is_file():
+        return
+    try:
+        elapsed = json.loads(timing_path.read_text())[ELAPSED_EXCLUDING_EVAL]
+        if math.isfinite(elapsed) and elapsed > 0:
+            write_json(timing_uri, {ELAPSED_EXCLUDING_EVAL: elapsed})
+    except Exception as error:
+        _log(f"Could not persist the trainer completion time: {error}")
 
 
 def run_head(
@@ -1451,7 +1466,7 @@ def run_head(
         _log(f"Received signal {signum}; terminating training driver and stopping Ray...")
         # Capture FIRST (before teardown mutates disk/GPU state) — a SIGTERM here is
         # often a k8s eviction / OOM whose cause survives nowhere else.
-        log_failure_diagnostics(f"signal {signum} (head rank 0)", FAILURE_DIAGNOSTICS_TIMEOUT)
+        log_failure_diagnostics(f"signal {signum} (head rank 0)")
         if process is not None:
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)
@@ -1524,7 +1539,7 @@ def run_head(
             reason = f"driver stalled after {args.driver_progress_timeout:g}s without a workload milestone (head rank 0)"
             _log(reason)
 
-            log_failure_diagnostics(reason, FAILURE_DIAGNOSTICS_TIMEOUT)
+            log_failure_diagnostics(reason)
             kill_driver_process_group(process)
             ray_stop()
             return DRIVER_STALLED_EXIT_CODE
@@ -1542,18 +1557,10 @@ def run_head(
             )
         if exit_code != 0:
 
-            log_failure_diagnostics(f"driver exit_code={exit_code} (head rank 0)", FAILURE_DIAGNOSTICS_TIMEOUT)
+            log_failure_diagnostics(f"driver exit_code={exit_code} (head rank 0)")
             ray_stop()
             return exit_code
-        timing_path = Path(driver_status_dir) / DRIVER_TIMING_FILENAME
-        if trainer_timing_uri is not None and timing_path.is_file():
-            try:
-                timing = json.loads(timing_path.read_text())
-                elapsed = timing["elapsed_excluding_eval_seconds"]
-                if math.isfinite(elapsed) and elapsed > 0:
-                    write_json(trainer_timing_uri, timing)
-            except Exception as error:
-                _log(f"Could not persist the trainer completion time: {error}")
+        publish_trainer_timing(Path(driver_status_dir), trainer_timing_uri)
     # Signal workers to unpark, then tear down.
     if args.rendezvous_dir and num_tasks > 1:
         write_head_result(args.rendezvous_dir, gang_epoch)
@@ -1606,7 +1613,7 @@ def run_worker(args: argparse.Namespace) -> int:
         _log(f"Worker rank {rank} received signal {signum}; stopping Ray.")
         # A SIGTERM on a worker node is often a k8s eviction/OOM of that node (it
         # hosts the training actors' GPUs); capture its disk/GPU state before reap.
-        log_failure_diagnostics(f"signal {signum} (worker rank {rank})", FAILURE_DIAGNOSTICS_TIMEOUT)
+        log_failure_diagnostics(f"signal {signum} (worker rank {rank})")
         stop.set()
 
     signal.signal(signal.SIGINT, _shutdown)

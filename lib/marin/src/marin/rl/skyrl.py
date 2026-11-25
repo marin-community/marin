@@ -1107,7 +1107,6 @@ def _launch_config_yaml(
             "rendezvous_dir": prefix_join(output.attempts_root, "rendezvous"),
             "rendezvous_timeout": 1800,
             "cluster_join_timeout": 1800,
-            "driver_progress_timeout": 9000,
         },
         "artifacts": {
             **asdict(output),

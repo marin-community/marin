@@ -12,6 +12,7 @@ from ray.util.queue import Queue
 from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
+from marinskyrl.driver_status import driver_progress_path
 
 from skyrl_train.evaluation_profiles import (
     additional_evaluation_metrics,
@@ -165,6 +166,7 @@ def eval_entrypoint(cfg: DictConfig, progress: Queue | None) -> dict:
 def run(cfg: DictConfig) -> None:
     validate_generation_driver_config(cfg)
     initialize_ray(cfg)
-    with workload_progress_queue() as progress:
-        metrics = workload_result(eval_entrypoint.remote(cfg, progress), progress)
+    with workload_progress_queue(driver_progress_path()) as progress:
+        result = eval_entrypoint.remote(cfg, progress.queue if progress else None)
+        metrics = workload_result(result, progress)
     logger.info(f"Metrics from eval only run: {metrics}")

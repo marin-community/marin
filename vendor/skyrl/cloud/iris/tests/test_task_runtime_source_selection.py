@@ -46,7 +46,7 @@ def test_head_returns_driver_abort_when_failure_diagnostics_block(tmp_path, monk
     diagnostics_started = threading.Event()
     release_diagnostics = threading.Event()
 
-    def block_diagnostics(reason):
+    def block_diagnostics(_reason):
         diagnostics_started.set()
         release_diagnostics.wait()
 
@@ -174,7 +174,9 @@ os.kill(os.getpid(), signal.SIGABRT)
     )
 
     assert exit_code == task_runtime.DRIVER_STALLED_EXIT_CODE
-    assert "TERMINATION ARTIFACT" in capfd.readouterr().out
+    output = capfd.readouterr().out
+    assert "worker still logging" in output
+    assert "diagnostic output" in output
 
 
 def test_head_keeps_a_quiet_driver_alive_while_work_advances(tmp_path, monkeypatch) -> None:

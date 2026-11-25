@@ -34,12 +34,13 @@ from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
 )
 from skyrl_train.entrypoints.workload_progress import (
+    DriverProgress,
+    poll_workload,
     report_to_driver,
     report_workload_progress,
-    wait_for_workload,
     workload_progress_queue,
 )
-from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME
+from marinskyrl.driver_status import DRIVER_TIMING_FILENAME, ELAPSED_EXCLUDING_EVAL, driver_progress_path
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
     parse_speculative_decoding_config,
@@ -95,10 +96,10 @@ class EntrypointSupervisor:
         if self._termination_signal is None:
             self._termination_signal = signum
 
-    def wait(self, entrypoint_ref: ray.ObjectRef, progress: Queue | None) -> int | None:
+    def wait(self, entrypoint_ref: ray.ObjectRef, progress: DriverProgress | None) -> int | None:
         """Relay progress until completion or return the exit code after termination."""
         while self._termination_signal is None:
-            if wait_for_workload(entrypoint_ref, progress):
+            if poll_workload(entrypoint_ref, progress):
                 return None
 
         signum = self._termination_signal
@@ -713,6 +714,15 @@ def skyrl_entrypoint(cfg: DictConfig, progress: Queue | None):
         return BasePPOExp(cfg).run()
 
 
+def save_trainer_timing(progress_path: Path | None, elapsed: float) -> None:
+    if progress_path is None:
+        return
+    try:
+        progress_path.with_name(DRIVER_TIMING_FILENAME).write_text(json.dumps({ELAPSED_EXCLUDING_EVAL: elapsed}))
+    except OSError:
+        logger.exception("Could not save trainer completion time")
+
+
 def run_ray_driver(
     cfg: DictConfig,
     entrypoint: RemoteFunction,
@@ -747,19 +757,14 @@ def run_ray_driver(
         exit_code = None
         failure: Exception | None = None
         try:
-            with workload_progress_queue() as progress:
-                result = entrypoint.remote(cfg, progress)
+            progress_path = driver_progress_path()
+            with workload_progress_queue(progress_path) as progress:
+                result = entrypoint.remote(cfg, progress.queue if progress else None)
                 exit_code = supervisor.wait(result, progress)
                 if exit_code is None:
                     elapsed_excluding_eval = ray.get(result)
                     if operation is EntrypointOperation.TRAIN:
-                        if progress_path := os.environ.get(DRIVER_PROGRESS_PATH_ENV):
-                            try:
-                                Path(progress_path).with_name(DRIVER_TIMING_FILENAME).write_text(
-                                    json.dumps({"elapsed_excluding_eval_seconds": elapsed_excluding_eval})
-                                )
-                            except OSError:
-                                logger.exception("Could not save trainer completion time")
+                        save_trainer_timing(progress_path, elapsed_excluding_eval)
                         logger.info("Training done!")
         except Exception as e:
             log_exception_as_text(failure_message, e)
