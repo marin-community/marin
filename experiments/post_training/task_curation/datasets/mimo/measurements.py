@@ -1,4 +1,4 @@
-# Copyright The Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Measure the repaired MiMo pin: text population, lexical scan, within-source dedup.
