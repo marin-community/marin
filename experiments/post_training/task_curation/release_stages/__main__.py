@@ -71,11 +71,19 @@ def _plan_document(args) -> ReleasePlan:
 
 
 def _attest_revision(args, plan: ReleasePlan) -> None:
-    """Validate and export the submitter-attested revision for the in-region bundle mode."""
+    """Validate and export the submitter-attested revision for the in-region bundle mode.
+
+    The bundle is a copied workspace without git: the containment (the plan tip
+    contains the plan's pinned revision) is the submitter's pre-submission
+    verification, and the guard verifies the attested revision is landed through the
+    bundled landing log. Where git is available (the local orchestration), the
+    containment is verified here as well.
+    """
     if getattr(args, "source_revision", None) is None:
         return
     revision = args.source_revision
     if plan.source_revision != revision:
+        import shutil  # noqa: PLC0415
         import subprocess  # noqa: PLC0415 — the local (git) validation path
 
         pinned = subprocess.run(
@@ -85,9 +93,10 @@ def _attest_revision(args, plan: ReleasePlan) -> None:
             text=True,
             check=False,
         )
-        if pinned.returncode != 0:
+        if pinned.returncode != 0 and shutil.which("git") is not None:
             raise ValueError(
-                f"the attested revision {revision} does not contain the plan's pinned revision {plan.source_revision}"
+                f"the attested revision {revision} does not contain the plan's pinned revision"
+                f" {plan.source_revision}"
             )
     os.environ[guard.ATTESTED_REVISION_ENV] = revision
 
