@@ -515,18 +515,13 @@ class _QueuedWrite:
 class _EvaluationWriter:
     """Commit durable writes on one thread while model calls and sandbox commands keep running.
 
-    The writes queued when the thread is free share one transaction, so concurrent attempts share
-    object-store round trips. Each caller returns once its own write is durable, and every queued
-    write is committed before the executor shuts down.
+    Each caller returns once its own write is durable, and every queued write commits before the executor shuts down.
     """
 
     store: DataStore
     executor: ThreadPoolExecutor
     queued: list[_QueuedWrite] = dataclasses.field(default_factory=list, init=False)
     lock: threading.Lock = dataclasses.field(default_factory=threading.Lock, init=False)
-
-    async def _run(self, operation: Callable[[], object]) -> None:
-        await _await_durable(asyncio.get_running_loop().run_in_executor(self.executor, operation))
 
     async def commit(self, write: Callable[[Transaction], object]) -> None:
         loop = asyncio.get_running_loop()
@@ -538,6 +533,7 @@ class _EvaluationWriter:
         await _await_durable(queued.durable)
 
     def _drain(self, loop: asyncio.AbstractEventLoop) -> None:
+        # Writes queued while the thread was busy share one transaction and its object-store round trips.
         with self.lock:
             batch = self.queued[:]
             self.queued.clear()
@@ -566,7 +562,7 @@ class _EvaluationWriter:
         await self.commit(lambda transaction: transaction.table(table).extend(rows))
 
     async def seal(self) -> None:
-        await self._run(self.store.seal)
+        await _await_durable(asyncio.get_running_loop().run_in_executor(self.executor, self.store.seal))
 
 
 def _resolve(durable: asyncio.Future[None], error: Exception | None) -> None:
@@ -578,7 +574,7 @@ def _resolve(durable: asyncio.Future[None], error: Exception | None) -> None:
         durable.set_exception(error)
 
 
-async def _await_durable(pending: asyncio.Future[Any]) -> None:
+async def _await_durable(pending: asyncio.Future[object]) -> None:
     try:
         await asyncio.shield(pending)
     except asyncio.CancelledError:
