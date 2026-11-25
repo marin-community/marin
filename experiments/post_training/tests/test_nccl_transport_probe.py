@@ -111,7 +111,7 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures(tmp_path, monkeypatch
             1,
             tmp_path,
             pynccl_init=True,
-            allow_full_world_nvls=allow,
+            allow_interhost_nvlink=allow,
         )
         return result["interconnect_verdict"]
 
@@ -123,6 +123,15 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures(tmp_path, monkeypatch
     assert verdict(True) == "missing_transport_evidence"
     streams[0] = [full, marker, socket]
     assert verdict(True) == "socket_transport"
+
+    remote = "NCCL INFO Channel 00/0 : {}[0] -> 4[0] via P2P/MNNVL/read"
+    streams[:] = [[remote.format(rank), marker] for rank in range(4)]
+    assert verdict(True) == "pass"
+    assert verdict(False) == "missing_transport_evidence"
+    streams[0] = [marker, remote.format(0)]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [remote.format(0).replace("4[0]", "1[0]"), marker]
+    assert verdict(True) == "missing_transport_evidence"
 
 
 def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
