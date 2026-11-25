@@ -1515,3 +1515,39 @@ async def test_native_script_judge_uses_the_trial_guest_relay(tmp_path, monkeypa
     assert [spec.network for spec in machines.specifications] == [NetworkPolicy.ALLOW]
     assert all(machine.closed and "host-only-key" not in machine.env.values() for machine in machines.machines)
     assert (directory / "task-spec.json").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_trusted_judge_uses_framework_python_when_path_selects_an_incomplete_environment(tmp_path, monkeypatch):
+    """Honor the selected executable at the machine boundary instead of rewriting it."""
+    shadow = tmp_path / 'unrelated-python'
+    shadow.mkdir()
+    executable = shadow / 'python3'
+    executable.write_text('#!/bin/sh\necho "No taskcompendium in PATH-selected Python" >&2\nexit 86\n')
+    executable.chmod(0o755)
+    create = Machines.create
+
+    async def create_with_real_program_selection(factory, spec):
+        machine = await create(factory, spec)
+        original_run = machine.run
+
+        async def run(command):
+            if 'taskcompendium.harbor.in_process' not in command.argv:
+                return await original_run(command)
+            arguments = machine.local_arguments(command.argv)
+            arguments[0] = command.argv[0]
+            environment = {**os.environ, **machine.env, **command.env, 'PATH': str(shadow)}
+            process = await asyncio.create_subprocess_exec(
+                *arguments, cwd=machine.local(command.cwd or machine.workdir), env=environment,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
+
+        machine.run = run
+        return machine
+
+    monkeypatch.setattr(Machines, 'create', create_with_real_program_selection)
+    await test_converted_judge_task_preserves_contract_through_production_trial(
+        tmp_path, monkeypatch, 'language-mixing', 1.0, 'task-spec-chat'
+    )

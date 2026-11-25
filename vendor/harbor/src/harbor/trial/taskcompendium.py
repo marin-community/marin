@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sys
 import time
 from tempfile import TemporaryDirectory
@@ -806,10 +807,12 @@ class TaskSpecTrial(Trial):
             and not any(parent in directories for parent in path.parents)
         )
         image = HostImage(read_only=roots, bin_dirs=(Path(sys.executable).parent,))
+        framework_env = {"PYTHONPATH": os.pathsep.join(path for path in sys.path if path)}
         env = (
-            {}
+            framework_env
             if connection is None
             else {
+                **framework_env,
                 BASE_URL_ENV: connection.base_url,
                 API_KEY_ENV: connection.api_key,
                 MODEL_ENV: connection.default_model,
@@ -846,7 +849,7 @@ class TaskSpecTrial(Trial):
                 conversation.write_text(self.attempt.conversation.model_dump_json())
                 await machine.upload(conversation, "/tests/conversation.json")
                 command = [
-                    "python3",
+                    sys.executable,
                     "-m",
                     "taskcompendium.harbor.in_process",
                     "--task",

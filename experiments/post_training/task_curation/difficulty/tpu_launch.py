@@ -28,6 +28,8 @@ def source_digest() -> str:
             *Path("experiments/post_training/task_curation/difficulty").glob("*.py"),
             *Path("experiments/post_training/task_curation").glob("difficulty_*.py"),
             *Path("lib/marin/src/marin/inference").glob("*.py"),
+            *Path("vendor/harbor/src/harbor/trial").glob("*.py"),
+            *Path("lib/taskcompendium/src/taskcompendium/harbor").glob("*.py"),
             Path("config/external/vllm/tpu.toml"),
             Path("scripts/ops/difficulty_failure_watch.py"),
         }

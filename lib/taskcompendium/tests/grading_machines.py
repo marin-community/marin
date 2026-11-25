@@ -93,9 +93,10 @@ class LocalGradingMachine:
             return EXITED
         argv = self.local_arguments(command.argv)
         env = {**os.environ, **self.env, **command.env}
-        if program == "python3":
-            argv[0] = self.python or sys.executable
-            if self.python is None:
+        framework_python = program == sys.executable
+        if program == "python3" or framework_python:
+            argv[0] = program if framework_python else self.python or sys.executable
+            if framework_python or self.python is None:
                 env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
             if SPEC_PATH in command.argv:
                 spec_path = self.local(SPEC_PATH)
