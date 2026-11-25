@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
@@ -24,6 +25,13 @@ class ResolvedPolicyEvaluation:
     context: int
     max_output: int | None
     seed: int | None
+
+    @property
+    def selection(self) -> EvaluationSelection:
+        """The catalog selection this candidate runs, with every policy setting applied."""
+        selection = self.evaluation.selection
+        run = selection.run.model_copy(update={"max_tokens": self.max_output, "seed": self.seed})
+        return selection.model_copy(update={"run": run})
 
     def __post_init__(self) -> None:
         if self.context > self.candidate.max_context:
@@ -54,7 +62,7 @@ class BenchmarkWindow:
 def benchmark_window(evaluation: PolicyEvaluation, candidate: PolicyCandidate) -> BenchmarkWindow | None:
     """Return the benchmark's agent input limit or protocol window, if declared."""
     dataset = selection_dataset(evaluation.selection, prompt_format(candidate.model))
-    if dataset.agent is not None:
+    if dataset.agent is not None and dataset.agent.max_input_tokens is not None:
         return BenchmarkWindow(tokens=dataset.agent.max_input_tokens, cap=True)
     if dataset.protocol.context_window is not None:
         return BenchmarkWindow(tokens=dataset.protocol.context_window, cap=False)
@@ -82,16 +90,24 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
             context = context if override.context is None else override.context
             max_output = max_output if override.max_output is None else override.max_output
         window = benchmark_window(evaluation, candidate)
-        if window is not None and not window.cap and window.tokens > candidate.max_context:
-            raise ValueError(
-                f"{candidate.name} on {evaluation.name}: the benchmark's window {window.tokens} is larger than "
-                f"the candidate's window {candidate.max_context}; exclude it"
-            )
+        if window is not None:
+            # A benchmark that declares its window runs on the candidate's served window, not one sized for it.
+            served = min(candidate.max_context, candidate.model.serve.max_model_len or candidate.max_context)
+            if not window.cap and window.tokens > served:
+                raise ValueError(
+                    f"{candidate.name} on {evaluation.name}: the benchmark's window {window.tokens} is larger than "
+                    f"the candidate's served window {served}; exclude it"
+                )
         if context is None:
             context = policy.context if window is None else window.tokens
         elif window is not None and (context > window.tokens if window.cap else context != window.tokens):
             limit = "above the agent input limit" if window.cap else "not the window"
             raise ValueError(f"{candidate.name} on {evaluation.name}: context {context} is {limit} {window.tokens}")
+        if window is not None and context > served:
+            raise ValueError(
+                f"{candidate.name} on {evaluation.name}: context {context} is larger than the candidate's served "
+                f"window {served}; add an override"
+            )
         resolved.append(
             ResolvedPolicyEvaluation(
                 candidate=candidate,

@@ -58,7 +58,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
-    selection = item.evaluation.selection
+    selection = item.selection
     config = evaluation_dataset(item)
     protocol = config.protocol
     sampling = protocol.sampling

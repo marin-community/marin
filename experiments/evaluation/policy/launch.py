@@ -6,7 +6,6 @@
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 
-from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import prompt_format
 from marin.evaluation.serving_config import resolved_serve_config
@@ -23,7 +22,8 @@ class ServerGroup:
     """Evaluations that share one server, whose ``max_model_len`` is ``window``.
 
     Agent and single-turn evaluations never share a server: agent runs serve the model's resolved
-    serving config, which is part of every run's identity.
+    serving config, which is part of every run's identity. Evaluations whose judges need different keys
+    never share one either, since a launch hands its judges one key.
     """
 
     window: int
@@ -54,6 +54,22 @@ def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
     return served
 
 
+def _judge_key(item: ResolvedPolicyEvaluation) -> tuple[str, ...] | None:
+    judge = item.evaluation.judge
+    return None if judge is None else judge.api_key
+
+
+def _by_judge_key(members: list[ResolvedPolicyEvaluation]) -> list[list[ResolvedPolicyEvaluation]]:
+    """Split evaluations so each part's judges share one key; evaluations without a judge join the first part."""
+    keyed: dict[tuple[str, ...], list[ResolvedPolicyEvaluation]] = {}
+    for item in members:
+        if (key := _judge_key(item)) is not None:
+            keyed.setdefault(key, []).append(item)
+    parts = list(keyed.values()) or [[]]
+    parts[0] = [item for item in members if _judge_key(item) is None or item in parts[0]]
+    return parts
+
+
 def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | None) -> tuple[ServerGroup, ...]:
     """Group evaluations by the server window they need, keeping agent and single-turn runs apart.
 
@@ -64,16 +80,10 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | Non
         agentic = runs_agent(resolve_selection(item.evaluation.selection, prompt_format(item.candidate.model)))
         groups.setdefault((_server_window(item, served), agentic), []).append(item)
     return tuple(
-        ServerGroup(window=window, agentic=agentic, evaluations=tuple(members))
+        ServerGroup(window=window, agentic=agentic, evaluations=tuple(part))
         for (window, agentic), members in groups.items()
+        for part in _by_judge_key(members)
     )
-
-
-def policy_selection(item: ResolvedPolicyEvaluation) -> EvaluationSelection:
-    """The catalog selection with the policy's output limit and seed applied to its run settings."""
-    selection = item.evaluation.selection
-    run = selection.run.model_copy(update={"max_tokens": item.max_output, "seed": item.seed})
-    return selection.model_copy(update={"run": run})
 
 
 def launch_specs(
@@ -108,7 +118,7 @@ def launch_specs(
         specs.append(
             LaunchSpec(
                 model=model,
-                evals=tuple(policy_selection(item) for item in group.evaluations),
+                evals=tuple(item.selection for item in group.evaluations),
                 platform=default_platform(model),
                 accelerator=None,
                 limit=limit,

@@ -13,7 +13,7 @@ October.
 from evalrecords.records import PromptFormat, TaskImageBuild, TaskMachineSettings
 
 from experiments.evaluation.benchmarks.agentic import CAMPAIGN_PROTOCOL
-from experiments.evaluation.evals import JUDGES
+from experiments.evaluation.judges import JUDGES
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 
