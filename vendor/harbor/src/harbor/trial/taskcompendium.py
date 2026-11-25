@@ -4,6 +4,7 @@
 """Execute original TaskSpecs within Harbor's trial lifecycle and verdict contract."""
 
 import asyncio
+import importlib.metadata
 import hashlib
 import json
 import os
@@ -800,6 +801,15 @@ class TaskSpecTrial(Trial):
         directories = {
             Path(path).resolve() for path in (sys.prefix, sys.base_prefix, *sys.path) if path and Path(path).is_dir()
         }
+        # Iris installs wheel files as symlinks into its uv archive cache. Mount
+        # each distribution's resolved archive, rather than the whole cache.
+        for distribution in importlib.metadata.distributions():
+            metadata = next(
+                (path for path in distribution.files or () if path.name == "METADATA" and path.parent.suffix == ".dist-info"),
+                None,
+            )
+            if metadata is not None:
+                directories.add(Path(distribution.locate_file(metadata)).resolve().parent.parent)
         roots = tuple(
             path
             for path in sorted(directories)

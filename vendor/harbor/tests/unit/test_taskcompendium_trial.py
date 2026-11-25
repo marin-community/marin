@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import importlib.metadata
 import json
 import inspect
 import shutil
@@ -1551,3 +1552,32 @@ async def test_trusted_judge_uses_framework_python_when_path_selects_an_incomple
     await test_converted_judge_task_preserves_contract_through_production_trial(
         tmp_path, monkeypatch, 'language-mixing', 1.0, 'task-spec-chat'
     )
+
+
+@pytest.mark.asyncio
+async def test_trusted_judge_exposes_symlinked_wheel_archive_without_mounting_the_cache(tmp_path, monkeypatch):
+    archive = tmp_path / 'uv-cache' / 'archive-v0' / 'wheel-id'
+    metadata = archive / 'example-1.0.dist-info'
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text('Name: example\nVersion: 1.0\n')
+    (metadata / 'RECORD').write_text('example-1.0.dist-info/METADATA,,\nexample-1.0.dist-info/RECORD,,\n')
+    installed = tmp_path / 'venv' / 'site-packages' / metadata.name
+    installed.mkdir(parents=True)
+    for name in ('METADATA', 'RECORD'):
+        (installed / name).symlink_to(metadata / name)
+    distribution = importlib.metadata.PathDistribution(installed)
+    monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [distribution])
+    create = Machines.create
+    mounted = []
+
+    async def record_mounts(factory, spec):
+        mounted.extend(getattr(spec.source, 'read_only', ()))
+        return await create(factory, spec)
+
+    monkeypatch.setattr(Machines, 'create', record_mounts)
+    await test_converted_judge_task_preserves_contract_through_production_trial(
+        tmp_path, monkeypatch, 'language-mixing', 1.0, 'task-spec-chat'
+    )
+    assert archive in mounted
+    assert archive.parent not in mounted
+    assert archive.parent.parent not in mounted
