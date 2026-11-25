@@ -89,8 +89,14 @@ async def _grade_rollout(
     judge = judge_connection(spec) if grades_with_judge(grader) else None
     if isinstance(placement, AgentMachine):
         assert machine is not None
+        assert spec.task_machine is not None
         return await grade_in_agent_machine(
-            task, attempt, _verifier_view(machine), timeout=spec.limits.verifier_timeout, judge_connection=judge
+            task,
+            attempt,
+            _verifier_view(machine),
+            timeout=spec.limits.verifier_timeout,
+            judge_connection=judge,
+            backend=spec.task_machine.backend,
         )
     assert isinstance(placement, GraderMachine)
     selection = spec.verifier_machine

@@ -583,7 +583,9 @@ def _grading_env(
     return env
 
 
-def _relay_script_judge(machine: Machine, connection: JudgeConnection | None) -> AbstractAsyncContextManager[None]:
+def _relay_script_judge(
+    machine: Machine, connection: JudgeConnection | None, grader: ScriptGrader | VerifyitGrader
+) -> AbstractAsyncContextManager[None]:
     if connection is None:
         return nullcontext()
     return forward_http_posts(
@@ -592,7 +594,11 @@ def _relay_script_judge(machine: Machine, connection: JudgeConnection | None) ->
         upstream=connection.base_url,
         routes=JUDGE_RELAY_ROUTES,
         headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
-        timeout=JUDGE_RELAY_REQUEST_TIMEOUT,
+        timeout=(
+            grader.judge.request_timeout
+            if isinstance(grader, ScriptGrader) and grader.judge is not None
+            else JUDGE_RELAY_REQUEST_TIMEOUT
+        ),
     )
 
 
@@ -603,6 +609,7 @@ async def grade_in_agent_machine(
     *,
     timeout: float | None = None,
     judge_connection: JudgeConnection | None = None,
+    backend: str,
 ) -> GradeResult:
     """Grade with an ``AgentMachine`` placement in the agent's machine, after its harness has returned.
 
@@ -618,7 +625,17 @@ async def grade_in_agent_machine(
     answers = _answer_files(task, attempt, grading)
     if isinstance(answers, GradeResult):
         return answers
-    env = _grading_env(grading, attempt, judge_connection)
+    relay_connection = (
+        judge_connection
+        if backend == Backend.DAYTONA and isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None
+        else None
+    )
+    guest_connection = (
+        replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+        if relay_connection is not None
+        else judge_connection
+    )
+    env = _grading_env(grading, attempt, guest_connection)
     try:
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             archive_path = Path(directory) / "grading.tar"
@@ -641,7 +658,8 @@ async def grade_in_agent_machine(
             )
             await _install_grading_archive(task_machine, archive_path, grading.limit, ROOT)
         await _prepare_reward_files(task_machine, grading, grading.limit)
-        return await _staged_reward(task_machine, grading, env)
+        async with _relay_script_judge(task_machine, relay_connection, grading.grader):
+            return await _staged_reward(task_machine, grading, env)
     except _StepFailed as failure:
         return failure.result
 
@@ -748,7 +766,7 @@ async def _grade_staged(
                 prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
             try:
-                async with _relay_script_judge(machine, relay_connection):
+                async with _relay_script_judge(machine, relay_connection, grading.grader):
                     setup_seconds = time.monotonic() - setup_started
                     result = await _grade_on(
                         machine,

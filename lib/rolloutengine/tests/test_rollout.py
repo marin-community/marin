@@ -4418,3 +4418,28 @@ async def test_supplied_verifier_remains_caller_owned(fails):
     finally:
         for machine in borrowed:
             await machine.close()
+
+
+@pytest.mark.parametrize("error", [TimeoutError, ContextWindowExceeded, ConnectionError])
+@pytest.mark.parametrize("sampled", [False, True])
+async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays_unavailable(error, sampled):
+    async def agent(context, complete):
+        await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
+        if sampled:
+            await complete(Prompt(({"role": "user", "content": "Working"},), {}))
+        raise error("Agent stopped")
+
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE)
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(
+            ReplayModel([{"role": "assistant", "content": "Working"}]),
+            {"local": FixtureImageFactory()},
+            harnesses={"agent": AgentHarness(agent)},
+        ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
+    result = caught.value
+    assert result.operation == (RolloutOperation.ADVANCE if sampled else RolloutOperation.PREPARE)
+    assert (result.grade.status, result.grade.reward) == (
+        (Outcome.GRADED, 1.0)
+        if sampled and error in (TimeoutError, ContextWindowExceeded)
+        else (Outcome.UNAVAILABLE, None)
+    )

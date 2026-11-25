@@ -14,7 +14,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS, PREPARED_INPUTS_VERSION, micro210_step, run_micro210
+from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_step, run_micro210
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
@@ -99,7 +99,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     submitted = []
 
     def resolve_key(spec):
-        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
+        assert spec == (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",
+        )
         return SimpleNamespace(value="test-together-key")
 
     monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
@@ -117,7 +120,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     run_micro210(config)
     launch = submitted[0]
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
-    assert launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] == "zai-org/GLM-5.3-Flash"
+    assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
@@ -125,10 +128,16 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
-    assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
+    assert launch["skyrl"]["generator"]["error_handling"] == {
+        "enable_error_classification": True,
+        "default_error_treatment": "mask",
+        "passthrough_exceptions": ["ContextLengthExceededError", "AgentTimeoutError"],
+    }
+    assert "terminal_bench" not in submitted[0]["skyrl"]
+    assert launch["skyrl"]["entrypoint"] == "generate"
     assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
-    altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
+    altered["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.1
     submitted.clear()
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
@@ -187,10 +196,11 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
         name="fixture/new-policy",
         version="2026.11.20",
     )
-    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    native = next(dep for dep in step.deps if dep.name == "evaluation/micro210/native")
+    prepared = native.deps[0]
     run(prepared)
     old_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / previous_version))
-    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / "2026.11.23"))
     assert old_record.source == str(old_inputs)
     assert old_record.config == {"sha256": previous_digest}
     assert new_record.source == str(new_inputs)
@@ -203,6 +213,7 @@ def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
         name="fixture/prepared-source",
         version="2026.11.20",
     )
-    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    native = next(dep for dep in step.deps if dep.name == "evaluation/micro210/native")
+    prepared = native.deps[0]
     assert prepared.adopt_source == PREPARED_INPUTS
     assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)

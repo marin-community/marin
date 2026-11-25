@@ -455,3 +455,32 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
+
+## Micro210 native evaluation
+
+`experiments.evaluation.micro210` binds the sealed Micro210 policy at
+`open-athena/micro210-policy@7ab57cf5e33cacc98440bfcc2dfd452b94c44344`
+and prepared tasks at
+`open-athena/micro210-prepared-tasks@2d33d7be129e6a93bb4279af8a4998a6915771a9`.
+The sealed table contains 434 rows. The policy's historical selection lists 440;
+its `task_changes` records the six dropped attempts and the HumanEval replacement.
+
+The graph verifies the prepared Parquet digest and derives a native table without
+changing row order, repetitions, prompts, or task membership. Package resources
+become native Pi tasks with their own CPU, memory, disk, network, and verifier
+limits. `binding.json` records the source and derived table digests and image pins.
+The launch uses a generation plan and retains the policy's vLLM startup settings.
+Context overflow and agent timeout retain the verifier verdict; unnamed errors
+are excluded from scored denominators.
+
+Forward `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` when submitting from a host
+with access to the pinned secrets. The coordinator uses the forwarded Together
+key before trying the policy's GCP secret reference. Judge credentials are passed
+at runtime. BixBench's verifier uses the machine-local judge relay after Pi stops.
+
+For a diagnostic smoke, use the production command with row and engine scale
+options, for example `--smoke-row 0 --smoke-row 1 --smoke-row 12 --smoke-engines 1`.
+These select CRUXEval, BixBench, and BFCL from the sealed table. All other task,
+sampling, timeout, and serving settings remain those of the production protocol.
+The evaluation record identifies smoke rows; a smoke is not a full Micro210 score.
+Use a fresh calendar version for each runtime change.

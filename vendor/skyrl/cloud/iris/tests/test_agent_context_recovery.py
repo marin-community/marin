@@ -265,3 +265,40 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
         assert machines.creations == 2
     finally:
         await worker.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error,scored", [(ContextWindowExceeded, True), (TimeoutError, True), (RuntimeError, False)])
+async def test_micro210_native_error_policy_preserves_verdict_and_excludes_unnamed_errors(
+    agent_harnesses, worker_config, error, scored
+):
+    worker_config.error_handling = {
+        "enable_error_classification": True,
+        "default_error_treatment": "mask",
+        "passthrough_exceptions": ["ContextLengthExceededError", "AgentTimeoutError"],
+    }
+
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": "Start"},), {}))
+        raise error("Agent stopped")
+
+    task = text_task().model_copy(update={
+        "environment_requirements": SHELL_ENVIRONMENT,
+        "answer_type": AnswerType.WORKSPACE_STATE,
+        "grader": ScriptGrader(
+            argv=("sh", "-c", "echo 0.5"), cwd="/workspace", answer_path=None, placement=AgentMachine()
+        ),
+    })
+    request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
+    worker = TaskRolloutWorker(
+        worker_config, WholeTaskProjection(worker_config, WorkerTokenizer()), ScriptedClient([sampled_reply()]),
+        {"shellsim": ShellSimMachineFactory()}, agents=agent_harnesses(agent), agent_max_retries=0, shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [result])
+    finally:
+        await worker.shutdown()
+    assert batch["exclude_from_baseline"] == [not scored]
+    assert batch.get("unshaped_reward_available", [True]) == [scored]
+    assert batch["unshaped_rewards"] == [0.5 if scored else 0.0]
