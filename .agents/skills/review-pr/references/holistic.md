@@ -58,8 +58,9 @@ instructions and the text of [design review](design.md) from the same rubric
 revision you used. It forms its own judgment from the code and returns
 findings while you check the implementation. Keep proposed verdicts and
 prior review comments out of its inputs. The main reviewer owns all
-posting and telemetry. If independent review is unavailable, work through
-the design review yourself before the implementation audit.
+posting and telemetry. If the runtime cannot start an independent reviewer,
+work through the design review before the implementation audit and record
+the missing independent pass under evidence and limits.
 
 Verify the returned claims against the callers, reconcile them with the
 implementation findings, and lead with the decision that most needs the

@@ -130,7 +130,7 @@ shared_prompt: |-
 
   ### Self-evaluation
 
-  - **Investigate before suppressing.** When context could settle a concern, trace a real use. Emit findings supported by the code and suppress those that remain speculative.
+  - **Precision over recall.** A reviewer who sees a false positive once trusts the tool less. When uncertain, suppress.
   - **Calibration.** If you wouldn't bet $1 on a finding being valid, score it below 0.7.
   - **Stay in scope.** Only the rules in your lane. Don't moonlight as a security / perf / style reviewer for things outside the catalog, or as another lane. The meta lane is the one exception on *diff* scope — it may read the whole change and beyond — but it still emits only meta codes.
   - **Anchor in real shapes.** A reader at the cited line should immediately see why you flagged it. If you're reaching, suppress.
@@ -287,6 +287,8 @@ lanes:
       spans files, lives in an unchanged file, or is a property of the whole change.
     - **Start at a consumer.** Work out what it needs before assessing the shape
       the diff gives it. Even a small change can alter a widely used contract.
+      When context could settle a design concern, trace a real use before
+      deciding whether to report it.
 
     These rules are higher-judgment than the local lanes; lean hard on each rule's
     confidence floor and its suppressors, and where a rule says so, phrase the finding
