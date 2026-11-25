@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from marin.datakit.chat_normalize import normalize_chat_record
+from marin.datakit.chat_normalize import _normalize_chat_record
 from marin.datakit.download import massive, openthoughts4_code
 from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
@@ -37,7 +37,7 @@ def test_terminal_empty_commands_preserve_wait_and_observation(adapter, completi
         ]
     }
     [document] = adapter(row)
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     messages = normalized["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
     assert messages[0]["content"] == [
@@ -74,7 +74,7 @@ def test_agenttrove_merges_completion_and_handoff_prompts() -> None:
         ]
     }
     [document] = agenttrove_row_to_chat_doc(row)
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     user_turns = [message for message in normalized["messages"] if message["role"] == "user"]
     assert user_turns[-1]["content"] == [
         {"type": "text", "text": "Confirm task completion.\n\nSummarize the work for the next agent."}
@@ -94,7 +94,7 @@ def test_agenttrove_unwraps_command_json_inside_think_tokens() -> None:
         ]
     }
     [document] = agenttrove_row_to_chat_doc(row)
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     assistant = [message for message in normalized["messages"] if message["role"] == "assistant"]
     assert [message["channel"] for message in assistant] == ["final", "final"]
     assert json.loads(assistant[0]["content"][0]["text"])["commands"] == [{"keystrokes": "ls\n"}]
@@ -112,7 +112,7 @@ def test_agenttrove_merges_terminal_output_with_user_followup() -> None:
         ]
     }
     [document] = agenttrove_row_to_chat_doc(row)
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     turns = [
         (message["role"], message["content"][0]["text"])
         for message in normalized["messages"]
@@ -434,7 +434,7 @@ def test_chat_preserves_source_id_through_parquet_normalization(adapter, schema,
     processed_path = tmp_path / "processed.parquet"
     pq.write_table(pa.Table.from_pylist([source], schema=schema), processed_path)
     [processed] = pq.read_table(processed_path).to_pylist()
-    normalized = normalize_chat_record(processed, "messages", "id")
+    normalized = _normalize_chat_record(processed, "messages", "id")
     output_path = tmp_path / "normalized.parquet"
     pq.write_table(pa.Table.from_pylist([normalized], schema=schema), output_path)
     [result] = pq.read_table(output_path).to_pylist()

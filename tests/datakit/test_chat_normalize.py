@@ -13,7 +13,7 @@ from marin.datakit.chat_normalize import (
     ChatChannel,
     ChatSourceData,
     ConvertedChatData,
-    normalize_chat_record,
+    _normalize_chat_record,
     normalize_chat_source,
     normalize_chat_to_parquet,
     validate_chat_messages,
@@ -76,9 +76,9 @@ def test_normalization_preserves_native_harmony_channels_without_interpreting_te
         ),
     ]
     record = {"messages": [message.to_dict() for message in messages]}
-    normalized = normalize_chat_record(record, "messages", "id")
+    normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
-    assert normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
+    assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
 
 
 @pytest.mark.parametrize(
@@ -95,7 +95,7 @@ def test_normalization_derives_conversation_mode_from_analysis(analysis, expecte
         "chat_template_kwargs": {"enable_thinking": not expected_mode},
     }
 
-    normalized = normalize_chat_record(record, "messages", "id")
+    normalized = _normalize_chat_record(record, "messages", "id")
 
     assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is expected_mode
     assert expected_instruction in render_chat_record(normalized)["text"]
@@ -103,7 +103,7 @@ def test_normalization_derives_conversation_mode_from_analysis(analysis, expecte
 
 def test_normalization_rejects_legacy_source_turns():
     with pytest.raises(ValueError, match="Source adapters must emit Harmony"):
-        normalize_chat_record(
+        _normalize_chat_record(
             {"messages": [{"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"}]},
             "messages",
             "id",
@@ -118,7 +118,7 @@ def test_chat_identity_includes_tool_definitions():
         .with_recipient("functions.run"),
     ]
     ids = [
-        normalize_chat_record(
+        _normalize_chat_record(
             {
                 "messages": [message.to_dict() for message in messages],
                 "chat_template_kwargs": {
@@ -148,11 +148,11 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
     final = Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL)
     record = {"messages": [message.to_dict() for message in [user, call, observation, final]]}
     with pytest.raises(ValueError, match="no explicit definition"):
-        normalize_chat_record(record, "messages", "id")
+        _normalize_chat_record(record, "messages", "id")
     record["chat_template_kwargs"] = {
         "tools": [{"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}]
     }
-    normalized = normalize_chat_record(record, "messages", "id")
+    normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
     assert json.loads(normalized["chat_template_kwargs"])["tools"][0]["name"] == "read"
     with pytest.raises(ValueError, match="observation"):
@@ -264,7 +264,7 @@ def test_tool_call_repetition_requires_unchanged_feedback_and_sequential_calls(r
         "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
     }
 
-    assert normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
+    assert _normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
 
 
 @pytest.mark.parametrize(
@@ -445,6 +445,6 @@ def test_normalization_retains_source_provenance_across_repeated_normalization(s
     }
     if source_id is not None:
         record["source_id"] = source_id
-    normalized = normalize_chat_record(record, "messages", "id")
+    normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["source_id"] == (source_id or "intermediate-content-hash")
-    assert normalize_chat_record(normalized, "messages", "id")["source_id"] == normalized["source_id"]
+    assert _normalize_chat_record(normalized, "messages", "id")["source_id"] == normalized["source_id"]

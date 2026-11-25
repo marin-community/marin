@@ -4,7 +4,7 @@
 import json
 
 import pytest
-from marin.datakit.chat_normalize import normalize_chat_record, validate_chat_messages
+from marin.datakit.chat_normalize import _normalize_chat_record, validate_chat_messages
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.penfever_rollouts import PenfeverRollout, row_to_chat_doc
@@ -90,7 +90,7 @@ def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
         "task_complete": True,
     }
     assert "chat_template_kwargs" not in document
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is True
     rendered = render_chat_record(normalized)["text"]
     assert "Respond with JSON containing analysis, plan, commands, and task_complete." in rendered
@@ -131,7 +131,7 @@ def test_terminal_protocol_without_thinking_keeps_thinking_disabled():
             ]
         }
     )
-    normalized = normalize_chat_record(document, "messages", "id")
+    normalized = _normalize_chat_record(document, "messages", "id")
     assert [message["channel"] for message in normalized["messages"] if message["role"] == "assistant"] == ["final"]
     assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is False
 

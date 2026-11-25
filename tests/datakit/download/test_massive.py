@@ -8,7 +8,7 @@ import json
 import tarfile
 
 import pyarrow.parquet as pq
-from marin.datakit.chat_normalize import normalize_chat_record
+from marin.datakit.chat_normalize import _normalize_chat_record
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
@@ -65,7 +65,7 @@ def test_row_to_doc_renders_full_training_document():
 
 def test_massive_normalizes_to_harmony_function_call():
     [source] = row_to_chat_doc(_row("alarm_set"))
-    doc = normalize_chat_record(source, "messages", "id")
+    doc = _normalize_chat_record(source, "messages", "id")
     call = doc["messages"][-1]
     assert call["recipient"] == "functions.alarm_set"
     assert call["channel"] == "commentary"
