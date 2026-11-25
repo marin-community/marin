@@ -268,6 +268,7 @@ Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GP
 fraction. The other presets use 0.75.
 To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
 JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
+Use `--set generator.speculative_decoding.num_speculative_tokens=N` to sweep proposal count.
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
 compatible draft. Online draft training remains EAGLE3-only.
 
