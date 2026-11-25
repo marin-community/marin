@@ -4,6 +4,7 @@
 """Audit fixed evaluation cohorts with SkyRL's exact FTPO tail-loop detector."""
 
 import argparse
+import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -162,17 +163,21 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="JSON output URI; Markdown is written beside it")
     args = parser.parse_args()
     configure_coreweave_s3()
-    manifest = json.loads(StoragePath(args.manifest).read_text())
+    manifest_payload = StoragePath(args.manifest).read_bytes()
+    manifest = json.loads(manifest_payload)
     baseline = json.loads(StoragePath(args.baseline).read_text()) if args.baseline else None
     results = {}
     hashes = {}
     statuses = {}
     reserves = dict(item.split("=", 1) for item in args.reserve_input)
+    reserve_sources = reserves.copy()
+    input_sources = {}
     cached_rows = {}
     for item in args.input:
         name, pattern = item.split("=", 1)
         if name in results:
             raise ValueError(f"duplicate input for {name}")
+        input_sources[name] = pattern
         if pattern not in cached_rows:
             cached_rows[pattern] = list(read_rows(pattern))
         reserve_rows = read_rows(reserves.pop(name)) if name in reserves else None
@@ -191,7 +196,8 @@ def main() -> None:
     if reserves:
         raise ValueError(f"reserve inputs without initial inputs: {sorted(reserves)}")
     document = {
-        "manifest": args.manifest, "baseline": args.baseline,
+        "manifest": args.manifest, "manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+        "baseline": args.baseline, "inputs": input_sources, "reserve_inputs": reserve_sources,
         "cohort_hashes": hashes, "domains": results, "target_status": statuses,
     }
     StoragePath(args.output).write_text(json.dumps(document, indent=2) + "\n")
