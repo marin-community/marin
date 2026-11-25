@@ -3,9 +3,9 @@
 
 """Score a Nemotron Ultra Reasoning Gym reply with the pinned scorer and targeted repairs.
 
-The candidate is the final answer's last ``<answer>`` block, else its last boxed answer, else the whole
-final answer. The grader packages' ``reasoning_gym`` scores it against the row's question, answer and
-metadata; the metadata's ``source_dataset`` names the task.
+The candidate is the final answer's last ``<answer>`` block, last boxed answer, or last Markdown answer
+section, in that order. Otherwise the final answer text is used. The grader packages' ``reasoning_gym``
+scores it against the row's question, answer and metadata; the metadata's ``source_dataset`` names the task.
 """
 
 import contextlib
