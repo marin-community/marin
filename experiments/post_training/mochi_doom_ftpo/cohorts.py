@@ -4,7 +4,6 @@
 """Freeze Mochi FTPO cohorts and disjoint training pools on an in-region CPU worker."""
 
 import argparse
-import hashlib
 import json
 import logging
 from collections import Counter, defaultdict
@@ -19,6 +18,7 @@ import pyarrow.parquet as pq
 from finestore.rl.strata import MembershipState, SelectionDefinition, TaskStrata
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe.cohort_identity import cohort_hash, prompt_hash
 from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, RawRow
@@ -61,10 +61,6 @@ class Candidate:
     prompt_hash: str
     original_validation: bool = False
     source_priority: int = 0
-
-
-def token_hash(token_ids: list[int]) -> str:
-    return hashlib.sha256(json.dumps(token_ids, separators=(",", ":")).encode()).hexdigest()
 
 
 def prompt_tokens(task: TaskSpec, tokenizer: PreTrainedTokenizerBase) -> list[int]:
@@ -226,7 +222,7 @@ def main() -> None:
         for row in read_parquet(uri, ["task_spec"]):
             task = TaskSpec.model_validate_json(row["task_spec"])
             excluded_ids.add(task.id)
-            excluded_hashes.add(token_hash(prompt_tokens(task, tokenizer)))
+            excluded_hashes.add(prompt_hash(prompt_tokens(task, tokenizer)))
     candidates = []
     counts = Counter()
     seen = set()
@@ -239,7 +235,7 @@ def main() -> None:
         if len(tokens) > 2048:
             counts[f"{domain}/over2048"] += 1
             return
-        digest = token_hash(tokens)
+        digest = prompt_hash(tokens)
         if task.id in excluded_ids or digest in excluded_hashes:
             counts[f"{domain}/excluded"] += 1
             return
@@ -294,7 +290,7 @@ def main() -> None:
             "reserve": reserve,
             "budget": budget,
             "max_period_tokens": budget // 8,
-            "cohort_hash": hashlib.sha256("".join(sorted(row["prompt_hash"] for row in rows)).encode()).hexdigest(),
+            "cohort_hash": cohort_hash(row["prompt_hash"] for row in rows),
         }
     (StoragePath(args.output) / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     logger.info(

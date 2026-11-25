@@ -4,7 +4,6 @@
 """Audit fixed evaluation cohorts with SkyRL's exact FTPO tail-loop detector."""
 
 import argparse
-import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -15,9 +14,9 @@ import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from skyrl_train.config.reward_shaping import LoopCreditConfig
-from skyrl_train.json_serialization import canonical_json_bytes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import tail_loop
 from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN
+from skyrlrecipe.cohort_identity import cohort_hash, prompt_hash
 
 INITIAL_PANEL_ROWS = 128
 EXTENDED_PANEL_ROWS = 256
@@ -39,10 +38,6 @@ class Incidence:
     length_p50: float | None
     length_p90: float | None
     length_p99: float | None
-
-
-def prompt_hash(token_ids: list[int]) -> str:
-    return hashlib.sha256(canonical_json_bytes(token_ids)).hexdigest()
 
 
 def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> Incidence:
@@ -90,7 +85,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
         grader_error = status == "error" or bool(row.get("exception_type")) or bool(row.get("server_error"))
         errors += int(grader_error)
         unavailable += int(not grader_error and status != "verified")
-        passes += int(not damaged and not grader_error and verification.get("passed") is True)
+        passes += int(not damaged and not grader_error and status == "verified" and verification.get("passed") is True)
         if valid_tokens:
             lengths.append(len(tokens))
         at_cap = row.get("stop_reason") in ("length", "max_tokens", "max_length") or (
@@ -131,7 +126,7 @@ def audit_domain(
             status = "target" if result.confirmed >= MINIMUM_TARGET_LOOPS else "non-target"
     elif reserve_rows is not None:
         raise ValueError(f"{name} does not qualify for extension")
-    digest = hashlib.sha256("".join(sorted(row["prompt_hash"] for row in selected["rows"])).encode()).hexdigest()
+    digest = cohort_hash(row["prompt_hash"] for row in selected["rows"])
     return DomainAudit(result, digest, status)
 
 
@@ -142,7 +137,7 @@ def audit_candidate(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]], b
     selected = cohort
     if baseline.incidence.N == len(cohort["rows"]) + len(cohort["reserve"]):
         selected = {**cohort, "rows": [*cohort["rows"], *cohort["reserve"]]}
-    digest = hashlib.sha256("".join(sorted(row["prompt_hash"] for row in selected["rows"])).encode()).hexdigest()
+    digest = cohort_hash(row["prompt_hash"] for row in selected["rows"])
     if digest != baseline.cohort_hash:
         raise ValueError("candidate prompt hashes differ from the sealed baseline")
     return DomainAudit(audit_cohort(selected, rows), digest, baseline.target_status)
