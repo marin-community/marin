@@ -546,7 +546,9 @@ def derive_archive_plan(
             )
         if stage == "eval" and not ledger["records"]:
             raise ValueError("Completed evaluation lacks retained trace records")
-    eval_source = prefix_join(evaluated, "exports/dumped_evals/eval_only")
+    eval_source = documents[("eval_inputs", "selection.json")].get(
+        "results_uri", prefix_join(evaluated, "exports/dumped_evals/eval_only")
+    )
     eval_fs, eval_prefix = filesystem_for(eval_source)
     native_rows = sorted(eval_fs.glob(prefix_join(eval_prefix, "*.jsonl")))
     if not native_rows:

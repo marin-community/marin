@@ -17,8 +17,11 @@ def audit(
     expected_rollouts: int,
     expected_by_data_source: dict[str, int] | None = None,
     expected_identities: list[dict] | None = None,
+    *,
+    results_uri: str | None = None,
 ) -> dict:
-    fs, pattern = filesystem_for(str(StoragePath(result_uri) / "exports" / "dumped_evals" / "eval_only" / "*.jsonl"))
+    results = StoragePath(results_uri or str(StoragePath(result_uri) / "exports/dumped_evals/eval_only"))
+    fs, pattern = filesystem_for(str(results / "*.jsonl"))
     summaries = []
     failures = Counter()
     source_counts = Counter()

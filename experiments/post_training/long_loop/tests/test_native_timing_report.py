@@ -4,6 +4,8 @@
 import hashlib
 import json
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.rl.skyrl import SkyRLRun
@@ -11,7 +13,78 @@ from rigging.event_log import EventLog
 from rigging.filesystem.storage_path import StoragePath
 from rigging.training_journal import TrainingJournal
 
-from experiments.post_training.long_loop.runtime_timing import write_report
+from experiments.post_training.long_loop.runtime_timing import prepare_reporting_inputs, write_report
+
+
+@pytest.mark.parametrize("duplicate_identity", [False, True])
+def test_canonical_report_uses_frozen_rows_and_only_the_completed_attempt(tmp_path, duplicate_identity):
+    prepared = tmp_path / "prepared"
+    prepared.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"task_rollout_spec": json.dumps({"task": {"source": {"dataset": source}}})} for source in ("a", "b")]
+        ),
+        prepared / "rollouts.parquet",
+    )
+    evaluated = tmp_path / "evaluated"
+    results = evaluated / "exports/dumped_evals/completed/eval_only"
+    results.mkdir(parents=True)
+    (evaluated / "canonical-evaluation.json").write_text(json.dumps({"canonical_spec_sha256": "a" * 64}))
+    rows = [
+        {
+            "uid": "0" if duplicate_identity else str(index),
+            "data_source": source,
+            "verification": {"status": "verified", "score": 1},
+            "response_token_ids": [1],
+            "stop_reason": "stop",
+        }
+        for index, source in enumerate(("a", "b"))
+    ]
+    (results / "results.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    other = evaluated / "exports/dumped_evals/interrupted/eval_only"
+    other.mkdir(parents=True)
+    (other / "results.jsonl").write_text(json.dumps(rows[0]))
+    run = SkyRLRun(
+        hf_model_uri=None,
+        global_step=None,
+        tokenizer_uri="tokenizer",
+        tokenizer_revision="pin",
+        checkpoint_root="checkpoints",
+        draft_checkpoint_root=None,
+        terminal_manifest_uri="terminal.json",
+        iris_job_id="/user/eval",
+        attempt_id="completed",
+    )
+    write_record(ArtifactRecord(result=run.result_payload(), output_path=str(evaluated)))
+    selection = tmp_path / "reporting-inputs"
+    selection.mkdir()
+    prepare_reporting_inputs(
+        output=str(selection),
+        prepared_inputs=str(prepared),
+        evaluated=str(evaluated),
+        source_sha256=hashlib.sha256((prepared / "rollouts.parquet").read_bytes()).hexdigest(),
+        data_relative_path="rollouts.parquet",
+        policy_sha256="a" * 64,
+    )
+    output = tmp_path / "report"
+    output.mkdir()
+    arguments = dict(
+        output=str(output),
+        stages=[str(evaluated)],
+        expected_rollouts=None,
+        evaluation_selection=str(selection),
+        sft_geometry="Adopted SFT",
+    )
+    if duplicate_identity:
+        with pytest.raises(ValueError, match="missing, unexpected"):
+            write_report(**arguments)
+        return
+    write_report(**arguments)
+    summary = json.loads((output / "evaluation.json").read_text())
+    assert summary["all_verified"]
+    assert summary["completed_rollouts"] == summary["expected_rollouts"] == 2
+    assert summary["attempts_by_data_source"] == {"a": 1, "b": 1}
+    assert (selection / "rollouts.parquet").read_bytes() == (prepared / "rollouts.parquet").read_bytes()
 
 
 def test_producer_and_adopted_native_journals_are_reported(tmp_path):

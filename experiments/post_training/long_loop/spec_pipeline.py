@@ -36,7 +36,7 @@ from experiments.post_training.long_loop.openresearcher_service import (
 )
 from experiments.post_training.long_loop.rl import configured_rl_step, curriculum_validation_callbacks
 from experiments.post_training.long_loop.run_spec import stage_blockers
-from experiments.post_training.long_loop.runtime_timing import report_step, timed
+from experiments.post_training.long_loop.runtime_timing import prepare_reporting_inputs, report_step, timed
 from experiments.post_training.long_loop.sft import HANDOFF_DIR, export_sft
 from experiments.post_training.long_loop.sft_accounting import write_sft_accounting
 from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, native_sft_step
@@ -380,7 +380,8 @@ def build_spec_graph(
         trained=learned,
     )
     evaluation = resolved["evaluation"]
-    canonical_judge = micro210_policy.read_micro210_policy(micro210_policy.POLICY_REFERENCE)["evaluation"]["judge"]
+    canonical_judge_policy = micro210_policy.read_micro210_policy(micro210_policy.POLICY_REFERENCE)
+    canonical_judge = canonical_judge_policy["evaluation"]["judge"]
     if draccus.decode(JudgeConfig, evaluation["judge"]) != draccus.decode(JudgeConfig, canonical_judge):
         raise ValueError("Long-loop judge differs from the canonical Micro210 policy")
     canonical = micro210_artifact_step(
@@ -400,6 +401,20 @@ def build_spec_graph(
         },
     )
     evaluated = after_checkpoint(timed(replace(canonical, deps=(*canonical.deps, finalized))), learned)
+    reporting_inputs = after_checkpoint(
+        apply(
+            f"{name}/evaluation-reporting-inputs",
+            prepare_reporting_inputs,
+            version=version,
+            output=OUT,
+            prepared_inputs=eval_inputs,
+            evaluated=evaluated,
+            source_sha256=canonical_judge_policy["prepared_rollouts_sha256"],
+            data_relative_path=canonical_judge_policy["evaluation"]["data_relative_path"],
+            policy_sha256=micro210_policy.POLICY_REFERENCE.sha256,
+        ),
+        learned,
+    )
     report = after_checkpoint(
         report_step(
             version,
@@ -409,11 +424,11 @@ def build_spec_graph(
                 exported,
                 *((endpoint,) if endpoint is not None else ()),
                 learned,
-                eval_inputs,
+                reporting_inputs,
                 evaluated,
             ],
-            expected_rollouts=evaluation["expected_rollouts"],
-            evaluation_selection=eval_inputs,
+            expected_rollouts=None,
+            evaluation_selection=reporting_inputs,
             rl_terminal=learned,
             additional_timing=[
                 item
@@ -469,7 +484,7 @@ def build_spec_graph(
             **({"endpoint": endpoint} if endpoint is not None else {}),
             "rl": learned,
             "finalization": finalized,
-            "eval_inputs": eval_inputs,
+            "eval_inputs": reporting_inputs,
             "eval": evaluated,
             **accounting_artifacts,
         },
