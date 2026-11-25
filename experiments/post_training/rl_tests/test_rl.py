@@ -569,11 +569,10 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
     task_set_version = snowball_model.DEFAULT_EVAL_LITE_VERSION
-    new_task_set = tmp_path / task_set_name / "2026.11.05"
+    original_task_set = Path(recipe.selection_artifact(f"{task_set_name}@{task_set_version}").path())
+    new_task_set = Path(recipe.selection_artifact(f"{task_set_name}@2026.11.05").path())
     new_task_set.mkdir(parents=True)
-    (new_task_set / "summary.json").write_bytes(
-        (tmp_path / task_set_name / task_set_version / "summary.json").read_bytes()
-    )
+    (new_task_set / "summary.json").write_bytes((original_task_set / "summary.json").read_bytes())
     changed_task_set = replace(
         learning,
         held_out_tasks=f"{task_set_name}@2026.11.05",
