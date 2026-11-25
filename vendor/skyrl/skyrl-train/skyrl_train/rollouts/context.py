@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
+import os
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
+from uuid import uuid4
 
 import ray
 from loguru import logger
@@ -16,9 +18,17 @@ from omegaconf import DictConfig
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from marinskyrl.environment_contract import TrainingType
+from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
+from skyrl_train.config.rollout_validation import (
+    FAMILY_COLUMN,
+    GROUPS_PER_FAMILY_KEY,
+    BatchPolicy,
+    minimum_family_pool_sizes,
+    validate_family_pools,
+    validate_groups_per_family,
+)
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
@@ -27,10 +37,10 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
+from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
-    BatchPolicy,
     Admission,
     AdmittedRollout,
     BufferSnapshot,
@@ -147,12 +157,15 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        grader_report_path: str | None = None,
     ):
         self.loader = loader
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
+        self._grader_report_path = grader_report_path
+        self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -181,6 +194,7 @@ class TrainingContext:
         )
         batch_size = config.trainer.train_batch_size
         max_sample_batches = int(dynamic_sampling.max_sample_batches)
+        groups_per_family = validate_groups_per_family(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
             max_in_flight=config.trainer.rollout_buffer.max_in_flight,
@@ -188,7 +202,17 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
+            groups_per_family=groups_per_family,
         )
+        families: dict[str, str] = {}
+        if groups_per_family:
+            if not isinstance(dataset, PromptDataset) or FAMILY_COLUMN not in dataset.dataframe.column_names:
+                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in the training rows")
+            column = dataset.dataframe.with_format(None)[FAMILY_COLUMN]
+            families = {dataset.uid(index): family for index, family in enumerate(column)}
+            validate_family_pools(
+                groups_per_family, collections.Counter(families.values()), buffer_config.max_staleness_steps
+            )
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -204,6 +228,7 @@ class TrainingContext:
             ),
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
+        report_graders = bool(config.trainer.get("dump_grader_report", False))
         return cls(
             PromptLoader(
                 dataset,
@@ -211,14 +236,17 @@ class TrainingContext:
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
+                families=families,
+                family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
-            RolloutContentPolicy(admission, selection),
+            RolloutContentPolicy(admission, selection, report_graders=report_graders),
             RolloutRequestSpec.from_config(config),
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
         )
 
     def start(self) -> None:
@@ -231,7 +259,25 @@ class TrainingContext:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        ray.kill(self._buffer)
+        try:
+            await self._write_grader_report()
+        finally:
+            ray.kill(self._buffer)
+
+    async def _write_grader_report(self) -> None:
+        if self._grader_report_path is None:
+            return
+        try:
+            summary = await self._buffer.grader_summary.remote()
+        except ray.exceptions.RayError:
+            logger.exception("Failed to collect grader stats for {}", self._grader_report_path)
+            return
+        if summary["subsets"]:
+            write_grader_report(
+                self._grader_report_path,
+                self._grader_report_attempt,
+                {"training": summary["subsets"], "training_tasks": summary["tasks"]},
+            )
 
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
@@ -313,6 +359,7 @@ class TrainingContext:
                     raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
+                await self._write_grader_report()
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
@@ -389,7 +436,9 @@ class TrainingContext:
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
+                        prompt = await self._uids_released.wait_for(
+                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
+                        )
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.

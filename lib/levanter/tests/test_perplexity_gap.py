@@ -17,11 +17,11 @@ import pytest
 import haliax
 
 from levanter.analysis.model_perplexity import (
+    TOKEN_COUNT_SUMMARY_FILENAME,
     ModelScoreReportBuilder,
     ScoredDocument,
     compare_scored_documents,
     read_model_score_summary,
-    read_token_count_summary,
     read_scored_documents,
     write_model_score_files,
 )
@@ -587,7 +587,8 @@ def test_model_score_files_write_token_count_summary():
             vocab_size=8,
             token_id_to_text={1: "<bos>", 2: "ab", 3: "c", 4: "de", 5: "f"},
         )
-        token_count_summary = read_token_count_summary(tmpdir)
+        with open(os.path.join(tmpdir, TOKEN_COUNT_SUMMARY_FILENAME)) as f:
+            token_count_summary = json.load(f)
 
     assert token_count_summary["vocab_size"] == 8
     assert token_count_summary["overall"]["total_tokens"] == 7
@@ -687,7 +688,8 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
 
         loaded_summary = read_model_score_summary(tmpdir)
         loaded_documents = read_scored_documents(tmpdir)
-        token_count_summary = read_token_count_summary(tmpdir)
+        with open(os.path.join(tmpdir, TOKEN_COUNT_SUMMARY_FILENAME)) as f:
+            token_count_summary = json.load(f)
 
     assert loaded_summary["model"] == "fake-model"
     assert loaded_documents[0].document == document

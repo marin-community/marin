@@ -6,7 +6,13 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
+from rigging.task_errors import RetrySettings
+from shellbox.backends.daytona.machine import (
+    DaytonaImageBuild,
+    DaytonaMachineFactory,
+    DaytonaNetworkMode,
+    DaytonaNetworkPolicy,
+)
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
 from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
@@ -17,7 +23,6 @@ from skyrl_train.rollouts.harbor_settings import (
     HARBOR_EXCEPTION,
     EnvironmentConfig,
     EnvironmentType,
-    RetryConfig,
     VerifierConfig,
     concurrent_trials,
 )
@@ -30,7 +35,8 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import (
 from skyrl_train.trajectory_runners.harbor.truncation_penalty import apply_truncation_penalty, detect_turn_truncation
 from skyrl_train.trajectory_runners.types import RESPONSE_SPAN_TAGS_KEY, TrajectoryRequestBatch
 from skyrl_train.metric_names import IDENTITY_AWARE_REWARD_METRIC_PREFIX
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig, ErrorTreatment, classify_exception_type
+from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
 from skyrl_train.utils.pbs_shaping import compute_pbs_token_shaping
 from skyrl_train.utils.span_tagger import tag_generated_tokens
 from skyrl_train.utils.reward_shaping import (
@@ -57,7 +63,7 @@ class HarborTaskSettings:
     concurrent_trials: int
     error_handling: ErrorHandlingConfig
     reward_shaping: dict
-    retry: RetryConfig
+    retry: RetrySettings
     attempt_timeout: float | None
 
     @classmethod
@@ -96,11 +102,20 @@ class HarborTaskSettings:
     def grader_override(self) -> NoGrader | None:
         return NoGrader(reason="Harbor verification is disabled") if self.verifier.disable else None
 
+    def daytona_image_build(self, phase: str) -> DaytonaImageBuild:
+        """Resolve the phase's sandbox image build mode."""
+        mode = self.environment.kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT)
+        if phase == "eval":
+            mode = self.environment.kwargs.get("eval_image_build", mode)
+        return DaytonaImageBuild(mode)
+
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:
         match self.environment.type:
             case EnvironmentType.DAYTONA:
                 policy = self.environment.kwargs.get("network_policy")
-                key_env = self.environment.kwargs.get("eval_api_key_env" if phase == "eval" else "api_key_env")
+                key_env = self.environment.kwargs.get("api_key_env")
+                if phase == "eval":
+                    key_env = self.environment.kwargs.get("eval_api_key_env", key_env)
                 client_factory = AsyncDaytona
                 if key_env is not None:
                     api_key = os.environ.get(key_env)
@@ -109,6 +124,7 @@ class HarborTaskSettings:
                     client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
                 return DaytonaMachineFactory(
                     client_factory=client_factory,
+                    image_build=self.daytona_image_build(phase),
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),
                     network_policy=None
                     if policy is None
@@ -136,7 +152,7 @@ class HarborTaskSettings:
             if original.backend == Backend.DOCKER:
                 updates["backend"] = (
                     HARBOR_EVAL_MACHINE_BACKEND
-                    if phase == "eval" and self.environment.kwargs.get("eval_api_key_env")
+                    if phase == "eval"
                     else HARBOR_MACHINE_BACKEND
                 )
             if original.startup_timeout is not None:

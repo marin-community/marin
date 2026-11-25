@@ -55,7 +55,7 @@ from skyrl_train.training_batch import (
     gradient_accumulation_steps,
     per_data_parallel_batch_size,
 )
-from skyrl_train.trajectory_selection import optimization_samples_per_prompt
+from skyrl_train.config.trajectory_selection import optimization_samples_per_prompt
 from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.models.grug_query_bias import (
@@ -906,10 +906,9 @@ class PolicyWorkerBase(Worker):
         metrics.update(
             advantage_metrics(
                 batch,
-                algorithm=algorithm,
                 reduction=reduction,
                 step_wise=False,
-                group_scores=(plan.uids, scores[:, None]),
+                group_scores=(plan.uids, scores),
             )
         )
         drop_advantage_inputs(apply_loop_advantages(batch))

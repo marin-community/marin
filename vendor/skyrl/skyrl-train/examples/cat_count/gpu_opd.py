@@ -22,7 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 from skyrlrecipe.declared import (
     EvaluationCallback,
-    EvaluationSampling,
+    EvaluationProfile,
     Teacher,
     TeacherEndpoint,
     TeacherModel,
@@ -32,7 +32,7 @@ from skyrlrecipe.declared import (
 from skyrlrecipe.sampling import EvalSamplingParams
 from examples.recipe import compose_recipe
 from skyrl_train.entrypoints.main_base import run
-from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 from skyrl_train.tokenizer import create_tokenizer
 
 HELDOUT_NS = (3, 5, 13, 16)
@@ -226,7 +226,7 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
                     eval_steps=EVAL_INTERVAL,
                     eval_before_train=True,
                     additional_evaluations={
-                        "sampled": EvaluationSampling(
+                        "sampled": EvaluationProfile(
                             sampling_params=EvalSamplingParams(temperature=1.0),
                             n_samples_per_prompt=SAMPLED_EVAL_SAMPLES,
                         )

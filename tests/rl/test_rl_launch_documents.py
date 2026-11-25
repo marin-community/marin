@@ -4,16 +4,21 @@
 import inspect
 import json
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import yaml
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from tests.rl.launch_document_census import render_launch_census
+from experiments.post_training import rl_compose
+from tests.rl.launch_document_census import generation_geometry_step, render_launch_census, runtime_launch
 
 
 def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    monkeypatch.setattr(rl_compose, "SELECTION_ROOT", str(tmp_path / "selections"))
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path / "artifacts"))
     producers = set()
     validate = SkyRLSpec.__post_init__
 
@@ -27,16 +32,23 @@ def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
     monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(hex="104e63883176".ljust(32, "0")))
     documents, failures = render_launch_census(tmp_path / "artifacts")
     assert not failures, failures
+    with contextmanager(runtime_launch)(tmp_path) as render:
+        documents["native/generation"] = render(generation_geometry_step()).launch_config_yaml
     root = Path(__file__).resolve().parents[2]
     authored = {
         str(path.relative_to(root)) for path in (root / "experiments").rglob("*.py") if "SkyRLSpec(" in path.read_text()
     }
-    assert authored <= producers, authored - producers
+    # Launcher tests exercise the shared composer through Snowball presets and Mochi's three-rack preset.
+    separate_owners = {"experiments/post_training/rl_compose.py"}
+    assert authored <= producers | separate_owners, authored - producers - separate_owners
     return documents
 
 
 def test_rl_launch_documents_render_from_authored_specs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _render_documents(tmp_path, monkeypatch)
+    generation = yaml.safe_load(_render_documents(tmp_path, monkeypatch)["native/generation"])
+    assert generation["iris"]["allocation"]["num_nodes"] == 1
+    assert generation["skyrl"]["generator"]["num_inference_engines"] == 4
+    assert generation["skyrl"]["entrypoint"] == "generate"
 
 
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.

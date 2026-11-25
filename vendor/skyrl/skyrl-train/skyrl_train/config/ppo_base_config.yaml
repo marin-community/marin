@@ -37,6 +37,7 @@ checkpoint_export:
   step: null
   checkpoint_path: null
   export_root: null
+  # Keep these defaults for rl_gate comparisons against sealed controls.
   hf_hub_repo_id: null
   hf_hub_private: false
   hf_hub_revision: main
@@ -331,6 +332,8 @@ trainer:
   tracker_commit_each_step: true
   dump_data_batch: false
   dump_eval_results: true
+  dump_grader_report: false
+  grader_report_dir: ${trainer.export_path}
   log_level: "INFO"
 
   rope_scaling: null
@@ -423,14 +426,15 @@ generator:
 
   engine_init_kwargs: {}
 
-  # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
-  # Hugging Face revisions or streams object-store checkpoints through Run:ai.
+  # Managed speculative decoding with optional online training for EAGLE3.
+  # SkyRL mirrors pinned Hugging Face drafts and streams object-store checkpoints into vLLM through Run:ai.
   speculative_decoding: null
 
   override_existing_update_group: "auto"
   # Objectives that consume rollout logprobs use processed probabilities and
   # require full-distribution, temperature-only sampling.
   sampling_params:
+    ignore_eos: false
     max_generate_length: 1024
     repetition_penalty: 1.0
     temperature: 1.0
@@ -444,6 +448,7 @@ generator:
 
   eval_sampling_params:
     seed: null
+    ignore_eos: false
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0
     temperature: 0.0

@@ -32,14 +32,19 @@ def _moe_mlp_local_scatter(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
+    """Local fallback MoE path: sorted grouped GMM then scatter-add combine.
+
+    With ``combine_in_fp32`` the weighted rows and their per-token sum stay float32 until the final cast.
+    """
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,
         selected_experts,
         combine_weights,
         token_valid,
         num_experts=num_experts,
+        combine_in_fp32=combine_in_fp32,
     )
     cumulative_group_sizes = jnp.cumsum(group_sizes).astype(jnp.int32)
     x_dispatch = _zero_inactive_grouped_rows(x_dispatch, cumulative_group_sizes)
@@ -59,5 +64,8 @@ def _moe_mlp_local_scatter(
 
     with jax.named_scope("scatter"):
         weighted = _zero_inactive_grouped_rows(out_dispatch * w_dispatch[:, None], cumulative_group_sizes)
-        out = jnp.zeros_like(x).at[token_dispatch].add(weighted, mode="drop")
+        if combine_in_fp32:
+            out = jnp.zeros(x.shape, jnp.float32).at[token_dispatch].add(weighted, mode="drop").astype(x.dtype)
+        else:
+            out = jnp.zeros_like(x).at[token_dispatch].add(weighted, mode="drop")
     return out, _zero_dropped_assignments()

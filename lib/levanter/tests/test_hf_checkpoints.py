@@ -138,6 +138,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     (reference / "configuration_custom.py").write_bytes(b"CUSTOM_ARCHITECTURE = True\n")
     (reference / "nested/modeling_custom.py").write_bytes(b"CUSTOM_MODEL = True\n")
     (reference / ".git/config").write_bytes(b"git metadata")
+    (reference / ".verified-copy-manifest.json").write_bytes(b'{"files": ["initializer weights"]}')
+    (reference / ".cache_metadata.json").write_bytes(b'{"source_revision": "initializer"}')
     (reference / "reference-weights.safetensors").write_bytes(b"stale weights")
     (reference / "pytorch_model.bin").write_bytes(b"stale torch weights")
     (reference / "pytorch_model-00001-of-00002.bin").write_bytes(b"stale torch shard")
@@ -159,6 +161,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     assert (tmp_path / "configuration_custom.py").read_bytes() == b"CUSTOM_ARCHITECTURE = True\n"
     assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
     assert not (tmp_path / ".git/config").exists()
+    assert not (tmp_path / ".verified-copy-manifest.json").exists()
+    assert not (tmp_path / ".cache_metadata.json").exists()
     assert not (tmp_path / "reference-weights.safetensors").exists()
     assert not (tmp_path / "pytorch_model.bin").exists()
     assert not (tmp_path / "pytorch_model-00001-of-00002.bin").exists()

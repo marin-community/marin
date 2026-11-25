@@ -20,7 +20,6 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.datakit.download.http_session import build_retrying_session
-from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -344,49 +343,3 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 
     _write_metadata(cfg, metadata_records)
     return {"success": True, "processed": metadata_records}
-
-
-def uncheatable_eval_step(
-    name: str = "raw/uncheatable-eval/latest",
-    *,
-    repo_owner: str = "ziqing-huang",
-    repo_name: str = "uncheatable_eval",
-    data_path: str = "data",
-    branch: str = "master",
-    max_concurrent_downloads: int = 8,
-    request_timeout: int = 120,
-    github_token: str | None = None,
-    skip_existing: bool = True,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads the latest Uncheatable Eval dumps."""
-
-    def _run(output_path: str) -> dict:
-        cfg = UncheatableEvalDownloadConfig(
-            output_path=output_path,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            data_path=data_path,
-            branch=branch,
-            max_concurrent_downloads=max_concurrent_downloads,
-            request_timeout=request_timeout,
-            github_token=github_token,
-            skip_existing=skip_existing,
-        )
-        return download_latest_uncheatable_eval(cfg)
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={
-            "repo_owner": repo_owner,
-            "repo_name": repo_name,
-            "data_path": data_path,
-            "branch": branch,
-        },
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
-    )

@@ -11,12 +11,16 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.resources import files
+from inspect import Parameter, signature
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, Optional, Protocol
 
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
+
+from skyrl_train.evaluation_profiles import record_evaluation_profiles, resolve_evaluation_profiles
+
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.rollouts.harbor_settings import concurrent_trials
 from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
@@ -86,11 +90,46 @@ class HPCGeometry(Protocol):
     gpus_per_node: int
 
 
+def _validate_installed_agent_kwargs(terminal_bench: Mapping[str, Any]) -> None:
+    installed = terminal_bench.get("installed_agent")
+    if installed is None:
+        return
+    from harbor.agents.factory import AgentFactory  # noqa: PLC0415 - only installed-agent recipes need Harbor
+    from harbor.agents.installed.base import BaseInstalledAgent  # noqa: PLC0415 - only installed-agent recipes need Harbor
+
+    agent = installed["agent"]
+    adapter = AgentFactory.get_agent_class(agent["name"])
+    if not issubclass(adapter, BaseInstalledAgent):
+        raise ValueError("The selected agent must be an installed Harbor agent")
+    supported = {descriptor.kwarg for descriptor in (*adapter.CLI_FLAGS, *adapter.ENV_VARS)}
+    for base in adapter.__mro__:
+        if "__init__" in base.__dict__:
+            supported.update(
+                parameter.name
+                for parameter in signature(base.__init__).parameters.values()
+                if parameter.kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+            )
+    if unknown := sorted(agent.get("kwargs", {}).keys() - supported):
+        raise ValueError(f"Unknown {agent['name']} recipe kwargs: {', '.join(unknown)}")
+
+
 def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
     """Populate launch-owned token limits from the authored request budget."""
     materialized = copy.deepcopy(raw)
     for path, value in budget.derived_values(materialized.get("terminal_bench")).items():
         set_path(materialized, path, value)
+    serving_window_tokens = budget.effective_serving_window_tokens
+    for callback in materialized.get("trainer", {}).get("callbacks") or ():
+        if callback["type"] != "harbor_evaluation":
+            continue
+        for cohort in callback["cohorts"]:
+            for agent in cohort["job"].get("agents", ()):
+                model_info = agent.setdefault("kwargs", {}).setdefault("model_info", {})
+                max_output_tokens = model_info.get("max_output_tokens")
+                if max_output_tokens is not None and max_output_tokens >= serving_window_tokens:
+                    raise ValueError("Harbor output tokens must leave room for input in the serving window")
+                # Harbor counts both prompt and reply tokens in max_input_tokens.
+                model_info["max_input_tokens"] = serving_window_tokens
     return materialized
 
 
@@ -142,15 +181,18 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
 
     config_groups = raw.get("config_groups", {})
     if "algorithm_recipe" in config_groups:
-        group = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
+        group = compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
     recipe = SkyRLRecipe.from_document(raw)
+    _validate_installed_agent_kwargs(raw.get("terminal_bench") or {})
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
     materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
     trainer = materialized_raw["trainer"]
     generator = materialized_raw["generator"]
+    if recipe.trainer.policy.megatron_config.moe_router_replay:
+        generator.setdefault("engine_init_kwargs", {}).setdefault("enable_return_routed_experts", True)
     terminal_bench = materialized_raw.get("terminal_bench")
     data = dict(raw.get("data", {}))
     data.pop("kind", None)
@@ -237,6 +279,7 @@ class TaskLocalSkyRLValues:
     terminal_bench_data: tuple[str, ...]
     policy_model_path: str | None = None
     draft_model_uri: str | None = None
+    evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 TASK_LOCAL_SKYRL_PATHS = MappingProxyType(
@@ -291,6 +334,8 @@ def _skyrl_config_sections(
         trainer["export_path"] = exp_args["export_root"]
     elif not trainer.get("export_path") and experiments_dir and job_name:
         trainer["export_path"] = join_resource_path(experiments_dir, job_name, "exports")
+    if exp_args.get("grader_report_dir"):
+        trainer["grader_report_dir"] = exp_args["grader_report_dir"]
     if exp_args.get("checkpoint_root"):
         trainer["ckpt_path"] = exp_args["checkpoint_root"]
     elif not trainer.get("ckpt_path") and experiments_dir and job_name:
@@ -359,7 +404,8 @@ def _skyrl_config_sections(
     return sections
 
 
-def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:
+def compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:
+    """Compose native schema defaults with the selected Hydra configuration groups."""
     config_dir = Path(str(files("skyrl_train.config"))).resolve()
     group_overrides = [f"+{group_name}={config_name}" for group_name, config_name in config_groups.items()]
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
@@ -386,7 +432,7 @@ def compose_skyrl_config(
     hpc: HPCGeometry,
 ) -> CompiledSkyRLConfig:
     """Compose the final SkyRL subtree from its config groups and launch values."""
-    config = _compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
+    config = compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
     OmegaConf.set_struct(config, False)
     config = OmegaConf.merge(config, _skyrl_config_sections(parsed, exp_args, hpc))
     _resolve_max_in_flight(config)
@@ -407,5 +453,6 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             continue
         for path in paths:
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
+    record_evaluation_profiles(updated, resolve_evaluation_profiles(updated, evaluation_data=values.evaluation_data))
     OmegaConf.resolve(updated)
     return updated

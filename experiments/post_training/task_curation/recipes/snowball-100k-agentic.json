@@ -1,0 +1,76 @@
+{
+  "admitted_graders": [
+    "harness",
+    "in_process",
+    "package"
+  ],
+  "exclusions": [
+    {
+      "format": "task_spec",
+      "rows": 1500,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.17.1/full_validation.parquet",
+      "version": "2026.11.17.1"
+    }
+  ],
+  "family_limits": {
+    "agentic": 5608,
+    "nonagentic": 100000
+  },
+  "heldout": [
+    {
+      "format": "historical",
+      "rows": 910,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+      "version": "2026.10.23.1"
+    }
+  ],
+  "name": "snowball-100k-agentic",
+  "released": [
+    {
+      "admission": {
+        "sha256": "304c3db806ab843c9a13c00f9054790ef45ce927186a95d09046106d3b2c0fe8",
+        "uri": "s3://marin-us-east-02a/marin/rl-data/task-health/attempts/checkpoints/snowball-rl/train-medium-agentic-65c84cfbc4-in-9486f87b/2026.11.20.1/attempts.parquet"
+      },
+      "agentic": true,
+      "family": "agentic",
+      "format": "task_spec",
+      "license": "unverified",
+      "rows": 5608,
+      "sha256": "ae53e7a3678a3ef05c5364834644d8eefb5bdc258f78f3b4c4d316fa956a0192",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet",
+      "version": "2026.11.19.1"
+    }
+  ],
+  "seed": 20261019,
+  "source_limits": {
+    "MarinSkyRL:eurus2_code": 16970,
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": 743,
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": 5752,
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": 1921,
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": 1931,
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": 2079,
+    "MarinSkyRL:openscience": 20790,
+    "MarinSkyRL:reasoning_gym": 20800,
+    "SnowballV01:structure-closure": 11634,
+    "Task Trove:laion__nemotron-gym-agent-calendar-v2": 2699,
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": 5673,
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
+    "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet": 5608
+  },
+  "sources": {
+    "MarinSkyRL:eurus2_code": "nonagentic",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "nonagentic",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": "nonagentic",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": "nonagentic",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": "nonagentic",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": "nonagentic",
+    "MarinSkyRL:openscience": "nonagentic",
+    "MarinSkyRL:reasoning_gym": "nonagentic",
+    "SnowballV01:structure-closure": "nonagentic",
+    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "nonagentic",
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "nonagentic",
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "nonagentic"
+  },
+  "validation_per_family": 20,
+  "version": "2026.11.19.2"
+}

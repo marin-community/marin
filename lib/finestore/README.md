@@ -30,11 +30,20 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
-The transaction buffers its rows and object bytes in memory. Each participating
-table produces one level-zero Parquet shard. FineStore writes every shard and an
-immutable full manifest before it conditionally advances `HEAD`. Until that final
-write succeeds, none of the transaction is visible. A caller should split a
-transaction when its payload would exceed a safe process-memory bound.
+`store.transaction(message=...)`, and the same argument to
+`store.unbounded_transaction()`, records why a change was made and who made it. The
+manifest of the commit the transaction publishes holds them as `commit_info`, with that
+commit's sequence and publication time, and `ReadView.commit_info` returns the record of
+the pinned commit. `author=` defaults to the user who launched the process, as
+`rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
+submitting user. FineStore stores the author as given and does not verify it.
+On a non-empty archive, a transaction with no writes returns the checked
+commit token without publishing a new commit.
+
+Appends to registered tables and named object writes retain their Arrow buffers
+in memory. Each appended table produces one level-zero Parquet shard. FineStore
+writes every shard and an immutable full manifest before it conditionally advances
+`HEAD`. Until that final write succeeds, none of the transaction is visible.
 
 Ordinary table appends use the same commit path. `store.flush()` atomically publishes
 the currently claimed buffers from all registered tables. `table.flush()` publishes
@@ -46,8 +55,56 @@ A flush uploads each new shard, writes a manifest, and publishes it with one
 compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
 onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
 so commits to one root are serialized; writers that need more aggregate commit
-throughput should write to separate roots. A flush raises `CommitConflict` only after
-losing the compare-and-swap for an hour.
+throughput should write to separate roots. A flush retries compare-and-swap conflicts
+for up to an hour.
+
+## Transactional table changes
+
+A transaction can create, rename, or drop tables. Use a private table to stream
+a rebuild, then rename it into place and write its completion marker:
+
+```python
+from finestore.layout import TableMetadata, TableNameConflict
+
+with store.transaction(base=source_view) as transaction:
+    transaction.require_unchanged("source")
+    table = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+    table.extend(rebuilt_rows)
+    transaction.rename_table("scratch", "results", on_conflict=TableNameConflict.REPLACE)
+    transaction.write_object("build-complete", b"done")
+```
+
+The temporary name is visible inside the transaction. Readers see one final
+namespace after the `HEAD` update. A rename moves the manifest references and
+keeps the shard paths. Renaming to an occupied name raises unless the caller
+sets `TableNameConflict.REPLACE`. Dropping an existing table removes it from
+the final namespace. A created table can be published empty.
+
+Created tables write Arrow batches up to the transaction's byte budget. An
+unbounded transaction uses the store buffer budget for these batches. A single
+row may exceed the budget. The commit checks names changed by DDL and any
+extra names passed to `require_unchanged`. Concurrent content changes fail
+with `CommitConflict`. Physical compaction can proceed while data is staged.
+
+An abandoned transaction can leave unreferenced shards under `data/_staged/`.
+Published tables can reference paths there, so reclamation must account for
+active staging transactions and retained snapshots.
+
+Renaming, dropping, or replacing a previously published table advances its incarnation.
+Append handles registered under an earlier incarnation fail with
+`CommitConflict`. Flush buffered appends before changing a table in the same store.
+After the change, call `store.table(...)` to register a fresh handle. If another
+store changed a registered table, reopen before writing to it. Pinned reads retain
+their earlier view.
+
+The first publication of a table uses the existing manifest format. An
+incarnation change requires the `table-incarnations-v1` manifest feature.
+Upgrade readers such as Marina's EvalDash before writers that drop or replace
+existing tables.
+
+Pass `expected=view.table_version(table)` to `finestore.admin.drop_table` when
+an earlier operation, such as a backup, relied on an exact file set. A drop
+that removes an active table clears the seal.
 
 ## Reads
 
@@ -157,6 +214,8 @@ Two adapters build cache behavior on this primitive:
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
+  A fetch preserves a regular local file when its bytes match the committed blob;
+  missing or different files are atomically replaced.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache
 cleanup does not acknowledge persistence or return a commit token. Use
@@ -271,13 +330,15 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard
-integrity metadata while streaming Parquet, so it does not require another object-store
-read.
+object, the current maintainer epoch, optional seal state, and the `commit_info` of an
+attributed transaction. Writers compute shard integrity metadata while streaming
+Parquet, so it does not require another object-store read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
-commit. A manifest can also name `required_features`; readers reject features they do
-not implement before exposing a view. This lets future optional metadata remain
+commit. Such a writer copies its parent's `commit_info` into the commits it publishes;
+the record names the sequence of the commit it describes, so readers ignore the copy.
+A manifest can also name `required_features`; readers reject features they do not
+implement before exposing a view. This lets future optional metadata remain
 additive while mandatory semantics fail closed without forcing unrelated archives to
 change their format version.
 
@@ -350,3 +411,14 @@ shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`
 and CPU report readers need no trainer or inference-engine dependencies.
+
+`finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
+and typed attempt fields keyed by `(attempt_id, field)` in the same store under
+`<export_root>/run-records`. The evaluations table stores scored task rows keyed by
+`(attempt_id, step, evaluation, task_id)`. `update_attempt` commits a writer's supplied fields;
+omitted fields remain stored and explicit null clears a field. Native configuration,
+terminal result, startup information and checkpoint ancestry have separate fields.
+`read_attempt_metrics` joins only that attempt and its known bounded ancestors;
+joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
+starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt records to history and timing readers.

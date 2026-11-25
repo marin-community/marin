@@ -73,7 +73,8 @@ pub struct LocalSegment {
     pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
     /// Bounds of the columns the table flags with `catalog_bounds`; see
-    /// [`crate::store::column_bounds`]. Empty for a legacy-local segment.
+    /// [`crate::store::column_bounds`]. Planning reads them only from the object
+    /// catalog, so a legacy-local table is always scanned.
     pub column_bounds: crate::store::column_bounds::ColumnBounds,
     /// The local files this segment's advertised artifacts resolve to. Empty
     /// until an index build commits them.

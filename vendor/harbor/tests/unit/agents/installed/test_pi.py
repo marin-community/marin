@@ -24,6 +24,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 from harbor.models.trajectories.trajectory import Trajectory
 from harbor.utils.artifact_writer import get_artifact_writer
 
@@ -136,6 +137,29 @@ async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, reque
     else:
         await agent.install(shell.environment)
         assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_ignores_mcp_adapter_pin_without_servers(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
+    agent = Pi(logs_dir=temp_dir, mcp_adapter_version="7.0.0")
+
+    await agent.install(shell.environment)
+
+    assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_rejects_mcp_adapter_pin_with_servers(temp_dir):
+    agent = Pi(
+        logs_dir=temp_dir,
+        mcp_adapter_version="7.0.0",
+        mcp_servers=[MCPServerConfig(name="tools", transport="sse", url="http://mcp-server:8000/sse")],
+    )
+
+    with pytest.raises(RuntimeError, match="pi-mcp-adapter version 7.0.0") as error:
+        await agent.install(AsyncMock())
+    assert "image-provided pi-mcp-extension" in str(error.value)
 
 
 class TestPiAgent:
@@ -258,7 +282,9 @@ class TestPiAgent:
         )
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"theme": "dark"}))
+        settings_path.write_text(
+            json.dumps({"theme": "dark", "httpIdleTimeoutMs": 120000})
+        )
         agent = Pi(
             logs_dir=temp_dir,
             model_name="openai/test-model",
@@ -273,6 +299,7 @@ class TestPiAgent:
         settings = json.loads(settings_path.read_text())
         assert settings == {
             "theme": "dark",
+            "httpIdleTimeoutMs": 120000,
             "compaction": {
                 "enabled": True,
                 "reserveTokens": max_tokens,
@@ -326,8 +353,9 @@ class TestPiAgent:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("http_idle_timeout", [None, 360])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(
-        self, temp_dir, monkeypatch
+        self, temp_dir, monkeypatch, http_idle_timeout
     ):
         shell = _local_pi_shell(
             temp_dir,
@@ -342,14 +370,22 @@ class TestPiAgent:
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
         original_settings = {
-            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000}
+            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000},
+            "theme": "dark",
         }
         settings_path.write_text(json.dumps(original_settings))
-        agent = Pi(logs_dir=temp_dir, model_name="openai/test-model")
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name="openai/test-model",
+            http_idle_timeout=http_idle_timeout,
+        )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
-        assert json.loads(settings_path.read_text()) == original_settings
+        expected_settings = dict(original_settings)
+        if http_idle_timeout is not None:
+            expected_settings["httpIdleTimeoutMs"] = 360000
+        assert json.loads(settings_path.read_text()) == expected_settings
 
 
 @pytest.mark.asyncio
@@ -660,11 +696,12 @@ async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider
             "16385 input tokens, for a total of at least 32769 tokens.",
             ContextLengthExceededError,
         ),
+        ('400: {"message":"Generation stopped: max_turns","type":"generation_stopped","code":400}', None),
     ],
-    ids=["connection", "context-overflow"],
+    ids=["connection", "context-overflow", "generation-stopped"],
 )
 @pytest.mark.asyncio
-async def test_hosted_vllm_failure_is_classified(
+async def test_hosted_vllm_request_end_is_classified(
     temp_dir, monkeypatch, error_message, expected_error
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
@@ -698,6 +735,10 @@ async def test_hosted_vllm_failure_is_classified(
         thinking_format="qwen-chat-template",
     )
 
+    if expected_error is None:
+        # A normal return lets Harbor keep the verifier score when generation reaches its turn limit.
+        assert await agent.run("Fix the bug", shell.environment, AgentContext()) is None
+        return
     with pytest.raises(expected_error) as error:
         await agent.run("Fix the bug", shell.environment, AgentContext())
 

@@ -17,7 +17,8 @@ from tests.gpu.utils import (
     ray_init_for_tests,
     get_rank_0_memory,
 )
-from skyrl_train.utils.utils import print_mem, validate_cfg
+from skyrl_train.utils.utils import print_mem
+from skyrl_train.config.driver_validation import validate_cfg
 from skyrl_train.entrypoints.main_base import config_dir
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.utils.torch_utils import logprobs_from_logits

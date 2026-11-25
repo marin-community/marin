@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
+    "taskforge",
     "haliax",
     "iris",
     "fray",
@@ -90,9 +91,24 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
+_NATIVE_CONFIG = ("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")
+MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
+    "tests/rl/test_skyrl.py": (
+        *_NATIVE_CONFIG,
+        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+    ),
+    "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
+}
+
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
+    "taskforge": "marin-taskforge",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
@@ -117,10 +133,12 @@ UV_EXTRAS: dict[str, list[str]] = {
 }
 
 PYTHON_VERSION = "3.12"
+# `-n auto` counts physical cores, so it starts 2 workers on a 4-vCPU hosted runner.
+# `logical` starts one per vCPU.
 PYTEST_ARGS: tuple[str, ...] = (
     "--durations=5",
     "-n",
-    "auto",
+    "logical",
     "--dist=worksteal",
     "--tb=short",
 )
@@ -155,7 +173,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
+SHARD_COUNT: dict[str, int] = {"levanter": 5, "marin": 6}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -186,6 +204,18 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "rl-progress": (
+        "infra/marina/",
+        "lib/finestore/src/finestore/rl/",
+        "lib/marin/src/marin/rl/",
+        "lib/marin/src/marin/execution/",
+        "experiments/post_training/rl",
+        "experiments/post_training/snowball_rl.py",
+        "experiments/post_training/skyrl_test_support.py",
+        "infra/ci/",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "skyrl-wheel": (
         "lib/skyrlrecipe/",
         "vendor/skyrl/",
@@ -241,6 +271,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "rolloutengine-unit": (
         "lib/rolloutengine/",
+        "lib/finelog/",
         "lib/taskcompendium/",
         "lib/verifyit/",
         "lib/rigging/",
@@ -251,8 +282,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "taskforge-unit": (
         "lib/taskforge/",
-        "experiments/post_training/capability_driven_envs/",
-        "experiments/post_training/glm.py",
+        "experiments/taskforge/",
         "lib/rolloutengine/",
         "lib/zephyr/",
         "lib/fray/",
@@ -261,6 +291,8 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/shellbox/",
         "lib/verifyit/",
         "lib/rigging/",
+        "lib/finelog/",
+        "lib/finestore/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,
@@ -767,18 +799,16 @@ def classify(
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
 
-    launch_census = "tests/rl/test_rl_launch_documents.py"
-    if (repo_root / launch_census).is_file() and any(
-        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
-    ):
-        direct_tests["marin"].append(launch_census)
-
     for filepath in changed_files:
         if filepath in broad_triggers:
             broad = True
             continue
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
+        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
+            if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python

@@ -19,6 +19,7 @@ useAutoRefresh()
       <RouterLink :to="{ path: '/models', query: cohortQuery }">Models</RouterLink>
       <RouterLink :to="{ path: '/compare', query: cohortQuery }">Compare</RouterLink>
       <RouterLink :to="{ path: '/runs', query: cohortQuery }">Runs</RouterLink>
+      <RouterLink :to="{ path: '/reports' }">Playground Reports</RouterLink>
       <RouterLink :to="{ path: '/inspect', query: cohortQuery }">Inspect</RouterLink>
       <RouterLink :to="{ path: '/debug', query: cohortQuery }">Debug</RouterLink>
       <RefreshButton />

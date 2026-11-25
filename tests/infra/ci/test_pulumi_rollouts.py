@@ -18,7 +18,7 @@ from scripts.ci.pulumi_rollouts import (
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "lib/finestore/src/finestore/reader.py",
+        "lib/finestore/src/finestore/rl/rl_progress.py",
         "lib/evalrecords/src/evalrecords/records.py",
         "lib/iris/src/iris/rpc/controller_connect.py",
         "lib/finelog/src/finelog/rpc/logs_pb2.py",

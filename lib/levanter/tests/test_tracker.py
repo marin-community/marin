@@ -24,7 +24,6 @@ from levanter.tracker.wandb import (
     WandbConfig,
     WandbTracker,
     _truncate_wandb_artifact_name,
-    truncate_wandb_run_name,
 )
 
 
@@ -132,7 +131,7 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch, tmp
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
 
 
-def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
+def test_wandb_tracker_skips_artifacts_larger_than_20_mb_without_raising(tmp_path, caplog):
     class FakeRun:
         def log_artifact(self, *args, **kwargs):
             raise AssertionError("oversized artifacts must not reach W&B")
@@ -142,8 +141,12 @@ def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
     with artifact_path.open("r+b") as artifact_file:
         artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
 
-    with pytest.raises(ValueError, match="20,000,000-byte limit"):
+    with caplog.at_level(logging.WARNING):
         WandbTracker(FakeRun()).log_artifact(artifact_path)
+
+    # The skip is exactly one warning, not a raise and not an error traceback.
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
@@ -342,22 +345,3 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
-
-
-def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():
-    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
-
-    truncated = truncate_wandb_run_name(name)
-
-    assert len(truncated) <= 64
-    assert truncated.endswith("lr7.5e-7_seed2")
-    assert "_-7_seed2" not in truncated
-
-
-def test_truncate_wandb_run_name_logs_warning(caplog):
-    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
-
-    with caplog.at_level(logging.WARNING):
-        truncate_wandb_run_name(name)
-
-    assert any(record.levelno >= logging.WARNING for record in caplog.records)

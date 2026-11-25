@@ -26,9 +26,9 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
 import yaml
-from iris.client.client import IrisClient, Job
+from iris.client.client import Job
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, infer_preemptible_constraint
+from iris.cluster.constraints import Constraint, infer_preemptible_constraint
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
@@ -39,6 +39,7 @@ from rigging.config_discovery import find_project_root
 from cloud.iris.launch_config import SubmissionMode, derive_launch_topology, load_launch_config
 from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
+from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     resolve_ray_spill_target,
@@ -207,6 +208,8 @@ def supervise_iris_job(job: Job) -> LaunchOutcome:
         job_id=job_id,
         job_state=status.state.value,
         exit_code=0 if status.state is JobState.SUCCEEDED else 1,
+        started_at=status.started_at.as_formatted_date() if status.started_at else None,
+        finished_at=status.finished_at.as_formatted_date() if status.finished_at else None,
     )
 
 
@@ -227,11 +230,8 @@ def _gpu_constraints(
     resources: job_pb2.ResourceSpecProto,
     *,
     replicas: int,
-    target_cluster: str | None,
 ) -> list[Constraint]:
     constraints = []
-    if target_cluster:
-        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
     inferred = infer_preemptible_constraint(resources, replicas, constraints)
     if inferred is not None:
         constraints.append(inferred)
@@ -319,8 +319,19 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
     return args
 
 
+def _forwarded_environment(names: tuple[str, ...]) -> dict[str, str]:
+    missing = [name for name in names if name not in os.environ]
+    if missing:
+        raise ValueError(f"Missing forwarded environment variables: {', '.join(missing)}")
+    return {name: os.environ[name] for name in names}
+
+
 class IrisBackend:
     """Validate and submit one resolved Hydra launch config."""
+
+    def __init__(self, *, forward_env: tuple[str, ...] = ()):
+        _forwarded_environment(forward_env)
+        self.forward_env = forward_env
 
     def validate(self, config_path: Path) -> None:
         _iris_submission_state(config_path, load_launch_config(config_path))
@@ -334,10 +345,10 @@ class IrisBackend:
         if workspace is None:
             raise RuntimeError("SkyRL launches require a Marin checkout")
         with contextlib.redirect_stdout(sys.stderr):
-            return launch(args, workspace)
+            return launch(args, workspace, forward_env=self.forward_env)
 
     def export_terminal_policy(self, config_path: Path) -> None:
-        export_terminal_policy(config_path)
+        export_terminal_policy(config_path, forward_env=self.forward_env)
 
 
 def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:
@@ -560,29 +571,6 @@ class BundledLaunchConfig:
         return {RL_CONFIG_PAYLOAD_ENV: self.payload}
 
 
-def _resolve_parent_cluster_config(cluster_config: Optional[str]) -> Optional[str]:
-    """Path to the PARENT (marin) cluster YAML for federated submission.
-
-    The marin meta-scheduler config (marin.yaml) that owns iris.oa.dev and lists the
-    CoreWeave clusters as delegation peers. Defaults to the ``marin.yaml`` sibling of
-    ``--cluster-config`` (they live in the same ``lib/iris/config/`` dir); falls back
-    to the same search roots as :func:`_resolve_cluster_config_default`.
-    """
-    if cluster_config:
-        sib = Path(cluster_config).with_name("marin.yaml")
-        if sib.exists():
-            return str(sib)
-    rel = "lib/iris/config/marin.yaml"
-    for c in (
-        Path.home() / "Documents/marin" / rel,
-        Path("/Users/benjaminfeuer/Documents/marin") / rel,
-        Path(os.environ.get("MARIN_ROOT", "")) / rel,
-    ):
-        if c.exists():
-            return str(c)
-    return None
-
-
 def _load_cluster_config(cluster_config: str) -> dict[str, Any]:
     """Load the selected Iris cluster configuration for launch-time defaults."""
     try:
@@ -744,9 +732,11 @@ def _build_task_shell(
         args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
     ).shell_preflight()
     gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
+    # The frozen export runtime uses PyTorch NCCL and has no vLLM.
+    pynccl_check = "" if _is_checkpoint_export(args) else " --pynccl-init"
     transport_gate = (
         f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
-        " --mode gate --gate-coverage all-gpus --pynccl-init"
+        f" --mode gate --gate-coverage all-gpus{pynccl_check}"
         f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
     )
     bash = (
@@ -776,7 +766,7 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     return _build_task_shell(args, controller_cmd, pythonpath)
 
 
-def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
+def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ...] = ()) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
     if get_job_info() is not None and (args.target_cluster or args.parent_cluster_config):
         print(
@@ -882,7 +872,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     constraints = _gpu_constraints(
         resources_proto,
         replicas=replicas,
-        target_cluster=args.target_cluster,
     )
 
     priority_band = job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{args.priority.upper()}")
@@ -948,8 +937,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
         "DAYTONA_ORGANIZATION_ID",
-        "DAYTONA_API_URL",
-        "DAYTONA_TARGET",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
@@ -959,6 +946,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         v = os.environ.get(k)
         if v:
             env_vars[k] = v
+    env_vars.update(_forwarded_environment(forward_env))
     env_vars.update(wandb_launch_environment(entity=args.wandb_entity))
     if not _is_checkpoint_export(args) and _rl_config_uses_daytona(args.config):
         for field in ("daytona_api_key_env", "eval_daytona_api_key_env"):
@@ -969,77 +957,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
                     raise ValueError(f"Missing Daytona credential environment variable: {name}")
                 env_vars[name] = value
 
-    # Load the cluster config (pydantic IrisClusterConfig) and build the provider
-    # bundle, then discover + tunnel to the controller. This mirrors the marin
-    # CLI's own path (iris/cli/connect.py::require_controller_url): for a local
-    # controller start an in-process LocalCluster; otherwise use the config's
-    # controller_address() (defaults.worker.controller_address) if set, else fall
-    # back to the backend's discover_controller(). cw-us-east-02a's controller
-    # kind is "coreweave" (non-local, no IAP auth) → the discover path.
-    #
-    # FEDERATED submission (--target-cluster set): submit through the PARENT (marin)
-    # meta-scheduler instead of the peer's own controller. We load marin.yaml (whose
-    # dashboard_url is the IAP-gated iris.oa.dev) and tunnel THERE; the `cluster EQ
-    # <peer>` constraint appended above makes marin delegate the whole job to the peer
-    # child.
-    # Reaching iris.oa.dev requires IAP creds (`iris login` with an @openathena.ai
-    # account, or an allowlisted service account); tunnel()/IrisClient handle the auth.
-    submit_cluster_config = args.cluster_config
-    if args.target_cluster:
-        parent_cfg = args.parent_cluster_config or _resolve_parent_cluster_config(args.cluster_config)
-        if not parent_cfg:
-            raise SystemExit(
-                "[rl-iris] --target-cluster set but no parent (marin) cluster config "
-                "could be resolved. Pass --parent-cluster-config <path to marin.yaml>."
-            )
-        submit_cluster_config = parent_cfg
-        print(
-            f"[rl-iris] Federated submission: delegating to peer '{args.target_cluster}' "
-            f"via the marin meta-scheduler ({parent_cfg}).",
-            flush=True,
-        )
-    from contextlib import contextmanager as _contextmanager
-
-    @_contextmanager
-    def _direct_client():
-        if ambient_client := _ambient_in_cluster_client(workspace):
-            with ambient_client as client:
-                yield client
-            return
-        from iris.cluster.composer import provider_bundle
-        from iris.cluster.config import load_config
-        from iris.cluster.local_cluster import LocalCluster
-
-        # Direct submission to --cluster's own controller. On CoreWeave the loopback SSH
-        # tunnel presents as the trusted local_admin identity (no IAP login needed) —
-        # byte-identical to before.
-        iris_config = load_config(submit_cluster_config)
-        bundle = provider_bundle(iris_config)
-        if iris_config.controller.controller_kind() == "local":
-            controller_address = LocalCluster(iris_config).start()
-        else:
-            controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-                iris_config.controller
-            )
-        with bundle.controller.tunnel(address=controller_address) as controller_url:
-            yield IrisClient.remote(controller_url, workspace=workspace)
-
-    if args.target_cluster:
-        # Federated submission MUST carry the IAP *user* identity: the controller rejects
-        # a loopback/local_admin tunnel identity for a federated job ("a local_admin
-        # (CIDR/loopback) identity cannot submit a federated job"), because delegation
-        # forwards the submitter's identity to the peer for its owner check. Connect to
-        # the marin parent exactly as the `iris job run` CLI does — open_iris_client
-        # threads the IAP ClientCredentials (iris JWT + IAP OIDC token) from the cached
-        # `iris login`, so the submission carries the user identity rather than loopback.
-        # Requires a completed `iris --cluster=marin login` (@openathena.ai).
-        from iris.cli.connect import open_iris_client
-
-        client_cm = open_iris_client(config_file=Path(submit_cluster_config), workspace=workspace)
-    else:
-        client_cm = _direct_client()
-
-    with client_cm as client:
+    with submission_client(
+        args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace
+    ) as (client, cluster_pin):
+        if cluster_pin is not None:
+            constraints.append(cluster_pin)
         entrypoint = Entrypoint.from_command(*command)
         job = client.submit(
             entrypoint=entrypoint,
@@ -1058,6 +980,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             ports=[port.value for port in RayPort],
             max_retries_failure=args.max_retries,
             max_task_failures=args.max_retries,
+            **(
+                {"max_retries_preemption": 0}
+                if "records" in args.config.skyrl.trainer.get("logger", ()) and not _is_checkpoint_export(args)
+                else {}
+            ),
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
         )
@@ -1084,14 +1011,6 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         outcome = supervise_iris_job(job)
         print(f"[rl-iris] Job exit: {outcome.exit_code}", flush=True)
         return outcome
-
-
-def _ambient_in_cluster_client(workspace: Path) -> IrisClient | None:
-    """Connect a nested launch to the controller assigned to its coordinator task."""
-    controller_url = os.environ.get("IRIS_CONTROLLER_URL")
-    if not controller_url:
-        return None
-    return IrisClient.in_cluster(controller_url, workspace=workspace)
 
 
 def _seconds_to_duration(secs: int):
