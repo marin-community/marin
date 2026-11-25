@@ -6,8 +6,9 @@
 One maintained module replaces the per-release compose scripts (see INVENTORY.md);
 every release-identifying value arrives as typed :class:`IdentityBackendComposeInputs`
 and the stage source carries none of them. Additions mode: the retained identity survey
-and backend map are carried verbatim and the fresh targets' registry fingerprints and
-backend survey rows are appended — nothing is removed or re-pinned.
+and backend map are carried verbatim, minus the plan's removed sources (their
+fingerprints, backend rows and the pair reviews that touch them), and the fresh targets'
+registry fingerprints and backend survey rows are appended. Nothing is re-pinned.
 
 The stage verifies before it composes: the fresh backend survey must cover exactly the
 targets under the current requirement schema, prior and fresh runtime settings must
@@ -199,12 +200,20 @@ def _registry_document(entry: dict[str, Any], reader: RegistryReader) -> dict[st
 def compose_identity_survey(
     prior: SourceIdentitySurvey,
     targets: tuple[str, ...],
+    removed: tuple[str, ...],
     fresh_fingerprints: dict[str, SourceFingerprint],
     snapshot_id: str,
 ) -> SourceIdentitySurvey:
-    """Extend the retained identity with the targets' fingerprints, rechecking reviews and groups."""
-    fingerprints: dict[str, SourceFingerprint | None] = {**prior.fingerprints, **fresh_fingerprints}
-    for review in prior.reviews:
+    """Drop the planned removals, extend with the targets' fingerprints, recheck reviews and groups."""
+    unknown = sorted(set(removed) - set(prior.fingerprints))
+    if unknown:
+        raise ValueError(f"planned removals are absent from the retained identity: {unknown[:4]}")
+    retained = {source_id: fp for source_id, fp in prior.fingerprints.items() if source_id not in removed}
+    fingerprints: dict[str, SourceFingerprint | None] = {**retained, **fresh_fingerprints}
+    retained_reviews = [
+        review for review in prior.reviews if not {review.similarity.left, review.similarity.right} & set(removed)
+    ]
+    for review in retained_reviews:
         pair = review.similarity
         touching = sorted({pair.left, pair.right} & set(targets))
         if touching:
@@ -226,9 +235,9 @@ def compose_identity_survey(
     overlap = sorted(set(prior.fingerprints) & set(targets))
     if overlap:
         raise ValueError(f"retained identity already holds {overlap[:4]}; additions mode never re-pins")
-    if len(fingerprints) != len(prior.fingerprints) + len(targets):
+    if len(fingerprints) != len(retained) + len(targets):
         raise ValueError("composed fingerprints do not equal the retained fingerprints plus the targets")
-    served_reviews = list(prior.reviews)
+    served_reviews = retained_reviews
     standings = {
         source_id: SourceStanding(fingerprint.task_count)
         for source_id, fingerprint in fingerprints.items()
@@ -272,18 +281,21 @@ def _compose(
         raise ValueError("registry index carries no revision")
     fresh_fingerprints = fetch_target_fingerprints(index, targets, registry_reader)
     prior_identity = canonical_identity_survey(read_ref(inputs.prior_identity))
-    identity_survey = compose_identity_survey(prior_identity, targets, fresh_fingerprints, fresh.snapshot_id)
+    identity_survey = compose_identity_survey(
+        prior_identity, targets, inputs.removed_sources, fresh_fingerprints, fresh.snapshot_id
+    )
 
     # Composed counts shared by the dry-run proof and the sealed receipts.
     backend_counts = {
-        "retained_rows_unchanged": len(prior_backend.sources),
+        "retained_rows_unchanged": len(backend_survey.sources) - len(targets),
         "added_rows": sorted(targets),
         "source_count": len(backend_survey.sources),
         "prior_schema_sha256": prior_backend.schema_sha256,
         "composed_schema_sha256": fresh.schema_sha256,
     }
     identity_counts = {
-        "retained_fingerprints_unchanged": len(prior_identity.fingerprints),
+        "retained_fingerprints_unchanged": len(identity_survey.fingerprints) - len(targets),
+        "removed_fingerprints": sorted(inputs.removed_sources),
         "added_fingerprints": sorted(targets),
         "fingerprint_count": len(identity_survey.fingerprints),
         "retained_review_count": len(identity_survey.reviews),

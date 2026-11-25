@@ -307,6 +307,23 @@ def test_dry_run_verifies_with_zero_writes(tmp_path):
     assert [row["kind"] for row in _feed_rows(tmp_path)] == ["STAGE_START", "STAGE_FINISH"]
 
 
+def test_planned_removals_leave_both_surveys(tmp_path):
+    """A removed source drops from the backend map, the identity and the reviews touching it."""
+    inputs, reader = _build(tmp_path)
+    removing = dataclasses.replace(inputs, removed_sources=(PRIOR_IDS[2],))
+    proof = compose_stage.run_identity_backend_compose(
+        removing, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path)
+    )
+    assert proof["backend"]["source_count"] == 4
+    assert proof["identity"]["fingerprint_count"] == 4
+    assert proof["identity"]["removed_fingerprints"] == [PRIOR_IDS[2]]
+    assert proof["identity"]["retained_review_count"] == 1
+
+    unknown = dataclasses.replace(inputs, removed_sources=("Test:Never-Retained",))
+    with pytest.raises(ValueError, match="planned removals are absent from the retained identity"):
+        compose_stage.run_identity_backend_compose(unknown, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
+
+
 def test_write_seals_documents_and_receipts_then_refuses_a_rerun(tmp_path):
     inputs, reader = _build(tmp_path)
     compose_stage.run_identity_backend_compose(inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path))
