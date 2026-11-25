@@ -13,6 +13,7 @@ import pytest
 import ray
 import yaml
 from omegaconf import OmegaConf
+from ray._private.label_utils import validate_node_label_syntax
 from ray.cluster_utils import Cluster
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -45,7 +46,8 @@ def test_fabric_probe_passes_writable_nvml_result_storage(monkeypatch):
 
     monkeypatch.setattr(pynvml, "_nvmlGetFunctionPointer", get_function)
     labels = node_physical_labels(rank=0, gpus_per_node=4, host="host", fabric_info=probe_fabric_info())
-    assert labels[FABRIC_LABEL] == f"{cluster}:7"
+    validate_node_label_syntax(labels)
+    assert labels[FABRIC_LABEL] == f"{cluster}.7"
 
 
 def launch_config(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, width=4, variant="GB200", locality=True):
