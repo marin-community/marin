@@ -3,6 +3,7 @@
 
 """Validate gate results and retained progress records."""
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypedDict
@@ -220,3 +221,37 @@ class AttemptSummary(BaseModel):
         if self.failed_facts:
             self.status = "failed"
         return self
+
+
+def completed_controls(
+    records: Iterable[AttemptSummary],
+    *,
+    model: str | None = None,
+    preset: str | None = None,
+    version: str | None = None,
+    limit: int | None = None,
+    branch: str = "main",
+) -> list[AttemptSummary]:
+    """Select the most recent completed control attempt from each matching native run."""
+    ordered = sorted(
+        (
+            record
+            for record in records
+            if record.is_control
+            and record.branch == branch
+            and record.dirty is False
+            and record.status == "succeeded"
+            and record.artifact_uri
+            and record.completed_at
+            and (model is None or record.model == model)
+            and (preset is None or record.series == preset)
+            and (version is None or record.preset_version == version)
+        ),
+        key=lambda record: (datetime.fromisoformat(record.completed_at or ""), record.run_id, record.attempt_id),
+        reverse=True,
+    )
+    by_run: dict[tuple[str, str | None, str | None, str | None], AttemptSummary] = {}
+    for record in ordered:
+        identity = (record.native_run_id or record.run_id, record.model, record.series, record.preset_version)
+        by_run.setdefault(identity, record)
+    return list(by_run.values())[:limit]

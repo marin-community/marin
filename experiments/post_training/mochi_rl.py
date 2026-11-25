@@ -19,12 +19,15 @@ from experiments.post_training.rl_presets import (
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
+    UPDATE_SECONDS_METRIC,
     Evaluation,
     Layout,
+    Metric,
     ModelPresets,
     Preset,
     Recipe,
     Training,
+    WindowStatistic,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 
@@ -231,9 +234,34 @@ _TRAIN_LONG_AGENTIC = replace(
     agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.7"
 )
 
+_UPDATE_SECONDS = Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN)
+_SPEED_MEDIUM = replace(
+    _TRAIN_MEDIUM.with_updates(10),
+    name="speed-medium",
+    control_preset="speed-medium",
+    measured=range(2, 11),
+    tasks_input="forbidden",
+    temporary_output=False,
+    guards=(_UPDATE_SECONDS,),
+    objectives=(_UPDATE_SECONDS,),
+)
+_LEARNING_SCORE = Metric(f"{_EVALUATION.name}/family_mean", True)
+_LEARNING_MEDIUM = replace(
+    _TRAIN_LONG.with_updates(10),
+    name="learning-medium",
+    control_preset="learning-medium",
+    evaluations=(replace(_EVALUATION, every=None, at_start=True),),
+    temporary_output=False,
+    guards=(_LEARNING_SCORE,),
+    objectives=(_LEARNING_SCORE,),
+)
+
+
 MOCHI = ModelPresets(
     model="mochi",
     presets=(
+        _SPEED_MEDIUM,
+        _LEARNING_MEDIUM,
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,

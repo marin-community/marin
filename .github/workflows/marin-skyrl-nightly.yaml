@@ -7,6 +7,16 @@ on:
     - cron: "0 9 * * 0"
   workflow_dispatch:
     inputs:
+      controls:
+        description: Run the RL controls, including branch proof runs
+        type: boolean
+        default: false
+      model:
+        description: Optional model for the controls (snowball or mochi)
+        type: string
+      preset:
+        description: Optional gated preset to run
+        type: string
       grug_cutlass:
         description: Include the weekly Grug CUTLASS case alongside nightly Triton
         type: boolean
@@ -25,6 +35,7 @@ concurrency:
 
 jobs:
   gpu-gate:
+    if: ${{ !inputs.controls }}
     name: ${{ matrix.lane }}
     strategy:
       fail-fast: false
@@ -161,6 +172,56 @@ jobs:
         with:
           name: ${{ matrix.lane }}-run-log
           path: ${{ matrix.log }}
+          if-no-files-found: ignore
+
+  rl-controls:
+    if: github.event_name == 'schedule' || inputs.controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      CONTROL_BATCH: ${{ github.run_id }}-${{ github.run_attempt }}
+      REQUESTED_MODEL: ${{ inputs.model }}
+      REQUESTED_PRESET: ${{ inputs.preset }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: hai-gcp-models
+      - name: Submit and publish RL controls
+        run: |
+          set -eo pipefail
+          options=()
+          if [[ -n "$REQUESTED_MODEL" ]]; then
+            options+=(--model "$REQUESTED_MODEL")
+          fi
+          if [[ -n "$REQUESTED_PRESET" ]]; then
+            options+=(--preset "$REQUESTED_PRESET")
+          fi
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" "${options[@]}" \
+            2>&1 | tee rl-controls.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rl-control-runs
+          path: rl-controls.log
           if-no-files-found: ignore
 
   report-failure:
