@@ -392,7 +392,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
-                preset, handles, table=table, inputs=RunInputs(preset_name=preset.name, requirements=requirements)
+                preset,
+                handles,
+                group_name="tests/publication",
+                table=table,
+                inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )
         )[0]
         return report, str(report.path)

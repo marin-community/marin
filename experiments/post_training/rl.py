@@ -161,20 +161,21 @@ def _run_name(
     preset: presets.Preset,
     provenance: Provenance,
     inputs_hash: str,
-    replicate: int,
+    replicate: int | None,
     *,
     table: presets.ModelPresets,
     control: bool,
     resume_step: int | None,
 ) -> str:
     if control:
+        assert replicate is not None
         if provenance.base_commit is None:
             raise click.BadParameter("controls require a recorded source commit")
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
-    return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
+    return user_owned_name(name + (f"-r{replicate}" if preset.gated and replicate is not None else ""))
 
 
 def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
@@ -322,6 +323,15 @@ def build_experiment(
         rl_gate.gate_step(
             preset,
             tuple(runs),
+            group_name=_run_name(
+                preset,
+                provenance,
+                inputs_hash,
+                None,
+                table=table,
+                control=False,
+                resume_step=resume.step if resume is not None else None,
+            ),
             inputs=inputs,
             table=table,
         )

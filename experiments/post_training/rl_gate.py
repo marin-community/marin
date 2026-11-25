@@ -1000,10 +1000,15 @@ def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
 
 
 def gate_step(
-    preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: RunInputs
+    preset: presets.Preset,
+    runs: tuple[ArtifactStep[SkyRLRun], ...],
+    *,
+    group_name: str,
+    table: ModelPresets,
+    inputs: RunInputs,
 ) -> ArtifactStep[GateReport]:
     pin = control_pin(preset, table=table)
-    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
+    name = f"{group_name}/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
     return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)

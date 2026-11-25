@@ -181,22 +181,20 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         name = f"users/test/requirements-{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
-    report = run(
-        gate.gate_step(
+
+    def gate_for_candidates():
+        return gate.gate_step(
             preset,
             tuple(candidates),
+            group_name="users/test/requirements",
             inputs=RunInputs(
                 preset_name=preset.name,
-                requirements=(
-                    key + "<=control",
-                    key + "<=control",
-                    key + "<=0",
-                    "speed/update_seconds<=control",
-                ),
+                requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
             ),
             table=snowball_model.SNOWBALL,
         )
-    )[0]
+
+    report = run(gate_for_candidates())[0]
     assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
@@ -212,14 +210,8 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     for root in control_roots:
         with edit_receipt(root) as receipt:
             receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
-    stale = run(
-        gate.gate_step(
-            preset,
-            tuple(candidates),
-            table=snowball_model.SNOWBALL,
-            inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
-        )
-    )[0]
+    stale = run(gate_for_candidates())[0]
+    assert stale.path != report.path
     assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
 
 
@@ -284,7 +276,9 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
         expected = (
             "planned_updates"
             if fault == "updates"
-            else "finite_losses_and_gradients" if fault in ("loss", "policy-loss") else "grader_error_fraction"
+            else "finite_losses_and_gradients"
+            if fault in ("loss", "policy-loss")
+            else "grader_error_fraction"
         )
         assert not facts[expected].holds
 

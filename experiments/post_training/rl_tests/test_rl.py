@@ -133,7 +133,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
     del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
-    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
+    assert gate.config_version(recorded) == gate.config_version(planned)
 
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
