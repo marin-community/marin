@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The 2026-11-20 trial policy resolves to the catalog selections and windows each candidate runs with."""
+"""Every policy version resolves to the windows the worker enforces, and the trial shows what each candidate runs."""
 
 import pytest
 from evalrecords.records import TaskEvidence
@@ -13,7 +13,11 @@ from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, reso
 from experiments.evaluation.policy.versions import POLICIES
 
 POLICY = POLICIES["marin-2026-11-20-trial"]
-CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda candidate: candidate.name)
+EVERY_CANDIDATE = pytest.mark.parametrize(
+    ("policy", "candidate"),
+    [(policy, candidate) for policy in POLICIES.values() for candidate in policy.candidates],
+    ids=lambda value: getattr(value, "name", None) or getattr(value, "version", None),
+)
 
 
 def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
@@ -37,9 +41,9 @@ def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
     return selection_dataset(selection, model_format).protocol.context_window or model.serve.max_model_len
 
 
-@CANDIDATES
-def test_each_context_is_the_window_the_worker_enforces(candidate):
-    for item in resolve(POLICY, candidate):
+@EVERY_CANDIDATE
+def test_each_context_is_the_window_the_worker_enforces(policy, candidate):
+    for item in resolve(policy, candidate):
         assert item.context == _enforced_context(item), item.evaluation.name
 
 
