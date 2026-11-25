@@ -821,8 +821,9 @@ def _shadow_routing(
     return routing, shadowed_by_expert
 
 
-@jax.custom_vjp
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
 def _shadow_weights(
+    local_experts: int,
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     experts: Int[Array, "R"],
@@ -831,33 +832,34 @@ def _shadow_weights(
     """Broadcast the shadowed experts' weights from their owners to every shard of the EP group.
 
     The forward ``psum`` is exact, since only the owner contributes. The backward sums every shard's
-    gradient in float32 and adds it to the owner's weights, rounding once.
+    gradient in float32 and rounds it once onto the owner's slot. It expects each shard's own cotangent,
+    as ``shard_map(check_vma=False)`` delivers; with replication checking the cotangent arrives summed.
     """
-    weights, _ = _shadow_weights_fwd(moe_w13_local, moe_w2_local, experts, shard_id)
+    weights, _ = _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id)
     return weights
 
 
-def _shadow_weights_fwd(moe_w13_local, moe_w2_local, experts, shard_id):
-    local_experts = moe_w13_local.shape[0]
+def _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id):
     owned = (experts // local_experts == shard_id)[:, None, None]
     local = experts % local_experts
     w13 = jax.lax.psum(jnp.where(owned, moe_w13_local[local], 0), "expert")
     w2 = jax.lax.psum(jnp.where(owned, moe_w2_local[local], 0), "expert")
-    return (w13, w2), (moe_w13_local, moe_w2_local, owned, local)
+    # Save only the indices: the backward needs the bank's shape, not its values.
+    return (w13, w2), (owned, local)
 
 
-def _shadow_weights_bwd(residuals, cotangents):
-    moe_w13_local, moe_w2_local, owned, local = residuals
+def _shadow_weights_bwd(local_experts, residuals, cotangents):
+    owned, local = residuals
 
-    def to_owner(local_weights, cotangent):
+    def to_owner(cotangent):
         total = jax.lax.psum(cotangent.astype(jnp.float32), "expert")
-        # Every slot points at a real local expert, owned or not, so add: a set would let a non-owned
-        # slot's zero overwrite the owner's gradient.
-        gradient = jnp.zeros(local_weights.shape, jnp.float32).at[local].add(jnp.where(owned, total, 0))
-        return gradient.astype(local_weights.dtype)
+        # The shadowed experts are distinct, so each owned slot receives one value and the scatter adds it
+        # to zero exactly; non-owned slots add zero.
+        gradient = jnp.where(owned, total, 0).astype(cotangent.dtype)
+        return jnp.zeros((local_experts, *cotangent.shape[1:]), cotangent.dtype).at[local].add(gradient)
 
     w13_cotangent, w2_cotangent = cotangents
-    return to_owner(moe_w13_local, w13_cotangent), to_owner(moe_w2_local, w2_cotangent), None, None
+    return to_owner(w13_cotangent), to_owner(w2_cotangent), None, None
 
 
 _shadow_weights.defvjp(_shadow_weights_fwd, _shadow_weights_bwd)
@@ -1055,7 +1057,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     if shadow is not None:
         with jax.named_scope("moe_shadow"):
             shadowed = shadow.positions < shadow.assignments.shape[0]
-            w13_shadow, w2_shadow = _shadow_weights(moe_w13_local, moe_w2_local, shadow.experts, shard_id)
+            w13_shadow, w2_shadow = _shadow_weights(
+                moe_w13_local.shape[0], moe_w13_local, moe_w2_local, shadow.experts, shard_id
+            )
             shadow_out = _shadow_experts(
                 x_local,
                 jnp.where(shadowed, combine_weights_local, 0),
