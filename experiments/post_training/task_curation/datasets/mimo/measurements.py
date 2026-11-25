@@ -23,7 +23,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
-from marin.execution.artifact import write_artifact
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -80,8 +80,15 @@ def prepare_population(output_path: str) -> SourceTextPopulation:
         admission_rejections={},
     )
     # The scan's DF steps re-load the population from its recorded path in their
-    # workers; the artifact record must exist there before the graph runs.
-    write_artifact(population, output_path)
+    # workers; the artifact record must exist there before the graph runs. The record
+    # carries the value fields WITHOUT `path` (raw_load injects it from the source).
+    write_record(
+        ArtifactRecord(
+            output_path=output_path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
     return population
 
 
