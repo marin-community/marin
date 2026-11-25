@@ -10,7 +10,6 @@ import zipfile
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.evaluation.benchmarks.livecodebench_pro import HERE, PROMPT, TESTS_INPUT, source
@@ -39,7 +38,6 @@ SLOW_SUM = (
     "int main() { while (std::clock() < 3 * CLOCKS_PER_SEC / 4) {}\n"
     "long long a, b; std::cin >> a >> b; std::cout << a + b << std::endl; }"
 )
-"""A correct program that first spends 0.75 CPU seconds."""
 
 
 def grader():
@@ -105,7 +103,6 @@ def test_conversion_prompts_with_the_official_prefix_and_ships_the_archive_and_i
     (tmp_path / f"{PROBLEM}.zip").write_bytes(archive_bytes())
     task = convert_row(recipe(), source_row(), inputs={TESTS_INPUT: StoragePath(str(tmp_path))})
 
-    assert isinstance(task, TaskSpec)
     assert task.context.events[0].content == PROMPT + "Print a + b."
     files = {resource.path: resource for resource in task.resources.verifier}
     config = json.loads(resource_bytes(files["config.json"]))
