@@ -574,6 +574,16 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
+        # Pi with BixBench's profile, installed over each task's image, under the packages' own timeouts.
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                job=JobSettings(agent_install=pi_install(BIXBENCH_PI)),
+            )
+            for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
+        ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),
         harbor_source(
             BFCL_PARITY_PI,
