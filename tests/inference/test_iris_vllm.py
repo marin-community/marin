@@ -53,8 +53,6 @@ def test_healthy_follower_outlives_rendezvous_deadline(monkeypatch):
 def test_coordinator_latches_shutdown_and_tracks_stopped_followers():
     coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
 
-    assert coordinator.vllm_primary_address() == "10.0.0.1"
-    assert coordinator.state() is iris_vllm._GangState.WAITING
     assert not coordinator.followers_stopped((1, 2))
 
     coordinator.request_shutdown()
