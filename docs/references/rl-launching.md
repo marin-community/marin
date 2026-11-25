@@ -83,9 +83,12 @@ Use the run's resolved launch document to export its best committed native
 checkpoint, including after an early stop.
 
 ```bash
-uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
+uv run --isolated --frozen --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
   --launch-config ./training-launch.yaml --recover-best
 ```
+
+The `cpu` extra runs on macOS. The `vllm` and `megatron` extras and GPU torch
+builds do not run on macOS; export and training jobs run on Iris.
 
 ## One Hydra launch document
 
@@ -216,7 +219,7 @@ with the original checkpoint directory, resolved training configuration, and
 export placement in these variables:
 
 ```bash
-uv run --directory vendor/skyrl --frozen --extra cpu --no-group dev \
+uv run --isolated --frozen --project vendor/skyrl --extra cpu --no-group dev \
   python -m cloud.iris.export_hf_checkpoint \
   --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
   --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"

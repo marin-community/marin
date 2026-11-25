@@ -401,6 +401,10 @@ def _reply_label(spec: JudgeSpec, answer: str, labels: dict[str, float]) -> str 
         final = _label_cased(spec, member)
         return final if final in labels else None
     answer = _label_cased(spec, answer)
+    if spec.label_scan == "pattern":
+        # The judge's explanation may name other labels; its last verdict match decides.
+        final = _last_verdict(answer, spec.verdict_patterns)
+        return final if final in labels else None
     if spec.label_scan == "whole":
         return answer if answer in labels else None
     final = answer.rsplit("\n", 1)[-1].strip()
@@ -437,7 +441,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
         answer, detail = _judged_answer(
             spec, client, model, messages, attempt_detail={}, temperature=spec.sampling.temperature
         )
-        verdict = _pairwise_verdict(_label_cased(spec, answer), spec.verdict_patterns)
+        verdict = _last_verdict(_label_cased(spec, answer), spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
         score_a = float(labels[verdict])
@@ -516,7 +520,7 @@ def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int 
     return verdicts, confidence
 
 
-def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
+def _last_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
     """The last nonempty match of the first pattern with one, as Arena-Hard parses verdicts."""
     for pattern in patterns:
         matches = [match for match in re.findall(pattern, reply) if match]

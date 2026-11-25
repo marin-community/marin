@@ -168,6 +168,7 @@ class SourceOrigin(StrEnum):
     LITE_CODER = "Lite-Coder"
     LM_EVAL = "lm-eval"
     LIVECODEBENCH = "LiveCodeBench"
+    LIVECODEBENCH_PRO = "LiveCodeBench-Pro"
     MARCUSM117 = "marcusm117"
     MARIN = "Marin"
     MARIN_COMMUNITY = "marin-community"
