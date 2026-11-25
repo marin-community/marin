@@ -2,7 +2,6 @@
 
 from rolloutengine.models import TASK_TIMING_KEYS as TASK_TIMING_KEYS
 
-GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens"
 ROLLOUT_FAILURE_FRACTION_METRIC = "generate/failed_trajectory_fraction"
 ENVIRONMENT_METRIC_PREFIX = "environment/"
 GENERATE_OUTCOME_METRIC_PREFIX = "generate/outcome/"

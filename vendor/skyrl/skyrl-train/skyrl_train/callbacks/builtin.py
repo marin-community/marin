@@ -43,7 +43,7 @@ from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_desti
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
-from skyrl_train.metric_names import GROSS_ROLLOUT_TOKENS_METRIC
+from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -207,7 +207,7 @@ class RolloutTokenBudgetCallback(TrainerCallback):
 
     def on_step_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
         self.total += state.metrics[GROSS_ROLLOUT_TOKENS_METRIC]
-        trainer.all_metrics["rollout/gross_response_tokens_total"] = self.total
+        trainer.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] = self.total
         if self.total >= self.budget:
             logger.info(
                 "Reached rollout token budget at update {}: {} >= {}", state.global_step, self.total, self.budget

@@ -32,6 +32,7 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
@@ -387,7 +388,7 @@ def measured_training(
     for step, row in sorted(metrics.items()):
         if step == 0 or "trainer/global_step" not in row:
             continue
-        gross = row.get("rollout/gross_response_tokens", -1)
+        gross = row.get(GROSS_ROLLOUT_TOKENS_METRIC, -1)
         if (
             step != completed + 1
             or row["trainer/global_step"] != step
@@ -401,7 +402,7 @@ def measured_training(
             break
         spent += int(gross)
         completed = step
-        if row.get("rollout/gross_response_tokens_total") != spent:
+        if row.get(CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC) != spent:
             valid = False
             break
     reached = valid and spent >= rollout_token_budget

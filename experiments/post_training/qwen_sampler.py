@@ -23,6 +23,7 @@ TASKS = f"{qwen_sampler_lab.NAME}@{qwen_sampler_lab.VERSION}"
 QWEN = ArtifactHfModel(qwen3_0_6b, relative_path="")
 RESPONSE_TOKENS = 4096
 PROMPT_EXPLORATION = 0.20
+LOW_EXPLORATION = 0.05
 ROLE_PLAN = replace(role_plan(batch_size=16, group_size=4, micro_train_batch_size=4), colocate_all=True)
 LAYOUT = Layout(
     name="qwen-h100x2",
@@ -143,14 +144,22 @@ PROMPT_ARMS = (
 )
 ARMS = (
     ("fixed", "adaptive-source", 1.0),
-    ("thompson", "adaptive-source-thompson", 0.05),
+    ("thompson", "adaptive-source-thompson", LOW_EXPLORATION),
     *((arm, kind, PROMPT_EXPLORATION) for arm, kind in PROMPT_ARMS),
 )
 RNO_PAIR_PILOT_ARMS = (
     *ARMS,
-    *((f"{arm}-eps05", kind, 0.05) for arm, kind in PROMPT_ARMS),
+    *((f"{arm}-eps05", kind, LOW_EXPLORATION) for arm, kind in PROMPT_ARMS),
 )
 FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
+CONFIRMATION_ARMS = ("fixed", "thompson", "cost-aware-eps05")
+CONFIRMATION_SEEDS = (41, 53)
+CONFIRMATION_TOKEN_BUDGET = 3_000_000
+
+
+def with_rollout_token_budget(preset: Preset, tokens: int) -> Preset:
+    config = preset.recipe.config.merge(RecipePatch(trainer=sections.Trainer(rollout_token_budget=tokens)))
+    return replace(preset, recipe=replace(preset.recipe, config=config))
 
 
 def token_budget_smoke(arm: str, kind: str, epsilon: float) -> Preset:
@@ -164,8 +173,31 @@ def token_budget_smoke(arm: str, kind: str, epsilon: float) -> Preset:
         revision="2026.11.25.8",
         evaluation_interval=None,
     )
-    config = preset.recipe.config.merge(RecipePatch(trainer=sections.Trainer(rollout_token_budget=200_000)))
-    return replace(preset, recipe=replace(preset.recipe, config=config), evaluations=(replace(EVAL, at_start=False),))
+    return with_rollout_token_budget(replace(preset, evaluations=(replace(EVAL, at_start=False),)), 200_000)
+
+
+def confirmation_presets(arms: tuple[str, ...]) -> tuple[Preset, ...]:
+    """Build fresh, gross-token-matched runs for the selected discovery arms."""
+    sampler_by_arm = {arm: (kind, epsilon) for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS}
+    layout = replace(RNO_PAIR_LAYOUT, coordinator_timeout_hours=3, job_timeout_seconds=7200)
+    evaluation = replace(FULL_VALIDATION, at_start=True)
+    presets = []
+    for arm in arms:
+        kind, epsilon = sampler_by_arm[arm]
+        for seed in CONFIRMATION_SEEDS:
+            preset = sampler_preset(
+                f"rno-pair-budget-confirm-{arm}-seed{seed}",
+                160,
+                kind,
+                epsilon,
+                seed,
+                layout=layout,
+                revision="2026.11.25.9",
+                evaluation_interval=None,
+            )
+            preset = replace(preset, evaluations=(evaluation,))
+            presets.append(with_rollout_token_budget(preset, CONFIRMATION_TOKEN_BUDGET))
+    return tuple(presets)
 
 
 def layout_presets(
@@ -212,12 +244,13 @@ QWEN_SAMPLER = ModelPresets(
             confirmation=(FULL_VALIDATION,),
         ),
         *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
+        *confirmation_presets(CONFIRMATION_ARMS),
         *(
             token_budget_smoke(arm, kind, epsilon)
             for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
             if arm in {"fixed", "cost-aware-eps05"}
         ),
-        # Dense control checkpoints allow comparison at the contextual arms' actual generation cost.
+        # Evaluate every update to compare controls at the contextual arms' observed token budgets.
         *(
             sampler_preset(
                 f"rno-pair-calibrate-{arm}",

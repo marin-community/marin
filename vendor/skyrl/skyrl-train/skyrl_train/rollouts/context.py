@@ -57,7 +57,7 @@ from skyrl_train.dynamic_sampling import (
     resolve_dynamic_sampling_criteria,
 )
 from skyrl_train.grader_reporting import write_grader_report
-from skyrl_train.metric_names import GROSS_ROLLOUT_TOKENS_METRIC
+from rolloutengine.models import GROSS_ROLLOUT_TOKENS_METRIC
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (

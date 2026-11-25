@@ -16,6 +16,8 @@ from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
+GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens"
+CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens_total"
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
 SETUP_COMPLETED_METRIC = "setup_completed"

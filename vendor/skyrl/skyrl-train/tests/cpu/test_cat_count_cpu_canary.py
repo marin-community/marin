@@ -29,7 +29,8 @@ from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
-from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, GROSS_ROLLOUT_TOKENS_METRIC, TASK_TIMING_KEYS
+from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
+from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
@@ -517,10 +518,21 @@ def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_se
         step_gross = sum(result["generated_tokens"] for result in results if result["dispatch_step"] == row["step"])
         assert row[GROSS_ROLLOUT_TOKENS_METRIC] == step_gross
     assert sum(row[GROSS_ROLLOUT_TOKENS_METRIC] for row in training) == gross
-    assert training[-1]["rollout/gross_response_tokens_total"] == gross
-    assert training[-2]["rollout/gross_response_tokens_total"] < cfg.trainer.rollout_token_budget <= gross
+    assert training[-1][CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] == gross
+    assert training[-2][CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] < cfg.trainer.rollout_token_budget <= gross
     consumed = sum(row["body"]["response_tokens"] for row in cat_count_session if row["name"] == "consumed_staleness")
     assert gross > consumed
+    budget_metrics = {
+        (int(row["attributes"]["step"]), row["attributes"]["metric"]): row["value"]
+        for row in cat_count_session
+        if row["name"] == "training_metric_value"
+        and row["attributes"].get("metric") in (GROSS_ROLLOUT_TOKENS_METRIC, CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC)
+    }
+    assert budget_metrics == {
+        (row["step"], metric): row[metric]
+        for row in training
+        for metric in (GROSS_ROLLOUT_TOKENS_METRIC, CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC)
+    }
     measured = [
         row
         for row in cat_count_session
