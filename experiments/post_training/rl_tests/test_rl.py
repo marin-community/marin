@@ -1147,7 +1147,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
             timeout.setattr(snowball, "time", SimpleNamespace(monotonic=lambda: next(clock)))
             timeout.setattr(client.job.return_value, "state_only", lambda: JobState.RUNNING)
             timed_out = CliRunner().invoke(follow)
-        assert timed_out.exit_code == 1 and "Check its Iris state before resubmitting" in timed_out.output
+        assert timed_out.exit_code == 3 and "Check its Iris state before resubmitting" in timed_out.output
         assert read_attempt(str(source / "exports"), "native-indexed").interruption is None
         assert [row.status for row in publications] == ["running"]
         publications.clear()
