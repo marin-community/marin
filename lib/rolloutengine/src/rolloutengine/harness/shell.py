@@ -188,6 +188,8 @@ class ShellHarness:
     """The provider that serves each ``ProviderRequirement.action_interface``."""
     prompt: Callable[[TaskSpec, BoundShellTool | None, tuple[FunctionDefinition, ...]], Prompt] = task_prompt
     """Render the task's public conversation and tool presentation."""
+    source_turn_limit: int | None = None
+    """End a source's native loop after recording its final tool observations."""
 
     def __post_init__(self) -> None:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
@@ -195,6 +197,8 @@ class ShellHarness:
         # Machines treat a negative limit differently, for example ShellSim slices with it and returns most of a stream.
         if self.output_limit_bytes <= 0:
             raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
+        if self.source_turn_limit is not None and self.source_turn_limit <= 0:
+            raise ValueError("The source turn limit must be positive")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         if task.completion_protocol is not None:
@@ -232,9 +236,11 @@ class ShellHarness:
             tools[name] = sessions[bound.requirement_name]
         definitions = tuple(tool.definition for tool in provider_tools.values())
         turn = await session.start(self.prompt(task, shell_tool, definitions))
+        turns = 0
         while True:
+            turns += 1
             transition = await _call_tools(task, machine, tools, context.events, turn)
-            if transition.done:
+            if transition.done or (self.source_turn_limit is not None and turns >= self.source_turn_limit):
                 session.record(observations=transition.observations, metrics=transition.metrics)
                 return
             turn = await session.reply(transition.observations)

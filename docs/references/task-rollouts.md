@@ -366,6 +366,14 @@ or `None` for a task without one, and the task's `ProviderRequirement`, includin
 Attempts never share a provider session, so provider state cannot leak between rollouts; each session closes
 in the attempt's cleanup. `ToolCallResult.content` becomes the tool observation verbatim; it is text, as in a chat tool message, and providers usually encode JSON in it.
 `done=True` ends the rollout after the current call, like a final tool; grading follows.
+
+The SkyRL consumer registers `workplace-native-tools:v1` with `WorkplaceProvider`.
+For these tasks, it preserves the native conversation, 27 function schemas,
+`temperature=1.0`, `parallel_tool_calls=False`, and six-model-turn limit.
+The provider calls the task's declared Workplace runtime on its own state machine;
+a missing machine or an undeclared function fails before command execution.
+The harness's `source_turn_limit=6` ends the native loop after recording the final
+tool observations, without requesting a seventh model completion.
 Non-object arguments return the JSON error observation that shell calls use; the provider validates the rest.
 A provider-only task needs no task machine.
 
