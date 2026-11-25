@@ -241,12 +241,14 @@ def test_population_repair_covers_every_task_and_writes_the_ledger(tmp_path):
         with pq.ParquetWriter(stream, table.schema) as writer:
             writer.write_table(table)
     bindings = {row["id"]: binding_for(row) for row in rows}
-    summary = repair_population(input_parquet, bindings, tmp_path / "out")
+    summary = repair_population(input_parquet, bindings, tmp_path / "out", revision="landing-rev")
     assert summary["tasks"] == 3
     ledger = json.loads((tmp_path / "out" / "repair-ledger.json").read_text())
     assert len(ledger["tasks"]) == 3
     with pytest.raises(RepairRejected, match="omit task"):
-        repair_population(input_parquet, {rows[0]["id"]: bindings[rows[0]["id"]]}, tmp_path / "out2")
+        repair_population(
+            input_parquet, {rows[0]["id"]: bindings[rows[0]["id"]]}, tmp_path / "out2", revision="landing-rev"
+        )
 
 
 def test_population_repair_excludes_typed_tasks(tmp_path):
@@ -268,7 +270,7 @@ def test_population_repair_excludes_typed_tasks(tmp_path):
             ]
         }
     )
-    summary = repair_population(input_parquet, bindings, tmp_path / "out", exclusions)
+    summary = repair_population(input_parquet, bindings, tmp_path / "out", exclusions, revision="landing-rev")
     assert summary["tasks"] == 2 and summary["excluded_tasks"] == 1
     ledger = json.loads((tmp_path / "out" / "repair-ledger.json").read_text())
     assert ledger["excluded_tasks"] == [
@@ -286,6 +288,7 @@ def test_population_repair_excludes_typed_tasks(tmp_path):
             bindings,
             tmp_path / "out2",
             exclusions_from_document({"tasks": [{"task_id": "missing", "reason": "r", "evidence": "e"}]}),
+            revision="landing-rev",
         )
 
 

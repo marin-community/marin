@@ -34,7 +34,6 @@ import hashlib
 import json
 import re
 import shutil
-import subprocess
 import tomllib
 from collections import Counter
 from dataclasses import dataclass
@@ -223,21 +222,6 @@ CONVERSION_RECEIPT_PROTOCOL = "mimo-taskspec-conversion-v1"
 CONVERTER_NAME = "experiments.post_training.task_curation.datasets.mimo.repair"
 
 
-def converter_revision() -> str:
-    """The landing revision the converter runs from, read from its own checkout."""
-    root = Path(__file__).resolve().parents[4]
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RepairRejected("the converter cannot read its own checkout revision")
-    return result.stdout.strip()
-
-
 def exclusions_from_document(document: dict) -> dict[str, TaskExclusion]:
     """Validate the repair lane's typed per-task exclusion document."""
     exclusions = {}
@@ -400,11 +384,16 @@ def repair_population(
     bindings: dict[str, ImageBinding],
     output_dir: Path,
     exclusions: dict[str, TaskExclusion] | None = None,
-    revision: str | None = None,
+    revision: str = "",
 ) -> dict:
-    """Rewrite the whole retained population and write the repaired release artifacts."""
+    """Rewrite the whole retained population and write the repaired release artifacts.
+
+    ``revision`` is the landing revision the converter runs from; the conversion
+    receipt binds it, so a run without it cannot produce a receipt admission accepts.
+    """
+    if not revision:
+        raise RepairRejected("the conversion receipt requires the converter's landing revision")
     schema = pq.ParquetFile(input_parquet).schema_arrow
-    revision = revision or converter_revision()
     exclusions = exclusions or {}
     ledger = []
     conversions = []
@@ -513,6 +502,11 @@ def main() -> None:
     parser.add_argument("--revision", default=None, help="the pinned release revision")
     parser.add_argument("--bindings", required=True, help="the image lane's binding document URI")
     parser.add_argument("--exclude", default=None, help="the typed per-task exclusion document URI")
+    parser.add_argument(
+        "--converter-revision",
+        required=True,
+        help="the landing revision the converter runs from; the conversion receipt binds it",
+    )
     parser.add_argument("--output", required=True, help="directory for the repaired release, local or object-store")
     arguments = parser.parse_args()
     if (arguments.input is None) == (arguments.repo is None):
@@ -528,12 +522,14 @@ def main() -> None:
     )
     output = StoragePath(arguments.output)
     if output.is_local:
-        summary = repair_population(input_parquet, bindings, Path(arguments.output), exclusions)
+        summary = repair_population(
+            input_parquet, bindings, Path(arguments.output), exclusions, arguments.converter_revision
+        )
         print(json.dumps(summary, indent=1))
         return
     with TemporaryDirectory(prefix="mimo-repair-") as temporary:
         staging = Path(temporary)
-        summary = repair_population(input_parquet, bindings, staging, exclusions)
+        summary = repair_population(input_parquet, bindings, staging, exclusions, arguments.converter_revision)
         for name in ("tasks.parquet", "repair-ledger.json", "repair-summary.json", "conversion-receipt.json"):
             destination = output / name
             if destination.exists():
