@@ -328,6 +328,13 @@ answer-format instructions and tool schemas. The shell harness appends instructi
 `TaskSpec.context.events`; assistant-prefix tasks use their continuation and whitespace rules.
 Compare a live saved prompt's token IDs with its frozen hash before counting the evaluation.
 
+For measurements bounded by a single turn and a fixed token budget, explicitly set
+`environment.task_sessions.task_spec.session.model_turn_timeout`, `total_turn_timeout`,
+and `attempt_timeout` to `null`. Canonical TaskSpec defaults include a 1,800-second model
+deadline, which can cancel long or queued requests before they reach their token limit.
+Retain bounded verifier and cleanup deadlines. Report timed-out generations as unassessed
+rather than treating their missing completions as evidence of low loop incidence.
+
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
 finishes its own uploads using the same SDK deadline. These waits can take up to

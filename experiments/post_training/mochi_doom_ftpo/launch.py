@@ -135,6 +135,17 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
                     max_staleness_steps=0, batch_policy="full_batch", max_in_flight=64
                 ),
             ),
+            environment=sections.Environment(
+                task_sessions={
+                    "task_spec": {
+                        "session": {
+                            "model_turn_timeout": None,
+                            "total_turn_timeout": None,
+                            "attempt_timeout": None,
+                        }
+                    },
+                }
+            ),
             generator=sections.Generator(
                 max_num_seqs=64,
                 engine_init_timeout_seconds=7200,
@@ -227,7 +238,7 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
 
 BASELINE = Preset(
     name="doom-baseline",
-    revision="2026.11.24.4",
+    revision="2026.11.24.5",
     recipe=Recipe(
         layout=BASELINE_LAYOUT,
         fixed_reply_tokens=None,
@@ -255,6 +266,17 @@ BASELINE = Preset(
 )
 SAMPLED = replace(
     BASELINE, name="doom-baseline-sampled", evaluations=(evaluation("sampled32k", "panel32k", 32768, 0.7),)
+)
+BASELINE_32K = replace(
+    BASELINE,
+    name="doom-baseline-32k",
+    evaluations=(
+        evaluation("panel32k", "panel32k", 32768),
+        evaluation("reserve32k", "reserve32k", 32768),
+        evaluation("sampled32k", "panel32k", 32768, 0.7),
+        evaluation("sampled_reserve32k", "reserve32k", 32768, 0.7),
+    ),
+    budget="128 GB200; fixed-token 32K baseline and hashed reserves, greedy plus sampled",
 )
 RESERVE = replace(
     BASELINE,
@@ -317,7 +339,7 @@ MOCHI_DOOM = ModelPresets(
     model="mochi",
     namespace="mochi-doom-ftpo",
     control_pins={},
-    presets=(BASELINE, SAMPLED, RESERVE, SMOKE, MATH, MIXED, LONG, LONG_PP16, LONG_16K, EVAL, EVAL_GREEDY),
+    presets=(BASELINE, BASELINE_32K, SAMPLED, RESERVE, SMOKE, MATH, MIXED, LONG, LONG_PP16, LONG_16K, EVAL, EVAL_GREEDY),
     needs_completed_default_export=False,
 )
 
