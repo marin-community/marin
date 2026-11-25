@@ -1,7 +1,7 @@
 # Daytona operations for agentic RL
 
-Use this runbook when Harbor trials fail during sandbox setup, snapshot quota
-prevents a launch, or completed trials leave provider capacity occupied. Iris
+Use this runbook when task attempts fail during sandbox setup, snapshot quota
+prevents a launch, or completed attempts leave provider capacity occupied. Iris
 job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 
 ## Credentials and account selection
@@ -9,18 +9,13 @@ job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 Agentic RL uses the dedicated `DAYTONA_RL_API_KEY`. A generic Daytona key can
 authenticate successfully against the wrong account. Do not substitute it for
 the RL key. Resolve the credential through the launcher's supported secret
-indirection and verify that the coordinator and trial workers receive it.
+indirection and verify that the coordinator and rollout workers receive it.
 
-Validation that needs declarative image builds uses the Daytona **eval** account,
-not the RL account. Keep the two credentials separately named and select the
-eval credential only in the validation subprocess. For inline Harbor validation,
-set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
-forward it through both the coordinator and task launcher. Do not globally
-replace the RL credential: training containers remain in the RL account.
-`DaytonaValidationError: declarative builds are not allowed` is an account/build
-permission failure, not a model failure or a zero reward. Inline validation accepts
-`image_build: snapshot` and `image_build: declarative`. Select declarative mode for
-per-sandbox image builds in the eval account.
+Checkpoint evaluation uses the Daytona **eval** account for declarative image
+builds. The evaluation TaskSpecs select the `daytona-eval` backend and training
+tasks select `daytona`. Keep both credentials separately named through the
+coordinator and task launcher. A `DaytonaValidationError` about declarative
+builds identifies an account or build permission failure.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
@@ -37,14 +32,12 @@ export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
 : "${DAYTONA_EVAL_API_KEY:?Eval secret resolution failed}"
 ```
 
-The Marin RL coordinator allowlist forwards both names. Configure the SkyRL
-task launcher's `terminal_bench_config.harbor` with
-`daytona_api_key_env: DAYTONA_RL_API_KEY` and
-`eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY`; its Daytona credential
-forwarding reads those fields and rejects missing values. In the
-`trainer.callbacks` entry with `type: harbor_evaluation`, set
-`daytona_api_key_env: DAYTONA_EVAL_API_KEY`. These paths are relative to the
-SkyRL training config (`skyrl` in the generated launch config).
+The Marin RL coordinator allowlist forwards both names. Under
+`environment.task_sessions.daytona`, set `api_key_env: DAYTONA_RL_API_KEY`,
+`eval_api_key_env: DAYTONA_EVAL_API_KEY`, and `eval_image_build: declarative`.
+The task launcher reads those fields and rejects missing credentials. These
+paths are relative to `skyrl` in the generated launch config. Shellbox fixes the
+provider endpoint and target for both accounts.
 
 With [the explicit coordinator-secret declaration](https://github.com/marin-community/marin/pull/10333),
 also set `IrisSkyRLExecution.required_env_vars` to
@@ -181,9 +174,9 @@ the command prints a warning when the profile exceeds one.
    Shellbox spec JSON. Do not hand-write task-level CPU or memory values: the
    snapshot name follows the effective request. For example, `ot-tblite` launches
    at 2 CPU, 8192 MB memory and 8192 MB storage regardless of task-level values.
-   A SkyRL launcher sets the same values under `terminal_bench.harbor` as
-   `override_cpus`, `override_memory_mb` and `override_storage_mb`; use those,
-   not the task's `task.toml`. Use `--specs -` on the next commands to read stdin.
+   For SkyRL, use the selected TaskRolloutSpecs and the deployment's
+   `environment.task_sessions.task_spec` bindings to determine the effective
+   image and resource requests. Use `--specs -` on the next commands to read stdin.
    When the launch overrides the dataset through a runtime overlay file, pass it
    as a second argument (`snapshot-specs <policy> <overlay>`); otherwise the
    stable policy's own task set is emitted.
@@ -320,10 +313,9 @@ or capacity problems; identify the concrete exception before assigning a cause.
 
 ## Evidence and progress
 
-Resolve the durable `trace_jobs/` location from the launched configuration or run
-metadata. Agentic trials commonly retain their start configuration, final result,
-agent/verifier outputs, exceptions, and timing data. Standard dataset-reward RL
-has no Harbor trial artifacts; missing `trace_jobs/` is expected in that mode.
+SkyRL writes agentic training attempt receipts under `task-health/` in the run
+export. These record setup and verifier outcomes and bounded diagnostics. The
+standalone Harbor evaluator and older runs store trial artifacts under `trace_jobs/`.
 
 Inspect actual rewards, verifier results, stop reasons, and exceptions. All-zero
 rewards from the first step can reflect sandbox, data, verifier, or weight-sync
@@ -336,10 +328,10 @@ coexist with a stalled trainer. Require advancing trainer phases/steps and
 durable artifacts for training progress. Report dispatched, completed, scored,
 correct, retained, and accepted-for-training counts separately.
 
-Measure sandbox demand across all concurrent workers and replicas. Per-worker
-`n_concurrent_trials` is not an account-wide concurrency limit. Compare admitted
-trial demand with model-serving capacity (`max_num_seqs` times inference-engine
-count), then inspect scheduler queues, KV-cache use, and request flow. Before
+Measure sandbox demand across all concurrent workers and replicas. SkyRL divides
+`trajectory_runner.max_concurrent_training_machine_tasks` among its rollout
+workers. Compare demand with model-serving capacity (`max_num_seqs` times
+inference-engine count), then inspect scheduler queues, KV-cache use, and request flow. Before
 attributing under-feeding to Daytona, check coordinator CPU/GIL pressure and
 staleness throttling.
 

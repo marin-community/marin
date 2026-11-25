@@ -19,7 +19,7 @@ The resume run uses 100 steps.
 Regenerate from `vendor/skyrl` in the frozen CPU environment:
 
 ```bash
-uv sync --frozen --group dev --group harbor-test --extra cpu --extra telemetry
+uv sync --frozen --group dev --extra cpu --extra telemetry
 uv run --frozen python skyrl-train/examples/cat_count/cpu_canary.py \
   --out /tmp/cat-count-policy --steps 3000 --lr 3e-4 \
   --width 128 --layers 2 --seed 0

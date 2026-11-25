@@ -48,9 +48,11 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
@@ -100,6 +102,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -232,40 +235,6 @@ IGNORED_DRIVER_OUTPUT_MARKERS = (b"[fd-monitor]",)
 
 def _log(msg: str) -> None:
     print(f"[task-runtime] {msg}", flush=True)
-
-
-def stage_task_data(data_json: str, *, role: str) -> None:
-    """Extract HF task datasets to this node's local task directory on every node.
-
-    The controller runs on every node before Ray bootstrap; pods don't share a
-    filesystem, so each pod fetches+extracts the parquet repo to the identical
-    node-local path the rollout workers read. Idempotent (``on_exist=skip``).
-    """
-    try:
-        data = json.loads(data_json)
-    except (ValueError, TypeError):
-        data = [data_json] if data_json else []
-    if not data:
-        return
-
-    # PYTHONPATH includes /app (launcher bootstrap), so cloud.iris is importable.
-    from cloud.iris.rl_data import resolve_rl_train_data
-
-    _log(f"Staging {role} data on this node (rank {_rank()}/{_num_tasks()}): {data}")
-    # This HF *parquet* dataset is NOT pre-cached, so force-clear HF_HUB_OFFLINE /
-    # TRANSFORMERS_OFFLINE for the extraction only (the ranks' env is untouched).
-    # Without this the snapshot_download inside resolve_rl_train_data dies
-    # OfflineModeIsEnabled.
-    saved = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
-    for k in saved:
-        os.environ.pop(k, None)
-    try:
-        resolved = resolve_rl_train_data(data, on_exist="skip", verbose=True)
-    finally:
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
-    _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
 def _write_model_ref(cache_root: Path, revision: str, resolved_revision: str) -> None:
@@ -1347,6 +1316,25 @@ def wait_for_nodes(
         ray.shutdown()
 
 
+def verify_role_placement(ray_address: str, topology: RoleTopology, report_directory: Path) -> None:
+    """Audit single-node and multi-node allocations before starting model actors."""
+    # Preserve this module's deferred Ray bootstrap; the audit connects here.
+    import ray  # noqa: PLC0415
+
+    ray.init(address=ray_address, ignore_reinit_error=True)
+    try:
+        nodes = ray.nodes()
+        rows = audit_role_nodes(nodes, topology=topology)
+        report = json.dumps(
+            {"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": [asdict(row) for row in rows]},
+            sort_keys=True,
+        )
+        (report_directory / "role-topology.json").write_text(report + "\n")
+        _log(f"Verified physical role placement before model actors: {report}")
+    finally:
+        ray.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Roles.
 # ---------------------------------------------------------------------------
@@ -2034,6 +2022,9 @@ def run_head(
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
+    if args.role_topology is not None:
+        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
+
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
         env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
@@ -2229,7 +2220,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
         task_env=task_env,
-        terminal_bench_data=_json_list(skyrl.get("data", {}).get("terminal_bench_data", [])),
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
@@ -2272,7 +2262,6 @@ def _write_final_config(
     values = TaskLocalSkyRLValues(
         train_data=(),
         validation_data=(),
-        terminal_bench_data=(),
         policy_model_path=policy_model.local_path if policy_model else None,
         draft_model_uri=draft_model.source_uri if draft_model else None,
     )
@@ -2344,7 +2333,15 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        args.ray_labels = args.role_topology.node_labels(_rank())
+        args.ray_labels = {
+            **args.role_topology.node_labels(_rank()),
+            **node_physical_labels(
+                rank=_rank(),
+                gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
+                host=os.environ[IRIS_NODE_NAME_ENV],
+                fabric_info=probe_fabric_info(),
+            ),
+        }
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.
@@ -2367,13 +2364,9 @@ def main() -> None:
     if debug_artifact_root:
         ensure_debug_artifact_directories(debug_artifact_root)
         initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
-    # Stage task datasets on THIS node before Ray bootstrap (head + every worker).
-    # Without this, only rank-0 has the extracted tasks and the rollout workers die
-    # with FileNotFoundError on task.toml. See stage_task_data docstring.
+    # Stage datasets on every node before Ray bootstrap because pods have separate filesystems.
     if args.data_sources_json:
         materialize_data_sources(args.data_sources_json)
-    if args.terminal_bench_data:
-        stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
     stage_hugging_face_models(launch_config)
     policy_model = prepare_policy_model(args)
     policy_local_path = policy_model.local_path if policy_model is not None else None

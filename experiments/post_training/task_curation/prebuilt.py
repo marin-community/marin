@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import huggingface_dataset_url
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -47,9 +48,7 @@ class PrebuiltCohort:
 
     @property
     def dataset(self) -> SourceReference:
-        return SourceReference(
-            self.repo, self.revision, f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
-        )
+        return SourceReference(self.repo, self.revision, huggingface_dataset_url(self.repo, self.revision))
 
     @property
     def files(self) -> tuple[str, ...]:

@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -192,7 +193,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             (directory / "curriculum.json").write_text(json.dumps(payload))
             stages.append(
                 curation_embedding_pipeline(
-                    curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+                    curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
                     curriculum=ArtifactStep.adopt("curriculum-fixture", f"2026.10.14.{revision}", source=str(directory)),
                     runtime=runtime,
                     description_model=DescriptionModel("fixture", "1"),
@@ -204,7 +205,15 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     sample_size=None,
                     seed=0,
                     inventory=[
-                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
+                        RlDataSource(
+                            info=SourceInfo(
+                                data_restriction=DataRestriction.OPEN,
+                                upstream_dataset="source",
+                                upstream_name="source",
+                                build_path="test",
+                                origin=SourceOrigin.MARIN,
+                            )
+                        ).declaration
                     ],
                 )
             )
@@ -330,7 +339,7 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
         runtime.activate(context),
     ):
         stages = curation_embedding_pipeline(
-            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
             curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
             runtime=runtime,
             description_model=DescriptionModel("fixture", "1"),
@@ -342,20 +351,43 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             sample_size=None,
             seed=0,
             inventory=[
-                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
                 RlDataSource(
-                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset="source",
+                        upstream_name="source",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
                 ).declaration,
-                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset="release",
+                        upstream_name="Pointer",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        count=7,
+                    )
+                ).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset="no-count",
+                        upstream_name="NoCount",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
+                ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
-    assert rows["source"]["basis"] == "matched"
-    assert rows["Pointer:release"]["basis"] == "declared"
-    assert rows["Pointer:release"]["task_count"] == 7
-    assert rows["Pointer:release"]["intended_use"] is None
+    assert rows["Marin:source"]["basis"] == "matched"
+    assert rows["Marin:release"]["basis"] == "declared"
+    assert rows["Marin:release"]["task_count"] == 7
+    assert rows["Marin:release"]["intended_use"] is None
     assert "Pointer:no-count" not in rows
     assert release["task_count"] == 1
 
@@ -414,7 +446,7 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert resumed.exit_code == 0, resumed.output
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
-    assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
+    assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)
+    assert any(row["source_id"] == "TaskTrove:smartie-calibforge-admitted" for row in declared)

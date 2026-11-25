@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
@@ -12,12 +13,10 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from verifyit.json_objects import unique_object
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
-SOURCE_ID = "SnowballV01:structure-closure"
-VALIDATION_SOURCE_ID = f"{SOURCE_ID}/validation"
 
 RUBRIC = """
 These tasks complete an unfinished assistant message. Present its text as an assistant prefill and
@@ -46,9 +45,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id=VALIDATION_SOURCE_ID if intended_use == IntendedUse.EVAL else SOURCE_ID,
-                title=f"Snowball v0.1 structural closure · {split}",
-                origin="SnowballV01",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="structure-closure",
+                upstream_name="structure-closure",
+                subset="validation" if intended_use == IntendedUse.EVAL else None,
+                build_path="SnowballV01",
+                origin=SourceOrigin.OPENATHENA,
                 family="structural",
                 tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
                 count=count,

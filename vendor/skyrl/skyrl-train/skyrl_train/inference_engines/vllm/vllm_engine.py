@@ -1403,13 +1403,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         (typical case: vLLM serving_chat ValueError on 32k-token validation).
         Without this, the failed task unwinds Python but its sibling tasks'
         Ray ObjectRefs leak into the entrypoint actor's distributed-refcount
-        state — that's the `reference_count.cc:1619` SIGABRT pattern that's
-        been killing the v3 maxgn09_hint chain links one after another even
-        after the harbor rollback_on_exception hook landed (the hook fires
-        AFTER the trial, but the ObjectRefs leak DURING the generate batch).
-        See agent_logs/2026-05-25_v6a-agrs_507771_moe_combine_stack_pinned.md
-        and project_ray_workercrashed_harbor_rollback.md for the chain of
-        evidence.
+        state and can cause a `reference_count.cc:1619` SIGABRT before a
+        rollout cleanup hook runs.
         """
         prompt_token_ids, sampling_params = self._preprocess_prompts(input_batch)
 
@@ -1720,9 +1715,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         generator transport (``num_returns="streaming"``).  Each ``yield``
         produces one ``ObjectRef`` that the caller resolves to the SSE string.
 
-        ``_ensure_token_ids_in_sse_chunk`` is applied per-chunk so that
-        ``provider_specific_fields.token_ids`` is present for harbor's literal
-        accumulator.
+        Each chunk also carries its token IDs in the delta metadata, including
+        chunks with control tokens and empty text.
         """
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})

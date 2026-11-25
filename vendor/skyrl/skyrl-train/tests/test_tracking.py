@@ -106,7 +106,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
                 },
             }
         )
-        with Tracking("marin-rl", "experiment", backends=("wandb",), config=config) as tracker:
+        with Tracking("native-project", "experiment", backends=("wandb",), config=config) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:
                 raise training_error
