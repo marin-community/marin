@@ -597,8 +597,9 @@ def _lookup_shard(
     where: list[tuple[str, str, object]],
     scan_profile: _ScanProfile,
     history_floor: int,
+    columns: Sequence[str] | None,
 ) -> pa.Table:
-    plan = _read_plan(filesystem, (shard,), primary_key, None, where)
+    plan = _read_plan(filesystem, (shard,), primary_key, columns, where)
     assert plan is not None
     return _scan_plan(plan, None, scan_profile=scan_profile, history_floor=history_floor)
 
@@ -745,10 +746,11 @@ class _ReadOperations:
         wanted = {tuple(key) for key in keys}
         if not wanted or self.table_metadata_path(table) is None:
             return []
-        rows = self._lookup_rows(table, list(wanted), _TABLE_SCAN_PROFILE, committed_after=sequence)
+        primary_key = self.primary_key(table)
+        # Read only the key and version columns; the check needs no row values.
+        rows = self._lookup_rows(table, list(wanted), _TABLE_SCAN_PROFILE, committed_after=sequence, columns=primary_key)
         if rows is None:
             return []
-        primary_key = self.primary_key(table)
         commits = rows[SystemColumns.COMMIT].to_pylist()
         changed = {key_values(rows, index, primary_key) for index, commit in enumerate(commits) if commit > sequence}
         return sorted(changed & wanted)
@@ -761,6 +763,7 @@ class _ReadOperations:
         diagnostics: BlobReadDiagnostics | None = None,
         *,
         committed_after: int | None = None,
+        columns: Sequence[str] | None = None,
     ) -> pa.Table | None:
         shards = self.list_shards(table)
         if committed_after is not None:
@@ -797,6 +800,7 @@ class _ReadOperations:
                 where=where,
                 scan_profile=scan_profile,
                 history_floor=self._history_floor,
+                columns=columns,
             )
             with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(selected))) as executor:
                 parts = list(executor.map(read, selected))
