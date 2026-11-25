@@ -40,9 +40,9 @@ Seed: the run's trainer seed, 20261020.
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
-from marin.rl.curriculum import PoolRow, RlCurriculum
+from marin.rl.curriculum import CurriculumValidation, PoolRow, RlCurriculum, draw_validation_split
 
-from experiments.post_training.task_curation.curriculum import weighted_curriculum
+from experiments.post_training.task_curation.curriculum import curriculum_with_validation
 from experiments.post_training.task_curation.datasets.long_loop_rl import (
     AGENTIC_RELEASE,
     AGENTIC_RELEASE_URL,
@@ -87,12 +87,17 @@ def exp3_rl_curriculum(pool_rows: Mapping[str, Sequence[PoolRow]]) -> RlCurricul
     streams them from the pinned releases). The holdout is drawn here, so every
     construction of this curriculum from the same pools records the same split
     and the same identity."""
-    return weighted_curriculum(
+    validation = draw_validation_split(dict(WEIGHTS), pool_rows, size=VALIDATION_SIZE, seed=SEED).validation
+    return exp3_curriculum_from_validation(validation)
+
+
+def exp3_curriculum_from_validation(validation: CurriculumValidation) -> RlCurriculum:
+    """Bind the Exp3 mix to its published, curriculum-owned holdout."""
+    return curriculum_with_validation(
         CURRICULUM_NAME,
         CURRICULUM_VERSION,
         weights=dict(WEIGHTS),
         seed=SEED,
-        validation_size=VALIDATION_SIZE,
-        pool_rows=pool_rows,
+        validation=validation,
         catalog={"agentic": AGENTIC_RELEASE, "nonagentic": NONAGENTIC_RELEASE},
     )

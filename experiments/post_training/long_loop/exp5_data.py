@@ -44,8 +44,8 @@ from experiments.post_training.long_loop.exp4_data import (
     NEMOTRON_SOURCE,
     NEMOTRON_UPSTREAM_ROWS,
     _regenerate_generated_label,
-    _write_pool_file,
     row_identity,
+    write_pool_file,
 )
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.long_loop_rl import AGENTIC_TRAIN_SOURCE, TEACHER_ROUTE_LABELS
@@ -346,10 +346,10 @@ def prepare_pool(
         else:
             raise ValueError(f"pool row {route!r}/{task['id']!r} landed on neither side of the holdout")
     files = {
-        f"{label}/train.parquet": _write_pool_file(destination, f"{label}/train.parquet", rows)
+        f"{label}/train.parquet": write_pool_file(destination, f"{label}/train.parquet", rows)
         for label, rows in train_rows.items()
     }
-    files["validation.parquet"] = _write_pool_file(destination, "validation.parquet", held)
+    files["validation.parquet"] = write_pool_file(destination, "validation.parquet", held)
     (destination / "manifest.json").write_text(
         json.dumps(
             {

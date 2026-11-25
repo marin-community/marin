@@ -5,14 +5,14 @@
 
 from collections.abc import Callable, Mapping
 
-from marin.rl.curriculum import CurriculumValidation, RlCurriculum
+from marin.rl.curriculum import CurriculumValidation, RlCurriculum, ValidationRow
 
 from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
+from experiments.post_training.task_curation.exp3_curriculum import exp3_curriculum_from_validation
 from experiments.post_training.task_curation.exp4_curriculum import (
     NEMOTRON_IF_LABEL,
     NEMOTRON_SOURCE,
     exp4_rl_curriculum,
-    exp4_validation_from_manifest,
 )
 from experiments.post_training.task_curation.exp5_curriculum import (
     HARDMATH_LABEL,
@@ -22,14 +22,12 @@ from experiments.post_training.task_curation.exp5_curriculum import (
     OPENRESEARCHER_LABEL,
     OPENRESEARCHER_SOURCE,
     exp5_rl_curriculum,
-    exp5_validation_from_manifest,
 )
 
-_MANIFEST_BUILDERS: dict[
-    str, tuple[Callable[[Mapping], CurriculumValidation], Callable[[CurriculumValidation], RlCurriculum]]
-] = {
-    "long-loop/exp4-rl": (exp4_validation_from_manifest, exp4_rl_curriculum),
-    "long-loop/exp5-rl": (exp5_validation_from_manifest, exp5_rl_curriculum),
+_MANIFEST_BUILDERS: dict[str, Callable[[CurriculumValidation], RlCurriculum]] = {
+    "long-loop/exp3-rl": exp3_curriculum_from_validation,
+    "long-loop/exp4-rl": exp4_rl_curriculum,
+    "long-loop/exp5-rl": exp5_rl_curriculum,
 }
 
 
@@ -39,8 +37,11 @@ def curriculum_from_manifest(manifest: Mapping) -> RlCurriculum:
     name = identity.partition("@")[0]
     if name not in _MANIFEST_BUILDERS:
         raise ValueError(f"Unregistered pool curriculum: {identity}")
-    read_validation, build = _MANIFEST_BUILDERS[name]
-    curriculum = build(read_validation(manifest["validation"]))
+    payload = manifest["validation"]
+    validation = CurriculumValidation(
+        size=payload["size"], seed=payload["seed"], rows=tuple(ValidationRow(**row) for row in payload["rows"])
+    )
+    curriculum = _MANIFEST_BUILDERS[name](validation)
     if curriculum.identity != identity:
         raise ValueError(f"Rebuilt curriculum {curriculum.identity} differs from pool manifest {identity}")
     return curriculum

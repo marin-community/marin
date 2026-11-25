@@ -1,0 +1,56 @@
+checkpoint: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop/long-loop-mochi-sft-exp3-v5-bankadam-128/sft/2026.11.24.128/checkpoints/step-2100
+metadata_digest: df6099c18bf8480838491030b374fe5feedb199f2b99c798783efdd1e8abd5aa
+model:
+  vocab_size: 128256
+  hidden_dim: 6144
+  intermediate_dim: 3072
+  shared_expert_intermediate_dim: 3072
+  num_shared_experts: 2
+  num_experts: 384
+  num_experts_per_token: 8
+  latent_dim: 3072
+  qb_estimator: hist
+  qb_hist_bins: 10000
+  num_layers: 48
+  num_heads: 48
+  num_kv_heads: 12
+  local_kv_heads: 12
+  global_kv_heads: 6
+  head_dim: 128
+  max_seq_len: 262144
+  sliding_window: 2048
+  global_every: 4
+  capacity_factor: 1.625
+  layer_norm_eps: 1.0e-05
+  initializer_std: 0.0063788795384978605
+  qk_mult: 1.66
+  qk_mult_long_scale: 1.0
+  log_scaling_n_floor: 65536
+  log_scaling_alpha: 0.1
+  log_scaling_power: 2.0
+  sconv: true
+  sconv_kernel: 4
+  sconv_sites:
+  - k
+  - attn
+  - mlp
+  attention_implementation: gpu_fa4_cute_sm100
+  attention_context_layout: zigzag
+  moe_implementation: ragged_all_to_all
+  expert_chunks: 1
+  pooled_transport_capacity_factor: 1.15
+  num_expert_waves: 3
+  report_capacity_overflow: true
+  remat_mode: offload_carry
+  remat_group_size: null
+  rope:
+    theta: 10000.0
+    scaling_factor: null
+  rope_fused: true
+  ce_grad_in_forward_token_block_size: null
+destination: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop/long-loop-mochi-sft-exp3-v5-bankadam-128/sft/2026.11.24.128/exports/step-2100
+source_revision: 6d72bd3cd6e5befc7e21f798396e2d6cba99fae5
+read_host_budget_bytes: 429496729600
+export_host_budget_bytes: 34359738368
+max_concurrent_shards: 1
+request_concurrency: 4

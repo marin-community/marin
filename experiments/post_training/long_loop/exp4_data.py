@@ -142,7 +142,7 @@ def _old_question(task: dict) -> str:
     raise ValueError(f"Generated row {task.get('id')!r} carries no verifier config")
 
 
-def _write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> str:
+def write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> str:
     """Write one stamped-schema parquet under the pool artifact and return its verified digest."""
     with tempfile.TemporaryDirectory() as temporary:
         local = Path(temporary) / "file.parquet"
@@ -404,10 +404,10 @@ def prepare_pool(*, output: str, agentic: str, blend: str, nemotron: str, grader
         else:
             raise ValueError(f"pool row {route!r}/{task['id']!r} landed on neither side of the holdout")
     files = {
-        f"{label}/train.parquet": _write_pool_file(destination, f"{label}/train.parquet", rows)
+        f"{label}/train.parquet": write_pool_file(destination, f"{label}/train.parquet", rows)
         for label, rows in train_rows.items()
     }
-    files["validation.parquet"] = _write_pool_file(destination, "validation.parquet", held)
+    files["validation.parquet"] = write_pool_file(destination, "validation.parquet", held)
     (destination / "manifest.json").write_text(
         json.dumps(
             {
