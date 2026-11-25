@@ -321,6 +321,7 @@ MATH = replace(
     measured=range(1, 13),
     checkpoints="best",
     checkpoint_every=3,
+    keep_every=3,
     checkpoint_selection_metric="eval/all/ftpo_selection_score",
     checkpoint_preservation_max_drop={"eval/all/fail_closed_pass_rate": PILOT_MAX_PASS_RATE_DROP},
     additional_callbacks=(
@@ -339,13 +340,16 @@ SMOKE = replace(
     updates=2,
     measured=range(1, 3),
     checkpoint_every=1,
+    keep_every=None,
     checkpoints="latest",
     export="latest",
     additional_callbacks=(),
     recipe=replace(MATH.recipe, config=training_config(32768, 3e-6)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
-MIXED = replace(MATH, name="doom-mixed", tasks=QUALIFIED_TASKS, tasks_input="required", batch_mix=TARGET_BATCH_MIX)
+MIXED = replace(
+    MATH, name="doom-mixed", tasks=QUALIFIED_TASKS, tasks_input="required", batch_mix=TARGET_BATCH_MIX, keep_every=None
+)
 LONG = replace(
     SMOKE,
     name="doom-long",
