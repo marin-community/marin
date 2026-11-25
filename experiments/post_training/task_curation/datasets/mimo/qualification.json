@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "d53fc9b64cec5393baa1c7ae5889de9ec71524f1",
+  "revision": "9f06bceb4199146394e15daa243c4203afb7690f",
   "path": "experiments/post_training/task_curation/datasets/mimo/qualification.json",
-  "sha256": "bde6563ea41b1afa7bc7e5fd6d90387e45030769117476ecf13995cbde68b735"
+  "sha256": "10eeef1c9c8adf2b24471978f353d0945ab6a4773194f1e863218f4de58bd832"
 }
