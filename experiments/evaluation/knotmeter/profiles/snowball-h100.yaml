@@ -1,0 +1,24 @@
+model:
+  repo: open-athena/Marin-Snowball-67B-A2B-v0.1.1
+  revision: 59852d6f07261722bbec1edb6ab148317156b58e
+  tokenizer: open-athena/Marin-Snowball-67B-A2B-v0.1.1
+  tokenizer_revision: 59852d6f07261722bbec1edb6ab148317156b58e
+gpus: {type: H100, count: 8, per_host: 8}
+cluster: cw-rno2a
+priority: interactive
+memory: 384GB
+session_concurrency: 128
+serving:
+  environment: {VLLM_SERVER_DEV_MODE: '1'}
+  dtype: bfloat16
+  max_model_len: 262144
+  max_num_seqs: 128
+  max_num_batched_tokens: 8192
+  gpu_memory_utilization: 0.94
+  extra_args: [--enable-prompt-tokens-details, --max-logprobs, '50', --reasoning-parser, grug, --enable-auto-tool-choice, --tool-call-parser, hermes, --prefix-cache-retention-interval, '128']
+workload:
+  public_dataset: semianalysis_cc_traces_weka_062126_256k
+checks:
+  - name: model-numerics
+    fixture: experiments/evaluation/inference_correctness/fixtures/snowball-v0.1.1.json
+    timeout: 3600

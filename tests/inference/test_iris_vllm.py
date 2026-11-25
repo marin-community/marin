@@ -1,13 +1,54 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
+import sys
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.actor.client import ActorClient
+from iris.actor.resolver import FixedResolver
+from iris.actor.server import ActorServer
 from marin.inference import iris_vllm
+
+
+@pytest.mark.parametrize("shutdown", ["requested", "during-check", "not-requested"])
+def test_exited_follower_observes_coordinated_shutdown(monkeypatch, shutdown):
+    name = "shutdown-race"
+    server = ActorServer(host="127.0.0.1", port=0)
+    server.register(name, iris_vllm.VllmCoordinatorActor("127.0.0.1"))
+    port = server.serve_background()
+    resolver = FixedResolver({name: f"http://127.0.0.1:{port}"})
+    monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: SimpleNamespace(resolver=resolver))
+    client = ActorClient(resolver, name, call_timeout=5, max_call_attempts=1)
+    launch = iris_vllm.IrisGangCoordinator(name, task_index=1, num_tasks=2)
+    try:
+        with subprocess.Popen([sys.executable, "-c", "pass"]) as process:
+            assert process.wait(timeout=10) == 0
+            exited = RuntimeError(f"vLLM process exited unexpectedly with code {process.returncode}")
+
+            def check_alive():
+                if shutdown == "during-check":
+                    client.request_shutdown()
+                if process.poll() is not None:
+                    raise exited
+
+            if shutdown == "requested":
+                client.request_shutdown()
+            if shutdown == "not-requested":
+                with pytest.raises(RuntimeError) as stopped:
+                    iris_vllm.wait_for_iris_vllm_shutdown(launch, check_alive)
+                assert stopped.value is exited
+                assert not client.followers_stopped((1,))
+            else:
+                iris_vllm.wait_for_iris_vllm_shutdown(launch, check_alive)
+                iris_vllm.notify_iris_vllm_stopped(launch)
+                assert client.followers_stopped((1,))
+    finally:
+        server.stop()
 
 
 def test_healthy_follower_outlives_rendezvous_deadline(monkeypatch):

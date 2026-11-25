@@ -1,0 +1,58 @@
+model:
+  repo: hero-sft-step400407
+  revision: 1a7886b05df25338a12642b25f25525c0eb6c5551384934a2f089d7ec5b4a88d
+  path: s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
+  config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
+  tokenizer: marin-community/marin-tokenizer-tools
+  tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+  chat_template: marin
+  eos_token_id: 128009
+gpus:
+  type: GB200
+  count: 16
+  per_host: 4
+cluster: cw-us-east-08a
+priority: interactive
+session_concurrency: 64
+memory: 256GB
+serving:
+  environment: {VLLM_SERVER_DEV_MODE: '1'}
+  dtype: bfloat16
+  max_model_len: 262144
+  max_num_seqs: 128
+  max_num_batched_tokens: 2048
+  gpu_memory_utilization: 0.95
+  router: true
+  extra_args:
+  - --enable-prompt-tokens-details
+  - --max-logprobs
+  - '50'
+  - --reasoning-parser
+  - grug
+  - --enable-auto-tool-choice
+  - --tool-call-parser
+  - hermes
+  - --seed
+  - '42'
+  - --hf-overrides
+  - '{"max_seq_len":262144,"max_position_embeddings":262144}'
+  - --load-format
+  - runai_streamer
+  - --model-loader-extra-config
+  - '{"distributed":true,"concurrency":4,"memory_limit":17179869184}'
+  - --kernel-config
+  - '{"moe_backend":"triton","enable_flashinfer_autotune":false}'
+  - --kv-cache-dtype
+  - auto
+  - --attention-backend
+  - FLASHINFER
+  - --compilation-config
+  - '{"cudagraph_mode":"PIECEWISE","splitting_ops":["vllm::unified_attention_with_output","vllm::unified_kv_cache_update","vllm::grug_moe_short_conv"],"inductor_compile_config":{"enable_auto_functionalized_v2":false,"combo_kernels":true,"benchmark_combo_kernel":true}}'
+  - --prefix-cache-retention-interval
+  - '0'
+workload:
+  public_dataset: semianalysis_cc_traces_weka_062126_256k
+checks:
+- name: model-numerics
+  fixture: experiments/evaluation/inference_correctness/fixtures/hero-sft-step400407.json
+  timeout: 3600

@@ -17,6 +17,62 @@ class TokenScore:
 
 
 @dataclass(frozen=True)
+class TokenDistribution:
+    """Top-k scores in supplied order; ``from_logprob_map`` validates and sorts."""
+
+    token_ids: tuple[int, ...]
+    logprobs: tuple[float, ...]
+
+    @classmethod
+    def from_logprob_map(cls, entries: dict[int, float]) -> "TokenDistribution":
+        scores = sorted(
+            (TokenScore(token_id=token, logprob=value) for token, value in entries.items()),
+            key=lambda score: (-score.logprob, score.token_id),
+        )
+        if not scores or any(not math.isfinite(score.logprob) or score.logprob > 0 for score in scores):
+            raise ValueError("Missing, positive or non-finite log probabilities")
+        return cls(tuple(score.token_id for score in scores), tuple(score.logprob for score in scores))
+
+
+@dataclass(frozen=True)
+class DistributionDifference:
+    """Probability-error bounds over top-k lists, including missing tokens."""
+
+    max_probability_error_lower_bound: float
+    # The report retains this field name for the conservative upper bound.
+    max_probability_error: float
+    shared_tokens: int
+    # A diagnostic comparison of the first listed IDs; supplied order breaks ties.
+    same_greedy_token: bool
+
+
+def distribution_difference(first: TokenDistribution, second: TokenDistribution) -> DistributionDifference:
+    """Bound top-k probability error, including tokens missing from one side.
+
+    Each input contains only its true top-k scores.
+    An absent token has probability between zero and that side's kth probability.
+    The upper bound is conservative. This statistic is not full-vocabulary KL.
+    """
+    a = dict(zip(first.token_ids, map(math.exp, first.logprobs), strict=True))
+    b = dict(zip(second.token_ids, map(math.exp, second.logprobs), strict=True))
+    upper, lower = [], []
+    for token in a.keys() | b.keys():
+        if token in a and token in b:
+            lower.append(abs(a[token] - b[token]))
+            upper.append(lower[-1])
+        else:
+            known, floor = (a[token], min(b.values())) if token in a else (b[token], min(a.values()))
+            lower.append(max(0.0, known - floor))
+            upper.append(max(known, abs(known - floor)))
+    return DistributionDifference(
+        max_probability_error_lower_bound=max(lower),
+        max_probability_error=max(upper),
+        shared_tokens=len(a.keys() & b.keys()),
+        same_greedy_token=first.token_ids[0] == second.token_ids[0],
+    )
+
+
+@dataclass(frozen=True)
 class NextTokenObservation:
     """One backend's exact next-token response, independent of its serving API."""
 

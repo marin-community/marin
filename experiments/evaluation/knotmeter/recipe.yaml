@@ -1,0 +1,30 @@
+# One measurement protocol for all serving presets.
+harness_version: "1.0.12"
+harness_source: e4bb2f835ffedbbe6b76252ea5c93caec68c5faf
+processor_source: 80dff120d27fd6092210f4546b8faa5e6c9723ac
+duration: 3600
+minimum_duration: 900
+warmup_requests_per_lane: 10
+unsafe_override: false
+stages:
+  probe: {duration: 180, warmup_requests_per_lane: 1, concurrency_limit: 8, unsafe_override: true}
+  screen: {duration: 900}
+  confirm: {}
+max_context: 262144
+max_profiling_error_ratio: 0.01
+random_seed: 42
+warmup_grace_period: 1800
+trace_idle_gap_cap_seconds: 300
+prepare_timeout: 1800
+ready_timeout: 4200
+task_timeout: 18000
+scheduling_timeout: 7200
+max_retries_failure: 0
+max_retries_preemption: 1
+task_image: ghcr.io/marin-community/iris-task@sha256:b66c48a1caca212d2fa970f9fb4d1e0685ab27be9014f335687b1031244f0467
+datasets:
+  semianalysis_cc_traces_weka_062126_256k:
+    dataset: semianalysisai/cc-traces-weka-062126-256k
+    dataset_revision: 8fecd2fc56694469f758f0afbbb6335ad3043740
+    dataset_sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
+    sessions: 393
