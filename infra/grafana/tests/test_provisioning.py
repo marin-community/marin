@@ -1334,10 +1334,12 @@ def _finelog_sql(panel: dict) -> list[str]:
     A finelog datasource's URL already names its cluster
     (provisioning/datasources/finelog.yaml), so its targets address ``/query``.
     """
-    if not str((panel.get("datasource") or {}).get("uid", "")).startswith("finelog-"):
-        return []
     sql = []
     for target in panel.get("targets") or []:
+        # A mixed panel names each target's datasource; otherwise the panel's applies.
+        datasource = target.get("datasource") or panel.get("datasource") or {}
+        if not str(datasource.get("uid", "")).startswith("finelog-"):
+            continue
         assert target.get("url") == "/query", f"{panel.get('title')}: {target.get('url')}"
         params = target.get("url_options", {}).get("params", [])
         sql += [param["value"] for param in params if param["key"] == "sql"]

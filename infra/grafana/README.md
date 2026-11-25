@@ -854,7 +854,7 @@ docker compose -f infra/grafana/local/compose.yaml up --build
 
 The bridge mints the IAP token for each request from the cached login, which
 compose mounts read-only from `~/.config/marin/credentials/marin.json`. No other
-credential is involved. Setting `GRAFANA_BRIDGE_LOCAL_FINELOG_URL` (an
+credential is needed for finelog. Setting `GRAFANA_BRIDGE_LOCAL_FINELOG_URL` (an
 `iap+https://` URL) and `GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES`
 together switches the bridge to this route; unset, it uses Direct VPC egress as
 deployed.
