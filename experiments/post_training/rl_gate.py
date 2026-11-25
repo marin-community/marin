@@ -655,7 +655,8 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_json(*command: str, timeout: int = 120):
+def run_native_json(*command: str, timeout: int = 120):
+    """Run a SkyRL CPU command that returns JSON on stdout."""
     try:
         result = subprocess.run(
             skyrl_cpu_command(*command),
@@ -665,8 +666,8 @@ def _native_json(*command: str, timeout: int = 120):
             timeout=timeout,
         )
         result.check_returncode()
-        return json.loads(result.stdout.splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        return json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
         cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
         if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
             cause = error.stderr.strip().splitlines()[-1]
@@ -676,7 +677,7 @@ def _native_json(*command: str, timeout: int = 120):
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
-    return _native_json(
+    return run_native_json(
         "python",
         "-I",
         "-m",
@@ -739,7 +740,7 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 @lru_cache(maxsize=16)
 def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_json(
+    return run_native_json(
         "python",
         "-I",
         "-m",

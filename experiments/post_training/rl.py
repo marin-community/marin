@@ -165,6 +165,8 @@ def _run_name(
     resume_step: int | None,
 ) -> str:
     if control:
+        if provenance.base_commit is None:
+            raise click.BadParameter("controls require a recorded source commit")
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
