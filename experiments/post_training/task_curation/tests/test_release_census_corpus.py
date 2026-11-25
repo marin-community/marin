@@ -227,7 +227,11 @@ def test_corpus_sizing_carries_prepare_workers():
     assert huge.workers == 8
     assert huge.memory_gb > anchor.memory_gb
     embed = sizing.embedding_sizing(sizing._ANCHOR_TASKS)
-    assert (embed.cpu, embed.memory_gb, embed.workers) == (64, 256, 16)
+    assert (embed.cpu, embed.memory_gb, embed.workers) == (64, 256, 32)
+    # The pool targets a short wall time at the measured rate, not the anchor's 15 h:
+    # R40's 20,572 fresh tasks get the full pool; a small slice gets a small one.
+    assert sizing.embedding_sizing(20_572).workers == 32
+    assert sizing.embedding_sizing(1_000).workers == 3
     compose = sizing.curriculum_compose_sizing(sizing._ANCHOR_COMPOSE_TASKS)
     assert (compose.cpu, compose.memory_gb, compose.workers) == (32, 128, 8)
     with pytest.raises(ValueError, match="positive"):

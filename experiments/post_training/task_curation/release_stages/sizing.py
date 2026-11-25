@@ -8,6 +8,7 @@ stage carries its own stale default (the previous per-release workers hardcoded
 workers=4 and a fixed batch size regardless of population).
 """
 
+import math
 from dataclasses import dataclass, replace
 
 
@@ -67,6 +68,11 @@ class StageResources:
 _ANCHOR_TASKS = 60_581
 _ANCHOR_COMPOSE_TASKS = 4_291_291
 _ANCHOR_EMBED_WORKERS = 16
+# The anchor embedding run took 15.4 h on 16 CPU workers: ~246 tasks per worker-hour.
+_ANCHOR_EMBED_HOURS = 15.4
+_EMBED_TASKS_PER_WORKER_HOUR = _ANCHOR_TASKS / (_ANCHOR_EMBED_WORKERS * _ANCHOR_EMBED_HOURS)
+# Size the worker pool so the fresh embedding finishes in about this many hours.
+_EMBED_TARGET_HOURS = 2
 _ANCHOR_COMPOSE_WORKERS = 8
 _WORKER_CPU = 4
 _WORKER_MEMORY_GB = 16
@@ -147,7 +153,7 @@ def qc_browse_sizing(total_panels: int) -> StageResources:
 
 
 def embedding_sizing(total_tasks: int) -> StageResources:
-    """Scale the CPU embedding job with the measured population's task count.
+    """Size the CPU embedding pool to finish in ~``_EMBED_TARGET_HOURS`` at the measured rate.
 
     GPU embedding has no measured run yet: when a valid backend parity receipt makes
     it eligible, the embed stage keeps this worker curve and requests the accelerator
@@ -156,7 +162,7 @@ def embedding_sizing(total_tasks: int) -> StageResources:
     if total_tasks <= 0:
         raise ValueError(f"embedding sizing needs a positive task count, got {total_tasks}")
     share = total_tasks / _ANCHOR_TASKS
-    workers = _clamp(round(_ANCHOR_EMBED_WORKERS * share), 2, 32)
+    workers = _clamp(math.ceil(total_tasks / (_EMBED_TASKS_PER_WORKER_HOUR * _EMBED_TARGET_HOURS)), 2, 32)
     return StageResources(
         cpu=_clamp(workers * _WORKER_CPU, 8, 64),
         memory_gb=_clamp(workers * _WORKER_MEMORY_GB, 32, 256),
