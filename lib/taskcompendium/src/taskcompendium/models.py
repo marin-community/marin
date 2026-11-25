@@ -560,7 +560,7 @@ class StdoutReward(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["stdout"] = "stdout"
-    pass_at_least: float | None = Field(default=None, allow_inf_nan=False)
+    pass_at_least: float | None = Field(default=None, allow_inf_nan=False, exclude_if=lambda value: value is None)
 
 
 class ExitCodeReward(BaseModel):

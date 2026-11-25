@@ -339,7 +339,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
             passed = (
                 verdict.reward > reward.pass_above
                 if verdict.reward is not None and reward.pass_above is not None
-                else None
+                else verdict.passed
             )
             return replace(verdict, diagnostics=diagnostics, passed=passed)
         try:
@@ -536,7 +536,7 @@ async def grade_in_sandbox(
         and not submissions
         and not (task.answer_type == AnswerType.STATE and attempt.state is not None)
     ):
-        return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
+        return GradeResult(Outcome.GRADED, 0.0, "Missing submission", passed=False)
     return await _grade_staged(
         task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ), judge_connection
     )
@@ -558,7 +558,7 @@ def _answer_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrad
             return [StagedFile(grading.grader.answer_path, _script_answer_bytes(answer_submission(task, attempt)))]
     except SubmissionFailure as error:
         if not gradeable_empty_text(task, attempt, grading.spec):
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error), passed=False)
         empty_answer_file = grading.grader.answer_path if isinstance(grading.grader, ScriptGrader) else answer_file
         assert empty_answer_file is not None
         return [StagedFile(empty_answer_file, b"")]
@@ -738,7 +738,7 @@ async def _grade_staged(
     except _StepFailed as failure:
         return failure.result
     except SubmissionFailure as error:
-        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error), passed=False)
 
 
 async def _grade_on(

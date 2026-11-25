@@ -157,6 +157,7 @@ def test_duplicate_json_answer_is_submission_failure(content):
     task = _task(_grader(ExactSpec(expected=("yes",))), answer_format=JsonAnswer())
     result = grade_answer(task, _attempt(task, content))
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert result.passed is False
 
 
 def test_plain_text_passes_blank_candidates_to_a_verifier_that_grades_them():

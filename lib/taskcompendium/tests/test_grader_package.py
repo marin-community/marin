@@ -15,6 +15,7 @@ from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.grading import parse_grade_result
 from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -185,6 +186,14 @@ def test_stdout_checker_reports_full_credit_separately_from_partial_reward(score
     assert result.passed is passed
     assert result.reward == (None if score == "invalid" else float(score))
     assert result.status is (Outcome.INFRA_ERROR if score == "invalid" else Outcome.GRADED)
+
+
+def test_omitted_stdout_threshold_preserves_published_task_digest():
+    task = _task(GraderPackage(ScriptGrader(argv=("true",), placement=GraderMachine(environment=GRADING_ENVIRONMENT))))
+    published = task.model_dump(mode="json")
+    published["grader"]["reward"] = {"kind": "stdout"}
+    loaded = TaskSpec.model_validate(published)
+    assert canonical_sha256(loaded.model_dump(mode="json")) == canonical_sha256(published)
 
 
 @pytest.mark.parametrize(

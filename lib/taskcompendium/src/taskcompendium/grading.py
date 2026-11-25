@@ -140,7 +140,7 @@ def terminal_grade(verifier: Spec, submission: Submission) -> GradeResult | None
     if is_ejection(submission):
         return grade_result(verifier, grade_ejection_candidate(verifier))
     if isinstance(verifier, UnsolvableSpec):
-        return GradeResult(Outcome.GRADED, 0.0)
+        return GradeResult(Outcome.GRADED, 0.0, passed=False)
     return None
 
 
@@ -198,7 +198,7 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
         candidate = _candidate(verifier, submission)
     except SubmissionFailure as error:
         if not gradeable_empty_text(task, attempt, verifier):
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error), passed=False)
         candidate = ""
     if isinstance(verifier, ReasoningMarkupSpec):
         assert isinstance(candidate, str)
@@ -224,7 +224,7 @@ def grade_remote_judge_answer(
         submission = answer_submission(task, attempt)
     except SubmissionFailure as error:
         if not gradeable_empty_text(task, attempt, verifier):
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error), passed=False)
         candidate = ""
     else:
         terminal = terminal_grade(verifier, submission)
@@ -234,12 +234,12 @@ def grade_remote_judge_answer(
             candidate = submission.value
         elif isinstance(submission, ActionSubmission):
             if isinstance(submission.message, TextMessage) and not submission.message.content.strip():
-                return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
+                return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"}, passed=False)
             candidate = native_action_text(submission.message)
         else:
             raise TypeError(f"A judge cannot grade a {type(submission).__name__}")
     if not candidate.strip() and verifier.empty_output is EmptyOutputPolicy.ZERO:
-        return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
+        return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"}, passed=False)
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     judge = verifier
     if judge.context and judge.context not in resources:
