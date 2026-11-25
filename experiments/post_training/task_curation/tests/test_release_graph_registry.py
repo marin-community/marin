@@ -613,8 +613,9 @@ def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_remote(callable_, *, resources):
+    def fake_remote(callable_, *, resources, env_vars=None):
         captured["dispatch"] = callable_
+        captured["env_vars"] = env_vars
         return lambda config: callable_(config)
 
     monkeypatch.setitem(release_graph_module._STAGE_EXECUTORS, spec.stage, fake_executor)
@@ -623,7 +624,32 @@ def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
     dispatch = captured["dispatch"]
     assert dispatch.func is release_graph_module._execute_stage_node
     assert dispatch.args == ("identity_backend_compose", spec.stage, "documents.identity_receipt")
+    assert captured["env_vars"] is not None
     assert receipt.receipt == ArtifactRef(**receipt_ref)
+
+
+def test_stage_child_env_forwards_the_attestation_and_credentials(monkeypatch):
+    """Dispatched stage jobs carry the attestation and credentials, nothing else."""
+    monkeypatch.setenv("ATLAS_RELEASE_SOURCE_REVISION", "a" * 40)
+    monkeypatch.setenv("CW_KEY_SECRET", "s3cret")
+    monkeypatch.delenv("CW_KEY_ID", raising=False)
+    monkeypatch.setenv("UNRELATED_VAR", "noise")
+    env = release_graph_module._stage_child_env()
+    assert env["ATLAS_RELEASE_SOURCE_REVISION"] == "a" * 40
+    assert env["CW_KEY_SECRET"] == "s3cret"
+    assert "CW_KEY_ID" not in env
+    assert "UNRELATED_VAR" not in env
+
+
+def test_materialize_job_credentials_writes_the_marin_record(monkeypatch, tmp_path):
+    raw = json.dumps({"cluster": "marin", "endpoint": "https://marina.oa.dev", "edge_refresh_token": "tok"})
+    monkeypatch.setenv("MARIN_IAP_CREDENTIAL_JSON", raw)
+    monkeypatch.setattr(release_graph_module.Path, "home", staticmethod(lambda: tmp_path))
+    release_graph_module._materialize_job_credentials()
+    record = tmp_path / ".config/marin/credentials/marin.json"
+    assert record.read_text() == raw
+    release_graph_module._materialize_job_credentials()  # idempotent: the record stays
+    assert record.read_text() == raw
 
 
 def test_typed_inputs_coerce_reference_fields():

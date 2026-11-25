@@ -57,6 +57,7 @@ Sequencing decisions wired here (flagged for the r39 builder's quirk review):
 import dataclasses
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable
 from functools import partial
@@ -656,8 +657,44 @@ def _execute_stage(stage: str, config: dict) -> dict:
     return executor(config)
 
 
+# Iris children do not inherit the parent environment: the dispatched stage jobs
+# receive the run's attestation and the credentials explicitly (the workspace rides
+# by bundle inheritance).
+STAGE_CHILD_ENV_KEYS = (
+    "ATLAS_RELEASE_SOURCE_REVISION",
+    "ATLAS_PUSH_LOG",
+    "ATLAS_WATCHDOG_FEED",
+    "CW_KEY_ID",
+    "CW_KEY_SECRET",
+    "MARIN_IAP_CREDENTIAL_JSON",
+)
+
+
+def _stage_child_env() -> dict[str, str]:
+    """The parent environment a dispatched stage job carries."""
+    return {key: value for key in STAGE_CHILD_ENV_KEYS if (value := os.environ.get(key))}
+
+
+def _materialize_job_credentials() -> None:
+    """Write the submitter-passed marin IAP credential record into this job's HOME.
+
+    Iris children inherit the workspace bundle but neither the parent environment nor
+    its filesystem; the record travels as MARIN_IAP_CREDENTIAL_JSON and the marina
+    client reads it from the credentials directory.
+    """
+    raw = os.environ.get("MARIN_IAP_CREDENTIAL_JSON")
+    if not raw:
+        return
+    target = Path.home() / ".config/marin/credentials/marin.json"
+    if target.is_file():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(raw)
+
+
 def _execute_stage_node(node: str, stage: str, receipt_key: str, config: dict) -> None:
     """Worker-side dispatch for a cluster stage: run it, then seal its graph receipt."""
+    _materialize_job_credentials()
     proof = _execute_stage(stage, config)
     document = {
         "kind": GRAPH_RECEIPT_KIND,
@@ -1024,7 +1061,9 @@ def _stage_step(
                 if dispatch_resources is None:
                     raise ValueError(f"cluster stage {node!r} has no sizing-derived resources")
                 dispatch = remote(
-                    partial(_execute_stage_node, node, spec.stage, receipt_key), resources=dispatch_resources
+                    partial(_execute_stage_node, node, spec.stage, receipt_key),
+                    resources=dispatch_resources,
+                    env_vars=_stage_child_env(),
                 )
                 dispatch(config)
             document = json.loads(StoragePath(path).read_text())
