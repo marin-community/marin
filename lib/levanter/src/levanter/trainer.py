@@ -661,7 +661,9 @@ class Trainer:
                 ProgressEvent.CHECKPOINT_STARTED,
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
-                checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+                checkpointer.on_step(
+                    tree=info.state.saveable_state, step=info.step, force=force, model=info.state.model
+                )
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
