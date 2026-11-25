@@ -4,7 +4,7 @@
 """Render a SWE-rebench-V2.1 dataset row into the files of its Harbor task.
 
 The rendered task format follows the published Harbor tasks. The grader template
-labels logs without named test results as unscorable.
+labels logs with no parsed results except package build errors as unscorable.
 """
 
 from __future__ import annotations
