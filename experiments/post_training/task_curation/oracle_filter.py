@@ -97,6 +97,7 @@ from experiments.post_training.task_curation.legacy_role_qualification import (
 )
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
 from experiments.post_training.task_curation.negative_controls import require_negative_control
+from experiments.post_training.task_curation.oracle_bootstrap_failure import require_bootstrap_failure
 from experiments.post_training.task_curation.post_grade_teardowns import (
     bind_post_grade_teardowns,
     require_post_grade_teardown,
@@ -126,6 +127,7 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/prior_phase_failures.py",
     "experiments/post_training/task_curation/post_grade_teardowns.py",
     "experiments/post_training/task_curation/archive_evidence.py",
+    "experiments/post_training/task_curation/oracle_bootstrap_failure.py",
     "experiments/post_training/task_curation/negative_controls.py",
     "experiments/post_training/task_curation/harbor_inspection.py",
     "experiments/post_training/task_curation/calibration_projection.py",
@@ -1418,6 +1420,7 @@ def write_retry_plan(
                     raise ValueError(f"Retry input task changed: {task.id}")
                 calibration = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
                 require_infrastructure_retry_parent(calibration, approvals[task.id])
+                require_bootstrap_failure(task, calibration.attempts[-1], approvals[task.id])
                 if not has_oracle_solution(task) or task.execution_requirements != calibration.declared_requirements:
                     raise ValueError(f"Retry changed the original oracle or its declared execution limits: {task.id}")
                 native = Path(mapping["task_path"])
@@ -1572,6 +1575,9 @@ def retry_cohort(
         else:
             verifier_starts[task_id] = calibration.attempts[-1].verifier_execution_requirements
         native = Path(parent["task_path"])
+        if plan.approvals[task_id].bootstrap_failure is not None:
+            task = TaskSpec.model_validate_json((native / TASK_SPEC_FILE).read_bytes())
+            require_bootstrap_failure(task, calibration.attempts[-1], plan.approvals[task_id])
         checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
         if checksum != parent.get("source_task_checksum", parent["task_checksum"]):
             raise ValueError(f"Retry native task changed after approval: {task_id}")
