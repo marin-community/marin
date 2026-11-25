@@ -18,7 +18,7 @@ Prime Intellect's two lists from a directory holding the files its recipe stages
         --write-proofs experiments/post_training/task_curation/datasets/lean/numina_proofs.json
     uv run python -m experiments.post_training.task_curation.datasets.lean.check_statements numina \\
         train-00000-of-00001.parquet --prime-lists DIR --lean LEAN --lean-path LEAN_PATH --mathlib-commit COMMIT \\
-        --write-replies experiments/post_training/task_curation/datasets/lean/numina_replies.json
+        --write-replies numina_replies.json
 
 The first output line records what was checked; each further line is one row's result. It exits non-zero
 when a reference does not validate or ProofNet-Verified rejects a row other than ``EXPECTED_REJECTIONS``.
@@ -27,9 +27,10 @@ At the pinned revisions, with the grader image's toolchain, all 365 ProofNet-Ver
 checks each NuminaMath-LEAN row's human proof as its golden control submits it, compiled like the
 grader's candidate step, and writes the rows whose proof compiles without ``sorry`` to ``numina_proofs.json``.
 ``--write-replies`` compiles ``numina.CONTRADICTION_REPLY`` and ``numina.FIXED_REPLY`` on every NuminaMath-LEAN
-task in the same way and writes their outcomes to ``numina_replies.json``. Its compile of ``FIXED_REPLY`` takes
-about 30 CPU-seconds and 2.3 GB beside Mathlib's shared pages when no tactic proves the task, mostly ``exact?``
-indexing Mathlib, so size ``--jobs`` to the machine's memory.
+task in the same way and writes their outcomes to ``numina_replies.json``, which the recipe fetches from
+``numina.REPLIES_URL``: publish a new file there and update ``REPLIES_URL`` and ``REPLIES_SHA256``. Its
+compile of ``FIXED_REPLY`` takes about 30 CPU-seconds and 2.3 GB beside Mathlib's shared pages when no tactic
+proves the task, mostly ``exact?`` indexing Mathlib, so size ``--jobs`` to the machine's memory.
 """
 
 import argparse
@@ -60,7 +61,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     reference_source,
     without_comments,
 )
-from experiments.post_training.task_curation.datasets.lean.numina import ReplyOutcome
+from experiments.post_training.task_curation.datasets.lean.numina import REPLIES, ReplyOutcome
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION, proofnet_contract
 
 EXPECTED_REJECTIONS = {35: "no_sorry_proof", 351: "repeated_exercise"}
@@ -69,8 +70,6 @@ SORRY_WARNING = "declaration uses 'sorry'"
 proof, and row 351 repeats row 168's exercise. NuminaMath-LEAN rejects many rows by design."""
 RECORDED = ("revision", "sha256", "lean", "mathlib")
 """What a written file records of the check that produced it."""
-REPLIES = {"contradiction": numina.CONTRADICTION_REPLY, "fixed_reply": numina.FIXED_REPLY}
-"""The replies ``--write-replies`` compiles on each task, by the name its results use."""
 
 
 def proofnet_contracts(path: Path, _args: argparse.Namespace) -> Iterator[tuple[object, Contract | ImportRejection]]:

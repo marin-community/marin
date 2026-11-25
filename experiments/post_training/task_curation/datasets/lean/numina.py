@@ -25,10 +25,10 @@ A task is also left out when its hypotheses contradict each other: ``CONTRADICTI
 the conclusion, proves it, so any reply that derives ``False`` scores. Every other task carries the label
 ``lean.fixed_reply``, which says whether ``FIXED_REPLY``, one constant reply that tries fifteen tactics,
 proves it, so that a selection can drop or downweight the tasks a constant reply already solves. Both
-come from ``numina_replies.json``; curation never runs Lean. Two LLM judges' flags in
-``numina_statement_flags.json`` leave out the tasks whose statement they found vacuous or whose answer a
-hypothesis gives away, and label ``lean.statement_flag`` the tasks whose statement they found weaker than
-the problem or different from it.
+come from ``numina_replies.json``, which the recipe fetches by URL and SHA-256; curation never runs Lean.
+Two LLM judges' flags in ``numina_statement_flags.json`` leave out the tasks whose statement they found
+vacuous or whose answer a hypothesis gives away, and label ``lean.statement_flag`` the tasks whose
+statement they found weaker than the problem or different from it.
 """
 
 import gzip
@@ -36,6 +36,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
@@ -144,20 +145,53 @@ hypotheses and the goal's leading binders. It cannot see a hypothesis it does no
 inside a set or under an existential, so it finds only some of the statements whose hypotheses contradict.
 It fails on a statement whose conclusion after ``intros`` is ``False``: such a task asks to show that the
 hypotheses contradict each other, so deriving ``False`` is its proof."""
-REPLIES_FILE = Path(__file__).resolve().parent / "numina_replies.json"
-REPLY_CHECKS = json.loads(REPLIES_FILE.read_text())
-"""The two replies compiled on every task like the grader's candidate step, by ``proof_key``: the tasks
-``CONTRADICTION_REPLY`` proves or leaves undecided, and ``FIXED_REPLY``'s outcome on every other task.
-``check_statements.py numina --write-replies`` writes the file; rerun it, and bump the recipe's ``version``,
-when the toolchain, the revision, ``PASSING_PROOFS`` or a reply moves."""
-CONTRADICTORY = frozenset(REPLY_CHECKS["contradictory"])
-"""Tasks that ``CONTRADICTION_REPLY`` proves."""
-FIXED_REPLY_OUTCOMES = {
-    key: ReplyOutcome(outcome) for outcome, keys in REPLY_CHECKS["fixed_reply"].items() for key in keys
-}
-"""``FIXED_REPLY``'s outcome on every task outside ``CONTRADICTORY``."""
+REPLIES = {"contradiction": CONTRADICTION_REPLY, "fixed_reply": FIXED_REPLY}
+"""The replies ``check_statements.py numina --write-replies`` compiles on each task, by the name its results use."""
+REPLIES_URL = "https://gist.githubusercontent.com/XiaoyuanWang111/5a7f19bdfb58ba9940300d11f14d8a41/raw/972bb14061d34ff08cd17c40ca6483ae71f8e1c0/numina_replies.json"
+REPLIES_SHA256 = "123426457f36c2819d7c11fe072bd80870fd706104d75664a3100a6315477150"
+"""``numina_replies.json``, by URL and SHA-256: the two replies compiled on every task like the grader's candidate
+step, by ``proof_key``. ``check_statements.py numina --write-replies`` writes it; rerun it, publish the new file,
+update both, and bump the recipe's ``version``, when the toolchain, the revision, ``PASSING_PROOFS`` or a reply
+moves."""
+
+
+@dataclass(frozen=True)
+class ReplyChecks:
+    """The pinned outcomes of the two replies."""
+
+    contradictory: frozenset[str]
+    """Tasks that ``CONTRADICTION_REPLY`` proves."""
+    fixed_reply: Mapping[str, ReplyOutcome]
+    """``FIXED_REPLY``'s outcome on every task outside ``contradictory``."""
+
+
+def replies_source() -> UrlSource:
+    return UrlSource(REPLIES_URL, REPLIES_SHA256, "numina_replies.json", SourceFormat.JSON)
+
+
+@cache
+def reply_checks(path: StoragePath) -> ReplyChecks:
+    """The outcomes in ``numina_replies.json``; fails when they are for other replies, another check than
+    ``PROOFS_FILE``'s, or name a task twice."""
+    with path.open("rb") as stream:
+        record = json.loads(stream.read())
+    checked = record["checked"]
+    if checked["replies"] != REPLIES:
+        raise ValueError("numina_replies.json was compiled for other replies; rerun check_statements.py")
+    proofs_checked = json.loads(PROOFS_FILE.read_text())["checked"]
+    if {key: checked[key] for key in proofs_checked} != proofs_checked:
+        raise ValueError("numina_replies.json and numina_proofs.json come from different checks")
+    keys = [*record["contradictory"], *(key for keys in record["fixed_reply"].values() for key in keys)]
+    if len(keys) != len(set(keys)):
+        raise ValueError("numina_replies.json names a task twice")
+    return ReplyChecks(
+        contradictory=frozenset(record["contradictory"]),
+        fixed_reply={key: ReplyOutcome(outcome) for outcome, keys in record["fixed_reply"].items() for key in keys},
+    )
+
+
 FIXED_REPLY_LABEL = "lean.fixed_reply"
-"""The task label that carries ``FIXED_REPLY_OUTCOMES``."""
+"""The task label that carries ``ReplyChecks.fixed_reply``."""
 
 
 class StatementFlag(StrEnum):
@@ -288,7 +322,8 @@ def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | Import
     if isinstance(contract, ImportRejection):
         return contract
     row_key = proof_key(data)
-    if row_key in CONTRADICTORY:
+    checks = reply_checks(context.inputs["replies"] / replies_source().filename)
+    if row_key in checks.contradictory:
         return source_defect(
             "contradictory_hypotheses", "The hypotheses prove False, so a reply that ignores the conclusion scores"
         )
@@ -297,7 +332,9 @@ def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | Import
         return source_defect(f"judged_{flag}", REJECTED_FLAGS[flag])
     evidence = {key: data[key] for key in ("uuid", "source", "problem_type", "question_type", "exam") if key in data}
     task = proof_task(row, context, contract, data["problem"], {**evidence, "proof": data["formal_ground_truth"]})
-    labels = {FIXED_REPLY_LABEL: FIXED_REPLY_OUTCOMES[row_key].value}
+    if row_key not in checks.fixed_reply:
+        raise ValueError(f"numina_replies.json has no outcome for {row_key}; rerun check_statements.py")
+    labels = {FIXED_REPLY_LABEL: checks.fixed_reply[row_key].value}
     if flag is not None:
         labels[STATEMENT_FLAG_LABEL] = flag.value
     return task.model_copy(update={"labels": labels})
@@ -348,7 +385,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 version="2",
                 intended_use=IntendedUse.TRAIN,
                 controls=NUMINA_CONTROLS,
-                inputs={name: prime_list_source(name) for name in PRIME_LISTS},
+                inputs={**{name: prime_list_source(name) for name in PRIME_LISTS}, "replies": replies_source()},
                 grader=LEAN_KERNEL_GRADER_PACKAGES,
             ),
         )

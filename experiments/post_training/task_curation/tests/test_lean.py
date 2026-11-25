@@ -14,8 +14,6 @@ from taskcompendium.pipeline.models import ImportRejection
 
 from experiments.post_training.task_curation.datasets.lean import numina, proofs
 from experiments.post_training.task_curation.datasets.lean.check_statements import (
-    RECORDED,
-    REPLIES,
     failed_unexpectedly,
     replies_record,
     reply_outcome,
@@ -36,9 +34,7 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP,
     FIXED_REPLY_LABEL,
     PASSING_PROOFS,
-    PROOFS_FILE,
     REJECTED_FLAGS,
-    REPLY_CHECKS,
     STATEMENT_FLAG_LABEL,
     STATEMENT_FLAGS,
     UNCOMPILABLE,
@@ -54,8 +50,8 @@ from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA_ROWS,
     PROOFNET,
     contract,
+    numina_inputs,
     numina_row,
-    prime_inputs,
     proofnet_row,
     with_passing_proof,
 )
@@ -276,7 +272,7 @@ def test_the_verdict_is_the_last_json_line_even_when_a_name_holds_a_line_separat
 
 def test_a_numina_row_freezes_its_theorem_and_keeps_the_human_proof_for_the_golden_control(tmp_path, monkeypatch):
     row = with_passing_proof(monkeypatch, numina_row())
-    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    task = converted_task(NUMINA, row, inputs=numina_inputs(tmp_path, row))
     assert contract(task) == {
         "prefix": "import Mathlib",
         "statement": "theorem algebra_1 (n : Nat) : n + 0 = n :=",
@@ -295,7 +291,7 @@ def test_the_golden_control_drops_the_human_proofs_comments_which_can_hold_code_
     proof = "import Mathlib\n\n/-! Example:\n```lean\nexample : True := trivial\n```\n-/\n"
     proof += "theorem algebra_1 (n : Nat) : n + 0 = n := by\n  exact Nat.add_zero n"
     row = with_passing_proof(monkeypatch, numina_row(formal_ground_truth=proof))
-    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    task = converted_task(NUMINA, row, inputs=numina_inputs(tmp_path, row))
     golden = human_proof(task).event
     assert isinstance(golden, TextMessage)
     block = proof_block(golden.content)
@@ -328,7 +324,7 @@ def test_a_numina_statement_freezes_its_last_theorem_after_its_prefix(
     formal_statement, prefix, statement, tmp_path, monkeypatch
 ):
     row = with_passing_proof(monkeypatch, numina_row(formal_statement=formal_statement))
-    frozen = contract(converted_task(NUMINA, row, inputs=prime_inputs(tmp_path)))
+    frozen = contract(converted_task(NUMINA, row, inputs=numina_inputs(tmp_path, row)))
     assert (frozen["prefix"], frozen["statement"].strip(), frozen["target"]) == (prefix, statement, "algebra_1")
 
 
@@ -343,8 +339,8 @@ def test_the_fixture_rows_used_as_golden_controls_have_passing_proofs():
     assert all(numina_proof_key(row) in PASSING_PROOFS for row in NUMINA_ROWS)
 
 
-def test_the_pinned_checks_drop_the_fixture_row_with_contradictory_hypotheses_and_label_the_others(tmp_path):
-    inputs = prime_inputs(tmp_path)
+def test_the_reply_checks_drop_the_fixture_row_with_contradictory_hypotheses_and_label_the_others(tmp_path):
+    inputs = numina_inputs(tmp_path)
     contradictory, *kept = NUMINA_ROWS
     rejection = convert_row(NUMINA, contradictory, inputs=inputs)
     assert isinstance(rejection, ImportRejection)
@@ -353,20 +349,24 @@ def test_the_pinned_checks_drop_the_fixture_row_with_contradictory_hypotheses_an
     assert labels == [{FIXED_REPLY_LABEL: "not_proved"}, {FIXED_REPLY_LABEL: "proved"}]
 
 
-def test_the_pinned_reply_checks_cover_every_task_once_with_the_current_replies_and_toolchain():
-    checked = REPLY_CHECKS["checked"]
-    assert checked["replies"] == REPLIES
-    assert {key: checked[key] for key in RECORDED} == json.loads(PROOFS_FILE.read_text())["checked"]
-    keys = [*REPLY_CHECKS["contradictory"], *(key for keys in REPLY_CHECKS["fixed_reply"].values() for key in keys)]
-    assert len(keys) == len(set(keys))
-    assert set(keys) == PASSING_PROOFS
+def test_a_task_without_a_reply_outcome_fails_conversion(tmp_path, monkeypatch):
+    row = with_passing_proof(monkeypatch, numina_row())
+    with pytest.raises(ValueError, match="no outcome"):
+        convert_row(NUMINA, row, inputs=numina_inputs(tmp_path))
+
+
+def test_reply_checks_compiled_for_another_reply_fail_conversion(tmp_path, monkeypatch):
+    inputs = numina_inputs(tmp_path)
+    monkeypatch.setattr(numina, "REPLIES", {**numina.REPLIES, "fixed_reply": "by\n  simp"})
+    with pytest.raises(ValueError, match="other replies"):
+        convert_row(NUMINA, NUMINA_ROWS[1], inputs=inputs)
 
 
 @pytest.mark.parametrize("flag", sorted(REJECTED_FLAGS))
 def test_a_statement_the_judges_find_vacuous_or_giving_the_answer_away_is_left_out(flag, tmp_path, monkeypatch):
     row = with_passing_proof(monkeypatch, numina_row())
     monkeypatch.setattr(numina, "STATEMENT_FLAGS", {numina_proof_key(row): flag})
-    rejection = convert_row(NUMINA, row, inputs=prime_inputs(tmp_path))
+    rejection = convert_row(NUMINA, row, inputs=numina_inputs(tmp_path, row))
     assert isinstance(rejection, ImportRejection)
     assert rejection.reason == f"judged_{flag}"
 
@@ -375,7 +375,7 @@ def test_a_statement_the_judges_find_vacuous_or_giving_the_answer_away_is_left_o
 def test_a_statement_the_judges_find_weaker_or_different_keeps_their_verdict_as_a_label(flag, tmp_path, monkeypatch):
     row = with_passing_proof(monkeypatch, numina_row())
     monkeypatch.setattr(numina, "STATEMENT_FLAGS", {numina_proof_key(row): flag})
-    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    task = converted_task(NUMINA, row, inputs=numina_inputs(tmp_path, row))
     assert task.labels == {FIXED_REPLY_LABEL: "not_proved", STATEMENT_FLAG_LABEL: flag}
 
 
@@ -495,7 +495,7 @@ OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"
     ],
 )
 def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, reason, tmp_path):
-    inputs = prime_inputs(tmp_path, unported=["listed-unported"], misformalized=["listed-misformalized"])
+    inputs = numina_inputs(tmp_path, unported=["listed-unported"], misformalized=["listed-misformalized"])
     result = convert_row(NUMINA, numina_row(**fields), inputs=inputs)
     assert isinstance(result, ImportRejection)
     assert result.reason == reason
