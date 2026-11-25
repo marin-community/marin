@@ -216,23 +216,21 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
         roots.append(root)
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
-    report = run(
-        gate.gate_step(
+
+    def gate_for_candidates():
+        return gate.gate_step(
             preset,
             tuple(candidates),
+            group_name="users/test/requirements",
             inputs=RunInputs(
                 preset_name=preset.name,
-                requirements=(
-                    key + "<=control",
-                    key + "<=control",
-                    key + "<=0",
-                    "speed/update_seconds<=control",
-                ),
+                requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
             ),
             cohort=cohort_from_fixtures(roots[0]),
         )
-    )[0]
-    assert report.verdict == "fail" and report.effect == "regression", report.reason
+
+    report = run(gate_for_candidates())[0]
+    assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
     assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 4) * math.sqrt(2.5) * math.sqrt(0.7))
@@ -256,10 +254,17 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
             preset,
             tuple(candidates),
             cohort=cohort,
+            group_name="users/test/requirements",
             inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
         )
     )[0]
     assert "failed" not in (same_cohort.reason or "") and same_cohort.control.attempts == cohort.attempts
+    other = cohort.attempts[1]
+    with edit_receipt(Path(other.path)) as receipt:
+        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
+    stale = run(gate_for_candidates())[0]
+    assert stale.path != report.path
+    assert stale.verdict == "invalid" and "stored control config version" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):

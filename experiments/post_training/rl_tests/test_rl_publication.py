@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -12,9 +13,11 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import click
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary
+from finestore.rl.rl_progress import AttemptSummary, Invariant, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -242,18 +245,80 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["grader_report"] is None
 
 
-def test_stored_evaluation_keeps_its_original_selection(preset_table, recorded_runs):
+def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(preset_table, recorded_runs):
     preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
     table = preset_table(preset)
-    source = recorded_runs(preset.name, "tests/eval-coverage", attempt_id="recorded")
+    built = runner.build_experiment(preset, table=table)
+    source = recorded_runs(preset.name, "tests/eval-coverage", attempt_id="recorded", inputs=built.inputs)
     attempt = read_stored_skyrl_attempts(str(source))[1]["recorded"]
     baseline = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    newer = replace(preset, held_out_tasks="eval-lite@2026.11.24.99")
+    newer = replace(
+        preset,
+        held_out_tasks="eval-lite@2026.11.24.99",
+        evaluations=(replace(preset.evaluations[0], name="renamed_eval", every=preset.checkpoint_every),),
+    )
     write_json(Path(recipe.selection_artifact(newer.held_out_tasks).path()) / "summary.json", selection_summary(40))
-    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt)
+    report = gate.GateReport(
+        preset=preset.name,
+        verdict=Verdict.INVALID,
+        effect=None,
+        reason="The evaluation protocol differs",
+        run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
+        control=gate.ControlMetadata(version="1234abcd", attempts=()),
+        invariants=(Invariant(name="evaluation_protocol_matches", value=9, limit=18, holds=False),),
+        comparisons=(),
+        gaps=(),
+    )
+    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt, report=report)
     assert row.status == "succeeded" and row.failed_facts == []
-    assert row.evaluation_data_identity == baseline.evaluation_data_identity
+    native = recorded_launch(attempt)
+    (selection,) = native.validation_data
+    expected_source = f"{selection.identity}/{selection.relative_path}"
+    assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
     assert row.evaluation_task_set == baseline.evaluation_task_set
+    assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
+    assert row.gate_result is not None and not row.gate_result.invariants[0].holds
+
+    def family_identity(summary):
+        return next(
+            score.comparability
+            for entry in summary.evaluations
+            if (score := entry.evaluation_score) and score.final and score.statistic == "family_mean"
+        )
+
+    assert family_identity(row) == family_identity(baseline) and family_identity(row) is not None
+    outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
+    changed = [
+        (
+            item.model_copy(update={"strata": item.strata.model_copy(update={"family": "alternate-family"})})
+            if item.task_id == outputs[0].task_id
+            else item
+        )
+        for item in outputs
+    ]
+    replace_evaluations(source, changed)
+    differently_grouped = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert differently_grouped.evaluation_task_set == baseline.evaluation_task_set
+    assert differently_grouped.evaluation_protocol_identity == baseline.evaluation_protocol_identity
+    assert family_identity(differently_grouped) != family_identity(baseline)
+
+    source_path = Path(selection.uri) / selection.relative_path
+    samples = pq.read_table(source_path).to_pylist()
+    task = json.loads(samples[0]["task_spec"])
+    task.setdefault("labels", {})["comparison_fixture"] = "changed-content-with-same-id"
+    samples[0]["task_spec"] = json.dumps(task)
+    pq.write_table(pa.Table.from_pylist(samples), source_path)
+    changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert changed_tasks.evaluation_task_set != baseline.evaluation_task_set
+    assert changed_tasks.evaluation_protocol_identity == baseline.evaluation_protocol_identity
+
+    altered_config = copy.deepcopy(attempt.native.config)
+    altered_config["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.314
+    altered = attempt.model_copy(update={"config": altered_config})
+    changed_protocol = publication.build_record(str(source), preset, table=table, attempt=altered)
+    assert changed_protocol.evaluation_task_set == changed_tasks.evaluation_task_set
+    assert changed_protocol.evaluation_protocol_identity != changed_tasks.evaluation_protocol_identity
+    assert family_identity(changed_protocol) != family_identity(changed_tasks)
 
 
 def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
@@ -413,6 +478,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 preset,
                 handles,
                 cohort=cohort,
+                group_name="tests/publication",
                 inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )
         )[0]

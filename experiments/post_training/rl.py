@@ -116,6 +116,7 @@ class RLExperiment:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     gate: ArtifactStep[rl_gate.GateReport] | None = None
     inputs: RunInputs | None = None
+    group_name: str = ""
 
 
 def _provenance(*, control: bool) -> Provenance:
@@ -162,7 +163,7 @@ def _run_name(
     preset: presets.Preset,
     provenance: Provenance,
     inputs_hash: str,
-    replicate: int,
+    replicate: int | None,
     *,
     table: presets.ModelPresets,
     control: str | None,
@@ -173,7 +174,7 @@ def _run_name(
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
-    return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
+    return user_owned_name(name + (f"-r{replicate}" if preset.gated and replicate is not None else ""))
 
 
 def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
@@ -317,7 +318,16 @@ def build_experiment(
         runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
     if validate_plan:
         rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
-    return RLExperiment(tuple(runs), inputs=inputs)
+    group_name = _run_name(
+        preset,
+        provenance,
+        inputs_hash,
+        None,
+        table=table,
+        control=None,
+        resume_step=resume.step if resume is not None else None,
+    )
+    return RLExperiment(tuple(runs), inputs=inputs, group_name=group_name)
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
@@ -1098,7 +1108,10 @@ def command(
                 if frozen is None:
                     raise InvalidComparison("coordinator requires a control cohort fixed at submission")
                 cohort = rl_gate.ControlCohort.model_validate_json(frozen)
-            run = replace(run, gate=rl_gate.gate_step(preset, run.runs, inputs=run.inputs, cohort=cohort))
+            run = replace(
+                run,
+                gate=rl_gate.gate_step(preset, run.runs, inputs=run.inputs, cohort=cohort, group_name=run.group_name),
+            )
         model = preset.model
         if (
             table.needs_completed_default_export

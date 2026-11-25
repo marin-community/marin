@@ -5,10 +5,11 @@
 
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.rl import skyrl
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
@@ -40,12 +41,13 @@ def preset_launch_yaml(
     return materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml
 
 
-def run_native_json(*command: str, timeout: int = 120):
+def run_native_json(*command: str, timeout: int = 120, env: Mapping[str, str] | None = None):
     """Run a SkyRL CPU command that returns JSON on stdout."""
     try:
         result = subprocess.run(
             skyrl_cpu_command(*command),
             capture_output=True,
+            env=env if env is not None else skyrl.skyrl_cpu_environment(),
             text=True,
             timeout=timeout,
         )
@@ -58,7 +60,9 @@ def run_native_json(*command: str, timeout: int = 120):
         raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
 
 
-def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
+def compose_configs(
+    paths: Sequence[str], *, validate_driver: bool = False, env: Mapping[str, str] | None = None
+) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
     return run_native_json(
@@ -72,4 +76,5 @@ def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> l
         *options,
         "--",
         *paths,
+        env=env,
     )

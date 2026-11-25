@@ -1096,8 +1096,9 @@ def gate_step(
     *,
     inputs: RunInputs,
     cohort: ControlCohort,
+    group_name: str,
 ) -> ArtifactStep[GateReport]:
-    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}"
+    name = f"{group_name}/gate-n{len(runs)}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
     return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, cohort=cohort), deps=runs)

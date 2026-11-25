@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from contextlib import redirect_stdout
@@ -29,7 +30,8 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
     with tempfile.TemporaryDirectory(prefix="rl-main-config-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(preset_launch_yaml(preset, name="main-base"))
-        (config,) = compose_configs([str(path)])
+        # The caller selected this checkout and already cleaned the Python environment.
+        (config,) = compose_configs([str(path)], env=os.environ)
         return config
 
 
