@@ -8,9 +8,9 @@ from dataclasses import dataclass, replace
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
-from taskcompendium.evaluation.spec import OperationKind
+from marin.evaluation.serving_config import resolved_serve_config
 
-from experiments.evaluation.curated import selection_dataset
+from experiments.evaluation.curated import resolve_selection, runs_agent, selection_dataset
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec, prompt_format
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
@@ -43,13 +43,12 @@ def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
     return config.protocol.context_window
 
 
-def _server_window(item: ResolvedPolicyEvaluation) -> int:
-    """The window a server must have for the run to see exactly the evaluation's context.
+def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
+    """Choose a server window from the declared benchmark window and policy context.
 
-    A benchmark that enforces its own window runs on the candidate's served window, which must hold it;
-    any other runs at the server's window, so it needs a server of exactly its context.
+    Benchmarks with a declared window request ``served``, the candidate's window after the checkpoint
+    clamps it; others request a server at the policy context.
     """
-    served = item.candidate.model.serve.max_model_len
     own = benchmark_window(item)
     if own is None:
         return item.context
@@ -63,13 +62,15 @@ def _server_window(item: ResolvedPolicyEvaluation) -> int:
     return served
 
 
-def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[ServerGroup, ...]:
-    """Group evaluations by the server window they need, keeping agent and single-turn runs apart."""
+def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | None) -> tuple[ServerGroup, ...]:
+    """Group evaluations by the server window they need, keeping agent and single-turn runs apart.
+
+    ``served`` is the candidate's served window as the launcher resolves it.
+    """
     groups: dict[tuple[int, bool], list[ResolvedPolicyEvaluation]] = {}
     for item in items:
-        config = evaluation_dataset(item)
-        agentic = config.protocol.operation is OperationKind.AGENT_EPISODE
-        groups.setdefault((_server_window(item), agentic), []).append(item)
+        agentic = runs_agent(resolve_selection(item.evaluation.selection, prompt_format(item.candidate.model)))
+        groups.setdefault((_server_window(item, served), agentic), []).append(item)
     return tuple(
         ServerGroup(window=window, agentic=agentic, evaluations=tuple(members))
         for (window, agentic), members in groups.items()
@@ -108,7 +109,8 @@ def launch_specs(
             raise ValueError(f"{candidate.name} does not run {sorted(unknown)} under {policy.version}")
         resolved = tuple(item for item in resolved if item.evaluation.name in evaluations)
     specs = []
-    for group in server_groups(resolved):
+    served = resolved_serve_config(candidate.model).max_model_len
+    for group in server_groups(resolved, served):
         model = candidate.model
         if model.serve.max_model_len != group.window:
             model = replace(model, serve=replace(model.serve, max_model_len=group.window))
