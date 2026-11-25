@@ -463,6 +463,8 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
             validate_cfg(auto_cfg)
             assert auto_cfg.trainer.batch_builder == "driver"
         cfg.trainer.batch_builder = "worker"
+        if metadata["model_type"] == "unreadable":
+            assert worker_batch_refusal(cfg, check_runtime_resources=False) is None
         match = "Unrecognized model" if metadata["model_type"] == "unreadable" else config_reason
         with pytest.raises(ValueError, match=match):
             validate_cfg(cfg)

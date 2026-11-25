@@ -174,6 +174,7 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
     replay = moe_router_replay_requested(cfg)
     if etp > 1 or replay:
         model = cfg.trainer.policy.model
+        # Planning without staged metadata leaves the ETP and replay checks to the training driver.
         if not check_runtime_resources and not os.path.isfile(os.path.join(model.path, "config.json")):
             return None
 
