@@ -4,7 +4,6 @@
 """Canonical task and curriculum embedding graph over existing curation outputs."""
 
 import json
-import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -18,6 +17,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.curriculum.alignment import (
@@ -144,7 +144,7 @@ def _describe(
     # Resolve credentials during execution so they never enter the artifact identity.
     submit = partial(
         chat_output,
-        OpenAIChatClient(base_url, os.environ[GLM_BULK_TOKEN_ENV], timeout=GLM_REQUEST_TIMEOUT),
+        OpenAIChatClient(base_url, require_secret(GLM_BULK_TOKEN_ENV), timeout=GLM_REQUEST_TIMEOUT),
         max_concurrent=endpoint.concurrency,
     )
     paths = describe_tasks(

@@ -45,7 +45,8 @@ AWS credentials arrive through the submitter's file-delivered secret bundle)::
     export KUBECONFIG=~/.kube/coreweave-iris-gpu
     uv run iris --cluster=cw-us-east-02a job run --job-name grug-67b-sft-smoke-coord \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \\
-      -e MARIN_PREFIX s3://marin-us-east-02a/marin -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
+      --secret HF_TOKEN env:HF_TOKEN --secret WANDB_API_KEY env:WANDB_API_KEY \\
       -- python -m experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage --stage smoke --version dev --run
 
 Drop ``--run`` to print the lowered plan (and each artifact's resolved ``name@version``) without

@@ -14,7 +14,7 @@ The generate stage calls the GLM relay, so submit it through the hub to ``cw-us-
       --enable-extra-resources --cpu 2 --memory 16GB --disk 32GB \\
       --job-name curriculum-science-generate-<date> \\
       -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \\
-      -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \\
+      --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN \\
       -- uv run python experiments/post_training/curriculum_sft/science_trial.py \\
       --stage generate --version <version> --run
 

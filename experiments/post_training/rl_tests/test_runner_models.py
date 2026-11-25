@@ -102,6 +102,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
         "DAYTONA_EVAL_API_KEY",
         "WANDB_API_KEY",
     }
+    assert execution.coordinator_secret_sources == (("WANDB_API_KEY", "env:WANDB_API_KEY"),)
 
 
 @pytest.mark.parametrize(

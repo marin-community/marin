@@ -684,6 +684,7 @@ class IrisSkyRLExecution:
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
+    # Source references for credentials whose consumers read the Iris secret mount.
     coordinator_secret_sources: tuple[tuple[str, str], ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None

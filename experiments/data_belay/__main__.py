@@ -87,7 +87,7 @@ def train_command(rung: str, run_id: str, flags: list[str], seed: int) -> list[s
 
 def _iris_job(job_name: str, resources: tuple[str, ...], module_args: list[str]) -> list[str]:
     """Iris command that runs ``python -m <module_args>`` on CLUSTER, passing on ``HF_TOKEN``."""
-    env = ["-e", "HF_TOKEN", os.environ["HF_TOKEN"]] if os.environ.get("HF_TOKEN") else []
+    env = ["--secret", "HF_TOKEN", "env:HF_TOKEN"] if os.environ.get("HF_TOKEN") else []
     return [
         *("uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources"),
         *("--target-cluster", CLUSTER, "--priority", BAND, *resources),
@@ -96,18 +96,13 @@ def _iris_job(job_name: str, resources: tuple[str, ...], module_args: list[str])
     ]
 
 
-def _shown(cmd: list[str]) -> str:
-    secret = os.environ.get("HF_TOKEN")
-    return " ".join(shlex.quote("$HF_TOKEN" if c == secret else c) for c in cmd)
-
-
 def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
     """Re-run this command, without ``--submit``, as an Iris CPU job. Never returns."""
     args = [a for a in sys.argv[1:] if a != "--submit"]
     cmd = _iris_job(
         job_name, ("--cpu", str(cpu), "--memory", memory, "--disk", "32GB"), ["experiments.data_belay", *args]
     )
-    click.echo(f"submitting: {_shown(cmd)}", err=True)
+    click.echo(f"submitting: {shlex.join(cmd)}", err=True)
     os.execvp(cmd[0], cmd)
 
 
@@ -331,9 +326,9 @@ def score(rung: str, submit: bool, run_ids: tuple[str, ...]) -> None:
     ]
     cmd = _iris_job(f"data-belay-score-{run_ids[0]}", SCORE_RESOURCES, module_args)
     if not submit:
-        click.echo(_shown(cmd))
+        click.echo(shlex.join(cmd))
         return
-    click.echo(f"submitting: {_shown(cmd)}", err=True)
+    click.echo(f"submitting: {shlex.join(cmd)}", err=True)
     os.execvp(cmd[0], cmd)
 
 

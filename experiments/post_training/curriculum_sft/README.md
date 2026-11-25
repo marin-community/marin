@@ -46,7 +46,7 @@ uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-08a \
   --enable-extra-resources --cpu 2 --memory 16GB --disk 32GB \
   --job-name curriculum-math-generate-<date> \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \
-  -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
+  --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN \
   -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
   --stage generate --version <SOLUTIONS_VERSION> --run
 ```

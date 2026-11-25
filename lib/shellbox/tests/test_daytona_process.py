@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+import traceback
 from contextlib import AsyncExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -348,11 +349,16 @@ def test_daytona_machine_close_reclaims_active_process_and_releases_reader(sessi
 def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_child(session_machine, wire):
     async def scenario():
         machine, api = session_machine
+        credential = "hf_" + "a" * 24
         api.corrupt_output = wire
+        if not wire:
+            api.corrupt_stderr = f"launcher unavailable: {credential}\n"
         try:
             session = await machine.open_process(Command((sys.executable, "-c", "import signal; signal.pause()")))
-            with pytest.raises((ValueError, RuntimeError)):
+            with pytest.raises((ValueError, RuntimeError)) as error:
                 await asyncio.wait_for(session.read(), 5)
+            if not wire:
+                assert "launcher unavailable" in str(error.value) and credential not in str(error.value)
             await session.close()
             assert not api.sessions
             assert all(child.returncode is not None for child in api.children)
@@ -362,25 +368,17 @@ def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["stream", "cleanup"])
 @pytest.mark.requires_linux_process_api
-def test_daytona_process_failure_diagnostics_redact_credentials(session_machine, failure):
+def test_daytona_process_cleanup_diagnostics_exclude_provider_details(session_machine):
     async def scenario():
         machine, api = session_machine
         credential = "hf_" + "a" * 24
-        if failure == "stream":
-            api.corrupt_output = ""
-            api.corrupt_stderr = f"launcher unavailable: {credential}\n"
         try:
             session = await machine.open_process(Command((sys.executable, "-c", "import signal; signal.pause()")))
-            if failure == "stream":
-                with pytest.raises(RuntimeError, match="launcher unavailable") as error:
-                    await asyncio.wait_for(session.read(), 5)
-            else:
-                api.delete_failure = DaytonaError(f"provider response: {credential}", status_code=503)
-                with pytest.raises(RuntimeError, match=r"delete_session.*503") as error:
-                    await session.close()
-            assert credential not in str(error.value)
+            api.delete_failure = DaytonaError(f"provider response: {credential}", status_code=503)
+            with pytest.raises(RuntimeError, match=r"delete_session.*503") as error:
+                await session.close()
+            assert credential not in "".join(traceback.format_exception(error.value))
         finally:
             await machine.close()
 

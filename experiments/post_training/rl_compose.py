@@ -708,6 +708,9 @@ def run_step(
             job_timeout_seconds=layout.job_timeout_seconds,
             wandb_entity=wandb_entity or preset.wandb_entity,
             required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
+            coordinator_secret_sources=(
+                () if "WANDB_API_KEY" in forward_env else (("WANDB_API_KEY", "env:WANDB_API_KEY"),)
+            ),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             role_topology=layout.role_topology,
         ),

@@ -56,7 +56,7 @@ Iris cluster run (from a dev box, on `marin` prod cluster):
 
 ```bash
 uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --secret WANDB_API_KEY env:WANDB_API_KEY \
   -- python -m experiments.grug.base.launch --version dev --run
 ```
 

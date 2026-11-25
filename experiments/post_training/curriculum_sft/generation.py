@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections import defaultdict
 from collections.abc import Callable
@@ -31,6 +30,7 @@ from marin.inference.structured_output import StructuredTool
 from math_verify import parse, verify
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers import AutoTokenizer
 from verifyit.modes.extract import extract_boxed, strip_math_delimiters
@@ -449,7 +449,7 @@ def sequence_token_counter(tokenizer: str, revision: str) -> Callable[[dict[str,
 
 
 def _glm_client(relay_job: str) -> OpenAIBatchClient:
-    return OpenAIBatchClient(resolve_glm_base_url(relay_job), os.environ[GLM_BULK_TOKEN_ENV])
+    return OpenAIBatchClient(resolve_glm_base_url(relay_job), require_secret(GLM_BULK_TOKEN_ENV))
 
 
 def _run_batch(client: OpenAIBatchClient, requests: list[dict[str, Any]], filename: str) -> str:

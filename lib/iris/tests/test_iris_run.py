@@ -46,19 +46,18 @@ def test_load_env_vars_invalid_key():
         load_env_vars([["KEY=VALUE"]])
 
 
-def test_run_refuses_credential_environment_flag_before_submission(monkeypatch):
-    submitted = []
-
-    def run_job(**kwargs):
-        submitted.append(kwargs["env_vars"])
-        return 0
-
-    monkeypatch.setattr("iris.cli.job.run_iris_job", run_job)
+def test_run_refuses_credential_environment_flag_before_submission(recorded_job_submissions):
     result = _invoke_run(["-e", "HF_TOKEN", "fixture-credential"])
     assert result.exit_code == 2
     assert "HF_TOKEN" in result.output and "--secret" in result.output
     assert "fixture-credential" not in result.output
-    assert not submitted
+    assert not recorded_job_submissions
+
+    result = _invoke_run(["-e", "HF_TOKEN_PATH", "/tmp/token-file", "-e", "CANARY_TARGET_TOKENS", "400"])
+    assert result.exit_code == 0, result.output
+    (submitted,) = recorded_job_submissions
+    assert submitted["environment"].env_vars["HF_TOKEN_PATH"] == "/tmp/token-file"
+    assert submitted["environment"].env_vars["CANARY_TARGET_TOKENS"] == "400"
 
 
 def test_iris_config_missing_file(tmp_path):

@@ -165,7 +165,7 @@ Jobs in this directory are submitted to **Iris** on a **v5p-8**.
 .venv/bin/iris --cluster=marin job run \
   --no-wait \
   --reserve v5p-8 \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --secret WANDB_API_KEY env:WANDB_API_KEY \
   -- python -m experiments.grug.moe.launch --version dev --run
 ```
 

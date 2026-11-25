@@ -5,7 +5,7 @@
 
 Usage:
     iris --config cluster.yaml job run -- python train.py --epochs 10
-    iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+    iris --config cluster.yaml job run --tpu v5litepod-16 --secret WANDB_API_KEY env:WANDB_API_KEY -- python train.py
 """
 
 import difflib
@@ -140,7 +140,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
         for item in env_flags:
             key = item[0].partition("=")[0]
             if looks_like_credential(key):
-                raise click.UsageError(f"Use --secret to supply credential {key!r}.")
+                raise click.UsageError(f"Use --secret {key} env:{key} to supply this credential.")
             if len(item) > 2:
                 raise ValueError(f"Too many values for env var: {' '.join(item)}")
             if "=" in item[0]:
@@ -880,7 +880,7 @@ Examples:
   \b
   # TPU job with environment variables
   iris --config cluster.yaml job run --tpu v5litepod-16 \\
-    -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+    --secret WANDB_API_KEY env:WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach

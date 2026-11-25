@@ -84,7 +84,7 @@ jobs:
             --timeout "$CANARY_TIMEOUT" \
             --cpu 2 --memory 8GB --disk 32GB \
             --job-name "${RUN_ID}-coord" \
-            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            --secret WANDB_API_KEY env:WANDB_API_KEY \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e IRIS_PORT_JAX "$IRIS_PORT_JAX" \
             -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \

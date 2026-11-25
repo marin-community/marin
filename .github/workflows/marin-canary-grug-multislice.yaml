@@ -97,8 +97,8 @@ jobs:
             -e GRUG_MULTISLICE_TPU_TYPE "$GRUG_MULTISLICE_TPU_TYPE" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
-            -e WANDB_API_KEY "$WANDB_API_KEY" \
-            -e HF_TOKEN "$HF_TOKEN" \
+            --secret WANDB_API_KEY env:WANDB_API_KEY \
+            --secret HF_TOKEN env:HF_TOKEN \
             -- python -m experiments.ferries.grug_multislice_smoke)
           if [ -z "$JOB_ID" ]; then
             echo "iris job run produced no job id" >&2

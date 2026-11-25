@@ -405,7 +405,7 @@ iris --cluster=marin cluster dashboard --port 8080
 ```bash
 # Submit a command to the cluster
 iris --config cluster.yaml job run -- python train.py
-iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
+iris --config cluster.yaml job run --tpu v5litepod-16 --secret WANDB_API_KEY env:WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
 # Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py

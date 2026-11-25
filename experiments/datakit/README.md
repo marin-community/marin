@@ -236,7 +236,7 @@ uv run iris --cluster=marin job run --no-wait \
 
 To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
 with `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` and add
-`-e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET"` before `--`.
+`--secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET` before `--`.
 
 Regeneration reads the source names from `--source-prefix`, then runs the source
 registry's Hugging Face download and normalization steps before sampling 100B
@@ -250,7 +250,7 @@ bytes as source revisions or normalization code change.
 uv run iris --cluster=marin job run --no-wait \
   --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
   --priority batch \
-  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
     --mode regenerate \
     --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \

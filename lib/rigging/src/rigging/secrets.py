@@ -31,10 +31,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from rigging.redaction import is_sensitive_key_name
-
-looks_like_credential = is_sensitive_key_name
-
 logger = logging.getLogger(__name__)
 
 ENV_SCHEME = "env:"
@@ -46,6 +42,7 @@ COREWEAVE_SECRET_NAMES = ("CW_KEY_ID", "CW_KEY_SECRET")
 AWS_CREDENTIALS_FILENAME = ".aws-credentials"
 _FORWARDED_SECRET_NAMES = ("HF_TOKEN", "WANDB_API_KEY", *COREWEAVE_SECRET_NAMES)
 _SECRET_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
+_CREDENTIAL_NAME_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_?key|credential)$", re.IGNORECASE)
 
 # A scheme-shaped prefix (``foo:``): used to tell an unknown-scheme reference
 # (raise) apart from a bare literal secret (also raise, different message).
@@ -85,6 +82,11 @@ def validate_secret_name(name: str) -> None:
     """Reject names that could escape a secret directory."""
     if not _SECRET_NAME_RE.fullmatch(name):
         raise ValueError("secret names must contain only letters, digits, underscores, dots, and hyphens")
+
+
+def looks_like_credential(name: str) -> bool:
+    """Identify environment names that conventionally carry credential values."""
+    return _CREDENTIAL_NAME_RE.search(name) is not None
 
 
 def list_secret_names(*, directory: Path | None = None) -> tuple[str, ...]:
@@ -209,13 +211,14 @@ def _fetch_gcp_secret(ref: str) -> str | None:
             f"{ref!r}: resolving a gcp-secret reference needs the optional dependency; " "install marin-rigging[secrets]"
         ) from exc
     from google.api_core.exceptions import GoogleAPICallError, NotFound  # noqa: PLC0415  # optional dep
+    from google.auth.exceptions import DefaultCredentialsError  # noqa: PLC0415  # optional dep
 
-    client = secretmanager.SecretManagerServiceClient()
     try:
+        client = secretmanager.SecretManagerServiceClient()
         response = client.access_secret_version(name=resource)
     except NotFound:
         return None  # ABSENT — try the next source
-    except GoogleAPICallError:
+    except (GoogleAPICallError, DefaultCredentialsError):
         raise SecretResolutionError("cloud secret source could not be read") from None
     try:
         return response.payload.data.decode("utf-8").strip()

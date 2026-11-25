@@ -516,7 +516,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  --secret WANDB_API_KEY env:WANDB_API_KEY -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
     --run-id "$run_id" --num-steps 200 --version dev --run
@@ -535,7 +535,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  --secret WANDB_API_KEY env:WANDB_API_KEY -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
     --run-id "$run_id" --num-steps 8 --schedule-steps 390251 \
@@ -638,7 +638,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  --secret WANDB_API_KEY env:WANDB_API_KEY -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
     --run-id "$run_id" --size d1024 --flavor ep --version dev --run

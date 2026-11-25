@@ -146,12 +146,18 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
+    graph = _coordinator_graph(handles)
     required = {name for execution in executions for name in execution.required_env_vars}
     sources: dict[str, str] = {}
     for execution in executions:
         for name, source in execution.coordinator_secret_sources:
             if sources.setdefault(name, source) != source:
                 raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
+
+    forwarded = {name for run in graph for name in run.forward_env}
+    conflicting = sorted(sources.keys() & forwarded)
+    if conflicting:
+        raise ValueError("RL coordinator secrets require file-aware consumers: " + ", ".join(conflicting))
 
     unavailable = {name for name in required - sources.keys() if not env_vars.get(name, "").strip()}
     secrets = {}
@@ -173,7 +179,7 @@ def _coordinator_request(
         for name in sorted(required.union(_COORDINATOR_ENV_VARS) - secrets.keys())
         if name in env_vars
     }
-    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
+    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(graph).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
