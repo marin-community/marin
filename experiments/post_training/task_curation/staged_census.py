@@ -82,7 +82,7 @@ def verify_acceptance_execution(job_name: str, source_id: str) -> str:
     stays Pending for the repair cycle.
     """
     describe = subprocess.run(
-        ["uv", "run", "--no-sync", "iris", "--cluster=marin", "job", "describe", f"/benfeuer/{job_name}"],
+        ["uv", "run", "--no-sync", "iris", "--cluster=cw-us-east-02a", "job", "describe", f"/benfeuer/{job_name}"],
         capture_output=True,
         text=True,
         check=False,
@@ -226,6 +226,7 @@ def main() -> None:
     )
     parser.add_argument("--output", required=True, type=Path, help="The staged census artifact directory.")
     parser.add_argument("--receipts-output", required=True, type=Path, help="The staged receipt shard directory.")
+    parser.add_argument("--report", type=Path, help="Write the census result JSON here.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
