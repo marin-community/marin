@@ -55,3 +55,29 @@ uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   --artifact-root "$OUTPUT_ROOT/artifacts" \
   --output-root "$OUTPUT_ROOT" \
   --max-workers 16 --run
+
+# The declared-limits deviation record joins the conversion receipt (user decision
+# 2026-11-25 ~5 AM EST): the emitted execution limits are Daytona's per-sandbox cap, the
+# upstream 6/24/32 declarations stay recorded as the source declaration.
+uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python - <<'PYEOF'
+import json
+from pathlib import Path
+
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import DECLARED_LIMITS_DEVIATION
+
+manifests = sorted(
+    Path("$OUTPUT_ROOT").rglob("manifest.json"),
+    key=lambda path: len(path.parts),
+)
+if not manifests:
+    raise SystemExit("intake conversion: no manifest.json under the output root")
+for path in manifests:
+    manifest = json.loads(path.read_text())
+    if manifest.get("source") != "swe-rebench-v2-1-repaired":
+        continue
+    if manifest.get("declared_limits_deviation") is not None:
+        continue
+    manifest["declared_limits_deviation"] = DECLARED_LIMITS_DEVIATION
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    print(f"declared-limits deviation recorded: {path}")
+PYEOF

@@ -14,7 +14,11 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    DECLARED_LIMITS_DEVIATION,
     SETUP_TIMEOUT_SEC,
+    UPSTREAM_CPUS,
+    UPSTREAM_MEMORY_MB,
+    UPSTREAM_STORAGE_MB,
     _flatten,
     admission_receipt_labels,
     dockerfile,
@@ -211,20 +215,32 @@ def test_family_config_keeps_upstream_grader_keys_verbatim():
     }
 
 
-def test_task_toml_carries_upstream_declarations_and_condensed_environment():
+def test_task_toml_carries_approved_reduced_limits_and_upstream_source_declaration():
+    """The user decision (2026-11-25) reduces the emitted execution limits to Daytona's
+    per-sandbox cap; the upstream 6/24/32 declarations stay recorded as the source
+    declaration with the typed deviation record."""
     flat = _flatten({**PYTHON_ROW, "tags": ["swe-rebench", "swe-rebench-v2.1"], "quality_flags": [], "env": []})
     setup = setup_command(flat, "v1-python", groups.GROUPS["python"])
     document = tomlkit.parse(task_toml(flat, "v1-python", groups.GROUPS["python"], setup))
     assert document["verifier"]["timeout_sec"] == 2400.0
     assert document["verifier"]["environment_mode"] == "shared"
     assert document["agent"]["timeout_sec"] == 3000.0
-    assert document["environment"]["cpus"] == 6
-    assert document["environment"]["memory_mb"] == 24576
-    assert document["environment"]["storage_mb"] == 32768
+    # The emitted limits: Daytona's per-sandbox cap (the approved user decision).
+    assert document["environment"]["cpus"] == 4
+    assert document["environment"]["memory_mb"] == 8192
+    assert document["environment"]["storage_mb"] == 10240
+    assert document["environment"]["setup"]["timeout_sec"] == 3600.0
     assert document["environment"]["allow_internet"] is True
     assert document["environment"]["workdir"] == "/testbed"
     assert "conda create -n testbed" in document["environment"]["setup"]["command"]
     assert "docker_image" not in document["environment"]
+    # The upstream values stay recorded as the source declaration, never emitted.
+    assert (UPSTREAM_CPUS, UPSTREAM_MEMORY_MB, UPSTREAM_STORAGE_MB) == (6, 24576, 32768)
+    assert DECLARED_LIMITS_DEVIATION["type"] == "declared_limits_reduction"
+    assert DECLARED_LIMITS_DEVIATION["reason"] == "upstream spec exceeds the Daytona 4/8/10 per-sandbox cap"
+    assert "fidelity gate" in DECLARED_LIMITS_DEVIATION["evidence"]
+    assert DECLARED_LIMITS_DEVIATION["upstream_declaration"]["cpus"] == 6
+    assert DECLARED_LIMITS_DEVIATION["declared_limits"]["cpus"] == 4
 
 
 def test_dockerfile_is_group_shared():

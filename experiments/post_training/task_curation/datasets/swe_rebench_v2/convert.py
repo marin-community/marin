@@ -104,17 +104,54 @@ CLONE_BLOCK = (
     "git remote remove origin\n"
 )
 
-# Upstream task.toml declarations, carried verbatim into the repaired package (the faithful
-# environment rule keeps the declared limits; the fidelity GATE runs both variants at the
-# Daytona-enforceable 4 CPUs as a recorded gate deviation, and the release either routes to a
-# backend that runs 6 CPUs or awaits a user-approved reduction).
-AGENT_TIMEOUT_SEC = 3000.0
-VERIFIER_TIMEOUT_SEC = 2400.0
-SETUP_TIMEOUT_SEC = 1800.0
-BUILD_TIMEOUT_SEC = 1800.0
-CPUS = 6
-MEMORY_MB = 24576
-STORAGE_MB = 32768
+# The upstream task.toml declarations (6 CPUs / 24,576 MB / 32,768 MB storage) are recorded
+# verbatim below as the SOURCE declaration. The USER DECISION (2026-11-25 ~5 AM EST) approves
+# the declared-limits reduction: the repaired package EMITS Daytona's per-sandbox cap
+# (4 CPUs / 8,192 MB / 10,240 MB) with the typed deviation record DECLARED_LIMITS_DEVIATION
+# (reason: the upstream spec exceeds the Daytona 4/8/10 per-sandbox cap; evidence: the
+# fidelity gate ran the full population at 4 CPUs, where every admitted row passed its
+# NoP 0.0 + oracle 1.0 trials). The upstream values are never emitted as execution limits.
+UPSTREAM_AGENT_TIMEOUT_SEC = 3000.0
+UPSTREAM_VERIFIER_TIMEOUT_SEC = 2400.0
+UPSTREAM_SETUP_TIMEOUT_SEC = 1800.0
+UPSTREAM_BUILD_TIMEOUT_SEC = 1800.0
+UPSTREAM_CPUS = 6
+UPSTREAM_MEMORY_MB = 24576
+UPSTREAM_STORAGE_MB = 32768
+
+AGENT_TIMEOUT_SEC = UPSTREAM_AGENT_TIMEOUT_SEC
+VERIFIER_TIMEOUT_SEC = UPSTREAM_VERIFIER_TIMEOUT_SEC
+SETUP_TIMEOUT_SEC = 3600.0
+"""The setup deadline doubles the upstream declaration (ruling 2026-11-21: the heavy-install
+tail exceeds the declared 1800 s at the 4 CPU profile; the fidelity gate proved every row at
+3600 s)."""
+BUILD_TIMEOUT_SEC = UPSTREAM_BUILD_TIMEOUT_SEC
+CPUS = 4
+MEMORY_MB = 8192
+STORAGE_MB = 10240
+
+DECLARED_LIMITS_DEVIATION = {
+    "type": "declared_limits_reduction",
+    "reason": "upstream spec exceeds the Daytona 4/8/10 per-sandbox cap",
+    "evidence": (
+        "the fidelity gate ran the full population at 4 CPUs / 8 GiB / 10 GiB; every admitted "
+        "row passed its NoP 0.0 + oracle 1.0 trials at exactly this profile "
+        "(s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/wave-v11/seal.json)"
+    ),
+    "upstream_declaration": {
+        "cpus": UPSTREAM_CPUS,
+        "memory_mb": UPSTREAM_MEMORY_MB,
+        "storage_mb": UPSTREAM_STORAGE_MB,
+        "setup_timeout_sec": UPSTREAM_SETUP_TIMEOUT_SEC,
+    },
+    "declared_limits": {
+        "cpus": CPUS,
+        "memory_mb": MEMORY_MB,
+        "storage_mb": STORAGE_MB,
+        "setup_timeout_sec": SETUP_TIMEOUT_SEC,
+    },
+    "decision": "user decision 2026-11-25 ~5 AM EST (coordinator relay); release v2 re-declaration ratified",
+}
 
 
 def swe_rebench_profile():

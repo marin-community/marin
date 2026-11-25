@@ -98,7 +98,14 @@ def _declare() -> RlDataSource[CurationRecipe]:
                     "shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel "
                     "unchanged). Fidelity-gated per group against the upstream digest images before the full "
                     "population run; per-version toolchains and interpreter provisioning are declared base "
-                    "properties. Pending qualification."
+                    "properties. Declared limits deviate from the upstream source declaration "
+                    "(6 CPUs / 24,576 MB / 32,768 MB storage, recorded verbatim in convert.py): "
+                    "the emitted execution limits are Daytona's per-sandbox cap (4 CPUs / 8,192 MB "
+                    "/ 10,240 MB, the setup deadline 3600 s), reduced by the approved user decision "
+                    "2026-11-25 (reason: the upstream spec exceeds the Daytona 4/8/10 per-sandbox "
+                    "cap; evidence: the fidelity gate ran the full population at 4 CPUs, where "
+                    "every admitted row passed its NoP 0.0 + oracle 1.0 trials). "
+                    "Pending qualification."
                 ),
             ),
             config=CurationRecipe(
