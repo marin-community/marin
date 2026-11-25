@@ -2,10 +2,10 @@
 
 A trial policy for exercising the policy launcher, not a released policy. It is the closest approximation of the October 2026 eval policy ([#10197](https://github.com/marin-community/marin/issues/10197))
 that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) through the
-[unlabeled campaign](../../campaigns/eval-campaign-09-25-unlabeled/README.md): single-turn
+[unlabeled campaign](../../../campaigns/eval-campaign-09-25-unlabeled/README.md): single-turn
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
-both as TaskSpec entries of the [benchmark catalog](../../catalog.py); the agentic ones are the
-campaign's curated protocols in [`benchmarks/agentic.py`](../../benchmarks/agentic.py), which pin
+both as TaskSpec entries of the [benchmark catalog](../../../catalog.py); the agentic ones are the
+campaign's curated protocols in [`benchmarks/agentic.py`](../../../benchmarks/agentic.py), which pin
 the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; print it with
 
 ```bash

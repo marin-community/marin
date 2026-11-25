@@ -8,12 +8,12 @@ from dataclasses import dataclass, replace
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, prompt_format
 from marin.evaluation.serving_config import native_context_window, resolved_serve_config
 
 from experiments.evaluation.curated import pinned_model, resolve_selection, runs_agent, selection_dataset
-from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec, prompt_format
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, benchmark_window, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
@@ -36,28 +36,16 @@ def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe
     return selection_dataset(item.evaluation.selection, prompt_format(item.candidate.model))
 
 
-def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
-    """The input window the benchmark enforces on any server: its agent's input limit, else its protocol's window."""
-    config = evaluation_dataset(item)
-    if config.agent is not None:
-        return config.agent.max_input_tokens
-    return config.protocol.context_window
-
-
 def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
-    """Choose a server window from the declared benchmark window and policy context.
+    """Choose a server window for a resolved evaluation.
 
-    Benchmarks with a declared window request ``served``, the candidate's window after the checkpoint
-    clamps it; others request a server at the policy context.
+    Benchmarks that enforce their own window, which ``resolve`` made the evaluation's context, request
+    ``served``, the candidate's window after the checkpoint clamps it; others request a server at the
+    evaluation's context.
     """
-    own = benchmark_window(item)
+    own = benchmark_window(item.evaluation, item.candidate)
     if own is None:
         return item.context
-    if own != item.context:
-        raise ValueError(
-            f"{item.candidate.name} on {item.evaluation.name}: the policy's context {item.context} is not the "
-            f"window {own} the benchmark enforces"
-        )
     if served is None or served < own:
         raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {own}")
     return served
