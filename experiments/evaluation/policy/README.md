@@ -89,7 +89,9 @@ run against the policy and names each field that differs. A full run must decide
 leave out items its protocol excludes, such as ones too long for its window, but not items it never
 inspected. `launch`, `status` and `verify` need CoreWeave credentials.
 
-A policy marked `released` launches only from a clean checkout of its tag, `eval-policy-<version>`,
+A policy whose file sets `released: true` launches only from a clean checkout of its tag,
+`eval-policy-<version>`,
 and `status` and `verify` mark its runs from any other commit invalid. Its run IDs include the tag's
 commit, so runs made before the release, at the same version, never stand in for the release's. A
-fix to a released policy is a new version. A policy not yet released launches from any commit.
+fix to a released policy is a new version. A policy not yet released launches from any commit. To cut a
+release, set `released: true`, merge, then tag the merged commit.

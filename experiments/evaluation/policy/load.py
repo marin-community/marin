@@ -18,7 +18,9 @@ from experiments.evaluation.policy.schema import (
     PolicyOverride,
 )
 
-_POLICY_KEYS = frozenset({"version", "default_context", "candidates", "evaluations", "exclusions", "overrides"})
+_POLICY_KEYS = frozenset(
+    {"version", "released", "default_context", "candidates", "evaluations", "exclusions", "overrides"}
+)
 
 
 def _evaluation(entry: str | dict) -> PolicyEvaluation:
@@ -60,6 +62,7 @@ def load_policy(path: Path) -> EvalPolicy:
 
     return EvalPolicy(
         version=document["version"],
+        released=document.get("released", False),
         default_context=document["default_context"],
         candidates=tuple(candidates.values()),
         in_distribution=in_distribution,

@@ -22,8 +22,10 @@ from experiments.evaluation.policy.runs import (
     run_problems,
     run_warnings,
 )
-from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
+from experiments.evaluation.policy.versions import POLICIES
 
+POLICY = POLICIES["marin-2026-11-20-trial"]
+QWEN = next(candidate for candidate in POLICY.candidates if candidate.name == "qwen3.6-35b-a3b")
 EVALUATIONS = {"aime24", "mrcr-32k"}
 
 

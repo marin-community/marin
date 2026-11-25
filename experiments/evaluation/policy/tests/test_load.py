@@ -12,6 +12,7 @@ from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, Po
 
 POLICY_FILE = """
 version: test
+released: true
 default_context: 73728
 candidates:
   qwen3.6-35b-a3b: {max_context: 262144}
@@ -31,6 +32,7 @@ def test_a_policy_file_reads_into_the_schema(tmp_path):
     boolq = PolicyEvaluation("boolq")
     assert load_policy(path) == EvalPolicy(
         version="test",
+        released=True,
         default_context=73_728,
         candidates=(qwen,),
         in_distribution=(
