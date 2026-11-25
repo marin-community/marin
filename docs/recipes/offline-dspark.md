@@ -94,7 +94,7 @@ uv run --extra cpu python -m experiments.post_training.dspark_sft \
   --preset mochi-agentic --stage preflight
 ```
 
-## Submit the Mochi Iris job
+## Prefill Mochi teacher activations
 
 Submit two four-GB200 tasks. The distributed BF16 teacher runs with TP1 and
 DP8/EP8. Each activation file lands on the leader, moves to the S3 scratch
@@ -102,10 +102,9 @@ bucket selected by `marin_temp_bucket`, and is removed locally after upload.
 The bucket expires the files after three days. A completed cache can be reused
 for 48 hours from the start of extraction. Cache identity includes the teacher,
 prepared dataset, sample mode, tap layers, sequence limit, and extraction
-runtime. On a cache hit the teacher processes do not start. Speculators uses
-one of the leader's GPUs and reads activations as it batches examples. The
-RunAI loader caps each process's CPU buffer at 8 GiB. The trainer stages only
-the teacher's embedding and final gated head shards.
+runtime. You can go directly to draft fitting when a reusable cache exists.
+Preflight reports the teacher GPU count as `prefill_gpus` and the fitting GPU
+count as `gpus`.
 
 Teacher prefill requests generate one token to return each activation file.
 The cache progress log reports completed conversations and prompt tokens per
@@ -116,16 +115,34 @@ them to the job as secrets.
 
 ```bash
 uv run iris --cluster=marin job run --no-wait \
-  --job-name mochi-dspark --target-cluster cw-us-east-08a --region us-east-08a \
+  --job-name mochi-dspark-prefill --target-cluster cw-us-east-08a --region us-east-08a \
   --enable-extra-resources --replicas 2 --gpu GB200x4 \
   --cpu 48 --memory 768GB --disk 128GB --timeout 7200 \
+  --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
+  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage prefill
+```
+
+## Fit a Mochi draft from cached activations
+
+After prefill completes, submit the fitting ArtifactStep on one GPU. Use
+matching preset, data, and sample selection for both stages. Speculators reads
+the activations as it batches examples. The RunAI loader caps each process's
+CPU buffer at 8 GiB. The trainer stages only the teacher's embedding and final
+gated head shards.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name mochi-dspark-fit --target-cluster cw-us-east-08a --region us-east-08a \
+  --enable-extra-resources --replicas 1 --gpu GB200x1 \
+  --cpu 12 --memory 160GB --disk 128GB --timeout 7200 \
   --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
 ```
 
 The default smoke trains three updates on 12 training and up to four validation
-conversations. Add `--steps 4000` to train for one packed epoch, capped at
+conversations. Add `--steps 4000` to both stages to train for one packed epoch, capped at
 4,000 optimizer steps, over the complete frozen mix. The epoch uses an
 8,192-token sequence and up to 1,024 anchors. Use `--data` to provide a
 different completed regional mix. Teacher activations take 48 KiB per input
@@ -159,8 +176,8 @@ uv run iris --cluster=marin job run --no-wait \
   -- python -m experiments.post_training.dspark_sft --preset mochi-agentic-50m --stage prepare
 ```
 
-After preparation succeeds, use the Mochi Iris command above with
-`--preset mochi-agentic-50m`, a fresh job name, and `--timeout 14400`. The
+After preparation succeeds, use the prefill and fitting commands with
+`--preset mochi-agentic-50m`, fresh job names, and `--timeout 14400`. The
 50M mix and its holdout use about 2.4 TiB of temporary object storage for
 teacher activations.
 

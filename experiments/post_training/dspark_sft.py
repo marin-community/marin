@@ -260,15 +260,17 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
         tokenizer_source=tokenizer_ref,
     )
     train, validation = inspect_mix(StoragePath(recipe.data))
-    total_gpus = settings.teacher_replicas
+    resources = {"gpus": settings.trainer_ranks}
     if recipe.teacher.family is TeacherFamily.SNOWBALL:
-        total_gpus += settings.trainer_ranks
+        resources["gpus"] += settings.teacher_replicas
+    else:
+        resources["prefill_gpus"] = settings.teacher_replicas
     return {
         "decoder": decoder,
         "extraction_taps": settings.extraction_taps,
         "train_shards": len(train),
         "validation_shards": len(validation),
-        "gpus": total_gpus,
+        **resources,
         "trainer_ranks": settings.trainer_ranks,
     }
 
@@ -294,7 +296,7 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
     type=click.Choice([size.value for size in mochi.DraftSize]),
     help="Mochi draft architecture for the named preset.",
 )
-@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
+@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "prefill", "train")), default="plan")
 def main(
     config: str | None,
     preset: str | None,
@@ -303,32 +305,34 @@ def main(
     draft_size: str | None,
     stage: str,
 ) -> None:
-    """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
+    """Plan, prepare, and run offline DSpark training on Iris."""
 
-    if stage == "train" and "IRIS_TASK_ID" not in os.environ:
-        raise click.UsageError("Submit the train stage through Iris")
+    if stage in ("prefill", "train") and "IRIS_TASK_ID" not in os.environ:
+        raise click.UsageError(f"Submit the {stage} stage through Iris")
     configure_coreweave_s3()
     prefix = marin_prefix()
     size = mochi.DraftSize(draft_size) if draft_size is not None else None
     recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps, draft_size=size)
-    if stage == "train":
+    if stage in ("prefill", "train"):
         _validate_training_locations(recipe, prefix)
     teacher = _teacher_artifact(recipe.teacher)
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":
         click.echo(json.dumps(_preflight(recipe, teacher, prefix), indent=2))
         return
-    if stage == "train" and recipe.teacher.family is TeacherFamily.MOCHI:
-        if mochi.train_mochi(
+    if stage == "prefill":
+        if recipe.teacher.family is not TeacherFamily.MOCHI:
+            raise click.UsageError("The prefill stage is available only for Mochi")
+        cache = mochi.prefill_mochi(
             teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
             teacher_identity=artifact_identity(teacher),
             prepared=prepared,
-            draft=draft,
             recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
             prefix=prefix,
             sample=recipe.mochi_sample,
-        ):
-            click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
+        )
+        if cache is not None:
+            click.echo(str(cache))
         return
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")

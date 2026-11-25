@@ -233,6 +233,7 @@ def test_activation_cache_reuses_completed_rows_until_the_reuse_window_ends(tmp_
         activation_store.activation_path(path, 0).write_bytes(b"activation")
 
     cache = activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=populate)
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) == cache
     reused = activation_store.get_or_build_activation_cache(
         root, reusable_for=reusable_for, populate=lambda _: pytest.fail("recomputed existing activations")
     )
@@ -240,6 +241,7 @@ def test_activation_cache_reuses_completed_rows_until_the_reuse_window_ends(tmp_
     assert activation_store.activation_path(reused, 0).read_bytes() == b"activation"
 
     now += reusable_for.to_seconds()
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) is None
     replacement = activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=populate)
     assert replacement != cache
     assert activation_store.activation_path(replacement, 0).read_bytes() == b"activation"
@@ -256,6 +258,7 @@ def test_activation_cache_retries_without_exposing_partial_rows(tmp_path):
 
     with pytest.raises(RuntimeError, match="teacher stopped"):
         activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=fail)
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) is None
 
     def populate(path):
         activation_store.activation_path(path, 0).write_bytes(b"complete")
