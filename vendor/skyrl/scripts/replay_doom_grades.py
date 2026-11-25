@@ -18,8 +18,8 @@ from rigging.filesystem.storage_path import StoragePath
 from skyrl_train.rollouts.task_projections import verification_result
 from taskcompendium.evaluation.corpus import parquet_rows
 from taskcompendium.grading import grade_result
-from taskcompendium.models import ScriptGrader, StdoutReward, TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.runtime.grading import stdout_grade
+from taskcompendium.models import FileReward, ScriptGrader, StdoutReward, TaskSpec, VerifyitGrader, verifyit_spec
+from taskcompendium.runtime.grading import file_grade, stdout_grade
 from verifyit.grade import Reward, Status
 
 from experiments.post_training.mochi_doom_ftpo.grades import full_credit_task
@@ -40,8 +40,11 @@ def replay_row(row: dict, task: TaskSpec) -> dict:
         grade = grade_result(verifyit_spec(grader), Reward(score, Status.SCORED))
     else:
         assert isinstance(grader, ScriptGrader)
-        assert isinstance(grader.reward, StdoutReward)
-        grade = stdout_grade(str(score).encode(), grader.reward, {})
+        if isinstance(grader.reward, StdoutReward):
+            grade = stdout_grade(str(score).encode(), grader.reward, {})
+        else:
+            assert isinstance(grader.reward, FileReward)
+            grade = file_grade(str(score).encode(), grader.reward.files[0], grader.reward, {})
     replayed = verification_result(grade)
     if original.get("passed") is not None and original["passed"] is not replayed.passed:
         raise ValueError(f"Explicit native pass disagrees for {task.id}")
@@ -85,7 +88,7 @@ def main() -> None:
                     target_hash.update(payload)
             receipts.append({"source": str(source), "source_sha256": source_hash.hexdigest(),
                              "output": str(target), "output_sha256": target_hash.hexdigest(), "counts": dict(counts)})
-    receipt = {"tasks": args.tasks, "policy": "native full credit; Verifyit=1, StdoutReward.pass_at_least=1",
+    receipt = {"tasks": args.tasks, "policy": "native full credit; Verifyit=1, StdoutReward>=1, FileReward>=1",
                "operation": "adapter replay only; original checker scores and generation evidence preserved",
                "files": receipts}
     (root / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

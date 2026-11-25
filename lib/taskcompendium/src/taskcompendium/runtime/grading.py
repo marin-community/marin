@@ -44,6 +44,7 @@ from taskcompendium.models import (
     GradingAttempt,
     JsonSubmission,
     MissingArtifactPolicy,
+    RewardFile,
     RewardFileFormat,
     ScriptGrader,
     StdoutReward,
@@ -314,6 +315,24 @@ def _reward_value(data: bytes, file_format: RewardFileFormat, key: str) -> tuple
     return reward, detail
 
 
+def file_grade(data: bytes, file: RewardFile, reward: FileReward, diagnostics: dict[str, Any]) -> GradeResult:
+    """Parse one captured reward file and apply its native pass declaration."""
+    if file.format is RewardFileFormat.VERDICT_JSON:
+        verdict = parse_grade_result(None, data)
+        passed = (
+            verdict.reward > reward.pass_above
+            if verdict.reward is not None and reward.pass_above is not None
+            else verdict.passed
+        )
+        return replace(verdict, diagnostics=diagnostics, passed=passed)
+    try:
+        value, detail = _reward_value(data, file.format, file.key)
+    except (UnicodeError, ValueError, TypeError, KeyError) as error:
+        return _infra_error(f"Invalid reward file {file.path}: {error}", GradingFailure.INVALID_REWARD, diagnostics)
+    passed = None if reward.pass_above is None else value > reward.pass_above
+    return GradeResult(Outcome.GRADED, value, detail=detail, passed=passed, diagnostics=diagnostics)
+
+
 async def _file_reward(machine: Machine, reward: FileReward, timeout: float, diagnostics: dict[str, Any]) -> GradeResult:
     for file in reward.files:
         result = await machine.run(
@@ -334,20 +353,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
             return _infra_error(f"Cannot read reward file: {file.path}", GradingFailure.EXECUTION, diagnostics)
         if not result.stdout.strip():
             return _infra_error(f"Empty reward file: {file.path}", GradingFailure.EMPTY_REWARD, diagnostics)
-        if file.format is RewardFileFormat.VERDICT_JSON:
-            verdict = parse_grade_result(None, result.stdout)
-            passed = (
-                verdict.reward > reward.pass_above
-                if verdict.reward is not None and reward.pass_above is not None
-                else verdict.passed
-            )
-            return replace(verdict, diagnostics=diagnostics, passed=passed)
-        try:
-            value, detail = _reward_value(result.stdout, file.format, file.key)
-        except (UnicodeError, ValueError, TypeError, KeyError) as error:
-            return _infra_error(f"Invalid reward file {file.path}: {error}", GradingFailure.INVALID_REWARD, diagnostics)
-        passed = None if reward.pass_above is None else value > reward.pass_above
-        return GradeResult(Outcome.GRADED, value, detail=detail, passed=passed, diagnostics=diagnostics)
+        return file_grade(result.stdout, file, reward, diagnostics)
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 

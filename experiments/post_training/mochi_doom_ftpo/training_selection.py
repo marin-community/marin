@@ -135,7 +135,7 @@ def main() -> None:
         "target_status": baseline["target_status"],
         "groups_per_family": groups,
         "domain_pool_limit": DOMAIN_POOL_LIMIT,
-        "correctness": "native full credit; Verifyit=1, StdoutReward.pass_at_least=1",
+        "correctness": "native full credit; Verifyit=1, StdoutReward>=1, FileReward>=1",
         "effective_cohort_hashes": baseline["cohort_hashes"],
         "exclusions": [
             *parent_summary["recipe"]["exclusions"],
