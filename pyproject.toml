@@ -108,6 +108,8 @@ constraint-dependencies = [
     "dnspython>=2.9.0",
     "msgpack>=1.2.3",
     "nltk>=3.10.4",
+    # Opt in to FlashAttention betas across uv splits because its GPU requirements are Linux-only.
+    "flash-attn-4>=4.0.0b27,<4.1",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
@@ -326,6 +328,7 @@ marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
 torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
+torchcodec = { index = "pytorch-cpu" }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
