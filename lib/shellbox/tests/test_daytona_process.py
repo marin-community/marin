@@ -374,7 +374,7 @@ def test_daytona_process_cleanup_diagnostics_exclude_provider_details(session_ma
         machine, api = session_machine
         credential = "hf_" + "a" * 24
         try:
-            session = await machine.open_process(Command((sys.executable, "-c", "import signal; signal.pause()")))
+            session = await machine.open_process(Command(("sleep", "60")))
             api.delete_failure = DaytonaError(f"provider response: {credential}", status_code=503)
             with pytest.raises(RuntimeError, match=r"delete_session.*503") as error:
                 await session.close()
