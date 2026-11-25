@@ -1365,6 +1365,9 @@ def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
         assert "{{from}}" in sql and "{{to}}" in sql, sql
         # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
         assert "'${" not in sql, sql
+        # The node section stays open, so a node query must read nothing while no node is selected.
+        if "${node" in sql:
+            assert "${node:sqlstring} <> ''" in sql, sql
 
 
 def test_the_production_image_ships_no_local_dashboard():
