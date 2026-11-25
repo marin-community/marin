@@ -243,7 +243,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
 
 @pytest.mark.parametrize("representation", ["direct", "rewrite"])
 def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
-    tmp_path, monkeypatch, description_server, representation
+    tmp_path, monkeypatch, description_server, representation, raw_math_catalog
 ):
     # Keep model inference at its provider boundary; execute conversion, HTTP, caches and export.
     monkeypatch.setattr(
@@ -392,7 +392,9 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(
+    tmp_path, monkeypatch, description_server, raw_math_catalog
+):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
@@ -449,4 +451,3 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "TaskTrove:smartie-calibforge-admitted" for row in declared)

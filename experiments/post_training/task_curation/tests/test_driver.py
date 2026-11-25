@@ -180,7 +180,7 @@ def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, m
     assert not (tmp_path / "report.json").exists()
 
 
-def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
+def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch, raw_math_catalog):
     monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
     output, cache = tmp_path / "output", tmp_path / "downloads"
     options = {

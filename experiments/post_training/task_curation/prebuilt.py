@@ -23,9 +23,11 @@ from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.harbor.native_package import validate_native_package
+from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.calibforge_publish import TASKS_FILENAME
@@ -34,6 +36,16 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
 from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
+
+
+def require_runnable_grader(task: TaskSpec) -> None:
+    """Require a grader or a valid native Harbor package."""
+    if not isinstance(task.grader, NoGrader):
+        return
+    if "harbor" in task.tags:
+        validate_native_package(task)
+        return
+    raise ValueError(f"Admitted task has no runnable grader: {task.id}: {task.grader.reason}")
 
 
 @dataclass(frozen=True)
@@ -45,6 +57,7 @@ class PrebuiltCohort:
     repo: str
     revision: str
     expected_rows: int
+    intended_use: IntendedUse
 
     @property
     def dataset(self) -> SourceReference:
@@ -116,7 +129,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
                 pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), handle)
         manifest = {
             "mode": invocation.mode.value,
-            "intended_use": "train",
+            "intended_use": config.intended_use.value,
             "input_rows": len(tasks),
             "converted_rows": len(tasks),
             "admitted_rows": len(tasks),

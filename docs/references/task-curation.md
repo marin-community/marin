@@ -419,6 +419,14 @@ the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
 its measured Daytona and oracle evidence remains visible even without a pipeline.
 
+The Atlas-admitted sources whose sealed retained receipts resolve in the
+retained-pin table (`datasets/atlas_admissions.py`) land as runnable
+declarations: each record binds to its receipt's retained pin, lexical evidence
+and stage-0 license receipt, and runs through the retained reader. A record
+whose receipt does not resolve here stays recorded in the coverage fixture's
+`declaration_blockers` until its reader PR lands; a record is never declared
+pipeline-less.
+
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
 an agentic source that declares no format, and rejects MarinSkyRL's internal
@@ -1051,3 +1059,33 @@ A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
 
+
+## Atlas publication imports
+
+`all_sources()` reads the immutable `atlas_publications.json` reference in
+`datasets/atlas_publications.py`. The table records the Atlas revision, final
+publication pins, complete conversion censuses, license receipts and lexical
+qualification. The reader checks the publication digest, each task digest,
+unique task IDs and the complete row count. It preserves the published TaskSpec
+and runtime bytes in the imported views. Intermediate prebuilt cohorts remain
+in the recorded lineage; upstream converters do not run again.
+
+Fingerprint-pinned evaluation sources use `frozen_atlas.py`. The source archive
+contains the exact Atlas checkout and lockfile. A separate process runs it with
+`uv run --isolated --frozen`, and checks the source ID, dataset revision, files,
+recipe name and converter version before conversion. The current checkout's
+converter code and dependency models cannot change that process's fingerprint.
+
+Run the coverage gate with the workspace test dependencies:
+
+```bash
+uv run --project lib/marin --isolated --frozen --group test pytest \
+  experiments/post_training/task_curation/tests/test_atlas_source_coverage.py
+```
+
+A fixture refresh removes declaration blockers and pin waivers only after the
+worktree declares the runnable import at the exact Atlas reference. Publish
+fixture bytes to `open-athena/atlas-source-pins`; update the revision, SHA-256 and
+byte size together. Excluded and Deprecated Atlas sources stay out of the
+catalog. A new primary license finding can move a source to Pending while its
+transformed answers, grader and retained publication await qualification.

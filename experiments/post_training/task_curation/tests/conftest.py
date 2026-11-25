@@ -5,6 +5,9 @@ import threading
 
 import pytest
 
+from experiments.evaluation.benchmarks import math as eval_math
+from experiments.post_training.task_curation.datasets import unconverted
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.tests.local_grader import (
     LEAN_KERNEL_GRADER_IMAGE,
     LocalGraderMachines,
@@ -36,3 +39,13 @@ def review_server():
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+@pytest.fixture
+def raw_math_catalog(monkeypatch):
+    """Local conversion fixtures, independent of the live Atlas admission policy."""
+    sources = [*skyrl_math.sources(), *eval_math.sources(), *unconverted.sources()]
+    registered = {source.info.id: source for source in sources}
+    runnable = {source.name: source for source in sources if source.pipeline is not None}
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: registered)
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: runnable)

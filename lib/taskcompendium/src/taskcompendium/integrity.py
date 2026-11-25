@@ -6,7 +6,9 @@
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+TEST_OUTPUT_INJECTION_GAP = "Candidate-produced test-output injection"
 
 PROTECTED_ROOT = "/opt/taskcompendium-shared"
 BOOTSTRAP_DIRECTORY = f"{PROTECTED_ROOT}-bootstrap"
@@ -25,6 +27,51 @@ DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", STARTUP_HOOKS_REPORT)
 
 class SharedDependencyState(StrEnum):
     AGENT_MUTABLE = "agent_mutable"
+
+
+class DeliveredVerifierFile(BaseModel):
+    """One private verifier file with the mode its delivery must preserve."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    mode: int
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MultiSweDeliveryContract(BaseModel):
+    """The recorded shared-root capture contract for a Multi-SWE pipeline."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1] = 1
+    id: Literal["multi-swe-delivery"] = "multi-swe-delivery"
+    dependency_state: SharedDependencyState
+    agent_user: str | None = None
+    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    undeclared_deadline: bool = False
+    known_open_gaps: tuple[str, ...] = (
+        "Agent-installed build tools and imports in the shared image environment",
+        TEST_OUTPUT_INJECTION_GAP,
+    )
+
+
+class RootDeliveryContract(BaseModel):
+    """The recorded verifier files, modes and deadlines of a root-delivery task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1] = 1
+    id: Literal["root-delivery"] = "root-delivery"
+    dependency_state: SharedDependencyState
+    agent_user: str | None = None
+    """The image's own agent identity; None keeps the source's default user."""
+    verifier_files: tuple[DeliveredVerifierFile, ...] = Field(min_length=1)
+    undeclared_deadline: bool = False
+    known_open_gaps: tuple[str, ...] = (
+        "Agent-installed pytest plugins and imports in the shared image environment",
+        TEST_OUTPUT_INJECTION_GAP,
+    )
 
 
 class SharedSourceFamily(StrEnum):

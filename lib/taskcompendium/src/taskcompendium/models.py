@@ -45,6 +45,8 @@ from verifyit.spec import (
     upgrade_judge_table,
 )
 
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
+
 SUBSET_LABEL = "subset_id"
 
 SCHEMA_VERSION = "0.31"
@@ -1082,6 +1084,18 @@ def upgrade_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class ExecutionRequirements(BaseModel):
+    """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    cpus: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    storage_mb: int = Field(gt=0)
+    agent_timeout_sec: float = Field(gt=0)
+    verifier_timeout_sec: float = Field(gt=0)
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -1090,6 +1104,10 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    execution_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
@@ -1099,6 +1117,9 @@ class TaskSpec(BaseModel):
     grader: Grader
     reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE
     source: Source
+    integrity_contract: SharedIntegrityContract | RootDeliveryContract | MultiSweDeliveryContract | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
@@ -1116,6 +1137,12 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if not self.id:
             raise ValueError("A task id is required")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):

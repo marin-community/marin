@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     DatasetRelease,
     IndependentQC,
+    LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -24,6 +25,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import DataRestriction
+from finestore.rl.status_taxonomy import SourceStatus as CatalogStatus
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -80,35 +82,19 @@ class TaskFormat(StrEnum):
 
 GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
     {
-        # Nemotron Ultra mix components: JSONL rows produced by Marin's own RL
-        # pipeline, predating the task-directory format.
-        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
         "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
         "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
         "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
         "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
         "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
         "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
         "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
         "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
         "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
         "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
     }
 )
-"""Marin-internal blend sources admitted before the task-directory requirement."""
+"""Remaining Marin-internal blend sources admitted before the task-directory requirement."""
 
 
 @dataclass(frozen=True)
@@ -118,6 +104,10 @@ class SourceReference:
     name: str
     revision: str | None
     url: str
+
+
+PENDING_TAG = "pending"
+"""The source tag that holds a licensed source for repair or qualification."""
 
 
 EXCLUDED_TAG = "excluded"
@@ -202,6 +192,12 @@ class SourceInfo:
     a negative verdict on an untouched submission without certifying an oracle;
     ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
     """
+
+    lexical_contamination: LexicalContaminationEvidence | None = None
+    """The lexical measurement that qualifies the source's current pin."""
+
+    inherited_admission: DatasetRelease | None = None
+    """The release whose admission the source inherits through its subset lineage."""
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
@@ -331,7 +327,15 @@ class RlDataSource[ConfigT: CatalogConfig]:
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
-                (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
+                (
+                    label
+                    for tag, label in (
+                        ("deprecated", "Deprecated"),
+                        (EXCLUDED_TAG, "Excluded"),
+                        (PENDING_TAG, CatalogStatus.PENDING.value),
+                    )
+                    if tag in tags
+                ),
                 "Inventory" if pipeline is None else "Available",
             ),
             pipeline=invocation,
