@@ -104,3 +104,14 @@ the cache clears every slot.
 The current history describes the processed prefix at one position. Reusing KV
 pages for an earlier prefix requires restoring the convolution history at that
 position, or recomputing it.
+
+### Native Hero serving
+
+Levanter loads Hero schema-v2 `grug_moe` checkpoints with banked or individually
+stored expert weights. The inference engine uses absolute token positions,
+paged KV caches, and request-slot convolution history for prefill and decode.
+Serving requires an explicit Grug mesh with context parallelism set to one.
+Schema-v3 log-scaled exports require a separate serving implementation.
+
+The CPU parity tests cover packed documents, both rotary layouts, and
+multi-choice generation with nonidentity convolution weights.
