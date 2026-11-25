@@ -33,7 +33,6 @@ from experiments.post_training.task_curation.sources import all_sources
 
 CENSUS_RECEIPT_SUFFIX = "admission-population-census"
 CORPUS_KIND_SUFFIX = "curriculum-corpus"
-DEFAULT_PREPARE_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -46,8 +45,9 @@ class CorpusAssemblyInputs:
     census_receipt: ArtifactRef
     output_root: str
     expected_sources: int
+    # Explicit per-source preparation workers, sized by the graph from StageResources.
+    workers: int
     slice_output_root: str | None = None
-    workers: int = DEFAULT_PREPARE_WORKERS
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
