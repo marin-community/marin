@@ -16,6 +16,7 @@ class JudgeServer(ThreadingHTTPServer):
     """Record requests to a local OpenAI-compatible judge endpoint."""
 
     requests: list[dict]
+    authorization: list[str | None]
     reply: str
     status_code: int
 
@@ -25,6 +26,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
         server: JudgeServer = self.server  # pyrefly: ignore[bad-assignment]
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         server.requests.append(request)
+        server.authorization.append(self.headers.get("Authorization"))
         body = json.dumps(
             {
                 "id": "chatcmpl-fixture",
@@ -67,6 +69,7 @@ def pytest_addoption(parser):
 def judge_server():
     server = JudgeServer(("127.0.0.1", 0), JudgeHandler)
     server.requests = []
+    server.authorization = []
     server.reply = "PASS"
     server.status_code = 200
     thread = threading.Thread(target=server.serve_forever, daemon=True)

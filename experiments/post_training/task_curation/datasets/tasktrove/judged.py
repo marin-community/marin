@@ -14,6 +14,7 @@ sources have no controls and their kept rows are admitted without them.
 import re
 from dataclasses import dataclass, field
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -203,9 +204,12 @@ SOURCES = (
         "laion__stackexchange-codereview-sandboxes-verified-v2",
         CODEREVIEW_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
-            title="laion/stackexchange-codereview-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__stackexchange-codereview-sandboxes-verified-v2",
+            upstream_name="laion/stackexchange-codereview-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -222,9 +226,12 @@ SOURCES = (
         "laion__glaive-code-assistant-sandboxes-verified-v2",
         GLAIVE_CODE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
-            title="laion/glaive-code-assistant-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__glaive-code-assistant-sandboxes-verified-v2",
+            upstream_name="laion/glaive-code-assistant-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -240,9 +247,12 @@ SOURCES = (
         "laion__nemotron-gym-safety-v3",
         SAFETY_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-safety-v3",
-            title="laion/nemotron-gym-safety-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__nemotron-gym-safety-v3",
+            upstream_name="laion/nemotron-gym-safety-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=89066,
@@ -259,9 +269,12 @@ SOURCES = (
         "laion__stackexchange-overflow-sandboxes-verified-v2",
         STACK_OVERFLOW_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
-            title="laion/stackexchange-overflow-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__stackexchange-overflow-sandboxes-verified-v2",
+            upstream_name="laion/stackexchange-overflow-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -277,9 +290,12 @@ SOURCES = (
         "laion__stackexchange-superuser-sandboxes-verified-v2",
         SUPERUSER_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
-            title="laion/stackexchange-superuser-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__stackexchange-superuser-sandboxes-verified-v2",
+            upstream_name="laion/stackexchange-superuser-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -295,9 +311,12 @@ SOURCES = (
         "laion__stackexchange-tezos-sandboxes-verified-v2",
         TEZOS_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
-            title="laion/stackexchange-tezos-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__stackexchange-tezos-sandboxes-verified-v2",
+            upstream_name="laion/stackexchange-tezos-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -313,9 +332,12 @@ SOURCES = (
         "laion__stackexchange-unix-sandboxes-verified-v2",
         UNIX_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
-            title="laion/stackexchange-unix-sandboxes-verified-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__stackexchange-unix-sandboxes-verified-v2",
+            upstream_name="laion/stackexchange-unix-sandboxes-verified-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,
@@ -331,9 +353,12 @@ SOURCES = (
         "laion__wizardlm-orca-v4",
         WIZARD_ORCA_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__wizardlm-orca-v4",
-            title="laion/wizardlm-orca-v4",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__wizardlm-orca-v4",
+            upstream_name="laion/wizardlm-orca-v4",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
             count=10000,

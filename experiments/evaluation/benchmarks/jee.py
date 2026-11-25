@@ -3,6 +3,7 @@
 
 """Pinned JEEBench source, exact type prompts, and three greedy source repetitions."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.evaluation_jee import convert_jee, jee_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
@@ -21,7 +22,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 JEE_REVISION = "d070d1113ce365df05903763a2017ec2d0d56118"
 
@@ -30,9 +31,12 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Evalchemy:JEEBench",
-                title="JEEBench",
-                origin="Evalchemy",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="JEEBench",
+                upstream_name="JEEBench",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="engineering-exam",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark"),
                 count=515,
