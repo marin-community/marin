@@ -76,7 +76,9 @@ class AdaptiveSourceOrder:
             policy = ThompsonInformative(self.prior_alpha, self.prior_beta, self.epsilon)
             informative = np.array([self.informative[name] for name in self.names])
             graded = np.array([self.graded[name] for name in self.names])
-            return dict(zip(self.names, policy.draw(informative, graded, self.posterior_rng).tolist(), strict=True))
+            reference = np.array([self.reference[name] for name in self.names])
+            weights = policy.weights_from_counts(informative, graded, self.posterior_rng, reference)
+            return dict(zip(self.names, weights.tolist(), strict=True))
         weighted = {
             name: self.reference[name]
             * (self.prior_alpha + self.informative[name])
@@ -88,9 +90,6 @@ class AdaptiveSourceOrder:
             name: (1 - self.epsilon) * weighted[name] / total + self.epsilon * self.reference[name]
             for name in self.names
         }
-
-    def probabilities(self) -> dict[str, float]:
-        return self.weights.copy()
 
     def next_index(self) -> int:
         if not self.window:

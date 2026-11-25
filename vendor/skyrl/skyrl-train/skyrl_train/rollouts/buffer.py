@@ -360,6 +360,7 @@ class SamplingGroupResult:
 
     lease_id: str
     committed_unix_ns: int
+    dispatch_step: int
     feedback_batch: int | None
     sample_count: int
     verified_scores: tuple[float | None, ...] | None
@@ -394,6 +395,7 @@ class BufferSnapshot:
     leases: frozenset[str]
     discarded: tuple[DiscardedCandidate, ...] = ()
     source_rejections: SourceRejections | None = None
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -815,6 +817,9 @@ class RolloutBuffer:
                 for batch_id, stats in self._stats.items()
                 if stats.source_rejections
             },
+            sampling_dispositions=tuple(
+                outcome for outcome in self._dispositions if outcome.sampling_result is not None
+            ),
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
@@ -831,6 +836,7 @@ class RolloutBuffer:
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
+            self._dispositions.extend(snapshot.sampling_dispositions)
             for candidate in snapshot.discarded:
                 self._stats[candidate.batch_id].discard(candidate)
             for batch_id, counts in (snapshot.source_rejections or {}).items():
@@ -849,6 +855,7 @@ class RolloutBuffer:
             result = SamplingGroupResult(
                 rollout.lease_id,
                 rollout.committed_unix_ns,
+                rollout.policy_step,
                 feedback_batch,
                 verdict.work.sample_count,
                 verdict.rewards.verified_scores if verdict.rewards is not None else verdict.rejected_verifier_scores,

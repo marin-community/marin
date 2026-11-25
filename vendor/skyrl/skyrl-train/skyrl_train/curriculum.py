@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List
 import numpy as np
 from omegaconf import DictConfig
 
+from skyrl_train.contextual_sampling import PromptAcquisition
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.rollouts.loader import JudgedGroup
 
@@ -39,6 +40,9 @@ class SamplingKind(StrEnum):
     DOMAIN_WEIGHTED = "domain-weighted"
     ADAPTIVE_SOURCE = "adaptive-source"
     ADAPTIVE_SOURCE_THOMPSON = "adaptive-source-thompson"
+    PROMPT_THOMPSON_SOURCE = PromptAcquisition.SOURCE.value
+    PROMPT_THOMPSON_CONTEXTUAL = PromptAcquisition.CONTEXTUAL.value
+    PROMPT_THOMPSON_COST_AWARE = PromptAcquisition.COST_AWARE.value
     NAIVE = "naive"
     THOMPSON = "thompson"
     LEARNABILITY = "learnability"
@@ -365,11 +369,13 @@ class ThompsonInformative(WeightPolicy):
         self.epsilon = epsilon
 
     def weights(self, stats: BinStats, rng: np.random.Generator) -> np.ndarray:
-        return self.draw(stats.informative, stats.total, rng)
+        return self.weights_from_counts(stats.informative, stats.total, rng)
 
-    def draw(self, informative: np.ndarray, total: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def weights_from_counts(
+        self, informative: np.ndarray, total: np.ndarray, rng: np.random.Generator, reference: np.ndarray | None = None
+    ) -> np.ndarray:
         draws = rng.beta(self.prior_alpha + informative, self.prior_beta + (total - informative))
-        return floored_normalized(draws, self.epsilon)
+        return floored_normalized(draws if reference is None else reference * draws, self.epsilon)
 
 
 class Directional(WeightPolicy):

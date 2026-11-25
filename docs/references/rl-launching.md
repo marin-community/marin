@@ -299,6 +299,22 @@ the rollout window can use distinct prompts. A rejected group releases a slot in
 Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
 family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
 
+The Qwen3-0.6B sampler experiment provides `smoke-{source-only,contextual,cost-aware}`
+and `pilot-{source-only,contextual,cost-aware}` presets in `experiments.post_training.qwen_sampler`.
+The `-seed29` pilot variants provide a second paired seed. All three adaptive arms share
+a discounted regularized logistic Thompson draw, distinct prompt windows, and 20%
+exploration from the reference mixture. The source-only arm uses source indicators.
+The contextual arms add public prompt length, text shape, and hashed word sequences
+centered within each training source. The cost-aware arm also fits generated token
+counts and applies a bounded inverse-cost weight.
+
+A useful dispatch has a fully verified group with normalized score spread of at least
+0.05 and contributes nonzero advantage tokens to an optimizer update. Feedback comes
+after the optimizer, with generated tokens charged for discarded, unverified, and
+untrained groups. Checkpoints retain the acquisition window, model, and random state.
+SkyRL checks the prepared held-out prompts for overlap before training and collects
+sampler feedback from training rollouts only.
+
 Set `data.sampling.kind=adaptive-source` to favor sources whose answers receive different
 verifier scores within a prompt group. `source_column` selects the prepared row label
 (`data_source` by default, `family` for labeled task sets, or `teacher_route` for stamped
@@ -313,10 +329,11 @@ source's reference share by its estimated mixed-group rate under a Beta prior
 mix. Set `epsilon=1` for a fixed-share control with the same draw and checkpoint behavior.
 For the Thompson comparison, set `kind=adaptive-source-thompson`. It uses the same
 verified groups and draws one rate per source from its Beta posterior at initialization
-and after each feedback batch. It normalizes those draws, floors each source at
+and after each feedback batch. It multiplies each draw by its reference share, normalizes
+the results, floors each source at
 `epsilon / number_of_sources`, and renormalizes. All subsequent draw windows use these
 weights until the next feedback batch. Checkpoints preserve the current weights and the
-posterior random-number state. Source reference shares apply to the posterior-mean arm.
+posterior random-number state.
 
 Source draws are stochastic, and rows are unique within a draw window. In-flight prompts,
 source sizes and admission can change the realized mix. The `curriculum/<source>/` metrics

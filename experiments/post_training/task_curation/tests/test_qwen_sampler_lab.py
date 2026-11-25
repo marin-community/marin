@@ -10,7 +10,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.models import TextMessage
 
-from experiments.post_training.task_curation.qwen_sampler_lab import DIFFICULTIES, FAMILIES, lab_examples
+from experiments.post_training.task_curation.qwen_sampler_lab import FAMILIES, Difficulty, lab_examples
 
 
 @pytest.fixture(scope="module")
@@ -62,7 +62,7 @@ def reference_answer(prompt, family, difficulty):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("family", FAMILIES)
-@pytest.mark.parametrize("difficulty", DIFFICULTIES)
+@pytest.mark.parametrize("difficulty", Difficulty)
 async def test_one_turn_shellsim_grades_each_transform(examples, family, difficulty):
     task = next(r.task for r in examples if r.strata.family == family and r.strata.difficulty == difficulty)
     event = task.context.events[0]

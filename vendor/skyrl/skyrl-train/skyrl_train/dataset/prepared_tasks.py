@@ -19,6 +19,7 @@ from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerBase
+from transformers.models.qwen2.tokenization_qwen2 import Qwen2Tokenizer
 from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
 _CACHE_KEY_METADATA = b"skyrl.prepared_task_key"
@@ -112,8 +113,9 @@ def prepared_task_cache_key(
 
 
 def _tokenizer_key(tokenizer: PreTrainedTokenizerBase, chat_template_kwargs: dict) -> dict | None:
-    # Built-in and remote-code subclasses can add preprocessing state outside the serialized backend.
-    if type(tokenizer) is not TokenizersBackend:
+    # Qwen2Tokenizer constructs a BPE backend. Its encoding and template methods are inherited.
+    # Other subclasses can depend on Python state outside the serialized backend.
+    if type(tokenizer) not in (TokenizersBackend, Qwen2Tokenizer):
         return None
     backend = tokenizer.backend_tokenizer
     if isinstance(backend.model, BPE) and backend.model.dropout:

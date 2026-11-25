@@ -88,11 +88,13 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
     assert admission.selection.metrics["curriculum/math/rejected/fully_masked"] == 1
     events = []
     monkeypatch.setattr(rollout_context, "record_event", lambda name, fields: events.append((name, fields)))
-    for outcome in (*initial.dispositions, *admission.dispositions):
-        rollout_context.record_sampling_result(outcome)
+    for result in (initial, admission):
+        for outcome in result.dispositions:
+            rollout_context.record_sampling_result(outcome, result.batch_id)
     receipts = {fields["lease_id"]: fields for name, fields in events if name == "sampling_group_result"}
     assert len(receipts) == 4
-    # The discarded future group commits before the first admission but can teach the sampler only in batch two.
+    # The prefetched discard is visible in admission one and contributes to the source sampler in batch two.
+    assert receipts[future.lease_id]["dispatch_step"] == receipts[future.lease_id]["admission_batch"] == 1
     assert receipts[future.lease_id]["feedback_batch"] == 2
     assert receipts[future.lease_id]["verified_one"] == 2
     assert receipts[current.lease_id]["feedback_batch"] == 1

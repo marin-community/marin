@@ -8,9 +8,11 @@ import json
 import random
 from collections import Counter
 from dataclasses import dataclass
+from enum import StrEnum
 from itertools import accumulate
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 
 import click
 from finestore.rl.strata import MembershipState, SelectionDefinition, TaskStrata, read_selection_manifest
@@ -45,8 +47,7 @@ from experiments.post_training.task_curation.selection import (
 
 NAME = "qwen-sampler-lab"
 VERSION = "2026.11.25.1"
-ROOT = f"{CANONICAL_ARTIFACT_ROOT}/rl-data/task-selection/{NAME}/{VERSION}"
-DIFFICULTIES = ("easy", "intermediate", "hard")
+ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection" / NAME / VERSION)
 TRAIN_SEED, EVAL_SEED = 20261125, 20261126
 TRAIN_PER_CELL, FULL_DEV_PER_CELL, FAST_DEV_PER_CELL = 512, 16, 4
 _PLACEMENT = GraderMachine(
@@ -57,24 +58,30 @@ _CHECK = """answer=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]]*,[[:
 if [ "$answer" = "$1" ]; then echo 1; else echo 0; fi"""
 
 
-def arithmetic(rng: random.Random, difficulty: str) -> tuple[str, str]:
+class Difficulty(StrEnum):
+    EASY = "easy"
+    INTERMEDIATE = "intermediate"
+    HARD = "hard"
+
+
+def arithmetic(rng: random.Random, difficulty: Difficulty) -> tuple[str, str]:
     a, b = rng.randint(11, 98), rng.randint(2, 49)
-    if difficulty == "easy":
+    if difficulty == Difficulty.EASY:
         return f"What is {a} + {b}?", str(a + b)
     c = rng.randint(3, 37)
-    if difficulty == "intermediate":
+    if difficulty == Difficulty.INTERMEDIATE:
         return f"What is ({a} + {b}) × {c}?", str((a + b) * c)  # noqa: RUF001
     d, modulus = rng.randint(100, 999), rng.randint(17, 97)
     prompt = f"Find the nonnegative remainder of (({a} + {b}) × {d} − {c}) divided by {modulus}."  # noqa: RUF001
     return prompt, str(((a + b) * d - c) % modulus)
 
 
-def string_transform(rng: random.Random, difficulty: str) -> tuple[str, str]:
-    length = {"easy": 5, "intermediate": 9, "hard": 15}[difficulty]
+def string_transform(rng: random.Random, difficulty: Difficulty) -> tuple[str, str]:
+    length = {Difficulty.EASY: 5, Difficulty.INTERMEDIATE: 9, Difficulty.HARD: 15}[difficulty]
     word = "".join(rng.choices("abcdefghijkmnpqrstuvwxyz", k=length))
-    if difficulty == "easy":
+    if difficulty == Difficulty.EASY:
         return f"Reverse the letters of {word}.", word[::-1]
-    if difficulty == "intermediate":
+    if difficulty == Difficulty.INTERMEDIATE:
         return f"Take letters at positions 1, 3, 5, ... of {word}, then reverse those letters.", word[::2][::-1]
     offset = rng.randint(2, 7)
     rotated = word[offset:] + word[:offset]
@@ -85,12 +92,12 @@ def string_transform(rng: random.Random, difficulty: str) -> tuple[str, str]:
     )
 
 
-def integer_list(rng: random.Random, difficulty: str) -> tuple[str, str]:
-    length = {"easy": 4, "intermediate": 7, "hard": 10}[difficulty]
+def integer_list(rng: random.Random, difficulty: Difficulty) -> tuple[str, str]:
+    length = {Difficulty.EASY: 4, Difficulty.INTERMEDIATE: 7, Difficulty.HARD: 10}[difficulty]
     values = [rng.randint(-25, 50) for _ in range(length)]
-    if difficulty == "easy":
+    if difficulty == Difficulty.EASY:
         operation, result = "Sort in ascending order", sorted(values)
-    elif difficulty == "intermediate":
+    elif difficulty == Difficulty.INTERMEDIATE:
         operation, result = "Double each value, then list the results in reverse input order", [
             2 * x for x in values[::-1]
         ]
@@ -103,7 +110,7 @@ def integer_list(rng: random.Random, difficulty: str) -> tuple[str, str]:
     return f"{operation} for {values}. Use comma-separated integers without brackets.", ",".join(map(str, result))
 
 
-FAMILIES = {"arithmetic": arithmetic, "string": string_transform, "list": integer_list}
+FAMILIES = MappingProxyType({"arithmetic": arithmetic, "string": string_transform, "list": integer_list})
 
 
 @dataclass(frozen=True)
@@ -119,7 +126,7 @@ def lab_examples() -> list[Example]:
     rows = []
     for split, seed, size in (("train", TRAIN_SEED, TRAIN_PER_CELL), ("dev", EVAL_SEED, FULL_DEV_PER_CELL)):
         for family, generator in FAMILIES.items():
-            for difficulty in DIFFICULTIES:
+            for difficulty in Difficulty:
                 rng = random.Random(f"{seed}/{family}/{difficulty}")
                 strata = TaskStrata(family=family, source=f"{NAME}/{family}", difficulty=difficulty)
                 for index in range(size):
@@ -143,13 +150,12 @@ def lab_examples() -> list[Example]:
                         source=source,
                     )
                     rows.append(Example(task, strata, split, split == "dev" and index < FAST_DEV_PER_CELL))
-    # A sequential static control should see all families and levels from its first batch.
+    # Interleave strata so a prefix of the released parquet is independent of generation order.
     random.Random(TRAIN_SEED).shuffle(rows)
     return rows
 
 
-def publish(output: str) -> dict:
-    examples = lab_examples()
+def selection_rows(examples: list[Example]) -> tuple[dict[str, list[dict]], list[dict]]:
     manifests, training, development, fast = [], [], [], []
     for example in examples:
         raw = example.task.model_dump_json()
@@ -167,6 +173,12 @@ def publish(output: str) -> dict:
             if example.fast_dev:
                 fast.append(record)
     files = {TRAIN_FILENAME: training, FULL_VALIDATION_FILENAME: development, VALIDATION_FILENAME: fast}
+    return files, manifests
+
+
+def publish(output: str) -> str:
+    files, manifests = selection_rows(lab_examples())
+    training, development, fast = files[TRAIN_FILENAME], files[FULL_VALIDATION_FILENAME], files[VALIDATION_FILENAME]
     definition = SelectionDefinition(
         name=NAME,
         version=VERSION,
@@ -194,11 +206,12 @@ def publish(output: str) -> dict:
             },
             "file_sha256": {n: hashlib.sha256(data).hexdigest() for n, data in contents.items()},
         }
-        contents[SUMMARY_FILENAME] = (json.dumps(summary, indent=2, sort_keys=True) + "\n").encode()
+        summary_json = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+        contents[SUMMARY_FILENAME] = summary_json.encode()
         (directory / SUMMARY_FILENAME).write_bytes(contents[SUMMARY_FILENAME])
         read_selection_manifest(str(directory))
         publish_once(StoragePath(output), contents)
-    return summary
+    return summary_json
 
 
 @click.command(help=__doc__)
@@ -207,7 +220,7 @@ def publish(output: str) -> dict:
 def main(output: str, run: bool) -> None:
     if run:
         configure_coreweave_s3()
-        click.echo(json.dumps(publish(output), indent=2))
+        click.echo(publish(output), nl=False)
     else:
         click.echo(output)
 

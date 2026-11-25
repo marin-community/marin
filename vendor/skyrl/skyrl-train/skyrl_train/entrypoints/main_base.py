@@ -562,14 +562,18 @@ class BasePPOExp:
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
         from skyrl_train.callbacks.builtin import create_default_callbacks  # noqa: PLC0415
 
+        additional_eval_datasets = self.get_additional_eval_datasets()
+        held_out = [*additional_eval_datasets.values()]
+        if eval_dataset is not None:
+            held_out.append(eval_dataset)
         return RayPPOTrainer(
-            context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
+            context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner, held_out=held_out),
             cfg=cfg,
             tracker=tracker,
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            additional_eval_datasets=self.get_additional_eval_datasets(),
+            additional_eval_datasets=additional_eval_datasets,
             callbacks=create_default_callbacks(cfg, evaluation_profiles=self.evaluation_profiles),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,

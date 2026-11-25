@@ -13,14 +13,14 @@ from taskcompendium.models import CommandSemantics
 
 from experiments.models import qwen3_0_6b
 from experiments.post_training import rl
-from experiments.post_training.cat_count_canary.launcher import MODELS, role_plan
+from experiments.post_training.cat_count_canary.launcher import role_plan
 from experiments.post_training.rl_agentic_recipe import TASK_MACHINES
 from experiments.post_training.rl_presets import Evaluation, Layout, ModelPresets, Preset, Recipe, Training
 from experiments.post_training.task_curation import qwen_sampler_lab
 
 TASKS = f"{qwen_sampler_lab.NAME}@{qwen_sampler_lab.VERSION}"
 QWEN = ArtifactHfModel(qwen3_0_6b, relative_path="")
-CHAT = MODELS["qwen3-0.6b"]
+RESPONSE_TOKENS = 4096
 LAYOUT = Layout(
     name="qwen-h100x2",
     workload=Training(replace(role_plan(batch_size=16, group_size=4, micro_train_batch_size=4), colocate_all=True)),
@@ -39,20 +39,22 @@ EVAL = Evaluation(
     "validation",
     EvaluationProfile(
         n_samples_per_prompt=1,
-        sampling_params=EvalSamplingParams(temperature=0.0, max_generate_length=64),
+        sampling_params=EvalSamplingParams(temperature=0.0, max_generate_length=RESPONSE_TOKENS),
     ),
     source="held_out",
     at_start=True,
 )
 
 
-def sampler_preset(name: str, updates: int, kind: str, epsilon: float) -> Preset:
+def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int) -> Preset:
     verifier = TASK_MACHINES[CommandSemantics.SHELL_SIMULATOR]
     config = RecipePatch(
         environment=sections.Environment(
             task_sessions={"task_spec": {"package_verifier": verifier.model_dump(mode="json")}}
         ),
-        context_budget=ContextBudget(request_window_tokens=384, max_new_tokens_per_turn=64, max_turns=1),
+        context_budget=ContextBudget(
+            request_window_tokens=512 + RESPONSE_TOKENS, max_new_tokens_per_turn=RESPONSE_TOKENS, max_turns=1
+        ),
         data=sections.Data(
             kind="parquet", sampling=sections.Sampling(kind=kind, source_column="family", epsilon=epsilon)
         ),
@@ -78,8 +80,7 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float) -> Preset
             run_engines_locally=True,
             gpu_memory_utilization=0.4,
             enable_prefix_caching=True,
-            chat_template=sections.ChatTemplate(source="name", name_or_path=CHAT.chat_template),
-            chat_template_kwargs=CHAT.chat_template_kwargs,
+            chat_template_kwargs={"enable_thinking": True},
             sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
             trajectory_retention=sections.TrajectoryRetention(enabled=False),
         ),
@@ -90,13 +91,13 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float) -> Preset
     )
     return Preset(
         name=name,
-        revision="2026.11.25.1",
+        revision="2026.11.25.2",
         tasks=TASKS,
         model=QWEN,
         recipe=Recipe(LAYOUT, fixed_reply_tokens=None, config=config),
         updates=updates,
         measured=range(1, updates + 1),
-        seed=17,
+        seed=seed,
         evaluations=(replace(EVAL, every=updates),),
         held_out_tasks=TASKS,
         checkpoints="none",
@@ -111,9 +112,15 @@ QWEN_SAMPLER = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-sampler",
     presets=tuple(
-        sampler_preset(f"{stage}-{arm}", updates, kind, epsilon)
-        for stage, updates in (("smoke", 4), ("pilot", 32))
-        for arm, kind, epsilon in (("fixed", "adaptive-source", 1.0), ("thompson", "adaptive-source-thompson", 0.05))
+        sampler_preset(f"{stage}-{arm}{suffix}", updates, kind, epsilon, seed)
+        for stage, updates, seed, suffix in (("smoke", 4, 17, ""), ("pilot", 32, 17, ""), ("pilot", 32, 29, "-seed29"))
+        for arm, kind, epsilon in (
+            ("fixed", "adaptive-source", 1.0),
+            ("thompson", "adaptive-source-thompson", 0.05),
+            ("source-only", "prompt-thompson-source", 0.20),
+            ("contextual", "prompt-thompson-contextual", 0.20),
+            ("cost-aware", "prompt-thompson-cost-aware", 0.20),
+        )
     ),
     control_pins={},
 )

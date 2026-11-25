@@ -20,6 +20,9 @@ class Sampling(Section):
             "domain-weighted",
             "adaptive-source",
             "adaptive-source-thompson",
+            "prompt-thompson-source",
+            "prompt-thompson-contextual",
+            "prompt-thompson-cost-aware",
             "naive",
             "thompson",
             "learnability",
@@ -31,14 +34,14 @@ class Sampling(Section):
     ) = field(None)
     "null uses seeded passes with data.shuffle"
     domain_weights: NumberMap = field({})
-    "domain-weighted route shares, or adaptive-source reference shares (empty uses row counts)"
+    "domain-weighted requires route shares. Adaptive source and prompt orders use row counts when empty."
     source_column: Literal["data_source", "teacher_route", "family"] = field("data_source")
-    "adaptive-source bin label on each prepared training row"
+    "adaptive source label on each prepared training row"
     decay: int | float = field(0.95)
-    "per-step multiplicative decay of bin sufficient stats"
+    "per-step multiplicative decay of observations"
     epsilon: int | float = field(0.05)
-    """adaptive-source reserves this fraction for reference shares. adaptive-source-thompson, thompson, learnability
-    and grade-prior floor each bin at epsilon / bin count before renormalization."""
+    """adaptive-source and prompt-thompson reserve this fraction for reference shares. adaptive-source-thompson,
+    thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization."""
     reversion_mass: int | float = field(0.0)
     "per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak"
     instance_decay: int | float = field(0.7)

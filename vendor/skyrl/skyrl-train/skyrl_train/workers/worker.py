@@ -82,6 +82,7 @@ from skyrl_train.batch_metrics import (
     advantage_metrics,
     forward_metrics,
     install_correction,
+    NONZERO_ADVANTAGE_TOKENS,
     nonzero_advantage_tokens_by_group,
     token_staleness_metrics,
 )
@@ -928,7 +929,7 @@ class PolicyWorkerBase(Worker):
         output = self.ppo_train(batch)
         if sampling_receipts_enabled and self.mesh_rank.is_collection_dp_rank():
             rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
-            output.metadata["nonzero_advantage_tokens"] = nonzero_advantage_tokens_by_group(
+            output.metadata[NONZERO_ADVANTAGE_TOKENS] = nonzero_advantage_tokens_by_group(
                 batch, plan.uids[rows.start : rows.stop]
             )
         return output

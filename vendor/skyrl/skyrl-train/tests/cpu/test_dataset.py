@@ -5,7 +5,6 @@ from dataclasses import replace
 from importlib.util import spec_from_file_location
 from pathlib import Path
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -14,6 +13,7 @@ from omegaconf import OmegaConf
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.contextual_sampling import PromptThompsonOrder
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext, prompt_order_from_config
@@ -23,6 +23,7 @@ from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace, WhitespaceSplit
+from transformers.models.qwen2.tokenization_qwen2 import Qwen2Tokenizer
 from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, text_task, write_selection_panel
@@ -31,6 +32,38 @@ from tests.cpu.task_specs import NATIVE_ENVIRONMENT, text_task, write_selection_
 class _StubTokenizer:
     def apply_chat_template(self, messages, add_generation_prompt):
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
+
+
+def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluation_overlap(tmp_path):
+    config = get_default_config()
+    config.trainer.train_batch_size = 3
+    config.generator.n_samples_per_prompt = 2
+    config.data.sampling.kind = "prompt-thompson-contextual"
+    configs = OmegaConf.to_container(config.environment.task_sessions)
+
+    def dataset(name, tasks):
+        path = tmp_path / f"{name}.parquet"
+        pq.write_table(pa.table({TASK_SPEC_COLUMN: [task.model_dump_json() for task in tasks]}), path)
+        return SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs)
+
+    tasks = [text_task(f"math-{index}", prompt=f"Compute {index} plus one.", source="math") for index in range(3)]
+    training = dataset("train", [text_task("too-long", prompt="x" * 300), *tasks])
+    validation = dataset("validation", [text_task("validation", prompt="Find a quotient.", source="math")])
+    order = prompt_order_from_config(config, training, held_out=[validation])
+    assert isinstance(order, PromptThompsonOrder)
+    assert {training.label(order.next_index()) for _ in range(3)} == {task.id for task in tasks}
+
+    private_changes = [
+        task.model_copy(update={"grader": task.grader.model_copy(update={"reason": "Different private grader text"})})
+        for task in tasks
+    ]
+    revised_order = prompt_order_from_config(config, dataset("revised", private_changes), held_out=[validation])
+    revised_order.load_state_dict(order.state_dict())
+    assert [revised_order.next_index() for _ in range(6)] == [order.next_index() for _ in range(6)]
+
+    duplicate = text_task("another-task-id", prompt="Compute 1 plus one.", source="math")
+    with pytest.raises(ValueError, match="held-out public prompt"):
+        prompt_order_from_config(config, training, held_out=[validation, dataset("duplicate", [duplicate])])
 
 
 @pytest.mark.parametrize("kind,epsilon", [("adaptive-source", 0.2), ("adaptive-source-thompson", 0.05)])
@@ -63,14 +96,13 @@ def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume
     if kind == "adaptive-source":
         # Beta(1,1) plus one observation yields means of 1/3 and 2/3.
         assert metrics["curriculum/math/weight"] == pytest.approx(0.1 + 0.8 / 3)
-    else:
-        rng = np.random.default_rng(61)
-        rng.beta([1, 1], [1, 1])  # Cold-start draw, before either source has evidence.
-        logic, math = rng.beta([2, 1], [1, 2])
-        # The math draw falls below the historical per-bin floor for this seed.
-        assert metrics["curriculum/math/weight"] == pytest.approx(0.025 / (logic / (logic + math) + 0.025))
     assert metrics["curriculum/logic/graded_groups"] == 1
     assert metrics["curriculum/logic/groups"] == 2
+    # With the same evidence and random seed, an explicit math prior must shift the mix.
+    OmegaConf.update(config, "data.sampling.domain_weights", {"math": 9, "logic": 1}, force_add=True)
+    weighted = prompt_order_from_config(config, dataset).observe(groups)
+    assert weighted["curriculum/math/weight"] > metrics["curriculum/math/weight"]
+    OmegaConf.update(config, "data.sampling.domain_weights", {"math": 1, "logic": 1}, force_add=True)
     first = order.next_index()
     resumed = prompt_order_from_config(config, dataset)
     resumed.load_state_dict(order.state_dict())
@@ -81,12 +113,13 @@ def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume
     assert [order.next_index() for _ in range(40)] == [resumed.next_index() for _ in range(40)]
     refreshed = order.observe(groups)
     assert resumed.observe(groups) == refreshed
-    if kind == "adaptive-source-thompson":
-        logic, math = rng.beta([2.95, 1], [1, 2.95])
-        assert refreshed["curriculum/math/weight"] == pytest.approx(math / (logic + math))
     draws = [order.next_index() for _ in range(400)]
     assert draws == [resumed.next_index() for _ in range(400)]
-    assert sum(index >= 5 for index in draws) > 225
+    # Both rules should favor the mixed logic verifier after repeated evidence.
+    for _ in range(40):
+        order.observe(groups)
+    draws = [order.next_index() for _ in range(400)]
+    assert sum(index >= 5 for index in draws) > 300
     assert all(len(set(draws[pos : pos + 4])) == 4 for pos in range(0, len(draws), 4))
 
 
@@ -237,6 +270,30 @@ def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_
     assert warm.prompts_dropped_too_long == 1
     assert [warm[i] for i in range(len(warm))] == [reference[i] for i in range(len(reference))]
     assert warm.collate_fn([warm[0], warm[1]]) == reference.collate_fn([reference[0], reference[1]])
+
+
+def test_qwen_prepared_cache_reuses_only_matching_thinking_mode(prepared_selection, monkeypatch):
+    cache, configs = prepared_selection
+    tokenizer = Qwen2Tokenizer(
+        chat_template="{% for m in messages %}{{ m.content }}{% endfor %}{% if enable_thinking %}<think>{% endif %}"
+    )
+
+    def dataset(thinking):
+        return SourceTaskDataset(
+            [cache.path],
+            tokenizer,
+            1000,
+            environment_configs=configs,
+            prepared_cache=cache,
+            chat_template_kwargs={"enable_thinking": thinking},
+        )
+
+    first = dataset(False)
+    dataset(True)
+    assert len(list(Path(cache.cache_dir).glob("*.parquet"))) == 2
+    monkeypatch.setattr(tokenizer, "apply_chat_template", lambda *_a, **_kw: pytest.fail("warm read retokenized"))
+    warm = dataset(False)
+    assert [warm[i] for i in range(len(warm))] == [first[i] for i in range(len(first))]
 
 
 @pytest.mark.parametrize("damage", ["truncated", "invalid last batch"])

@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
+import json
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -32,8 +33,16 @@ from skyrl_train.config.rollout_validation import (
     validate_family_pools,
     validate_groups_per_family,
 )
+from skyrl_train.contextual_sampling import (
+    PromptAcquisition,
+    PromptFeedback,
+    PromptThompsonOrder,
+    PublicPrompt,
+    public_prompt_digest,
+)
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
+from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
 from skyrl_train.dynamic_sampling import (
     DynamicSamplingType,
@@ -107,6 +116,7 @@ class TrainingContextState:
     object_store_root: str | None
     discarded: tuple[DiscardedCandidate, ...] = ()
     source_rejections: SourceRejections | None = None
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,9 +127,27 @@ class RolloutBatchMetadata:
     groups: tuple[AdmittedRollout, ...]
     metrics: dict[str, float]
     sampling_receipts_enabled: bool = False
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
 
 
-def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) -> PromptOrder:
+def _public_prompt_texts(dataset: PromptDataset) -> list[str]:
+    # Read only the model-visible prompt column. Canonical prepared rows store messages as JSON.
+    texts = []
+    for prompt in dataset.dataframe.with_format(None)[dataset.prompt_key]:
+        if isinstance(dataset, TaskDataset) and isinstance(prompt, str):
+            prompt = json.loads(prompt)
+        if isinstance(prompt, str):
+            texts.append(prompt)
+            continue
+        if any(not isinstance(message.get("content"), str) for message in prompt):
+            raise ValueError("Prompt Thompson sampling requires text-only public messages")
+        texts.append("\n".join(message["content"] for message in prompt))
+    return texts
+
+
+def prompt_order_from_config(
+    config: DictConfig, dataset: PromptGroupDataset, *, held_out: Sequence[PromptDataset] = ()
+) -> PromptOrder:
     """Build the loader's prompt order: seeded passes by default, or the ``data.sampling`` order."""
     sampling = config.data.sampling
     if sampling.kind is None:
@@ -133,6 +161,27 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
     kind = SamplingKind(sampling.kind)
     if kind is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
+    if kind in PromptAcquisition:
+        samples = config.generator.n_samples_per_prompt
+        if samples < 2:
+            raise ValueError("prompt-thompson requires at least two samples per prompt")
+        sources = dataset.dataframe.with_format(None)[sampling.source_column]
+        prompts = [
+            PublicPrompt(dataset.uid(index), source, text)
+            for index, (source, text) in enumerate(zip(sources, _public_prompt_texts(dataset), strict=True))
+        ]
+        held_out_digests = {public_prompt_digest(text) for panel in held_out for text in _public_prompt_texts(panel)}
+        return PromptThompsonOrder(
+            prompts,
+            held_out_digests,
+            sampling.domain_weights,
+            acquisition=PromptAcquisition(kind),
+            seed=seed,
+            window_size=batch_size,
+            decay=sampling.decay,
+            epsilon=sampling.epsilon,
+            reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
+        )
     if kind in (SamplingKind.ADAPTIVE_SOURCE, SamplingKind.ADAPTIVE_SOURCE_THOMPSON):
         if config.generator.n_samples_per_prompt < 2:
             raise ValueError("adaptive-source requires at least two samples per prompt")
@@ -157,8 +206,8 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
 
 
-def record_sampling_result(outcome: GroupDisposition) -> None:
-    """Export score and cost summaries from the trainer's buffered telemetry process."""
+def record_sampling_result(outcome: GroupDisposition, admission_batch: int) -> None:
+    """Emit verifier coverage and generated cost for a completed sampled lease."""
     result = outcome.sampling_result
     if result is None:
         return
@@ -170,6 +219,8 @@ def record_sampling_result(outcome: GroupDisposition) -> None:
             "group_uid": outcome.uid,
             "committed_unix_ns": result.committed_unix_ns,
             "feedback_batch": result.feedback_batch,
+            "admission_batch": admission_batch,
+            "dispatch_step": result.dispatch_step,
             "disposition": outcome.disposition,
             "generated_tokens": outcome.tokens,
             "sample_count": result.sample_count,
@@ -182,6 +233,21 @@ def record_sampling_result(outcome: GroupDisposition) -> None:
             "verified_max": max(scores, default=None),
         },
     )
+
+
+def _record_admission(admission: Admission, trace_rollouts: bool, step: int, max_untrained_groups: int) -> None:
+    for outcome in admission.dispositions:
+        record_sampling_result(outcome, admission.batch_id)
+        if trace_rollouts:
+            record_group_disposition(
+                disposition=outcome.disposition,
+                tokens=outcome.tokens,
+                step=step,
+                dwell_seconds=outcome.dwell_seconds,
+            )
+    for policy_step, work in admission.generated:
+        record_generated_work(work, policy_step)
+    record_rollout_buffer(admission.ready_count, max_untrained_groups)
 
 
 def record_sampling_training(batch: RolloutBatchMetadata, nonzero_advantage_tokens: collections.Counter[str]) -> None:
@@ -223,7 +289,7 @@ class TrainingContext:
         *,
         rollout_spans: bool,
         grader_report_path: str | None = None,
-        adaptive_order: AdaptiveSourceOrder | None = None,
+        adaptive_order: AdaptiveSourceOrder | PromptThompsonOrder | None = None,
     ):
         self.loader = loader
         self.config = config
@@ -248,7 +314,14 @@ class TrainingContext:
         self._submission_allowed.set()
 
     @classmethod
-    def from_config(cls, config: DictConfig, dataset: PromptGroupDataset, workers: RolloutWorkers) -> TrainingContext:
+    def from_config(
+        cls,
+        config: DictConfig,
+        dataset: PromptGroupDataset,
+        workers: RolloutWorkers,
+        *,
+        held_out: Sequence[PromptDataset] = (),
+    ) -> TrainingContext:
         algorithm = config.trainer.algorithm
         dynamic_sampling = algorithm.dynamic_sampling
         selection = GroupSelectionPolicy(
@@ -296,7 +369,7 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
-        order = prompt_order_from_config(config, dataset)
+        order = prompt_order_from_config(config, dataset, held_out=held_out)
         return cls(
             PromptLoader(
                 dataset,
@@ -315,7 +388,7 @@ class TrainingContext:
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
-            adaptive_order=order if isinstance(order, AdaptiveSourceOrder) else None,
+            adaptive_order=order if isinstance(order, (AdaptiveSourceOrder, PromptThompsonOrder)) else None,
         )
 
     def start(self) -> None:
@@ -401,24 +474,16 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
+        sampling_dispositions: list[GroupDisposition] = []
+        tracks_prompt_feedback = isinstance(self._adaptive_order, PromptThompsonOrder)
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
             admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
-            for outcome in admission.dispositions:
-                record_sampling_result(outcome)
-            for policy_step, work in admission.generated:
-                record_generated_work(work, policy_step)
-            if self._rollout_spans:
-                for outcome in admission.dispositions:
-                    record_group_disposition(
-                        disposition=outcome.disposition,
-                        tokens=outcome.tokens,
-                        step=self._policy_step,
-                        dwell_seconds=outcome.dwell_seconds,
-                    )
-            record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
+            _record_admission(admission, self._rollout_spans, self._policy_step, self.config.max_untrained_groups)
+            if tracks_prompt_feedback:
+                sampling_dispositions.extend(admission.dispositions)
             if admission.admitted:
                 admitted = tuple(admission.admitted)
                 groups.extend(admitted)
@@ -432,7 +497,7 @@ class TrainingContext:
                     raise ValueError("selected batch group indices are not ordered from zero")
                 await self._write_grader_report()
                 sampling_metrics = self.loader.observe(admission.selection.judged)
-                if self._adaptive_order is not None:
+                if isinstance(self._adaptive_order, AdaptiveSourceOrder):
                     record_event(
                         "sampling_feedback_observed",
                         {"feedback_batch": admission.batch_id, "observed_unix_ns": time.time_ns()},
@@ -442,7 +507,41 @@ class TrainingContext:
                     tuple(groups),
                     {**admission.selection.metrics, **sampling_metrics},
                     sampling_receipts_enabled=self._adaptive_order is not None,
+                    sampling_dispositions=tuple(sampling_dispositions),
                 )
+
+    def finish_sampling_step(
+        self, batch: RolloutBatchMetadata, counts: collections.Counter[str] | None
+    ) -> dict[str, float]:
+        """Update the prompt policy only once optimizer participation is known."""
+        if counts is not None:
+            record_sampling_training(batch, counts)
+        if not isinstance(self._adaptive_order, PromptThompsonOrder):
+            return {}
+        feedback = []
+        for outcome in batch.sampling_dispositions:
+            result = outcome.sampling_result
+            if result is None:
+                raise ValueError(f"Prompt Thompson outcome has no dispatch receipt: {outcome.uid}")
+            feedback.append(
+                PromptFeedback(
+                    lease_id=result.lease_id,
+                    uid=outcome.uid,
+                    dispatch_step=result.dispatch_step,
+                    sample_count=result.sample_count,
+                    verified_scores=result.verified_scores,
+                    generated_tokens=outcome.tokens,
+                    nonzero_advantage_tokens=(
+                        counts[outcome.uid] if counts is not None and outcome.disposition == "consumed" else None
+                    ),
+                )
+            )
+        metrics = self._adaptive_order.finish_step(batch.batch_id, feedback)
+        record_event(
+            "sampling_feedback_observed",
+            {"feedback_batch": batch.batch_id, "observed_unix_ns": time.time_ns()},
+        )
+        return metrics
 
     async def state_dict(self) -> TrainingContextState:
         """Capture every dispatched group that no trained batch has consumed.
@@ -472,6 +571,7 @@ class TrainingContext:
             self._payloads.object_store_root,
             snapshot.discarded,
             snapshot.source_rejections,
+            snapshot.sampling_dispositions,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -509,6 +609,7 @@ class TrainingContext:
                 leases=frozenset(),
                 discarded=state.discarded,
                 source_rejections=state.source_rejections,
+                sampling_dispositions=state.sampling_dispositions,
             )
         )
         self._live_uids.update(rollout.verdict.uid for rollout in ready)

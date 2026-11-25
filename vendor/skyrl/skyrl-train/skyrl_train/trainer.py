@@ -30,12 +30,7 @@ from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
-from skyrl_train.rollouts.context import (
-    RolloutBatchMetadata,
-    TrainingContext,
-    TrainingContextState,
-    record_sampling_training,
-)
+from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
     TrajectoryBatch,
@@ -172,6 +167,7 @@ from skyrl_train.batch_metrics import (
     install_correction,
     advantage_metrics,
     forward_metrics,
+    NONZERO_ADVANTAGE_TOKENS,
     nonzero_advantage_tokens_by_group,
     reward_metrics,
     rollout_metrics,
@@ -1582,12 +1578,14 @@ class RayPPOTrainer:
             await context.wait(
                 asyncio.gather(*policy.async_run_ray_method("pass_through", "unload_batch", plan.global_step))
             )
-        if metadata.sampling_receipts_enabled and status["policy_update_steps"] > 0:
-            counts: Counter[str] = Counter()
-            for actor, output in zip(policy.actor_infos, outputs, strict=True):
-                if actor.rank.is_collection_dp_rank():
-                    counts.update(output.metadata["nonzero_advantage_tokens"])
-            record_sampling_training(metadata, counts)
+        if metadata.sampling_receipts_enabled:
+            counts: Counter[str] | None = None
+            if status["policy_update_steps"] > 0:
+                counts = Counter()
+                for actor, output in zip(policy.actor_infos, outputs, strict=True):
+                    if actor.rank.is_collection_dp_rank():
+                        counts.update(output.metadata[NONZERO_ADVANTAGE_TOKENS])
+            self.all_metrics.update(context.finish_sampling_step(metadata, counts))
         summary = batch_summary(plan)
         self._current_step_rewards = (
             [float(value) for group in plan.facts for value in group.scalar_values]
@@ -1764,8 +1762,13 @@ class RayPPOTrainer:
             step_wall.start("policy_training")
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_policy, training_input)
-        if sampling_batch is not None and status["policy_update_steps"] > 0:
-            record_sampling_training(sampling_batch, nonzero_advantage_tokens_by_group(training_input, sampling_uids))
+        if sampling_batch is not None:
+            counts = (
+                nonzero_advantage_tokens_by_group(training_input, sampling_uids)
+                if status["policy_update_steps"] > 0
+                else None
+            )
+            self.all_metrics.update(self.context.finish_sampling_step(sampling_batch, counts))
         self._policy_version_step = self.global_step
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)

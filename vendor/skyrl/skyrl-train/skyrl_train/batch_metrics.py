@@ -30,6 +30,9 @@ from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metric
 from skyrl_train.metric_reduction import MetricReduction, LocalReduction
 
 
+NONZERO_ADVANTAGE_TOKENS = "nonzero_advantage_tokens"
+
+
 def nonzero_advantage_tokens_by_group(batch: TrainingInputBatch, uids: Sequence[str]) -> Counter[str]:
     """Count final nonzero advantages where the policy loss mask is active."""
     advantages = batch["advantages"][: len(uids)]
