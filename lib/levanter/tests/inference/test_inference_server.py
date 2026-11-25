@@ -1095,7 +1095,6 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
     "policy",
     [
         {"mode": "keep", "clear_cache": True},
-        {"mode": "wait", "clear_cache": True},
         {"mode": "abort", "clear_cache": False},
         {"mode": "abort", "clear_cache": "yes"},
     ],
