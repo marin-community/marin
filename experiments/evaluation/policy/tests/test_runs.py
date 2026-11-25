@@ -94,11 +94,11 @@ def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_mod
         revision=None,
         tokenizer=QWEN.model.location,
         tokenizer_revision=QWEN.model.revision,
-        serve=replace(QWEN.model.serve, auto_overrides=False),
+        serve=replace(QWEN.model.serve, auto_overrides=False, max_model_len=32_768),
     )
-    # AIME24 runs on an 8,192-token server, so its record names a model with that window; checking it must
-    # not depend on the policy's other evaluations, which need more.
-    policy = replace(POLICY, in_distribution=(PolicyEvaluation("aime24", context=8_192), PolicyEvaluation("math500")))
+    # The checkpoint is served at 32,768, too small for MRCR's 73,728-token window; checking its AIME24 run must
+    # not depend on an evaluation it cannot run.
+    policy = replace(POLICY, in_distribution=(PolicyEvaluation("aime24"), PolicyEvaluation("mrcr")))
     (run,) = expected_runs(policy, model_candidate(checkpoint), limit=None, evaluations={"aime24"})
     record = _write(tmp_path, run)
     (expected,) = expected_runs(policy, record_candidate(policy, record), limit=None, evaluations={"aime24"})

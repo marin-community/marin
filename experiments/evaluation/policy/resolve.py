@@ -10,7 +10,7 @@ from evalrecords.records import EvaluationOverrides, EvaluationSelection
 from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation, PolicyOverride
+from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
 
@@ -41,7 +41,7 @@ class ResolvedPolicyEvaluation:
         if self.max_output is not None and self.max_output >= self.context:
             raise ValueError(
                 f"{self.candidate.name} on {self.evaluation.name}: output limit {self.max_output} does not fit "
-                f"in context {self.context}; add an override"
+                f"in context {self.context}"
             )
 
 
@@ -50,32 +50,31 @@ def catalog_variant(evaluation: PolicyEvaluation, candidate: PolicyCandidate) ->
     return selection_dataset(evaluation.selection, prompt_format(candidate.model))
 
 
-def _context(
-    policy: EvalPolicy, candidate: PolicyCandidate, evaluation: PolicyEvaluation, override: PolicyOverride | None
-) -> int:
-    """The context an evaluation runs with.
+def serving_window(policy: EvalPolicy, candidate: PolicyCandidate) -> int:
+    """The window the candidate is served at: the policy's, or the candidate's own if smaller."""
+    own = min(candidate.max_context, candidate.model.serve.max_model_len or candidate.max_context)
+    return min(own, policy.serving_window)
 
-    The candidate's override, else the evaluation's context, else the policy's default, is requested. A protocol window
-    is the one its items were built for, so a run uses exactly it, and a candidate served below it must be
-    excluded. Otherwise the run gets the smallest of the request, the window the candidate is served at and any
-    agent input limit, as the worker gives an agent.
+
+def _context(policy: EvalPolicy, candidate: PolicyCandidate, evaluation: PolicyEvaluation) -> int:
+    """The context an evaluation runs with on the candidate's server.
+
+    A protocol window is the one its items were built for, so a run uses exactly it, and a candidate served below
+    it must be excluded. An agent gets the smaller of its input limit and the serving window, as the worker gives
+    it; any other evaluation runs at the serving window.
     """
-    requested = evaluation.context if override is None or override.context is None else override.context
+    window = serving_window(policy, candidate)
     variant = catalog_variant(evaluation, candidate)
-    served = min(candidate.max_context, candidate.model.serve.max_model_len or candidate.max_context)
-    name = f"{candidate.name} on {evaluation.name}"
-    if (window := variant.protocol.context_window) is not None:
-        if window > served:
+    if (protocol_window := variant.protocol.context_window) is not None:
+        if protocol_window > window:
             raise ValueError(
-                f"{name}: the benchmark's window {window} is larger than the served window {served}; exclude it"
+                f"{candidate.name} on {evaluation.name}: the benchmark's window {protocol_window} is larger than "
+                f"the serving window {window}; exclude it"
             )
-        if requested is not None and requested != window:
-            raise ValueError(f"{name}: context {requested} is not the benchmark's window {window}")
-        return window
-    limits = [served, policy.default_context if requested is None else requested]
+        return protocol_window
     if variant.agent is not None and variant.agent.max_input_tokens is not None:
-        limits.append(variant.agent.max_input_tokens)
-    return min(limits)
+        return min(variant.agent.max_input_tokens, window)
+    return window
 
 
 def resolve(
@@ -83,9 +82,8 @@ def resolve(
 ) -> tuple[ResolvedPolicyEvaluation, ...]:
     """Return every evaluation the candidate runs under the policy.
 
-    ``evaluations`` limits it to those names, whose constraints alone are checked. Excluded evaluations
-    are left out. Each setting comes from the candidate's override, else the evaluation; the context is
-    then fitted to the benchmark and the candidate (``_context``). A candidate with no matching
+    ``evaluations`` limits it to those names, whose constraints alone are checked. Excluded evaluations are left
+    out, and a candidate's override replaces an evaluation's output limit. A candidate with no matching
     exclusions or overrides uses every policy evaluation.
     """
     excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
@@ -95,12 +93,12 @@ def resolve(
         if evaluation.name in excluded or (evaluations is not None and evaluation.name not in evaluations):
             continue
         override = overrides.get(evaluation.name)
-        max_output = evaluation.max_output if override is None or override.max_output is None else override.max_output
+        max_output = evaluation.max_output if override is None else override.max_output
         resolved.append(
             ResolvedPolicyEvaluation(
                 candidate=candidate,
                 evaluation=evaluation,
-                context=_context(policy, candidate, evaluation, override),
+                context=_context(policy, candidate, evaluation),
                 max_output=max_output,
                 seed=evaluation.seed,
             )

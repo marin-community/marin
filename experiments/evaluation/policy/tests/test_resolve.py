@@ -16,25 +16,22 @@ from experiments.evaluation.policy.schema import (
 )
 
 REVISION = "0" * 40
+WINDOW = 50_000
 LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", revision=REVISION), max_context=200_000)
-SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=60_000)
+SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=30_000)
 
-CONTEXT = 50_000
-# Real catalog benchmarks, since a context left unset comes from the benchmark's declared window.
 PLAIN = PolicyEvaluation("aime24")
 SEEDED = PolicyEvaluation("math500", seed=7)
-LONG = PolicyEvaluation("gpqa-diamond", context=100_000, max_output=30_000)
-SMALL_LONG = PolicyOverride(
-    candidate=SMALL, evaluation=LONG, context=60_000, max_output=10_000, reason="window too small"
-)
+CAPPED = PolicyEvaluation("gpqa-diamond", max_output=20_000)
+SMALL_CAPPED = PolicyOverride(candidate=SMALL, evaluation=CAPPED, max_output=10_000, reason="window too small")
 
 
-def _policy(*evaluations: PolicyEvaluation, **exceptions) -> EvalPolicy:
+def _policy(*evaluations: PolicyEvaluation, candidates=(LARGE, SMALL), **exceptions) -> EvalPolicy:
     return EvalPolicy(
         version="test",
-        default_context=CONTEXT,
-        candidates=(LARGE, SMALL),
-        in_distribution=evaluations or (PLAIN, SEEDED, LONG),
+        serving_window=WINDOW,
+        candidates=candidates,
+        in_distribution=evaluations or (PLAIN, SEEDED, CAPPED),
         **exceptions,
     )
 
@@ -43,82 +40,61 @@ def _settings(resolved: tuple[ResolvedPolicyEvaluation, ...]) -> dict[str, tuple
     return {item.evaluation.name: (item.context, item.max_output, item.seed) for item in resolved}
 
 
-def test_candidate_runs_every_evaluation_with_its_declared_settings():
+def test_a_candidate_runs_every_evaluation_at_its_serving_window():
     assert _settings(resolve(_policy(), LARGE)) == {
-        "aime24": (50_000, None, None),
-        "math500": (50_000, None, 7),
-        "gpqa-diamond": (100_000, 30_000, None),
+        "aime24": (WINDOW, None, None),
+        "math500": (WINDOW, None, 7),
+        "gpqa-diamond": (WINDOW, 20_000, None),
     }
 
 
-def test_an_unset_context_is_the_benchmarks_window_and_a_different_one_is_rejected():
-    windowed = PolicyEvaluation("mrcr", protocol="32k")
-    assert _settings(resolve(_policy(windowed), LARGE)) == {"mrcr-32k": (32_704, None, None)}
-    with pytest.raises(ValueError, match="mrcr-32k"):
-        resolve(_policy(replace(windowed, context=30_000)), LARGE)
-
-
-def test_an_agent_runs_at_the_smallest_of_its_limit_the_request_and_the_served_window():
-    # The worker gives an agent the smaller of its input limit and the served window.
-    agent = PolicyEvaluation("ds-1000", protocol="terminus-2")
-    tiny = PolicyCandidate(model=ModelConfig(name="tiny", location="org/tiny", revision=REVISION), max_context=16_384)
-    policy = EvalPolicy(version="test", default_context=CONTEXT, candidates=(LARGE, tiny), in_distribution=(agent,))
-    assert _settings(resolve(policy, tiny)) == {"ds-1000-terminus-2": (16_384, None, None)}
-    assert _settings(resolve(policy, LARGE)) == {"ds-1000-terminus-2": (32_768, None, None)}
-
-    smaller = PolicyOverride(candidate=LARGE, evaluation=agent, context=20_000, reason="less room")
-    assert _settings(resolve(replace(policy, overrides=(smaller,)), LARGE)) == {
-        "ds-1000-terminus-2": (20_000, None, None)
+def test_a_smaller_candidate_is_served_at_its_own_window_and_an_override_sets_its_output_limit():
+    assert _settings(resolve(_policy(overrides=(SMALL_CAPPED,)), SMALL)) == {
+        "aime24": (30_000, None, None),
+        "math500": (30_000, None, 7),
+        "gpqa-diamond": (30_000, 10_000, None),
     }
 
 
-def test_a_candidate_served_below_a_protocol_window_must_be_excluded():
-    # The candidate is served at 32,768 of a native 200,000; MRCR-65k's items need 65,472.
+def test_the_catalog_serve_window_caps_the_serving_window():
     served = PolicyCandidate(
         model=ModelConfig(
-            name="served", location="org/served", revision=REVISION, serve=ServeConfig(max_model_len=32_768)
+            name="served", location="org/served", revision=REVISION, serve=ServeConfig(max_model_len=40_000)
         ),
         max_context=200_000,
     )
-    windowed, agent = PolicyEvaluation("mrcr", protocol="65k"), PolicyEvaluation(
-        "swebench-verified", protocol="mini-swe-agent"
-    )
-    policy = EvalPolicy(version="test", default_context=CONTEXT, candidates=(served,), in_distribution=(windowed, agent))
-    with pytest.raises(ValueError, match="served on mrcr-65k"):
-        resolve(policy, served)
-
-    excluded = replace(policy, exclusions=(PolicyExclusion(candidate=served, evaluation=windowed, reason="window"),))
-    assert _settings(resolve(excluded, served)) == {"swebench-verified-mini-swe-agent": (32_768, None, None)}
+    assert _settings(resolve(_policy(PLAIN, candidates=(served,)), served)) == {"aime24": (40_000, None, None)}
 
 
-def test_an_agent_without_an_input_limit_runs_at_the_policy_context():
-    assert _settings(resolve(_policy(PolicyEvaluation("terminal-bench-2.0")), LARGE)) == {
-        "terminal-bench-2.0": (CONTEXT, None, None)
-    }
+def test_a_protocol_window_is_used_exactly_and_a_candidate_served_below_it_is_excluded():
+    windowed = PolicyEvaluation("mrcr", protocol="32k")
+    assert _settings(resolve(_policy(windowed), LARGE)) == {"mrcr-32k": (32_704, None, None)}
+    with pytest.raises(ValueError, match="small on mrcr-32k"):
+        resolve(_policy(windowed), SMALL)
+    excluded = PolicyExclusion(candidate=SMALL, evaluation=windowed, reason="window")
+    assert _settings(resolve(_policy(windowed, exclusions=(excluded,)), SMALL)) == {}
 
 
-def test_a_candidate_runs_at_most_at_its_window_and_overrides_still_apply():
-    assert _settings(resolve(_policy(), SMALL)) == {
-        "aime24": (50_000, None, None),
-        "math500": (50_000, None, 7),
-        "gpqa-diamond": (60_000, 30_000, None),
-    }
-    assert _settings(resolve(_policy(overrides=(SMALL_LONG,)), SMALL))["gpqa-diamond"] == (60_000, 10_000, None)
-    # An override's context is capped like the evaluation's own.
-    above = replace(SMALL_LONG, context=500_000)
-    assert _settings(resolve(_policy(overrides=(above,)), SMALL))["gpqa-diamond"] == (60_000, 10_000, None)
-    # An override's output limit must still fit the context it leaves.
+def test_an_agent_runs_at_the_smaller_of_its_input_limit_and_the_serving_window():
+    agent = PolicyEvaluation("ds-1000", protocol="terminus-2")
+    assert _settings(resolve(_policy(agent), LARGE)) == {"ds-1000-terminus-2": (32_768, None, None)}
+    assert _settings(resolve(_policy(agent), SMALL)) == {"ds-1000-terminus-2": (30_000, None, None)}
+    # An agent without a declared input limit, like Terminal-Bench 2.0's, runs at the serving window.
+    uncapped = PolicyEvaluation("terminal-bench-2.0")
+    assert _settings(resolve(_policy(uncapped), LARGE)) == {"terminal-bench-2.0": (WINDOW, None, None)}
+
+
+def test_an_output_limit_must_fit_the_context():
     with pytest.raises(ValueError, match="small on gpqa-diamond"):
-        resolve(_policy(overrides=(replace(SMALL_LONG, context=20_000, max_output=None),)), SMALL)
+        resolve(_policy(replace(CAPPED, max_output=40_000)), SMALL)
 
 
 def test_exceptions_apply_only_to_the_named_candidate():
     policy = _policy(
         exclusions=(PolicyExclusion(candidate=SMALL, evaluation=SEEDED, reason="unsupported"),),
-        overrides=(SMALL_LONG,),
+        overrides=(SMALL_CAPPED,),
     )
-
-    assert _settings(resolve(policy, SMALL)) == {"aime24": (50_000, None, None), "gpqa-diamond": (60_000, 10_000, None)}
+    assert _settings(resolve(policy, SMALL)) == {"aime24": (30_000, None, None), "gpqa-diamond": (30_000, 10_000, None)}
     assert _settings(resolve(policy, LARGE)) == _settings(resolve(_policy(), LARGE))
 
 
@@ -126,17 +102,17 @@ def test_exceptions_apply_only_to_the_named_candidate():
     "exceptions",
     [
         pytest.param(
-            {"overrides": (SMALL_LONG, replace(SMALL_LONG, max_output=5_000))}, id="two-overrides-for-one-pair"
+            {"overrides": (SMALL_CAPPED, replace(SMALL_CAPPED, max_output=5_000))}, id="two-overrides-for-one-pair"
         ),
         pytest.param(
             {
-                "exclusions": (PolicyExclusion(candidate=SMALL, evaluation=LONG, reason="unsupported"),),
-                "overrides": (SMALL_LONG,),
+                "exclusions": (PolicyExclusion(candidate=SMALL, evaluation=CAPPED, reason="unsupported"),),
+                "overrides": (SMALL_CAPPED,),
             },
             id="excluded-and-overridden",
         ),
         pytest.param(
-            {"overrides": (replace(SMALL_LONG, evaluation=replace(LONG, max_output=5_000)),)},
+            {"overrides": (replace(SMALL_CAPPED, evaluation=replace(CAPPED, max_output=5_000)),)},
             id="stale-copy-of-an-evaluation",
         ),
     ],
@@ -144,3 +120,20 @@ def test_exceptions_apply_only_to_the_named_candidate():
 def test_ambiguous_or_stale_exceptions_are_rejected(exceptions):
     with pytest.raises(ValueError):
         _policy(**exceptions)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"benchmark": "no-such-benchmark"}, id="unknown-benchmark"),
+        pytest.param({"benchmark": "mrcr", "protocol": "no-such"}, id="undeclared-variant"),
+        pytest.param({"benchmark": "gsm8k", "num_fewshot": 3}, id="undeclared-few-shot-count"),
+        pytest.param({"benchmark": "gsm8k", "protocol": ""}, id="empty-protocol"),
+        pytest.param({"benchmark": "financebench"}, id="judged-benchmark-without-a-judge"),
+        pytest.param({"benchmark": "gsm8k", "judge": "together"}, id="judge-on-an-unjudged-benchmark"),
+        pytest.param({"benchmark": "financebench", "judge": "nobody"}, id="unknown-judge"),
+    ],
+)
+def test_an_evaluation_the_catalog_cannot_run_as_declared_is_rejected(fields):
+    with pytest.raises(ValueError):
+        PolicyEvaluation(**fields)
