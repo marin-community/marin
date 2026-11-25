@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import List, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
@@ -61,7 +61,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -146,10 +146,6 @@ class InferenceResponse:
 
 class PolicyMismatchError(ValueError):
     """A generate request was queued for a different immutable policy."""
-
-    @property
-    def openai_finish_reason(self) -> Literal["stop", "length"]:
-        return "stop" if self.finish_reason == FinishReason.STOP else "length"
 
 
 class InferenceBatch(list):
@@ -731,7 +727,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason=generation.openai_finish_reason,
+                        finish_reason=format_finish_reason(generation.finish_reason),
                         logprobs=logprobs,
                     )
                 )
@@ -874,7 +870,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason=generation.openai_finish_reason,
+                    finish_reason=format_finish_reason(generation.finish_reason),
                     logprobs=logprobs,
                 )
             )
@@ -962,7 +958,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
     for choice, output in enumerate(outputs):
         metadata: dict[str, int | str] = {
             "completion_tokens": output.completion_tokens,
-            "finish_reason": output.finish_reason.name.lower(),
+            "finish_reason": format_finish_reason(output.finish_reason),
             "model_version": output.model_version,
         }
         if output.policy_id is not None:
