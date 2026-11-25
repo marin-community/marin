@@ -208,6 +208,32 @@ A source runs these phases in order:
 | `verification` | With controls, the executions of [source verification](#verification-trials). |
 | `export` | One execution shuffles the checked rows by task ID into the normalized shards and writes the `normalize`, `review`, `verify` and `final` views, with the unprocessed review rows of an unexpanded sample. |
 
+## Task store
+
+`task_store.TaskStore` keeps an append-only log of `TaskSpec` versions in one
+FineStore archive, keyed by task id. Each add or edit commits a new row; reads
+return the newest version of each id, and every older version stays readable
+through the commit that wrote it.
+
+```python
+from taskcompendium.pipeline.task_store import TaskStore, TaskView
+
+with TaskStore("s3://bucket/task-store") as store:
+    token = store.add(tasks, author="curation", message="import source X")
+    store.update(["task-1"], fix, author="alice", message="fix the grader of task-1")
+    versions = store.history("task-1")  # newest first, with commit ids and messages
+
+pinned = TaskView.at("s3://bucket/task-store", token.commit_id)
+same_tasks = list(pinned.tasks())
+```
+
+`add` commits only tasks that are new or differ from their newest version, so a
+repeated import commits nothing. `update` reads the newest versions, applies the
+edit and commits; when another writer changes one of the tasks first, the edit
+runs again on the newer version. A consumer records the commit id it read and
+gets the same tasks from `TaskView.at(root, commit_id)` later. `TaskView` and
+`task_history` need no write access to the archive.
+
 ## Grading environments
 
 A task's agent environment and its grader's environment are declared separately
