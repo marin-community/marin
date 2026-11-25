@@ -1136,3 +1136,26 @@ def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimiz
     callbacks = yaml.safe_load(terminal.build_config(context).launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
     best = next(callback for callback in callbacks if callback["type"] == "best_checkpoint")
     assert (best["expected_tasks"], best["minimum_scored_tasks"]) == (200, 180)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_uses_manifest_train_files_without_changing_sampling_labels(local_round, tmp_path):
+    data = Path(local_round.rl.pools["uri"])
+    manifest_path = data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    mapping = {label: f"source-{index:03d}/train.parquet" for index, label in enumerate(sorted(manifest["composition"]))}
+    for label, relative in mapping.items():
+        original = f"{label}/train.parquet"
+        target = data / relative
+        target.parent.mkdir(parents=True)
+        target.write_bytes((data / original).read_bytes())
+        manifest["files"][relative] = manifest["files"].pop(original)
+    manifest["training_files"] = mapping
+    manifest_path.write_text(json.dumps(manifest))
+    step = adopted_round_rl(local_round)
+    context = StepContext.for_run(
+        str(tmp_path / "mapped"), str(tmp_path), deps=step.deps, runtime_args=step.runtime_args
+    )
+    document = yaml.safe_load(step.build_config(context).launch_config_yaml)
+    assert {item["relative_path"] for item in document["inputs"]["train_data"]} == set(mapping.values())
+    assert set(document["skyrl"]["data"]["sampling"]["domain_weights"]) == set(mapping)

@@ -88,7 +88,9 @@ fingerprint means the rebuilt mix samples identically.
 
 For a historical comparison, pin the original training parquets and curriculum
 record, then draw the new holdout from those exact task documents. Give the
-derived curriculum a new identity and record its parent. A changed validation
+derived curriculum a new identity and record its parent. Remove all selected
+holdout prompts from training, preserving the original task documents and
+graders in both outputs. A changed validation
 split changes the training population; do not reuse the parent fingerprint.
 
 A published pool manifest may carry the complete typed `curriculum_definition`
