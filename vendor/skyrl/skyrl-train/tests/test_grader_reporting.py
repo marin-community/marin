@@ -8,11 +8,12 @@ import pytest
 from skyrl_gym.verification import VerificationResult
 from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
-from skyrl_train.dynamic_sampling import GroupSelectionPolicy
+from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.io import io
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
+    SAMPLING_SOURCE,
     BatchPolicy,
     PayloadReference,
     RolloutBuffer,
@@ -20,8 +21,69 @@ from skyrl_train.rollouts.buffer import (
     RolloutContentPolicy,
     RolloutGroup,
 )
+from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_judged_feedback_includes_prefetched_discards_across_resume(resume):
+    policy = RolloutContentPolicy(
+        GroupAdmissionPolicy(
+            GroupAdvantageInvariant.exact_physical(physical_group_size=2), rollout_logprobs_required=False
+        ),
+        GroupSelectionPolicy(DynamicSamplingType.FILTER),
+    )
+    config = RolloutBufferConfig(
+        batch_size=1,
+        max_in_flight=2,
+        max_staleness_steps=1,
+        batch_policy=BatchPolicy.FULL_BATCH,
+        dynamic_sampling=DynamicSamplingType.FILTER,
+        max_candidate_groups=3,
+    )
+    buffer = RolloutBuffer(config)
+
+    async def commit(lease, uid, rewards, results, *, loss_masks=((1,), (1,))):
+        prompt = {SAMPLING_SOURCE: "math"}
+        batch = TrajectoryBatch(
+            prompt_token_ids=[[1], [1]],
+            response_ids=[[2], [3]],
+            loss_masks=loss_masks,
+            rewards=rewards,
+            verification_results=results,
+        )
+        verdict = policy.verdict(RolloutGroup(batch, uid, lease.policy_step, prompt))
+        await buffer.commit(lease.lease_id, prompt, verdict, PayloadReference(None))
+
+    await buffer.publish(1)
+    current = await buffer.acquire_lease()
+    future = await buffer.acquire_lease()
+    await commit(future, "0", [0.0, 0.0], [VerificationResult.verified(1.0)] * 2)
+    await commit(
+        await buffer.acquire_lease(), "3", [0.0, 0.0], [VerificationResult.error("crash")] * 2, loss_masks=[[0], [0]]
+    )
+    await commit(current, "2", [0.0, 0.9], [VerificationResult.verified(0.5)] * 2)
+    await buffer.admit(timeout=1)
+    if resume:
+        snapshot = buffer.snapshot()
+        buffer = RolloutBuffer(config)
+        await buffer.restore(snapshot)
+    await buffer.publish(2)
+    await commit(
+        await buffer.acquire_lease(),
+        "1",
+        [0.0, 0.9],
+        [VerificationResult.error("timeout"), VerificationResult.verified(0.5)],
+    )
+    admission = await buffer.admit(timeout=1)
+    assert admission.selection.judged == [
+        JudgedGroup("0", (0.0, 0.0), (1.0, 1.0)),
+        JudgedGroup("1", (0.0, 0.9), (None, 0.5)),
+    ]
+    assert admission.selection.metrics["async/dynamic_sampling/candidate_count"] == 2
+    assert admission.selection.metrics["curriculum/math/rejected/fully_masked"] == 1
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):

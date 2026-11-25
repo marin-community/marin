@@ -16,17 +16,27 @@ from .sampling import EvalSamplingParams
 
 class Sampling(Section):
     kind: (
-        Literal["domain-weighted", "naive", "thompson", "learnability", "grade-uniform", "grade-adaptive", "grade-prior"]
+        Literal[
+            "domain-weighted",
+            "adaptive-source",
+            "naive",
+            "thompson",
+            "learnability",
+            "grade-uniform",
+            "grade-adaptive",
+            "grade-prior",
+        ]
         | None
     ) = field(None)
-    """null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-
-    adaptive|grade-prior"""
+    "null uses seeded passes with data.shuffle"
     domain_weights: NumberMap = field({})
-    "exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted"
+    "domain-weighted route shares, or adaptive-source reference shares (empty uses row counts)"
+    source_column: Literal["data_source", "teacher_route", "family"] = field("data_source")
+    "adaptive-source bin label on each prepared training row"
     decay: int | float = field(0.95)
     "per-step multiplicative decay of bin sufficient stats"
     epsilon: int | float = field(0.05)
-    "per-bin probability floor (thompson/learnability/grade-prior)"
+    "exploration mass (adaptive-source draws from the reference mixture)"
     reversion_mass: int | float = field(0.0)
     "per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak"
     instance_decay: int | float = field(0.7)

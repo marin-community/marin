@@ -21,6 +21,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
+from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
@@ -41,9 +42,11 @@ from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
+    SAMPLING_SOURCE,
     Admission,
     AdmittedRollout,
     BufferSnapshot,
+    DiscardedCandidate,
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
@@ -51,6 +54,7 @@ from skyrl_train.rollouts.buffer import (
     RolloutContentPolicy,
     RolloutGroup,
     RolloutTask,
+    SourceRejections,
 )
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
@@ -98,6 +102,8 @@ class TrainingContextState:
     loader: PromptLoaderState
     ready: list[ReadyRollout]
     object_store_root: str | None
+    discarded: tuple[DiscardedCandidate, ...] = ()
+    source_rejections: SourceRejections | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +128,19 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
     batch_size = config.trainer.train_batch_size
     if SamplingKind(sampling.kind) is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
+    if SamplingKind(sampling.kind) is SamplingKind.ADAPTIVE_SOURCE:
+        if config.generator.n_samples_per_prompt < 2:
+            raise ValueError("adaptive-source requires at least two samples per prompt")
+        return AdaptiveSourceOrder(
+            dataset.dataframe.with_format(None)[sampling.source_column],
+            sampling.domain_weights,
+            seed=seed,
+            window_size=batch_size,
+            decay=sampling.decay,
+            epsilon=sampling.epsilon,
+            prior_alpha=sampling.prior_alpha,
+            prior_beta=sampling.prior_beta,
+        )
     curriculum = CurriculumConfig.from_dict_config(sampling, group_size=config.generator.n_samples_per_prompt)
     return CurriculumOrder(dataset, curriculum, seed=seed, window_size=batch_size)
 
@@ -158,6 +177,7 @@ class TrainingContext:
         *,
         rollout_spans: bool,
         grader_report_path: str | None = None,
+        adaptive_order: AdaptiveSourceOrder | None = None,
     ):
         self.loader = loader
         self.config = config
@@ -165,6 +185,7 @@ class TrainingContext:
         self._workers = workers
         self._rollout_spans = rollout_spans
         self._grader_report_path = grader_report_path
+        self._adaptive_order = adaptive_order
         self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
@@ -229,10 +250,11 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
+        order = prompt_order_from_config(config, dataset)
         return cls(
             PromptLoader(
                 dataset,
-                prompt_order_from_config(config, dataset),
+                order,
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
@@ -247,6 +269,7 @@ class TrainingContext:
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
+            adaptive_order=order if isinstance(order, AdaptiveSourceOrder) else None,
         )
 
     def start(self) -> None:
@@ -389,7 +412,11 @@ class TrainingContext:
         ]
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
         return TrainingContextState(
-            dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root
+            dataclasses.replace(loader, retries=retries),
+            ready,
+            self._payloads.object_store_root,
+            snapshot.discarded,
+            snapshot.source_rejections,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -420,7 +447,15 @@ class TrainingContext:
                     ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
                 )
                 ready[index] = dataclasses.replace(ready[index], verdict=verdict)
-        await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
+        await self._buffer.restore.remote(
+            BufferSnapshot(
+                ready=ready,
+                retries=[],
+                leases=frozenset(),
+                discarded=state.discarded,
+                source_rejections=state.source_rejections,
+            )
+        )
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
             "Restored rollout state: {} committed groups and {} prompts to regenerate",
@@ -443,7 +478,10 @@ class TrainingContext:
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
-                task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
+                request = self._request_spec.request(prompt, lease.policy_step)
+                if self._adaptive_order is not None:
+                    prompt = {**prompt, SAMPLING_SOURCE: self._adaptive_order.assign(prompt["uid"])}
+                task = RolloutTask(lease, prompt, request)
                 self._in_flight[lease.lease_id] = task
                 running = asyncio.create_task(self._run(task))
                 self._running.add(running)

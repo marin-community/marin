@@ -151,6 +151,7 @@ TYPES = MappingProxyType(
         "data.sampling.kind": _literal(SamplingKind) + " | None",
         "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",
+        "data.sampling.source_column": 'Literal["data_source", "teacher_route", "family"]',
         "data.sampling.seed": "NonNegativeInt | None",
         "trainer.collective_phase_diagnostics": "bool | None",
         "generator.error_handling.passthrough_exceptions": "tuple[str, ...]",

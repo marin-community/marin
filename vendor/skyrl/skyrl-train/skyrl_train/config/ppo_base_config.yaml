@@ -11,10 +11,11 @@ data:
   shuffle: true
   preference_pair_format: text # text completions or tokenized conversations with assistant masks
   sampling:
-    kind: null # null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
-    domain_weights: {} # exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted
+    kind: null # null uses seeded passes with data.shuffle
+    domain_weights: {} # domain-weighted route shares, or adaptive-source reference shares (empty uses row counts)
+    source_column: data_source # adaptive-source bin label on each prepared training row
     decay: 0.95 # per-step multiplicative decay of bin sufficient stats
-    epsilon: 0.05 # per-bin probability floor (thompson/learnability/grade-prior)
+    epsilon: 0.05 # exploration mass (adaptive-source draws from the reference mixture)
     reversion_mass: 0.0 # per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak
     instance_decay: 0.7 # per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)
     prior_alpha: 1.0 # Beta prior for thompson (informative rate) and learnability (pass rate)

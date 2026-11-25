@@ -44,6 +44,9 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
+SAMPLING_SOURCE = "sampling_source"
+type SourceRejections = dict[int, collections.Counter[tuple[str, AdmissionRejection]]]
+
 
 @dataclass(frozen=True)
 class RolloutBufferConfig:
@@ -124,13 +127,16 @@ class GroupRewards:
     optimization: tuple[float, ...]
     outcome: tuple[float, ...]
     passed: bool
+    verified_scores: tuple[float | None, ...] | None = None
 
     @classmethod
     def from_batch(cls, batch: TrajectoryBatch) -> GroupRewards:
+        scores = normalized_verifier_scores(batch)
         return cls(
             optimization=tuple(NormalizedReward.from_output(reward).total for reward in batch["rewards"]),
             outcome=tuple(get_outcome_rewards(batch)),
             passed=any(get_trajectory_passes(batch)),
+            verified_scores=tuple(scores) if scores is not None else None,
         )
 
 
@@ -182,7 +188,6 @@ class RowFacts:
         rewards = GroupRewards.from_batch(batch)
         results = batch.get("verification_results")
         reward_sign_totals = tuple(float(np.sum(reward)) for reward in batch["rewards"])
-        scores = normalized_verifier_scores(batch)
         graded = frozenset(graded_row_indices(batch))
         policy_steps = batch.get("rollout_policy_steps")
         masks = [np.asarray(mask) for mask in batch["loss_masks"]]
@@ -235,7 +240,7 @@ class RowFacts:
             if results is not None
             else (None,) * count,
             graded=tuple(index in graded for index in range(count)),
-            verifier_scores=tuple(scores) if scores is not None else None,
+            verifier_scores=rewards.verified_scores,
             verifier_agents=tuple(
                 agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
                 for result in results
@@ -348,12 +353,23 @@ class GroupDisposition:
 
 
 @dataclass(frozen=True)
+class DiscardedCandidate:
+    """A filtered group's feedback awaiting the training step assigned to its batch."""
+
+    batch_id: int
+    uid: str
+    rewards: GroupRewards
+
+
+@dataclass(frozen=True)
 class BufferSnapshot:
     """Committed groups, prompts awaiting regeneration, and leases not yet committed, for a checkpoint."""
 
     ready: list[ReadyRollout]
     retries: list[dict]
     leases: frozenset[str]
+    discarded: tuple[DiscardedCandidate, ...] = ()
+    source_rejections: SourceRejections | None = None
 
 
 @dataclass(frozen=True)
@@ -399,18 +415,30 @@ class _SelectionStats:
 
     inspected: int = 0
     rejections: collections.Counter[AdmissionRejection] = field(default_factory=collections.Counter)
+    source_rejections: collections.Counter[tuple[str, AdmissionRejection]] = field(default_factory=collections.Counter)
     candidates: int = 0
     candidate_samples: int = 0
     samples_per_group: int | None = None
     optimization_reward_sum: float = 0.0
     outcome_reward_sum: float = 0.0
     passed: int = 0
-    dynamic_discarded: int = 0
+    discarded: list[DiscardedCandidate] = field(default_factory=list)
     judged: list[JudgedGroup] = field(default_factory=list)
 
-    def reject(self, rejection: AdmissionRejection) -> None:
+    def reject(self, rejection: AdmissionRejection, source: str | None, count: int = 1) -> None:
+        self.inspected += count
+        self.rejections[rejection] += count
+        if source is not None:
+            self.source_rejections[source, rejection] += count
+
+    def observe_judged(self, uid: str, rewards: GroupRewards) -> None:
         self.inspected += 1
-        self.rejections[rejection] += 1
+        self.judged.append(JudgedGroup(uid, rewards.optimization, rewards.verified_scores))
+
+    def discard(self, candidate: DiscardedCandidate) -> None:
+        self.observe_judged(candidate.uid, candidate.rewards)
+        self.observe_candidate(candidate.rewards)
+        self.discarded.append(candidate)
 
     def observe_candidate(self, rewards: GroupRewards) -> None:
         sample_count = len(rewards.optimization)
@@ -433,13 +461,17 @@ class _SelectionStats:
             "async/rejected_count": rejected,
             "async/rejected_rate": rejected / self.inspected,
             **{f"async/rejected_count/{reason.value}": self.rejections[reason] for reason in AdmissionRejection},
+            **{
+                f"curriculum/{source}/rejected/{reason.value}": count
+                for (source, reason), count in self.source_rejections.items()
+            },
         }
         if dynamic_sampling is DynamicSamplingType.FILTER:
             metrics.update(
                 {
                     "async/dynamic_sampling/candidate_count": self.candidates,
-                    "async/dynamic_sampling/discarded_count": self.dynamic_discarded,
-                    "async/dynamic_sampling/discarded_rate": self.dynamic_discarded / self.candidates,
+                    "async/dynamic_sampling/discarded_count": len(self.discarded),
+                    "async/dynamic_sampling/discarded_rate": len(self.discarded) / self.candidates,
                     "async/dynamic_sampling/candidate_trajectory_count": self.candidate_samples,
                     "async/dynamic_sampling/candidate_optimization_reward_mean": (
                         self.optimization_reward_sum / self.candidate_samples
@@ -743,7 +775,15 @@ class RolloutBuffer:
             for rollout in groups
         ]
         return BufferSnapshot(
-            ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases)
+            ready=[*admitted, *self._ready],
+            retries=list(self._retries),
+            leases=frozenset(self._leases),
+            discarded=tuple(candidate for stats in self._stats.values() for candidate in stats.discarded),
+            source_rejections={
+                batch_id: stats.source_rejections.copy()
+                for batch_id, stats in self._stats.items()
+                if stats.source_rejections
+            },
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
@@ -760,9 +800,14 @@ class RolloutBuffer:
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
+            for candidate in snapshot.discarded:
+                self._stats[candidate.batch_id].discard(candidate)
+            for batch_id, counts in (snapshot.source_rejections or {}).items():
+                for (source, reason), count in counts.items():
+                    self._stats[batch_id].reject(reason, source, count)
 
     def _reject(self, stats: _SelectionStats, rollout: ReadyRollout, rejection: AdmissionRejection) -> None:
-        stats.reject(rejection)
+        stats.reject(rejection, rollout.prompt.get(SAMPLING_SOURCE))
         self._dispose(rollout, rejection.value)
 
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
@@ -804,14 +849,13 @@ class RolloutBuffer:
             elif any(admitted_rollout.verdict.uid == verdict.uid for admitted_rollout in batch):
                 self._reject(stats, rollout, AdmissionRejection.DUPLICATE_UID)
             else:
-                stats.inspected += 1
-                stats.judged.append(JudgedGroup(verdict.uid, verdict.rewards.optimization))
-                if self.config.dynamic_sampling is DynamicSamplingType.FILTER:
-                    stats.observe_candidate(verdict.rewards)
                 if verdict.selection is not GroupSelectionResult.KEEP:
-                    stats.dynamic_discarded += 1
+                    stats.discard(DiscardedCandidate(batch_id, verdict.uid, verdict.rewards))
                     self._dispose(rollout, verdict.selection.value)
                     continue
+                stats.observe_judged(verdict.uid, verdict.rewards)
+                if self.config.dynamic_sampling is DynamicSamplingType.FILTER:
+                    stats.observe_candidate(verdict.rewards)
                 batch.append(rollout)
                 admitted[batch_id] += 1
                 if batch_id == self._policy_step:

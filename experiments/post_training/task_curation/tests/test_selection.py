@@ -709,6 +709,27 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
+def test_generator_allowlist_preserves_other_sources_and_excludes_unselected_tasks(tmp_path):
+    settings = recipe(tmp_path).model_copy(
+        update={
+            "source_limits": {"fixture:first": 1, "fixture:second": 1},
+            "grader_task_names": {"fixture:first": ("chain_sum",)},
+        }
+    )
+    generated = []
+    for name in ("chain_sum", "spell_backward"):
+        config = inline_resource("config.json", json.dumps({"contract": {"task": name}}).encode())
+        generated.append(source_task(name).model_copy(update={"resources": ResourceGroups(verifier=(config,))}))
+    curated = {
+        "fixture:first": admitted_source(tmp_path / "first", generated),
+        "fixture:second": admitted_source(tmp_path / "second", [source_task("calendar")]),
+    }
+    output = run(task_selection_step(curated, settings))[0]
+    assert {task.id for task in read_tasks(Path(output.path) / TRAIN_FILENAME)} == {"chain_sum", "calendar"}
+    counts = json.loads((Path(output.path) / "summary.json").read_text())["source_counts"]
+    assert counts["fixture:first"]["excluded"] == 1
+
+
 @pytest.mark.parametrize(
     "failure,cause",
     [

@@ -75,7 +75,7 @@ _DSPARK = sections.SpeculativeDecoding(
     num_speculative_tokens=4,
 )
 
-_DEFAULT_MODEL = ArtifactHfModel(
+DATAKIT_SFT_2026_09_21 = ArtifactHfModel(
     ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
     ),
@@ -254,7 +254,7 @@ _snowball = partial(
     Preset,
     revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
-    model=_DEFAULT_MODEL,
+    model=DATAKIT_SFT_2026_09_21,
     default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",

@@ -46,11 +46,13 @@ class PromptGroupDataset(Protocol):
 class JudgedGroup:
     """A prompt group that batch selection judged in one step, kept or discarded, with its per-sample rewards.
 
-    ``uid`` is the dataset row the group was generated from.
+    ``uid`` is the filtered dataset row. ``rewards`` carries the optimization signal.
+    Missing verifier grades stay absent from ``verified_scores`` even when training assigns a penalty.
     """
 
     uid: str
     rewards: tuple[float, ...]
+    verified_scores: tuple[float | None, ...] | None
 
 
 class PromptOrder(Protocol):

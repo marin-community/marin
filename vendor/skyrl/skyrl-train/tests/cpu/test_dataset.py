@@ -15,7 +15,8 @@ from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMI
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
-from skyrl_train.rollouts.context import TrainingContext
+from skyrl_train.rollouts.context import TrainingContext, prompt_order_from_config
+from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer
@@ -29,6 +30,48 @@ from tests.cpu.task_specs import NATIVE_ENVIRONMENT, text_task, write_selection_
 class _StubTokenizer:
     def apply_chat_template(self, messages, add_generation_prompt):
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
+
+
+def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume(tmp_path):
+    tasks = [
+        text_task("too-long", prompt="x" * 300, source="excluded"),
+        *(text_task(f"math-{i}", source="math") for i in range(5)),
+        *(text_task(f"logic-{i}", source="logic") for i in range(8)),
+    ]
+    path = tmp_path / "train.parquet"
+    pq.write_table(pa.table({TASK_SPEC_COLUMN: [task.model_dump_json() for task in tasks]}), path)
+    config = get_default_config()
+    config.trainer.train_batch_size = 4
+    config.generator.n_samples_per_prompt = 2
+    config.data.sampling.kind = "adaptive-source"
+    config.data.sampling.epsilon = 0.2
+    OmegaConf.update(config, "data.sampling.domain_weights", {"math": 1, "logic": 1}, force_add=True)
+    dataset = SourceTaskDataset(
+        [str(path)], _StubTokenizer(), 100, environment_configs=OmegaConf.to_container(config.environment.task_sessions)
+    )
+    order = prompt_order_from_config(config, dataset)
+    groups = [
+        # Optimization rewards credit answer formatting on math, which has no verifier spread.
+        JudgedGroup("0", (0.0, 0.8), (1.0, 1.0)),
+        JudgedGroup("5", (0.0, 0.0), (0.5, 0.9)),
+        JudgedGroup("6", (0.0, 0.5), (None, 0.5)),
+    ]
+    metrics = order.observe(groups)
+    # Beta(1,1) plus one observation yields means of 1/3 and 2/3.
+    assert metrics["curriculum/math/weight"] == pytest.approx(0.1 + 0.8 / 3)
+    assert metrics["curriculum/logic/graded_groups"] == 1
+    assert metrics["curriculum/logic/groups"] == 2
+    first = order.next_index()
+    resumed = prompt_order_from_config(config, dataset)
+    resumed.load_state_dict(order.state_dict())
+    tail = [order.next_index() for _ in range(3)]
+    assert tail == [resumed.next_index() for _ in range(3)]
+    assert len({first, *tail}) == 4
+    assert resumed.observe(groups) == order.observe(groups)
+    draws = [order.next_index() for _ in range(400)]
+    assert draws == [resumed.next_index() for _ in range(400)]
+    assert sum(index >= 5 for index in draws) > 225
+    assert all(len(set(draws[pos : pos + 4])) == 4 for pos in range(0, len(draws), 4))
 
 
 @pytest.mark.parametrize("native", [False, True])

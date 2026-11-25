@@ -188,6 +188,57 @@ presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs 
 These training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
+## Four-source Snowball sampler experiment
+
+The opt-in `experiments.post_training.snowball_sampler` entry trains the Datakit SFT checkpoint
+(`fe666478454e79fe6027a0bab0388d9abd68f51a`) on 1,024 tasks. The preparation step samples
+256 tasks each from generated arithmetic, scheduling, instruction-following calendar, and
+structured JSON. Arithmetic uses the named `chain_sum`, `base_conversion`, `basic_arithmetic`,
+and `leg_counting` generator contracts. The builder reuses the admitted source roots recorded in
+`snowball-100k@2026.11.19.1`, removes overlaps with its 910-task development panel and all 1,500
+`eval-lite@2026.11.17.1` tasks, and verifies each family quota before publication.
+
+Use the eastern CoreWeave credentials for the selection and plan, and the normal Snowball W&B
+credentials for submission. Prepare once from the branch containing the sampler:
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+uv run python -m experiments.post_training.task_curation.snowball_sampler_selection --run
+uv run python -m experiments.post_training.snowball_sampler --preset smoke-adaptive \
+  --version 2026.11.25.1 --priority interactive --issue 12201 --plan
+```
+
+Both arms use 40 H100s at interactive priority, 128 groups of four per optimizer update, up to
+32 simultaneous rollout groups and at most 384 untrained groups with two updates of staleness.
+Both use the same family-aware sampler and equal reference shares. The fixed arm puts all its
+draw probability on those reference shares. The adaptive arm uses 20% reference exploration,
+decay 0.95 and a Beta(1, 1) prior. In both arms, EvalLite's 100 active tasks are greedy and frozen.
+
+Run the four-update smokes first. Inspect scored coverage at steps 0, 2 and 4, the committed
+checkpoint and export, and the family weights and observations after the first dispatch window.
+Continue to the twenty-update pilots once these checks pass:
+
+```bash
+for arm in smoke-fixed smoke-adaptive; do
+  uv run python -m experiments.post_training.snowball_sampler --preset "$arm" \
+    --version 2026.11.25.1 --priority interactive --issue 12201 --run --wait || break
+done
+```
+
+```bash
+for arm in pilot-fixed pilot-adaptive; do
+  uv run python -m experiments.post_training.snowball_sampler --preset "$arm" \
+    --version 2026.11.25.1 --priority interactive --issue 12201 --run --wait || break
+done
+```
+
+Compare paired task scores at steps 0, 10 and 20 with per-family coverage. The step-20 exports
+give a fixed-update comparison. Record GPU-hours, total generated tokens including rejected groups,
+and family shares for each arm. A second adaptive arm can set `--set data.sampling.epsilon=0.1`.
+For a confirmatory run, predeclare a common gross-token cap and retain intermediate checkpoints.
+Use each arm's closest checkpoint below the cap and report both token counts. Claim a matched
+budget only when the counts differ by at most 5% of the smaller count.
+
 ## Dashboard publication
 
 Publish a stored attempt after an app release, without starting native work:

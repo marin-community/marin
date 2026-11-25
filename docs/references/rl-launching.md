@@ -299,6 +299,38 @@ the rollout window can use distinct prompts. A rejected group releases a slot in
 Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
 family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
 
+Set `data.sampling.kind=adaptive-source` to favor sources whose answers receive different
+verifier scores within a prompt group. `source_column` selects the prepared row label
+(`data_source` by default, `family` for labeled task sets, or `teacher_route` for stamped
+Parquet). `domain_weights` sets the reference shares. An empty map uses the filtered row
+counts. At least two answers per prompt are required.
+
+After each update, the sampler discounts earlier counts by `decay` and adds one observation
+per fully verified group, including groups discarded by dynamic sampling. It weights each
+source's reference share by its estimated mixed-group rate under a Beta prior
+(`prior_alpha`, `prior_beta`), then reserves `epsilon` of the total mass for the reference
+mix. Set `epsilon=1` for a fixed-share control with the same draw and checkpoint behavior.
+Source draws are stochastic, and rows are unique within a draw window. In-flight prompts,
+source sizes and admission can change the realized mix. The `curriculum/<source>/` metrics
+use these denominators:
+
+- `proposed_rows` counts sampler draws since the last feedback update, including rows
+  skipped because their UID is live or quarantined. `assigned_groups` counts actual
+  dispatches over that interval, including retries and loader scans. Regenerating an
+  interrupted group creates a new assignment.
+- `rejected/<reason>` counts completed groups rejected before feedback, attributed to the
+  batch that inspected them. Reasons include fully masked, too few eligible answers, stale
+  and duplicate UIDs. Absent rejection keys count as zero.
+- `groups` counts groups judged for the batch, including dynamic-filter discards.
+  `graded_groups` counts those with complete verifier scores. `informative_groups` counts
+  fully graded groups with at least two different scores. `weight` is the next target share.
+
+With asynchronous prefetch, assignments and judgments in one update can refer to different
+groups. With `trainer.dump_grader_report=true`, the training section of
+`grader_report.json` reports per-subset verifier and rollout failures. Join its
+`training_tasks` counts to the selection manifest by task ID to compute per-source
+verified coverage across completed answers, including groups rejected by admission.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,

@@ -161,6 +161,8 @@ class SelectionRecipe(BaseModel):
     sources: dict[str, str]
     family_limits: dict[str, PositiveInt]
     source_limits: dict[str, PositiveInt] | None = None
+    # Generated sources can contain several task types with different rule graders.
+    grader_task_names: dict[str, tuple[str, ...]] = Field(default_factory=dict, exclude_if=lambda names: not names)
     heldout: tuple[HeldoutSource, ...]
     exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
@@ -176,6 +178,8 @@ def _selection_recipe_fingerprint(recipe: SelectionRecipe) -> dict[str, Any]:
         fields.pop("admitted_graders")
     if not recipe.released:
         fields.pop("released")
+    if not recipe.grader_task_names:
+        fields.pop("grader_task_names")
     recipe_type = type(recipe)
     return {"__repr__": f"{recipe_type.__module__}.{recipe_type.__qualname__}", "vars": fields}
 
@@ -610,6 +614,10 @@ def write_training(
             for task, task_json in rows:
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
+                if source.source_id in config.recipe.grader_task_names:
+                    if _grader_contract(task)["task"] not in config.recipe.grader_task_names[source.source_id]:
+                        source_counts.excluded += 1
+                        continue
                 grader = _grader_kind(task)
                 if grader not in config.recipe.admitted_graders:
                     raise ValueError(f"Training selection does not admit {grader} graders: {task.id}")
@@ -808,7 +816,12 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
         if recipe.source_limits is not None
         else None
     )
-    recipe = recipe.model_copy(update={"sources": _canonical_ids(recipe.sources), "source_limits": limits})
+    task_names = {canonical_source_id(key): names for key, names in recipe.grader_task_names.items()}
+    recipe = recipe.model_copy(
+        update={"sources": _canonical_ids(recipe.sources), "source_limits": limits, "grader_task_names": task_names}
+    )
+    if unknown := task_names.keys() - recipe.sources.keys():
+        raise ValueError(f"Grader task names refer to unknown sources: {sorted(unknown)}")
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
