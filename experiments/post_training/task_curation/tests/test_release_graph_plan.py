@@ -11,6 +11,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.graph as graph
 from experiments.post_training.task_curation.release_stages.graph import (
+    ReleasePlan,
+    _plan_document_data,
     load_plan,
     plan_fingerprint,
     plan_ref,
@@ -78,6 +80,24 @@ def test_plan_fingerprint_is_stable_and_content_bound():
     plan = fixture_plan()
     assert plan_fingerprint(plan) == plan_fingerprint(fixture_plan())
     assert plan_fingerprint(plan) != plan_fingerprint(fixture_plan(expected_source_count=3))
+
+
+def test_plan_document_bytes_are_stable_across_new_optins():
+    """A plan that predates an opt-in reseals byte-identically.
+
+    The canonical document omits unset opt-ins, so adding an opt-in to the model
+    never moves a sealed plan: the in-flight cut's write-once plan document stays
+    valid and every fingerprint that binds it is unchanged.
+    """
+    legacy = json.loads(fixture_plan().model_dump_json())
+    legacy.pop("main_source_sync")
+    document = (json.dumps(legacy, indent=2, sort_keys=True) + "\n").encode()
+    resealed = (
+        json.dumps(_plan_document_data(ReleasePlan.model_validate_json(document)), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    assert resealed == document
+    opted_in = fixture_plan(main_source_sync={"main_source_revision": "b" * 40})
+    assert "main_source_sync" in _plan_document_data(opted_in)
 
 
 def test_registered_difficulty_seal_binds_only_the_named_release(tmp_path, monkeypatch):

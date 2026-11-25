@@ -34,6 +34,8 @@ from experiments.post_training.task_curation.source import (
 )
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.server import license_registry, licensing
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned, source_license_ban
 
 FIXTURE_COHORT_REPO = "open-athena/fixture-tasks"
 FIXTURE_COHORT_REVISION = "a" * 40
@@ -112,6 +114,7 @@ def _inject_offline_prebuilt_registries(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
 
+@pytest.mark.data_integration
 @pytest.mark.parametrize(
     "source_id,dataset",
     [
@@ -120,6 +123,12 @@ def _inject_offline_prebuilt_registries(monkeypatch: pytest.MonkeyPatch) -> None
     ],
 )
 def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog(monkeypatch, source_id, dataset):
+    """The staged lean sources wait for measurement outside the assembled catalog.
+
+    The offline staging assertions live on the main-sync test beside this one;
+    this one assembles the real catalog, which reads the private registry
+    archive, so it runs in the data-integration lane.
+    """
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": []})
     _inject_offline_prebuilt_registries(monkeypatch)
     pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
@@ -129,6 +138,60 @@ def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog
     assert source.info.within_source_dedup is None
     assert source.info.lexical_contamination is None
     assert source.info.id not in {source.info.id for source in source_catalog.configured_sources()}
+
+
+@pytest.mark.data_integration
+def test_main_sync_sources_stay_out_of_the_served_catalog():
+    """The staged main-sync ids are absent from the assembled served catalog.
+
+    The offline staging test above pins the mechanism (the hold set and the
+    intake listing); this one assembles the real catalog, which reads the
+    private registry archive, and pins the served-set outcome.
+    """
+    served = set(all_sources())
+    configured = {source.info.id for source in source_catalog.configured_sources()}
+    for source_id in source_catalog.MAIN_SYNC_PENDING_IDS:
+        assert source_id not in served, source_id
+        assert source_id not in configured, source_id
+
+
+@pytest.mark.parametrize("source_id", sorted(source_catalog.MAIN_SYNC_STAGED_IDS))
+def test_main_sync_sources_stage_for_r41_intake_outside_the_served_catalog(source_id):
+    """Main-sync sources stage for R41 intake; they never enter the served catalog.
+
+    The 2026-11-25 main-sync landing: origin/main declares 20 training sources the
+    Atlas r39 cut does not carry under any ID. They enter through the standing
+    pending mechanism only — staged for intake at their main pins until ingest
+    qualifies them — and none is wired into the served declarations (the release
+    lane freezes any wired source mid-cut).
+    """
+    pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    source = pending[source_id]
+    assert source.info.id in source_catalog.R41_PENDING_SOURCE_IDS
+    # Staged declarations bind no admission evidence yet: intake measures them.
+    assert source.info.actor_census_input is None
+    assert source.info.within_source_dedup is None
+    assert source.info.lexical_contamination is None
+
+
+@pytest.mark.parametrize("source_id", sorted(source_catalog.MAIN_SYNC_BANNED_IDS))
+def test_kto_components_are_license_banned_and_stage_nowhere(source_id, monkeypatch):
+    """The KTO components are banned at their pin (doubt-means-ban ruling, #11497).
+
+    trl-lib/kto-mix-14k @4470f033 declares no license anywhere on its card, so the
+    standing doubt rule bans the three components: admission refuses them and they
+    stage nowhere — not the served declarations and not the intake queue. The ban
+    lifts only with a recorded permissive grant at the pin.
+    """
+    # The autouse evaluation fixture blanks the ban registry; this test pins the
+    # real registry's decision, so restore it (and its cache) around the check.
+    monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
+    licensing.license_bans.cache_clear()
+    assert source_id not in {source.info.id for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    ban = source_license_ban(source_id, None)
+    assert ban is not None and ban.classification == "missing"
+    with pytest.raises(ValueError, match="License banned"):
+        require_unbanned(source_id, None)
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -> RlDataSource:

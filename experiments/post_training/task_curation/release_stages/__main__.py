@@ -186,6 +186,10 @@ def mode_run(args, *, force_run_failed: bool) -> int:
         # An unrestricted run builds the terminal stage, which transitively
         # builds every node; the plan document is its first dependency.
         handles.append(graph.terminal)
+        # The main-source sync is a plan-gated leaf outside the terminal's edges:
+        # a plan that opts in runs it on every build; other plans never touch it.
+        if plan.main_source_sync is not None:
+            handles.append(graph.stages["main_source_sync"])
     run_handles(*handles, force_run_failed=force_run_failed, max_concurrent=args.max_concurrent)
     verb = "RESUME" if force_run_failed else "RUN"
     print(f"{verb} {plan.release_id}: {len(handles) - 1} terminal handle(s) built")

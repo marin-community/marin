@@ -636,6 +636,43 @@ establishes availability. Stage j means the final qualified release. Sources wit
 `private_always` restriction stay in their private store: publication helpers refuse
 their upload, even to a private release repository.
 
+### Release pipeline: main-source sync
+
+The `atlas-release` pipeline carries a plan-gated `main_source_sync` stage that
+keeps the Atlas aware of the training sources origin/main declares
+([main-source sync stage](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/release_stages/main_sources.py)).
+Every release plan shows the node in `plan` and `status`; a plan opts in by
+declaring `main_source_sync: {"main_source_revision": "<40-hex origin/main sha>"}`
+(and optionally `queue_path`), and an unrestricted `run` then executes the stage on
+every build. A plan without the opt-in never executes it: the node hangs outside
+the terminal's dependency edges, so opting in or out moves no other stage's
+fingerprint and cannot disturb an in-flight cut.
+
+Each run:
+
+1. Archives the pinned origin/main revision into a temporary tree (the checkout
+   must already contain it — fetch `origin/main` first) and evaluates main's
+   `all_sources()` under that tree's own uv environment.
+2. Canonicalizes every main ID through the alias table and diffs the training
+   sources (`intended_use=train`; eval-side sources are counted in the report, not
+   queued) against the build's declared set plus the Atlas's standing decisions:
+   staged pending intake, retired admissions, license bans and metadata
+   exclusions. A source in any of these never re-queues.
+3. Seals a typed report — ID, dataset pin, task count, task format, restriction
+   and license field per new source — write-once under
+   `<release_root>/main-source-sync/`, bound into the release's graph receipt. A
+   rerun reuses the sealed report and records only its own proof.
+4. Appends each new source to the ingest queue (`CANDIDATES.md` under the ingest
+   directory, relocated with `ATLAS_MAIN_SYNC_QUEUE`) as one unclaimed `P1` row,
+   under the queue's `.candidates.lock`. The append is idempotent: a source the
+   table already names is skipped, so repeat runs and later builds make no
+   duplicate rows.
+
+The stage never auto-admits a source, never removes one, and never edits a
+declaration: new sources reach the Atlas only when a landing stages them through
+the [pending source intake](#pending-source-intake) mechanism, exactly like a
+hand-run intake.
+
 ### Repair of an Excluded source or task
 
 Start from the exact excluded pin and its typed claims. Diagnose each claim with
@@ -1756,6 +1793,21 @@ is also pending these measurements. Its converter and human-reference proof
 controls remain available for intake; Atlas catalog registration requires the
 same evidence. Numina intake must verify its source license before running
 those measurements.
+
+The 2026-11-25 main-source-sync landing stages seventeen further sources origin/main
+declares that the Atlas r39 cut does not carry under any ID: the four Anthropic
+hh-rlhf subsets, the three TaskTrove declared-but-not-live judge sources (glaive,
+tezos, structured-outputs-v4 — mechanically retired graders, so they queue with no
+pipeline and stay out of the catalog until their graders qualify) and nine
+Nemotron-RL-Ultra-Training-Blends MOPD components, plus NuminaMath-LEAN above. They
+hold in `R41_PENDING_SOURCE_IDS`, render in the status page's pending rows at their
+computed stage, and enter the served declarations only through the normal admission
+chain. The three TRL KTO components from the same main declaration set are not
+staged: their pinned upstream `trl-lib/kto-mix-14k@4470f033` declares no license, so
+the [doubt-means-ban ruling](https://github.com/marin-community/marin/issues/11497)
+bans them (license registry `2026.11.25.a-main-sync.1`, metadata-exclusion rows with
+typed `license-missing` claims). The ban lifts only with a recorded permissive grant
+at the pin.
 
 ## Declarations
 
@@ -5404,4 +5456,4 @@ RL-to-SFT conversion is its own workflow. The prompt/response reformatter in
 from pinned existing responses. Teacher generation, when needed, runs before
 this reformatting step and supplies pinned outputs. The conversion receipt grants
 no method tag. Prepare and register the child with Datakit before assigning SFT;
-see [Datakit registration](../../experiments/datakit/README.md#sft-registration-receipt).
+see [Datakit registration](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/datakit/README.md#sft-registration-receipt).

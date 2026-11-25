@@ -88,6 +88,7 @@ RUNNABLE_NODES = frozenset(
 )
 
 BLOCK_REASONS: dict[str, str] = {
+    "main_source_sync": "needs the build's sealed declarations document",
     "compose_manifest": "needs the real embed release/coverage receipts",
     "curriculum_compose": "needs the sealed composition manifest and the real census receipt",
     "text_scan_region": "needs the composed handoff document",

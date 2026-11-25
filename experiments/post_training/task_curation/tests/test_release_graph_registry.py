@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.tests.release_graph_fixtures import
 
 EXPECTED_NODES = (
     "declarations",
+    "main_source_sync",
     "admission_check",
     "census_inputs",
     "census",

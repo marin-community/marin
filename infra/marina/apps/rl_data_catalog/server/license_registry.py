@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.22.b-license-exclusions.1",
+  "version": "2026.11.25.a-main-sync.1",
   "bans": [
     {
       "source_id": "FWeindel:validated-tasks/tmax11-v1.1",
@@ -786,6 +786,57 @@ LICENSE_BANS = r"""{
         "https://github.com/marin-community/marin/issues/11497"
       ],
       "decided_at": "2026-11-22T22:05:21.992865+00:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+      "upstream_id": "trl-lib/kto-mix-14k",
+      "upstream_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "trl-lib/kto-mix-14k declares no license at the pin; standing doubt rule is binding.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-25T09:30:00-05:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+      "upstream_id": "trl-lib/kto-mix-14k",
+      "upstream_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "trl-lib/kto-mix-14k declares no license at the pin; standing doubt rule is binding.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-25T09:30:00-05:00",
+      "decision_by": "user standing rule via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+      "upstream_id": "trl-lib/kto-mix-14k",
+      "upstream_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "trl-lib/kto-mix-14k declares no license at the pin; standing doubt rule is binding.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+        "https://github.com/marin-community/marin/issues/11497"
+      ],
+      "decided_at": "2026-11-25T09:30:00-05:00",
       "decision_by": "user standing rule via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     }

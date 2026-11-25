@@ -199,6 +199,35 @@ fingerprints are skipped (pruned by the runner); failed stages restart alone; a
 changed plan fingerprint is a hard refusal (bump `artifact_version` and use a fresh
 release prefix instead of mixing recipes).
 
+## The main-source sync stage
+
+`main_source_sync` keeps the release aware of the training sources origin/main
+declares. The node is wired into the graph for every plan (visible in `plan` and
+`status`), but it is strictly plan-gated: a plan opts in by declaring
+
+```json
+"main_source_sync": {"main_source_revision": "<40-hex origin/main sha>", "queue_path": null}
+```
+
+(`queue_path` relocates the ingest queue; the operator default follows the
+watchdog-feed pattern and `ATLAS_MAIN_SYNC_QUEUE` overrides it.) A plan without
+the opt-in never executes the node — it hangs outside the terminal's dependency
+edges, so opting in or out moves no other stage's fingerprint — and an
+unrestricted `run` executes it on every build whose plan opts in.
+
+Each run evaluates main's `all_sources()` at the pinned revision (the checkout
+must contain it — `git fetch origin main` first), canonicalizes IDs through the
+alias table, and diffs the training sources against the build's declared set plus
+the Atlas's standing decisions (pending intake, retired admissions, license bans,
+metadata exclusions). It seals a typed report write-once under
+`<release_root>/main-source-sync/` (bound into the release's graph receipt) and
+appends each new source to the ingest queue as one unclaimed `P1` row under the
+queue's `.candidates.lock`. It never auto-admits, never removes sources and never
+edits a declaration; the append is idempotent (a source the table already names is
+skipped), so repeat runs and later builds make no duplicate rows. Its preflight is
+the upstream-witness receipt over the sealed declarations, so it prefights after
+`declarations` has run.
+
 ## Where artifacts land
 
 - Release documents and stage receipts: `<release_root>/<stage>/…`, sealed

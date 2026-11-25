@@ -117,6 +117,9 @@ from experiments.post_training.task_curation.release_stages import (
     identity_backend_compose as identity_backend_compose_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
+    main_sources as main_source_sync_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
     marina_release as marina_release_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
@@ -256,6 +259,7 @@ class ReleasePlan(BaseModel):
     rebound_source: str = ""
     rebound_tasks: int = 0
     removed_sources: tuple[str, ...] = ()
+    main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
     slice_output_root: str = ""
     validation_grading_environments: dict[str, dict]
@@ -303,12 +307,27 @@ class ReleasePlan(BaseModel):
                 raise ValueError(f"scan region {label!r} needs a non-empty '/'-suffixed prefix")
         if not self.embed_cache_root or not self.package_output_root:
             raise ValueError("embed_cache_root and package_output_root are required")
+        if self.main_source_sync is not None and self.main_source_sync.queue_path == "":
+            raise ValueError("main_source_sync.queue_path must be a path or unset, not an empty string")
         self.service.validate_shape()
         self.measured.validate_shape()
         if len(self.previously_available) != len(set(self.previously_available)):
             raise ValueError("previously_available repeats a source id")
         if self.rebound_tasks < 0 or (bool(self.rebound_source) != (self.rebound_tasks > 0)):
             raise ValueError("rebound pins must be empty (no rebound) or a source with a positive task count")
+
+
+def _plan_document_data(plan: ReleasePlan) -> dict:
+    """The canonical plan document bytes' source: the model dump, with unset opt-ins absent.
+
+    A plan that predates an optional opt-in reseals byte-identically: the field is
+    absent from the document rather than serialized as null, so adding an opt-in to
+    the model never moves a sealed plan or any fingerprint that binds it.
+    """
+    data = plan.model_dump(mode="json")
+    if plan.main_source_sync is None:
+        data.pop("main_source_sync", None)
+    return data
 
 
 def load_plan(path: Path) -> ReleasePlan:
@@ -327,7 +346,7 @@ def load_plan(path: Path) -> ReleasePlan:
 
 def plan_fingerprint(plan: ReleasePlan) -> str:
     """The digest of the canonical plan document; the identity its stages carry."""
-    document = json.dumps(plan.model_dump(mode="json"), sort_keys=True)
+    document = json.dumps(_plan_document_data(plan), sort_keys=True)
     return hashlib.sha256(document.encode()).hexdigest()
 
 
@@ -348,7 +367,7 @@ def stage_output_root(plan: ReleasePlan, stage: str) -> str:
 
 def write_plan(plan: ReleasePlan, release_root: str) -> dict:
     """Seal the release plan document write-once; the graph's first artifact."""
-    raw = (json.dumps(plan.model_dump(mode="json"), indent=2, sort_keys=True) + "\n").encode()
+    raw = (json.dumps(_plan_document_data(plan), indent=2, sort_keys=True) + "\n").encode()
     path = StoragePath(f"{release_root}/release-plan.json")
     if path.exists():
         if path.read_bytes() != raw:
@@ -619,6 +638,11 @@ def _execute_exposure_probe(config: dict) -> dict:
     return exposure_probe_stage.run_exposure_probe(inputs, dry_run=False)
 
 
+def _execute_main_source_sync(config: dict) -> dict:
+    inputs = typed_inputs(main_source_sync_stage.MainSourceSyncInputs, config)
+    return main_source_sync_stage.run_main_source_sync(inputs, dry_run=False)
+
+
 _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "census_inputs": _execute_census_inputs,
     "compose_manifest": _execute_compose_manifest,
@@ -646,6 +670,7 @@ _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "marina_release": _execute_marina_release,
     "hosted_check": _execute_hosted_check,
     "exposure_probe": _execute_exposure_probe,
+    "main_source_sync": _execute_main_source_sync,
 }
 
 
@@ -781,7 +806,7 @@ def _seal_compose_manifest(
 
 
 def _plan_document_step(plan: ReleasePlan) -> ArtifactStep[PlanDocument]:
-    document = plan.model_dump(mode="json")
+    document = _plan_document_data(plan)
 
     def build_config(_ctx: StepContext) -> dict:
         return {"plan": document}
@@ -1011,6 +1036,17 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         ("marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
         False,
     ),
+    # The main-source sync is a plan-gated leaf: it never joins another stage's
+    # dependency edges, so plans that opt out keep every existing fingerprint. A
+    # plan opts in through `main_source_sync`; without it the node refuses to run.
+    "main_source_sync": StageSpec(
+        "main_source_sync",
+        "main_source_sync",
+        main_source_sync_stage.__name__,
+        ("declarations",),
+        False,
+        receipt_key="report",
+    ),
 }
 
 
@@ -1124,6 +1160,41 @@ def _resolved_proof(ctx: StepContext, handle: ArtifactStep) -> dict:
 
 
 # --- declarations and the admission gate --------------------------------------
+
+
+def _main_source_sync_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    """The plan-gated main-source sync leaf: report main's new sources, queue them.
+
+    Every plan carries the node so the graph shape is stable, but only a plan that
+    declares ``main_source_sync`` can execute it: the inputs carry no pinned main
+    revision otherwise, and the stage refuses. It depends on nothing but the sealed
+    declarations and nothing depends on it, so opting in or out never moves another
+    stage's fingerprint.
+    """
+    spec = _STAGE_SPECS["main_source_sync"]
+    identity = _identity_fields(plan, "release_id", "source_revision", "main_source_sync")
+
+    def build_inputs(ctx: StepContext) -> dict:
+        if plan.main_source_sync is None:
+            raise ValueError("plan declares no main_source_sync opt-in; the main-source sync stage cannot run")
+        return {
+            "release_id": plan.release_id,
+            "source_revision": plan.source_revision,
+            "main_source_revision": plan.main_source_sync.main_source_revision,
+            "declarations": _resolved_receipt(ctx, declarations),
+            "report_root": stage_output_root(plan, "main-source-sync"),
+            "queue_path": plan.main_source_sync.queue_path,
+        }
+
+    return _stage_step(
+        plan,
+        "main_source_sync",
+        spec,
+        (declarations,),
+        build_inputs=build_inputs,
+        identity=identity,
+        inputs_type=main_source_sync_stage.MainSourceSyncInputs,
+    )
 
 
 def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> ArtifactStep[StageReceipt]:
@@ -2101,6 +2172,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     plan_handle = _plan_document_step(plan)
 
     declarations = _declarations_step(plan, plan_handle)
+    main_sync = _main_source_sync_step(plan, declarations)
     census_inputs = _census_inputs_step(plan, declarations)
     backend_validation = _backend_validation_step(plan, census_inputs)
     identity_backend = _identity_backend_compose_step(plan, backend_validation)
@@ -2133,6 +2205,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
 
     stages: dict[str, ArtifactStep] = {
         "declarations": declarations,
+        "main_source_sync": main_sync,
         "admission_check": admission_check,
         "census_inputs": census_inputs,
         "census": census,
@@ -2179,7 +2252,12 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
 
 
 def graph_nodes(graph: ReleaseGraph) -> list[dict]:
-    """The lowered graph as display data: one row per node with its dependencies."""
+    """The lowered graph as display data: one row per node with its dependencies.
+
+    The plan-gated main-source sync leaf hangs outside the terminal's edges, so it
+    is appended after the reachable nodes: every build sees the node it can opt
+    into, whether or not its plan does.
+    """
     nodes: list[dict] = []
     memo: set[int] = set()
 
@@ -2199,4 +2277,7 @@ def graph_nodes(graph: ReleaseGraph) -> list[dict]:
         )
 
     visit(graph.terminal)
+    sync = graph.stages.get("main_source_sync")
+    if sync is not None:
+        visit(sync)
     return nodes

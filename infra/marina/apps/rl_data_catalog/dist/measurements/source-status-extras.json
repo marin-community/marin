@@ -1202,7 +1202,7 @@
       "origin": "SWE-rebench",
       "upstream_dataset": "ibragim-bad/SWE-rebench-V2.1",
       "upstream_url": null,
-      "notes": "Repaired from the original author's re-verified ibragim-bad/SWE-rebench-V2.1@26c0145ded93168b0d5d095420155901ad2d5a2f (license PASS cc-by-4.0); ten consolidated shared base images replace the per-task digest-pinned images, the upstream combine.Dockerfile.j2 build step becomes the declared task-start setup, and the source's own Harbor verifier grades behind the SWE_REBENCH shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel unchanged). Fidelity-gated per group against the upstream digest images before the full population run; per-version toolchains and interpreter provisioning are declared base properties. Pending qualification.",
+      "notes": "Repaired from the original author's re-verified ibragim-bad/SWE-rebench-V2.1@26c0145ded93168b0d5d095420155901ad2d5a2f (license PASS cc-by-4.0); ten consolidated shared base images replace the per-task digest-pinned images, the upstream combine.Dockerfile.j2 build step becomes the declared task-start setup, and the source's own Harbor verifier grades behind the SWE_REBENCH shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel unchanged). Fidelity-gated per group against the upstream digest images before the full population run; per-version toolchains and interpreter provisioning are declared base properties. Declared limits deviate from the upstream source declaration (6 CPUs / 24,576 MB / 32,768 MB storage, recorded verbatim in convert.py): the emitted execution limits are Daytona's per-sandbox cap (4 CPUs / 8,192 MB / 10,240 MB, the setup deadline 3600 s), reduced by the approved user decision 2026-11-25 (reason: the upstream spec exceeds the Daytona 4/8/10 per-sandbox cap; evidence: the fidelity gate ran the full population at 4 CPUs, where every admitted row passed its NoP 0.0 + oracle 1.0 trials). Pending qualification.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
@@ -1321,7 +1321,7 @@
       "origin": "FACET-Terminal",
       "upstream_dataset": "FACET-Terminal/FACET-Terminal-Tasks-6k",
       "upstream_url": "https://huggingface.co/datasets/FACET-Terminal/FACET-Terminal-Tasks-6k/tree/b2d02645932e3989c8332a41e57d0f0855de7002",
-      "notes": "Canonical TaskSpecs at the contract-repair pin; pending the repaired chain's controls re-derivation, SAMPLE qualification and admission.",
+      "notes": "ADMIRATION state (coordinator ruling 2026-11-25 08:12 EST): admitted. The repaired chain completed: the canonical controls (5,961 of 6,010 at the oracle-filtered private release open-athena/facet-terminal-tasks-6k-oracle-filtered-20261124-contract-v1 @ 34b8ec2975df68369ad6e4bbd04a1af475a0a2ed; 49 typed oracle failures), the wire-4 refilter over the final 4-receipt chain, the filtered-pin census (lexical 0 contaminated, within-source 0 duplicates), and the qualification binding at the filtered pin. The SAMPLE QC (V4, seed 0/size 100) reviewed 99 with 1 unavailable (<=5% allowed) and returned SOME_ISSUES (36 issues, 36.4%). QC never rejects a source by itself: the source is admitted as-is with its weakness documented - the sealed triage is s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/facet-repaired-sample-qc-triage-v1/triage.json (sha 5298093c0c15bf728c8f3034c26e801ee352d835f2c7dda78bac12d6d86ce358, from the sealed QC campaign s3://marin-us-east-08a/marin/rl-data/atlas/ingest-a/2026.11.20.1/facet-repaired-sample-qc-v1/campaigns/6c99131ae92746618c6b5edfd8f83f27/1a227946a0b8be06cced.json). The repair campaign is a follow-up, not an admission blocker: the source-wide detector scan (fixture-field mismatches + missing referenced paths) records the repair-candidate class sizes. Coordinator admission decision 2026-11-25 08:12 EST.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
@@ -1355,8 +1355,25 @@
       "origin": "FWeindel",
       "upstream_dataset": "validated-tasks",
       "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/pymethods2test_v1",
-      "notes": "The complete raw validated-task population at the repackager pin (intake census 574937d678632ded: 4,990 rows, every row stages 1,2,3,4 passed, 0 duplicates). Every row is a complete native Harbor package; conversion keeps the original package bytes and Dockerfile build and binds the SHARED grader and RootDeliveryContract at conversion (rule C 2026-11-24), so the population enters later stages with no contract-less row. The upstream license and lineage scan is HELD: the recorded CANDIDATES P1 basis (license PASS on the original upstream) does not resolve to a checkable receipt, and the revision-history scan awaits the user ruling on license-less early revisions. No publication or admission claim.",
+      "notes": "The complete raw validated-task population at the repackager pin (intake census 574937d678632ded: 4,990 rows, every row stages 1,2,3,4 passed, 0 duplicates). Every row is a complete native Harbor package; conversion keeps the original package bytes, binds the SHARED grader and RootDeliveryContract at conversion (rule C 2026-11-24), and binds each task's environment to its class's digest-pinned prepared image (coordinator GO 2026-11-25: the 3 declared Dockerfile classes built once in region through the taskforge image builder and pinned by manifest digest; the census marked every task unbuilt_image until this pin; images manifest 729065e3c0ee32b3). The license scan PASSED under the coordinator's 2026-11-25 ruling (open-thoughts/TaskTrove @94688470 declares apache-2.0 at the pin and all revisions; receipt bound). No publication or admission claim.",
       "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nvidia:Nemotron-RL-agent-workplace_assistant",
+      "display_name": "Nvidia \u00b7 Nemotron-RL-agent-workplace_assistant",
+      "status": "Pending",
+      "origin": "Nvidia",
+      "upstream_dataset": "Nemotron-RL-agent-workplace_assistant",
+      "upstream_url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant",
+      "notes": "TRAIN native Workplace tool calls, source six-step protocol and separate private grader. All 1,064 retained rows have original native-action oracle=1/empty-actor=0 controls with exact historical owned-ID absence; the source held 177 NoP-positive rows and 14 technical rows remain uncounted. Prepared-image version binds the unchanged declared Docker context to an internal digest; each inverse restores original TaskSpec bytes and preserves private grader, resources and budgets. The explicit native qualification is s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-workplace/2026.11.23.1/prepared-final-pin-neighbors-native-binding-v1/native-physical-image-binding.json; it preserves original physical hashes and claims neither new physical Trials nor Harbor receipts nor environment-layer byte identity. Native tool consumer checked every current TaskSpec at e4e00aaa24c46ddc9f63db11e06e55655df73e2c, zero failures. Fresh exact-pin seed-zero SAMPLE: good, 100 reviewed, 6 issues, 0 unavailable; all findings retained. Snapshot/image census and all source deadlines remain as declared.",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "use": "train",
@@ -1585,6 +1602,278 @@
         "RL"
       ],
       "reasons": []
+    },
+    {
+      "id": "Anthropic:hh_rlhf/harmless-base",
+      "display_name": "Anthropic \u00b7 hh_rlhf/harmless-base",
+      "status": "Pending",
+      "origin": "Anthropic",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_url": null,
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Anthropic:hh_rlhf/helpful-base",
+      "display_name": "Anthropic \u00b7 hh_rlhf/helpful-base",
+      "status": "Pending",
+      "origin": "Anthropic",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_url": null,
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Anthropic:hh_rlhf/helpful-online",
+      "display_name": "Anthropic \u00b7 hh_rlhf/helpful-online",
+      "status": "Pending",
+      "origin": "Anthropic",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_url": null,
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Anthropic:hh_rlhf/helpful-rejection-sampled",
+      "display_name": "Anthropic \u00b7 hh_rlhf/helpful-rejection-sampled",
+      "status": "Pending",
+      "origin": "Anthropic",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_url": null,
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_en",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_en",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_multi",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_multi",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_multiturn",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_multiturn",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/safety_en",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/safety_en",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
+      "display_name": "TaskTrove \u00b7 laion__nemotron-gym-structured-outputs-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-structured-outputs-v4",
+      "upstream_url": null,
+      "notes": "All formats require both a format check and a source-grounding judge. Inventory: the grounding judge model is unspecified. Pin the judge contract and complete grounding-verifier QA before admission.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__glaive-code-assistant-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__glaive-code-assistant-sandboxes-verified-v2",
+      "upstream_url": null,
+      "notes": "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__stackexchange-tezos-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-tezos-sandboxes-verified-v2",
+      "upstream_url": null,
+      "notes": "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates fall to the dedup step. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
     }
   ],
   "stages": {
@@ -1778,6 +2067,84 @@
             "kind": "receipt",
             "message": "Ban registry 2026.11.16.1: no trajectory-data license; Apache-2.0 applies to the harness code; issue 11497.",
             "uri": "https://github.com/Tongyi-MAI/OpenGCUA/tree/55c33aea792b48b9c1330a514bfcc8f6d3ecc704",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+      "display_name": "TRL \u00b7 kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+      "status": "Excluded",
+      "origin": "TRL",
+      "upstream_dataset": "kto_mix",
+      "upstream_url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+      "notes": "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a declared grant at this pin. Held out of the served declarations and out of intake; the ban lifts only with a recorded permissive grant at the pin (issue 11497).",
+      "stage": null,
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-missing",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+            "uri": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+      "display_name": "TRL \u00b7 kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+      "status": "Excluded",
+      "origin": "TRL",
+      "upstream_dataset": "kto_mix",
+      "upstream_url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+      "notes": "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a declared grant at this pin. Held out of the served declarations and out of intake; the ban lifts only with a recorded permissive grant at the pin (issue 11497).",
+      "stage": null,
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-missing",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+            "uri": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+      "display_name": "TRL \u00b7 kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+      "status": "Excluded",
+      "origin": "TRL",
+      "upstream_dataset": "kto_mix",
+      "upstream_url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+      "notes": "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a declared grant at this pin. Held out of the served declarations and out of intake; the ban lifts only with a recorded permissive grant at the pin (issue 11497).",
+      "stage": null,
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-missing",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+            "uri": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
             "sha256": null,
             "expected": null
           }

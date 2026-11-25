@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.release_stages import preflight_sli
 from experiments.post_training.task_curation.release_stages.graph import write_plan
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 
-EXPECTED_NODE_COUNT = 30
+EXPECTED_NODE_COUNT = 31
 
 
 @pytest.fixture
@@ -160,7 +160,8 @@ def test_status_mode_reports_missing_state(tmp_path, plan_document, capsys):
     document = json.loads(output)
     assert document["release_id"] == "testrelease"
     nodes = {row["node"]: row for row in document["nodes"]}
-    assert len(nodes) == 29
+    assert len(nodes) == 30
+    assert nodes["main_source_sync"]["preflight"] == "missing"
     assert nodes["census"]["preflight"] == "missing"
     assert nodes["census"]["artifact"] in ("absent", "unknown-prefix")
 

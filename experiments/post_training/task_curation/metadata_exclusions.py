@@ -218,6 +218,78 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
             ),
         ),
     ),
+    MetadataExclusion(
+        id="TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+        origin="TRL",
+        upstream_dataset="kto_mix",
+        upstream_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+        dataset_id="trl-lib/kto-mix-14k",
+        dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
+        notes=(
+            "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas "
+            "r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no "
+            "license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling "
+            "bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a "
+            "declared grant at this pin. Held out of the served declarations and out of intake; the "
+            "ban lifts only with a recorded permissive grant at the pin (issue 11497)."
+        ),
+        claims=(
+            _claim(
+                ExclusionReason.LICENSE_MISSING,
+                "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned "
+                "upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+                uri="https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+            ),
+        ),
+    ),
+    MetadataExclusion(
+        id="TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+        origin="TRL",
+        upstream_dataset="kto_mix",
+        upstream_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+        dataset_id="trl-lib/kto-mix-14k",
+        dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
+        notes=(
+            "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas "
+            "r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no "
+            "license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling "
+            "bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a "
+            "declared grant at this pin. Held out of the served declarations and out of intake; the "
+            "ban lifts only with a recorded permissive grant at the pin (issue 11497)."
+        ),
+        claims=(
+            _claim(
+                ExclusionReason.LICENSE_MISSING,
+                "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned "
+                "upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+                uri="https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+            ),
+        ),
+    ),
+    MetadataExclusion(
+        id="TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+        origin="TRL",
+        upstream_dataset="kto_mix",
+        upstream_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
+        dataset_id="trl-lib/kto-mix-14k",
+        dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
+        notes=(
+            "Main-sync landing (2026-11-25): origin/main declares this KTO component but the Atlas "
+            "r39 cut does not carry it. The pinned upstream trl-lib/kto-mix-14k card declares no "
+            "license anywhere (frontmatter, body or LICENSE file), so the doubt-means-ban ruling "
+            "bans it; the component upstreams' grants (argilla cards) are lineage evidence, not a "
+            "declared grant at this pin. Held out of the served declarations and out of intake; the "
+            "ban lifts only with a recorded permissive grant at the pin (issue 11497)."
+        ),
+        claims=(
+            _claim(
+                ExclusionReason.LICENSE_MISSING,
+                "Ban registry 2026.11.25.a-main-sync.1: no license declaration in the pinned "
+                "upstream primary evidence; the standing doubt rule bans TRAIN/EVAL; issue 11497.",
+                uri="https://huggingface.co/datasets/trl-lib/kto-mix-14k/resolve/4470f033f33364e7d064c9f920c3df54d0cce767/README.md",
+            ),
+        ),
+    ),
 )
 
 

@@ -127,41 +127,85 @@ OUT_OF_REGION_PENDING_IDS = frozenset(
     }
 )
 
+# Sources origin/main declares that the Atlas r39 cut does not carry under any ID
+# (user request 2026-11-25, the main-source-sync landing). They enter through the
+# standing pending mechanism only — staged for R41 intake at their main pins — never
+# the served declarations. The KTO components are additionally license-banned: their
+# pinned upstream trl-lib/kto-mix-14k declares no license (doubt-means-ban ruling,
+# license registry 2026.11.25.a-main-sync, #11497), so they hold out of the served
+# set and never enter intake; the ban lifts only off the registry with new primary
+# evidence of a permissive grant.
+MAIN_SYNC_STAGED_IDS = frozenset(
+    {
+        "Anthropic:hh_rlhf/harmless-base",
+        "Anthropic:hh_rlhf/helpful-base",
+        "Anthropic:hh_rlhf/helpful-online",
+        "Anthropic:hh_rlhf/helpful-rejection-sampled",
+        "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
+        "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
+        "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
+        "Nemotron:nemotron_ultra_mopd/hs3_en",
+        "Nemotron:nemotron_ultra_mopd/hs3_multi",
+        "Nemotron:nemotron_ultra_mopd/hs3_multiturn",
+        "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+        "Nemotron:nemotron_ultra_mopd/safety_en",
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+        "project-numina:NuminaMath-LEAN",
+    }
+)
+
+MAIN_SYNC_BANNED_IDS = frozenset(
+    {
+        "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+        "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+        "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+    }
+)
+
+MAIN_SYNC_PENDING_IDS = MAIN_SYNC_STAGED_IDS | MAIN_SYNC_BANNED_IDS
+
 # The 2026-11-24 freeze ruling: R40's source set was frozen at the cut — sources
 # admitted or imported after it route to R41 through the standing mechanism.
 # The FACET-Terminal and Endless imports unfroze for R41 (their blockers were fixed
 # after the 5:10 PM EST ruling), but the R40 cut is frozen at the 334-source exact
 # cover per that ruling — they hold here until the cut completes, then re-enter the
 # served set for R41.
-R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS | {
-    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
-    "FWeindel:validated-tasks/endless",
-    # The pinned population record measures one task more than the declared census
-    # binding (13,969 vs 13,968) — the delta needs its owner's reconciliation, so it
-    # holds here rather than refusing the release census.
-    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
-    # The seven campaign-release rebuilds whose declared census bindings disagree
-    # with every reachable population record by a census-generation delta
-    # (ruling 2026-11-25: timebox expired, freeze to pending for R41).
-    "TaskTrove:tasktrove-code-contests-built-image",
-    "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
-    "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
-    "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
-    "TaskTrove:tasktrove-taco-built-image",
-    "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
-    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-    # The five Nemotron lean/rdkit renames: their fresh SAMPLE panels are drawn at
-    # the current pins but await the judge review, so their declarations still
-    # carry the archived-lineage marker (ruling 2026-11-25: timebox expired).
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-    # The Workplace admission landed after the 2026-11-24 freeze ruling: R40's source
-    # set is frozen at the cut, so the newly admitted population routes to R41.
-    "Nvidia:Nemotron-RL-agent-workplace_assistant",
-}
+R41_PENDING_SOURCE_IDS = (
+    OUT_OF_REGION_PENDING_IDS
+    | MAIN_SYNC_PENDING_IDS
+    | {
+        "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
+        "FWeindel:validated-tasks/endless",
+        # The pinned population record measures one task more than the declared census
+        # binding (13,969 vs 13,968) — the delta needs its owner's reconciliation, so it
+        # holds here rather than refusing the release census.
+        "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+        # The seven campaign-release rebuilds whose declared census bindings disagree
+        # with every reachable population record by a census-generation delta
+        # (ruling 2026-11-25: timebox expired, freeze to pending for R41).
+        "TaskTrove:tasktrove-code-contests-built-image",
+        "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+        "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+        "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+        "TaskTrove:tasktrove-taco-built-image",
+        "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+        "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+        # The five Nemotron lean/rdkit renames: their fresh SAMPLE panels are drawn at
+        # the current pins but await the judge review, so their declarations still
+        # carry the archived-lineage marker (ruling 2026-11-25: timebox expired).
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+        # The Workplace admission landed after the 2026-11-24 freeze ruling: R40's source
+        # set is frozen at the cut, so the newly admitted population routes to R41.
+        "Nvidia:Nemotron-RL-agent-workplace_assistant",
+    }
+)
 
 PENDING_MEASUREMENT_SOURCES = (
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
@@ -208,6 +252,13 @@ PENDING_MEASUREMENT_SOURCES = (
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
         }
     ),
+    # The main-sync staged sources (2026-11-25): declared on origin/main, absent
+    # from the Atlas r39 cut, staged for R41 intake at their main pins. The
+    # license-banned KTO components never enter this listing.
+    *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *(source for source in tasktrove_structured_outputs.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
 )
 
 
