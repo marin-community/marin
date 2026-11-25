@@ -41,7 +41,7 @@ Shellbox prepares Linux images only. `ImageArchitecture` names the two it handle
 | --- | --- |
 | Local | The host's only. Bubblewrap is not a virtual machine and runs image programs natively, so `LocalMachineFactory` prepares every image for the host's architecture. |
 | QEMU | `amd64` only (`QEMU_GUEST_ARCHITECTURE`). Bundles carry `qemu-system-x86_64` and an amd64 kernel. Only amd64 hosts are tested. |
-| Docker, local gVisor | `amd64` (`IMAGE_PLATFORM`) for registry pulls and Dockerfile builds. An arm64 Docker host runs them under its emulation. A local `DockerImage` runs as it is. |
+| Docker, local gVisor | `amd64` (`IMAGE_PLATFORM`) for registry pulls and Dockerfile builds. An arm64 Docker host needs amd64 emulation (binfmt) registered. A local `DockerImage` runs as it is. |
 | Daytona | Whatever Daytona's runners run. Shellbox passes no platform. Our images are amd64. |
 | Iris | The architecture of the worker that runs the sandbox job. Shellbox passes no platform or node constraint. |
 

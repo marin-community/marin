@@ -38,7 +38,7 @@ HOST_MACHINE_ARCHITECTURES = {
     "aarch64": ImageArchitecture.ARM64,
     "arm64": ImageArchitecture.ARM64,
 }
-"""``platform.machine()`` values on Linux, and on macOS Docker hosts, mapped to the native architecture."""
+"""``platform.machine()`` values mapped to the native architecture: Linux reports x86_64 or aarch64, macOS arm64."""
 
 
 class ImageArchitectureMismatch(ValueError):
@@ -222,6 +222,34 @@ def _manifest_digest(
     return digest
 
 
+def _index_alias(cache: Path, index_digest: str, architecture: ImageArchitecture) -> Path:
+    """The link naming the layout an index digest selected for ``architecture``; an index has no layout of its own."""
+    return cache / f"{index_digest.replace(':', '-')}-{architecture}"
+
+
+def _cached_pin(
+    cache: Path, pinned_digest: str, architecture: ImageArchitecture, source: RegistryImage
+) -> PreparedImage | None:
+    """Return the verified cached layout for a manifest pin, or for an index pin's recorded selection."""
+    destination = cache / pinned_digest.replace(":", "-")
+    if destination.exists():
+        _manifest_digest(destination, architecture, source, expected=pinned_digest)
+        return PreparedImage(destination, pinned_digest, source)
+    alias = _index_alias(cache, pinned_digest, architecture)
+    if not alias.exists():
+        return None
+    selected = "sha256:" + os.readlink(alias).removeprefix("sha256-")
+    _manifest_digest(alias, architecture, source, expected=selected)
+    return PreparedImage(cache / selected.replace(":", "-"), selected, source)
+
+
+def _record_index_selection(cache: Path, index_digest: str, architecture: ImageArchitecture, layout: Path) -> None:
+    try:
+        _index_alias(cache, index_digest, architecture).symlink_to(layout.name)
+    except FileExistsError:
+        pass  # Another process recorded the same immutable selection.
+
+
 def prepare_image(
     source: RegistryImage | DockerfileSource,
     cache: Path,
@@ -250,20 +278,10 @@ def prepare_image(
         match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
         if match is not None:
             pinned_digest = match[1]
-    index_alias = None
-    if pinned_digest is not None:
-        # An index pin names no layout of its own; this link records which manifest it selected.
-        index_alias = cache / f"{pinned_digest.replace(':', '-')}-{architecture}"
     if pinned_digest is not None and policy is None:
-        destination = cache / pinned_digest.replace(":", "-")
-        if destination.exists():
-            _manifest_digest(destination, architecture, source, expected=pinned_digest)
-            return PreparedImage(destination, pinned_digest, source)
-        assert index_alias is not None
-        if index_alias.exists():
-            selected = "sha256:" + os.readlink(index_alias).removeprefix("sha256-")
-            _manifest_digest(index_alias, architecture, source, expected=selected)
-            return PreparedImage(cache / selected.replace(":", "-"), selected, source)
+        cached = _cached_pin(cache, pinned_digest, architecture, source)
+        if cached is not None:
+            return cached
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
@@ -306,9 +324,6 @@ def prepare_image(
             except FileExistsError:
                 pass  # Another process published this content-addressed layout.
         _manifest_digest(destination, architecture, source, expected=digest)
-        if index_alias is not None and digest != pinned_digest:
-            try:
-                index_alias.symlink_to(destination.name)
-            except FileExistsError:
-                pass  # Another process recorded the same immutable selection.
+        if pinned_digest is not None and digest != pinned_digest:
+            _record_index_selection(cache, pinned_digest, architecture, destination)
         return PreparedImage(destination, digest, source)
