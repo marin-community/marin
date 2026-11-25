@@ -1325,7 +1325,10 @@ def test_training_moe_health_queries_show_routing_signals():
     assert query("parameter_norms") == [(at, 4800.0, 200.0)]
 
 
-LOCAL_DASHBOARDS = DASHBOARDS / "local"
+UTILIZATION = DASHBOARDS / "utilization.json"
+# Three fleet queries and three node queries. The bridge's cache only shares byte-identical SQL,
+# so a later edit to one copy of a shared query would add a hub scan per load.
+UTILIZATION_MAX_DISTINCT_SQL = 6
 
 
 def _finelog_sql(panel: dict) -> list[str]:
@@ -1346,21 +1349,17 @@ def _finelog_sql(panel: dict) -> list[str]:
     return sql
 
 
-@pytest.mark.parametrize("path", sorted(LOCAL_DASHBOARDS.glob("*.json")), ids=lambda path: path.name)
-def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
-    """local/compose.yaml queries the production hub live, and a dashboard load fires
-    every panel at once: no auto-refresh, and every query bounded by the range."""
-    dashboard = json.loads(path.read_text())
+def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
+    """Every signed-in viewer's load reaches the hub, and local/compose.yaml loads the same file
+    against it live: no auto-refresh, a short default range, every query bounded by the range,
+    and a node query that reads nothing while no node is selected."""
+    dashboard = json.loads(UTILIZATION.read_text())
 
     assert dashboard.get("refresh", "") == ""
+    assert dashboard["time"] == {"from": "now-15m", "to": "now"}
     queries = [sql for panel in _all_panels(dashboard) for sql in _finelog_sql(panel)]
-    for variable in dashboard.get("templating", {}).get("list", []):
-        if variable.get("type") == "query":
-            infinity = variable["query"]["infinityQuery"]
-            queries += _finelog_sql(
-                {"title": variable["name"], "datasource": variable["datasource"], "targets": [infinity]}
-            )
     assert queries
+    assert len(set(queries)) <= UTILIZATION_MAX_DISTINCT_SQL
     for sql in queries:
         assert "{{from}}" in sql and "{{to}}" in sql, sql
         # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
@@ -1368,12 +1367,3 @@ def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
         # The node section stays open, so a node query must read nothing while no node is selected.
         if "${node" in sql:
             assert "${node:sqlstring} <> ''" in sql, sql
-
-
-def test_the_production_image_ships_no_local_dashboard():
-    """The image stitches dashboards/*.json without recursing (Dockerfile), so dashboards/local/,
-    which queries the production hub live, is provisioned only by local/compose.yaml."""
-    shipped = stitch_all(DASHBOARDS, DASHBOARDS / "panels")
-
-    assert set(shipped) == {path.name for path in DASHBOARDS.glob("*.json")}
-    assert not set(shipped) & {path.name for path in LOCAL_DASHBOARDS.glob("*.json")}

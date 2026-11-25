@@ -868,13 +868,24 @@ Every panel query reaches the production hub, so the local setup holds the load 
 
 - Only the `marin` hub is served, with at most one query in flight to it.
 - Alert rules load but never evaluate (`GF_UNIFIED_ALERTING_EXECUTE_ALERTS=false`).
-- Only the dashboards in `dashboards/local/` are provisioned, re-read every 10 s,
-  so opening Grafana does not fire the production dashboards' queries.
+- Only the dashboard under development is provisioned: compose mounts
+  `dashboards/utilization.json` and Grafana re-reads it every 10 s, so opening Grafana
+  does not fire the other dashboards' queries. The mount follows the file, not its
+  path: after something replaces the file (`git checkout`, some editors), run
+  `docker compose -f infra/grafana/local/compose.yaml up -d` again. To work on
+  another dashboard, change that mount.
 - Grafana listens on 127.0.0.1 only. Anonymous users are Admin, so panels can be
   edited and saved.
 
 Keep a dashboard under development on a short default range with auto-refresh
 off, and bound every query by the dashboard range.
+
+`utilization.json` is also a production dashboard. In production every signed-in
+viewer's load reaches the hub, and what bounds it is the bridge's 20 s cache (shared
+per query and time window), the 20 s query deadline, auto-refresh off, the
+15-minute default range, and node queries that read nothing until a node is
+selected; a test requires the last three and caps the dashboard at six distinct
+queries. The deployed bridge has no per-source concurrency bound on `/query`.
 
 ## Deploy
 

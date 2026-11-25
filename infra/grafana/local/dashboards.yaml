@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Local replacement for provisioning/dashboards/marin.yaml (see compose.yaml): it
-# provisions only the dashboards under development, re-read every 10 s from the
-# worktree, so an edit to the JSON shows on the next reload.
+# provisions only the dashboard under development (mounted by compose), re-read every
+# 10 s from the worktree, so an edit to the JSON shows on the next reload.
 apiVersion: 1
 
 providers:

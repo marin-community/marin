@@ -16,8 +16,8 @@
 # marin` does, with the IAP token minted from the cached login. The login file is
 # mounted read-only and nothing in this file holds a credential. Only the `marin`
 # hub is served, at most one query is in flight to it, alert rules load but never
-# evaluate, and only the dashboards in ../dashboards/local/ are provisioned, so
-# opening Grafana cannot fire the production dashboards' queries at the hub.
+# evaluate, and only the dashboard under development (../dashboards/utilization.json) is
+# provisioned, so opening Grafana cannot fire the other dashboards' queries at the hub.
 name: marin-grafana-local
 
 services:
@@ -43,7 +43,7 @@ services:
     volumes:
       - ${HOME}/.config/marin/credentials/marin.json:/home/grafana/.config/marin/credentials/marin.json:ro
       - ./dashboards.yaml:/etc/grafana/provisioning/dashboards/marin.yaml:ro
-      - ../dashboards/local:/etc/grafana/dashboards-local:ro
+      - ../dashboards/utilization.json:/etc/grafana/dashboards-local/utilization.json:ro
       - grafana-data:/var/lib/grafana
 
 volumes:
