@@ -9,6 +9,7 @@ exercise the same code path the release graph runs, not a parallel mock. The sou
 registry is the injected boundary (the graph resolves the real one at run time).
 """
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -39,6 +40,7 @@ from taskcompendium.models import (
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import corpus_assembly as corpus_stage
+from experiments.post_training.task_curation.release_stages import embed as embed_stage
 from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.tests import census_parallel_fixtures as census_fixtures
@@ -225,7 +227,11 @@ def test_corpus_sizing_carries_prepare_workers():
     assert huge.workers == 8
     assert huge.memory_gb > anchor.memory_gb
     embed = sizing.embedding_sizing(sizing._ANCHOR_TASKS)
-    assert (embed.cpu, embed.memory_gb, embed.workers) == (64, 256, 16)
+    assert (embed.cpu, embed.memory_gb, embed.workers) == (64, 256, 32)
+    # The pool targets a short wall time at the measured rate, not the anchor's 15 h:
+    # R40's 20,572 fresh tasks get the full pool; a small slice gets a small one.
+    assert sizing.embedding_sizing(20_572).workers == 32
+    assert sizing.embedding_sizing(1_000).workers == 3
     compose = sizing.curriculum_compose_sizing(sizing._ANCHOR_COMPOSE_TASKS)
     assert (compose.cpu, compose.memory_gb, compose.workers) == (32, 128, 8)
     with pytest.raises(ValueError, match="positive"):
@@ -507,6 +513,7 @@ def _corpus_inputs(
         census_receipt=census_receipt,
         output_root=str(tmp_path / "release" / "corpus"),
         expected_sources=1,
+        targets=(SOURCE_ID,),
         slice_output_root=str(tmp_path / "slice" / "corpus"),
         workers=1,
     )
@@ -537,6 +544,8 @@ def test_corpus_assembly_end_to_end_after_census(tmp_path):
     corpus = json.loads((tmp_path / "release" / "corpus" / "corpus.json").read_text())
     assert corpus["population"] == "converted"
     assert sum(row["task_count"] for row in corpus["inventory"]) == 2
+    # The embed stage digest-verifies the corpus reference against the written bytes.
+    assert embed_stage.read_corpus(ArtifactRef(**proof["corpus"])) == corpus
     with pytest.raises(ValueError, match="already exists"):
         corpus_stage.run_corpus_assembly(inputs, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
 
@@ -574,6 +583,7 @@ def test_corpus_assembly_fans_out_with_identical_corpus(tmp_path):
             census_receipt=receipt,
             output_root=str(root / "corpus"),
             expected_sources=1,
+            targets=(SOURCE_ID,),
             workers=workers,
         )
 
@@ -729,6 +739,7 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
         census_receipt=receipt,
         output_root=str(tmp_path / "release" / "corpus"),
         expected_sources=2,
+        targets=(SOURCE_ID, EMPTY_SOURCE_ID),
         slice_output_root=str(tmp_path / "slice" / "corpus"),
         workers=1,
     )
@@ -742,3 +753,15 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
     corpus = json.loads((tmp_path / "release" / "corpus" / "corpus.json").read_text())
     assert len(corpus["inventory"]) == 1
     assert sum(row["task_count"] for row in corpus["inventory"]) == 2
+
+    # Write mode assembles only the release's targets, and refuses a target the census lacks.
+    def registry():
+        return {SOURCE_ID: _source_registry(declaration)()[SOURCE_ID], EMPTY_SOURCE_ID: empty_source}
+
+    scoped = dataclasses.replace(inputs, output_root=str(tmp_path / "scoped" / "corpus"), targets=(SOURCE_ID,))
+    proof = corpus_stage.run_corpus_assembly(scoped, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
+    corpus = json.loads((tmp_path / "scoped" / "corpus" / "corpus.json").read_text())
+    assert [row["id"] for row in corpus["inventory"]] == [SOURCE_ID] and proof["tasks"] == 2
+    unknown = dataclasses.replace(inputs, output_root=str(tmp_path / "unknown"), targets=("Marin:not-censused",))
+    with pytest.raises(ValueError, match="carry no row for targets"):
+        corpus_stage.run_corpus_assembly(unknown, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))

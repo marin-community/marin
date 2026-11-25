@@ -372,8 +372,9 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     source_revision=plan.source_revision,
                     inputs=ArtifactRef(uri=uri, sha256=sha256),
                     census_receipt=receipt,
-                    output_root=stage_output_root(plan, "corpus"),
+                    output_root=stage_output_root(plan, "corpus-fresh"),
                     expected_sources=1,
+                    targets=plan.targets,
                     workers=1,
                     slice_output_root=f"{source_root}/corpus",
                 ),
@@ -480,6 +481,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     runtime_defaults=plan.validation_runtime_defaults,
                 ),
                 dry_run=True,
+                repo_root=REPO_ROOT,
             )
             return {"targets": len(proof["targets"]), "task_count": proof["task_count"], "mode": "dry-run"}
 

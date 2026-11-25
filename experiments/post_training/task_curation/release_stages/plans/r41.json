@@ -2,12 +2,12 @@
   "kind": "atlas-release-config",
   "release_id": "r41",
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "9a85416bb9d03d6a317dc5009925d98e66a4ff87",
+  "freeze_source_revision": "65a0a026c524bc49305059cf5c9e558480e8fe06",
   "prior_release": {
-    "release_id": "r39-admissions-refresh",
+    "release_id": "r40",
     "declarations": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v27/prior-declarations.json",
-      "sha256": "60b7623525cb964d5a1620fb47a57664a7545aad4cdc592896af0f67933eb8c8"
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/declarations/declarations.json",
+      "sha256": "12d347977a99c5a4e03b2158aee1f472de5c19beb30b00c2148f2aa7814de042"
     },
     "identity": {
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/source-identities-v7.json",
@@ -34,80 +34,7 @@
       "sha256": "73afceacae585208a2ccb7aac34465c7170a209ba0b8243080e89db8d014794e"
     }
   },
-  "removed_sources": [
-    {
-      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
-    },
-    {
-      "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
-      "reason": "removed from the catalog by the prior release's admission ruling"
-    },
-    {
-      "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
-      "reason": "removed from the catalog by the prior release's admission ruling"
-    },
-    {
-      "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
-      "reason": "removed from the catalog by the prior release's admission ruling"
-    },
-    {
-      "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
-      "reason": "removed from the catalog by the prior release's admission ruling"
-    },
-    {
-      "source_id": "TaskTrove:laion__wizardlm-orca-v4",
-      "reason": "removed from the catalog by the prior release's admission ruling"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-code-contests-built-image",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
-      "reason": "frozen out of the prior release: one-task delta against its panel; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-taco-built-image",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
-    }
-  ],
+  "removed_sources": [],
   "qc_exclusions": [
     {
       "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
@@ -167,5 +94,6 @@
     }
   ],
   "production_version": 76,
-  "preview_base_version": 32
+  "preview_base_version": 32,
+  "prior_snapshot_id": "assembly-r40-cut-v1"
 }

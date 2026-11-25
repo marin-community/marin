@@ -236,7 +236,7 @@ def main() -> None:
     check_receipt_evidence(receipt)
     args.receipts_output.mkdir(parents=True, exist_ok=True)
     write_receipt_shards(args.receipts_output, {receipt.source_id: receipt.model_dump(mode="json")})
-    print(
+    result_payload = (
         json.dumps(
             {
                 "measured": record["task_count"],
@@ -248,7 +248,12 @@ def main() -> None:
             sort_keys=True,
             default=str,
         )
+        + "\n"
     )
+    if args.report is not None:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(result_payload)
+    print(result_payload)
 
 
 if __name__ == "__main__":

@@ -694,6 +694,9 @@ def _execute_stage(stage: str, config: dict) -> dict:
 # Iris children do not inherit the parent environment: the dispatched stage jobs
 # receive the run's attestation and the credentials explicitly (the workspace rides
 # by bundle inheritance).
+# The uv extra carrying the CPU torch wheels the Harrier embedder imports.
+EMBED_CPU_DEPENDENCY_GROUP = "cpu"
+
 STAGE_CHILD_ENV_KEYS = (
     "ATLAS_RELEASE_SOURCE_REVISION",
     "ATLAS_PUSH_LOG",
@@ -1089,6 +1092,7 @@ def _stage_step(
     identity: Callable[[], dict],
     inputs_type: type,
     resources: Callable[[], ResourceConfig] | None = None,
+    dependency_groups: list[str] | None = None,
     receipt_key: str | None = None,
     name_suffix: str = "",
 ) -> ArtifactStep[StageReceipt]:
@@ -1097,7 +1101,9 @@ def _stage_step(
     ``node`` is the graph key (unique, used for the graph-receipt document);
     ``spec.stage`` is the executor key (shared by phase variants). ``receipt_key``
     overrides the spec's sealed-reference key; it defaults to the spec's own so a
-    custom spec key cannot drift out of the cluster dispatch.
+    custom spec key cannot drift out of the cluster dispatch. ``dependency_groups``
+    names the uv extras the dispatched job (and the Zephyr workers it spawns, which
+    reproduce its setup) installs; ``None`` infers them from the resources' device.
     """
     graph_receipt_root = f"{plan.release_root}/graph"
     receipt_key = spec.receipt_key if receipt_key is None else receipt_key
@@ -1120,6 +1126,7 @@ def _stage_step(
                     partial(_execute_stage_node, node, spec.stage, receipt_key),
                     resources=dispatch_resources,
                     env_vars=_stage_child_env(),
+                    pip_dependency_groups=dependency_groups,
                     pip_packages=list(spec.pip_packages) or None,
                 )
                 dispatch(config)
@@ -1306,7 +1313,7 @@ def _corpus_assembly_step(
     plan: ReleasePlan, census_inputs: ArtifactStep, census: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["corpus_assembly"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count")
+    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "targets")
     sizing = corpus_sizing(plan.expected_population_tasks)
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1318,6 +1325,7 @@ def _corpus_assembly_step(
             "census_receipt": _resolved_receipt(ctx, census),
             "output_root": stage_output_root(plan, "corpus"),
             "expected_sources": plan.expected_source_count,
+            "targets": plan.targets,
             "workers": sizing.workers,
             "slice_output_root": plan.slice_output_root or None,
         }
@@ -1334,6 +1342,19 @@ def _corpus_assembly_step(
     )
 
 
+def _fresh_corpus_expectation(plan: ReleasePlan, census_proof: dict) -> dict:
+    """The shipped fresh corpus: the targets the census did not oracle-filter to empty."""
+    results = {row["source_id"]: row for row in census_proof["results"]}
+    missing = sorted(set(plan.targets) - set(results))
+    if missing:
+        raise ValueError(f"census results carry no rows for targets: {missing[:5]}")
+    shipped = [results[source_id] for source_id in plan.targets if results[source_id].get("oracle_empty") is None]
+    return {
+        "expected_source_count": len(shipped),
+        "expected_task_count": sum(row["inventory"]["retained_tasks"] for row in shipped),
+    }
+
+
 def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["embed"]
     identity = _identity_fields(
@@ -1347,15 +1368,16 @@ def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -
             "corpus": _resolved_proof(ctx, corpus)["corpus"],
             "artifact_root": stage_output_root(plan, "embed"),
             "cache_root": plan.embed_cache_root,
-            "expected_source_count": plan.expected_source_count,
-            "expected_task_count": _resolved_proof(ctx, census)["tasks"],
+            **_fresh_corpus_expectation(plan, _resolved_proof(ctx, census)),
             "parity_receipt": _ref_dict(plan.pins.parity_receipt),
             "gpu_runtime": plan.gpu_runtime,
         }
 
+    cuda = plan.pins.parity_receipt is not None and bool(plan.gpu_runtime)
+
     def resources() -> ResourceConfig:
         config = _resources_config(embedding_sizing(plan.expected_population_tasks))
-        if plan.pins.parity_receipt is not None and plan.gpu_runtime:
+        if cuda:
             return dataclasses.replace(config, device=GpuConfig(variant=plan.gpu_runtime))
         return config
 
@@ -1368,6 +1390,9 @@ def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -
         identity=identity,
         inputs_type=embed_stage.EmbedInputs,
         resources=resources,
+        # The Harrier embedder needs torch: the CPU wheel group on CPU, the inferred
+        # GPU group on a CUDA run.
+        dependency_groups=None if cuda else [EMBED_CPU_DEPENDENCY_GROUP],
     )
 
 
@@ -1375,7 +1400,9 @@ def _curriculum_compose_step(
     plan: ReleasePlan, compose_manifest: ArtifactStep, census: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["curriculum_compose"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_population_tasks")
+    identity = _identity_fields(
+        plan, "release_id", "source_revision", "targets", "removed_sources", "expected_population_tasks"
+    )
 
     def build_inputs(ctx: StepContext) -> dict:
         census_proof = _resolved_proof(ctx, census)
@@ -1390,6 +1417,7 @@ def _curriculum_compose_step(
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "output_root": stage_output_root(plan, "compose"),
             "expected_fresh_task_count": sum(per_source[source_id] for source_id in plan.targets),
+            "removed_sources": plan.removed_sources,
         }
 
     return _stage_step(

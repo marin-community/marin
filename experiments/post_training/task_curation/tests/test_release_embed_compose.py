@@ -23,7 +23,9 @@ from taskcompendium.pipeline.curriculum.models import AlignmentRelease, Alignmen
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import embed as embed_stage
+from experiments.post_training.task_curation.release_stages.graph import _fresh_corpus_expectation
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 NODES = [
@@ -188,15 +190,19 @@ def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
     return ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
-def _composition(tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2) -> dict:
+def _composition(
+    tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2, removed=False
+) -> tuple[dict, int]:
     """A sealed composition manifest over a one-source retained release plus one fresh.
 
     ``drift`` crafts a declaration copy in the current-target document that differs
     from the fresh inventory's own copy — the alignment-time inventory stays valid,
-    the current declaration drifted.
+    the current declaration drifted. ``removed`` adds a second retained source the
+    plan removes.
     """
     old_decl = _declaration("retained")
     fresh_decl = _declaration("admitted")
+    removed_decl = _declaration("removed")
     current_decl = fresh_decl
     if drift == "task_count":
         current_decl = fresh_decl.model_copy(
@@ -208,12 +214,21 @@ def _composition(tmp_path: Path, *, drift=None, overlap=False, param_change=None
     if drift == "display_name":
         current_decl = fresh_decl.model_copy(update={"url": "https://example.org/renamed"})
     old_source = _source("retained", old_decl)
+    removed_source = _source("removed", removed_decl, task_count=1)
     fresh_source = _source("admitted", fresh_decl, task_count=2)
     if overlap:
         fresh_source = fresh_source.model_copy(update={"source_id": old_decl.id, "source_key": old_source.source_key})
-    old = _release(tmp_path, "retained", old_decl, old_source, task_count=3)
+    old_sources = [old_source] + ([removed_source] if removed else [])
+    old_inventory = [old_decl] + ([removed_decl] if removed else [])
+    old_task_count = 3 + (1 if removed else 0)
+    old = _release(tmp_path, "retained", old_decl, old_source, task_count=old_task_count)
+    if removed:
+        old = old.model_copy(update={"sources": old_sources, "inventory": old_inventory, "task_count": old_task_count})
+        old = compose.AlignmentRelease.model_validate(old.model_dump(mode="json"))
     fresh = _release(tmp_path, "admitted", fresh_decl, fresh_source, task_count=2)
-    old_stats = _statistics(tmp_path, "old-statistics.parquet", [old_decl.id], offset=0)
+    old_stats = _statistics(
+        tmp_path, "old-statistics.parquet", [old_decl.id] + ([removed_decl.id] if removed else []), offset=0
+    )
     fresh_stats = _statistics(tmp_path, "fresh-statistics.parquet", [fresh_source.source_id], offset=10)
     old_cov = _coverage(old, old_stats, old_stats)
     fresh_cov = _coverage(fresh, fresh_stats, fresh_stats, distance=0.45)
@@ -260,6 +275,7 @@ def _compose_inputs(tmp_path: Path, document: dict, expected_tasks: int) -> comp
         inputs=_seal_json(tmp_path, "composition-inputs.json", document),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=expected_tasks,
+        removed_sources=(),
     )
 
 
@@ -269,15 +285,42 @@ def _feeds(tmp_path: Path) -> tuple[Path, ...]:
 
 def test_compose_plan_accepts_an_additions_manifest(tmp_path):
     document, expected = _composition(tmp_path)
-    plan = compose.compose_plan(document, expected)
+    plan = compose.compose_plan(document, expected, ())
     assert len(plan.targets) == 1
     assert plan.fresh_task_count == 2 and plan.retained_task_count == 3
     assert len(plan.sources) == 2 and len(plan.inventory) == 2
 
 
+def test_compose_plan_drops_planned_removals_from_the_retained_curriculum(tmp_path):
+    """A planned removal never survives into the composed release."""
+    document, expected = _composition(tmp_path)
+    retained_id = _declaration("retained").id
+    plan = compose.compose_plan(document, expected, (retained_id,))
+    assert plan.removed_sources == (retained_id,)
+    assert [source.source_id for source in plan.sources] == list(plan.targets)
+    assert [declaration.id for declaration in plan.inventory] == list(plan.targets)
+    assert plan.retained_task_count == 0
+    release = compose.compose_release(plan, document, {"uri": "/sealed/inputs.json", "sha256": "c" * 64})
+    assert release.task_count == 2 and retained_id not in {source.source_id for source in release.sources}
+    with pytest.raises(ValueError, match="absent from the retained curriculum"):
+        compose.compose_plan(document, expected, ("Marin:never-retained",))
+
+
+def test_compose_plan_reads_an_earlier_generation_retained_inventory(tmp_path):
+    """A retained release sealed in the r39-era declaration form (with the removed name) upgrades."""
+    document, expected = _composition(tmp_path)
+    old_path = tmp_path / "old-release.json"
+    old = json.loads(old_path.read_text())
+    old["inventory"][0]["name"] = "retained-legacy-name"
+    old_path.write_text(json.dumps(old))
+    document["old_release"]["sha256"] = hashlib.sha256(old_path.read_bytes()).hexdigest()
+    plan = compose.compose_plan(document, expected, ())
+    assert plan.retained_task_count == 3 and "name" not in plan.inventory[0].model_dump(mode="json")
+
+
 def test_compose_release_carries_lineage_and_totals(tmp_path):
     document, expected = _composition(tmp_path)
-    plan = compose.compose_plan(document, expected)
+    plan = compose.compose_plan(document, expected, ())
     release = compose.compose_release(plan, document, {"uri": "/sealed/inputs.json", "sha256": "c" * 64})
     assert release.task_count == 5
     assert release.lineage["composition_inputs_uri"] == "/sealed/inputs.json"
@@ -302,7 +345,7 @@ def test_compose_plan_refusals(tmp_path, drift, overlap, param_change, expected_
         tmp_path, drift=drift, overlap=overlap, param_change=param_change, expected_tasks=expected_tasks
     )
     with pytest.raises(ValueError, match=message):
-        compose.compose_plan(document, expected_tasks)
+        compose.compose_plan(document, expected_tasks, ())
 
 
 def test_compose_run_dry_run_writes_nothing(tmp_path):
@@ -324,6 +367,7 @@ def test_compose_run_refuses_bad_inputs_and_alerts(tmp_path):
         inputs=ArtifactRef(uri=document["old_release"]["uri"], sha256="0" * 64),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=expected,
+        removed_sources=(),
     )
     with pytest.raises(ValueError, match="digest mismatch"):
         compose.run_compose(inputs, dry_run=True, feeds=_feeds(tmp_path))
@@ -335,6 +379,7 @@ def test_compose_run_refuses_bad_inputs_and_alerts(tmp_path):
         inputs=ArtifactRef(uri=str(tmp_path / "missing.json"), sha256="0" * 64),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=0,
+        removed_sources=(),
     )
     with pytest.raises(ValueError, match="positive"):
         compose.run_compose(empty, dry_run=True, feeds=_feeds(tmp_path))
@@ -412,3 +457,69 @@ def test_embed_dry_run_records_plan_without_executing(tmp_path):
     assert not any((tmp_path / "release" / "artifacts").rglob("*"))
     rows = (tmp_path / "alerts.jsonl").read_text().splitlines()
     assert json.loads(rows[-1])["kind"] == embed_stage.alerts.KIND_FINISH
+
+
+def test_fresh_corpus_expectation_counts_the_shipped_targets():
+    """Embed's expectation is the shipped fresh set: zero-admission targets ship nothing.
+
+    The census proof's per-source results carry the oracle-empty marker; the
+    expectation counts only the targets the census did not filter to empty and
+    sums their retained tasks.
+    """
+    plan = fixture_plan(targets=("Marin:fixture", "Marin:fixture-empty"), expected_population_tasks=10)
+    census_proof = {
+        "results": [
+            {"source_id": "Marin:fixture", "inventory": {"retained_tasks": 4}},
+            {
+                "source_id": "Marin:fixture-empty",
+                "oracle_empty": {"original_count": 7},
+                "inventory": {"retained_tasks": 0},
+            },
+            {"source_id": "Marin:not-a-target", "inventory": {"retained_tasks": 99}},
+        ]
+    }
+    expectation = _fresh_corpus_expectation(plan, census_proof)
+    assert expectation == {"expected_source_count": 1, "expected_task_count": 4}
+
+
+def test_end_to_end_targets_scoped_and_removals_dropped(tmp_path):
+    """The structural-scoping chain on a small fixture plan.
+
+    Embed's expectation counts only the plan's targets (the removed source's
+    census row is oracle-empty and a non-target row is ignored); the compose drops
+    the planned removal from the retained curriculum so nothing survives into the
+    composed release; and a removed source that would survive — as a fresh target
+    — refuses.
+    """
+    plan = fixture_plan(targets=("Marin:admitted",), removed_sources=("Marin:removed",))
+    census_proof = {
+        "results": [
+            {"source_id": "Marin:admitted", "inventory": {"retained_tasks": 2}},
+            {
+                "source_id": "Marin:removed",
+                "oracle_empty": {"original_count": 5},
+                "inventory": {"retained_tasks": 0},
+            },
+            {"source_id": "Marin:not-in-the-plan", "inventory": {"retained_tasks": 99}},
+        ]
+    }
+    # 1. Only targets are embedded: the shipped fresh set is the one target.
+    expectation = _fresh_corpus_expectation(plan, census_proof)
+    assert expectation == {"expected_source_count": 1, "expected_task_count": 2}
+
+    # 2. The compose drops the planned removal: the composed release carries only
+    #    the retained survivor and the fresh target.
+    document, expected = _composition(tmp_path, removed=True)
+    removed_id = _declaration("removed").id
+    compose_plan = compose.compose_plan(document, expected, (removed_id,))
+    assert removed_id not in {source.source_id for source in compose_plan.sources}
+    assert removed_id not in {declaration.id for declaration in compose_plan.inventory}
+    assert compose_plan.retained_task_count == 3
+    release = compose.compose_release(compose_plan, document, {"uri": "/sealed/inputs.json", "sha256": "c" * 64})
+    assert release.task_count == 5 and removed_id not in {source.source_id for source in release.sources}
+
+    # 3. A removed source left in retained fails: one that is also a fresh target
+    #    cannot be dropped from the retained curriculum, so the compose refuses.
+    overlap_document, overlap_expected = _composition(tmp_path, overlap=True)
+    with pytest.raises(ValueError, match="also a planned removal"):
+        compose.compose_plan(overlap_document, overlap_expected, (_declaration("retained").id,))
