@@ -3,18 +3,20 @@
 
 """SWE-bench Science with native isolated grading.
 
-All 119 task packages are defined by the pinned release. Task materials retain their upstream licenses.
+Task materials retain their upstream licenses.
 """
 
 import base64
 import re
 import shlex
 import tomllib
+from collections.abc import Iterator
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from finestore.rl.status_taxonomy import DataRestriction
+from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, PiAgent
 from taskcompendium.importers.harbor.package import (
@@ -64,11 +66,17 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
-VERSION = "2026.11.24.5"
+VERSION = "2026.11.25.1"
 BENCHMARK = "swebench-science"
-TASK_COUNT = 119
+TASK_COUNT = 118
 PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
 PATCH = "/logs/artifacts/model.patch"
+
+
+def benchmark_rows(path: StoragePath, context: ConversionContext) -> Iterator[dict]:
+    # Task 019 requires permission to modify pycisTopic. See marin-community/marin#12108.
+    if path.name != "task_019.tar.gz":
+        yield from package_rows(path, context)
 
 
 def _offline_image(env: dict) -> str:
@@ -180,7 +188,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         name=f"harbor-{name}",
         version=VERSION,
         intended_use=IntendedUse.EVAL,
-        source=HarborRepoSource(DATASET, REVISION, read=package_rows, root="tasks"),
+        source=HarborRepoSource(DATASET, REVISION, read=benchmark_rows, root="tasks"),
         convert=convert,
     )
     source = RlDataSource(

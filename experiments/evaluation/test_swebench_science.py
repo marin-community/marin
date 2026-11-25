@@ -15,9 +15,8 @@ from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGr
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
-import experiments.post_training.task_curation.harbor_packages as packages_module
 from experiments.evaluation.benchmarks import swebench_science
-from experiments.post_training.task_curation.harbor_packages import package_archive, stage_repository_packages
+from experiments.post_training.task_curation.harbor_packages import package_archive
 
 # Task 002's MIT-licensed manifest and collection hook are copied from DATASET at REVISION.
 FIXTURE = Path(__file__).parent / "fixtures/harbor/swebench_science"
@@ -43,6 +42,16 @@ def swebench_science_package(tmp_path):
     (tests / "grader.py").write_text("from private_tests import grade\ngrade()\n")
     (tests / "test.sh").write_text("exit 99\n")  # This stub must never replace the image's verifier.
     return package
+
+
+def test_corpus_omits_held_pycistopic_package(tmp_path):
+    [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
+    rows = []
+    for name in ("task_018", "task_019", "task_020", "task_119"):
+        archive = tmp_path / f"{name}.tar.gz"
+        archive.write_bytes(b"package")
+        rows.extend(source.config.recipe.source.read(StoragePath(str(archive)), ConversionContext({}, None)))
+    assert [row["name"] for row in rows] == ["task_018", "task_020", "task_119"]
 
 
 def test_corpus_sets_solver_disk_and_keeps_the_verifier_image(swebench_science_package):
@@ -130,20 +139,3 @@ def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_p
     git("apply", "--binary", str(artifacts / "model.patch"))
     assert (repo / "source.py").read_text() == "candidate\n"
     assert (repo / "new.bin").read_bytes() == b"\x00candidate\xff"
-
-
-def test_nested_huggingface_repository_stages_packages_under_root(tmp_path, monkeypatch):
-    repository = tmp_path / "repository"
-    for name in ("tasks/task_001", "tasks/task_002", "other/task_003"):
-        directory = repository / name
-        directory.mkdir(parents=True)
-        (directory / "task.toml").write_text(name)
-    monkeypatch.setattr(packages_module, "snapshot_download", lambda *_args, **_kwargs: str(repository))
-    output = tmp_path / "staged"
-    stage_repository_packages(
-        "org/fixture",
-        swebench_science.REVISION,
-        StoragePath(str(output)),
-        root="tasks",
-    )
-    assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]

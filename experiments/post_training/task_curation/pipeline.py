@@ -211,7 +211,7 @@ class HarborRepoSource:
     repo: str
     revision: str
     read: FileReader
-    root: str = ""
+    root: str = field(default="", metadata={"fingerprint_omit_value": ""})
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
