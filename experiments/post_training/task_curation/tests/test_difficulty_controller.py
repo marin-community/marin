@@ -33,7 +33,11 @@ from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from experiments.post_training.task_curation.difficulty import controller
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
-from experiments.post_training.task_curation.difficulty.planner import RebuildEnvironmentArtifact
+from experiments.post_training.task_curation.difficulty.planner import (
+    RebuildEnvironmentArtifact,
+    action_id,
+    action_payload,
+)
 from experiments.post_training.task_curation.difficulty.state import CatalogSource
 
 
@@ -56,7 +60,15 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
     sdk = SimpleNamespace(SecretManagerServiceClient=SecretManager)
     monkeypatch.setitem(sys.modules, "google.cloud.secretmanager", sdk)
     monkeypatch.setattr(google.cloud, "secretmanager", sdk, raising=False)
-    monkeypatch.setattr(controller, "list_iris_jobs", lambda: [])
+    monkeypatch.setattr(
+        controller,
+        "list_iris_jobs",
+        lambda: [
+            SimpleNamespace(
+                job_id="/fixture/atlas-difficulty-reconciler-controller-old/difficulty-reconcile-live", active=True
+            )
+        ],
+    )
     monkeypatch.setattr(controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture"))
     accepted = tmp_path / "external-submission.json"
 
@@ -167,7 +179,10 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
         )
         backend = IrisBackend(client, parent, str(tmp_path / "ledger"))
         action = RebuildEnvironmentArtifact("s3://fixture/artifact", (), ())
-        manifest = "s3://fixture/manifest.json"
+        manifest_path = tmp_path / "ledger/v1/actions" / (action_id(action) + ".json")
+        manifest_path.parent.mkdir(parents=True)
+        manifest_path.write_text(json.dumps(action_payload(action)))
+        manifest = str(manifest_path)
         identity = VerifiedIdentity(user_id="fixture", role="task", job_id=str(parent))
         with identity_scope(identity), iris_ctx_scope(IrisContext(job_id=parent, client=client)):
             if default_parent:
@@ -178,13 +193,25 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
                 child = backend.submit(action, manifest)
                 assert child.startswith(str(parent) + "/difficulty-reconcile-")
                 assert backend.submit(action, manifest) == child
+                other = IrisBackend(client, parent, str(tmp_path / "other-ledger"))
+                other_manifest = tmp_path / "other-ledger/v1/actions" / manifest_path.name
+                other_manifest.parent.mkdir(parents=True)
+                other_manifest.write_text(manifest_path.read_text())
+                other_child = other.submit(action, str(other_manifest))
+                assert other_child != child
+                assert {job.job_id for job in backend.jobs()} == {child}
+                assert {job.job_id for job in other.jobs()} == {other_child}
+                restarted = IrisBackend(
+                    client, JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "next"), backend.ledger
+                )
+                assert restarted.submit(action, manifest) == child
             children = service.list_jobs(
                 controller_pb2.Controller.ListJobsRequest(
                     query=controller_pb2.Controller.JobQuery(job_id_prefix=str(parent) + "/")
                 ),
                 None,
             ).jobs
-        assert len(children) == (0 if default_parent else 1)
+        assert len(children) == (0 if default_parent else 2)
 
 
 def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_path, monkeypatch):

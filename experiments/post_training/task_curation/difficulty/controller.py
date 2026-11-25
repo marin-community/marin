@@ -214,7 +214,7 @@ def launch_controller(
 ) -> None:
     """Submit one CPU parent; its inherited client owns every remediation child."""
     for job in list_iris_jobs():
-        if CONTROLLER_JOB_PREFIX in job.job_id and job.active:
+        if job.job_id.rsplit("/", 1)[-1].startswith(CONTROLLER_JOB_PREFIX) and job.active:
             print(json.dumps({"controller_job": job.job_id, "state": job.state}))
             return
     record = load_credentials("marin")

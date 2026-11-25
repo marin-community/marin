@@ -337,7 +337,7 @@ def collect_finished(
         )
         target = StoragePath(ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{row.action_id}.json"
         error_identity = None
-        if job.state == JobState.SUCCEEDED:
+        if job.state == JobState.SUCCEEDED and target.exists():
             result = json.loads(target.read_text())
             if result["status"] == "completed":
                 continue
@@ -378,6 +378,9 @@ def collect_finished(
             )
             detail = f"Iris child {row.job_id}: {job.state}"
             error_identity = f"iris_child_{job.state}"
+            if job.state == JobState.SUCCEEDED:
+                detail = f"Iris child {row.job_id} succeeded without a result in this campaign ledger"
+                error_identity = "completed_job_missing_campaign_result"
             if target.exists():
                 failure = json.loads(target.read_text())
                 if failure["status"] == "failed":

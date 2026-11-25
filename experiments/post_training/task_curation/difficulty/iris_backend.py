@@ -18,7 +18,12 @@ from rigging.timing import Duration
 from experiments.post_training.task_curation.difficulty.campaign import campaign_record
 from experiments.post_training.task_curation.difficulty.executor import Job, action_job_slots
 from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET, JOB_TIMEOUT
-from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
+from experiments.post_training.task_curation.difficulty.ledger import (
+    ACTIONS_DIRECTORY,
+    LEDGER_VERSION,
+    digest,
+    read_rows,
+)
 from experiments.post_training.task_curation.difficulty.planner import (
     MAX_GPU_HOURS_PER_JOB,
     Action,
@@ -47,6 +52,8 @@ class IrisBackend:
         prefix = f"/{self.controller_job.user}/{JOB_NAMESPACE}"
         raw = self.client.list_jobs(prefix=prefix)
         jobs = []
+        referenced = {row.job_id for row in read_rows(self.ledger) if row.job_id}
+        scope = JOB_COMPONENT + digest(self.ledger)[:16] + "-"
         grouped: dict[str, list[Job]] = {}
         for status in raw:
             wire = str(status.job_id)
@@ -54,6 +61,11 @@ class IrisBackend:
                 "atlas-difficulty-reconciler-controller-" in wire and "/" + JOB_COMPONENT not in wire
             ):
                 continue
+            if "/" + JOB_COMPONENT in wire:
+                base, component = wire.split("/" + JOB_COMPONENT, 1)
+                root = base + "/" + JOB_COMPONENT + component.split("/", 1)[0]
+                if root not in referenced and not component.startswith(scope.removeprefix(JOB_COMPONENT)):
+                    continue
             match = re.search(r"atlas-difficulty-(small|large|hosted|snowball)-", wire)
             solver = Solver(match.group(1)) if match else None
             job = Job(wire, status.state, solver)
@@ -64,7 +76,7 @@ class IrisBackend:
             else:
                 jobs.append(job)
         for root in grouped:
-            prefix = root.rsplit("/", 1)[-1].removeprefix(JOB_COMPONENT)
+            prefix = root.rsplit("/", 1)[-1].rsplit("-", 1)[-1]
             matches = (StoragePath(self.ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / (prefix + "*.json")).glob()
             if len(matches) != 1:
                 raise ValueError(f"Active job has no unique action manifest: {root}")
@@ -81,7 +93,7 @@ class IrisBackend:
 
     def submit(self, action: Action, manifest_uri: str) -> str:
         key = action_id(action)
-        name = JOB_COMPONENT + key[:24]
+        name = JOB_COMPONENT + digest(self.ledger)[:16] + "-" + key[:24]
         existing = self.client.list_jobs(prefix=f"/{self.controller_job.user}/{JOB_NAMESPACE}")
         for job in existing:
             if str(job.job_id).endswith("/" + name):

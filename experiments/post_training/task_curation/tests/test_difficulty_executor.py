@@ -293,3 +293,17 @@ def test_tpu_reconcile_uses_only_qualified_pools_and_admits_later_large(tmp_path
     )
     submitted = [json.loads(p.read_text())["solver"] for p in (tmp_path / "jobs").glob("*.json")]
     assert len(submitted) == 4 and set(submitted) == {solver.value for solver in Solver}
+
+
+def test_successful_child_without_campaign_result_does_not_repair_or_crash(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    backend = JobStore(str(tmp_path / "jobs"))
+    action = plan([blocked(Gap(GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING))], [])[0]
+    execute_plan([action], [], [SOURCE], ledger, backend, EscalationLog(ledger))
+    backend.existing = [replace(job, state=JobState.SUCCEEDED) for job in backend.existing]
+    additions = collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    assert {row.outcome for row in additions} == {Outcome.FINISHED, Outcome.ESCALATED}
+    failure = next(row for row in additions if row.outcome == Outcome.ESCALATED)
+    assert failure.reason == GapReason.CONTROLLER_ACTION_FAILED
+    assert failure.error_identity == "completed_job_missing_campaign_result"
+    assert collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger)) == []
