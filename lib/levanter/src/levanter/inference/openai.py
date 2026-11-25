@@ -46,12 +46,12 @@ from levanter.inference.binary import (
     EXPERT_IDS,
     EXPERT_VALID,
     GENERATE_PATH,
+    LOGPROB_MODE,
     MEDIA_TYPE,
     MAX_POLICY_ID_LENGTH,
     POLICY_LOGPROBS,
     PROMPT_TOKEN_IDS,
     TOKEN_IDS,
-    GenerateOptions,
     choice_tensor_key,
     encode_frame,
     read_generate_request,
@@ -770,6 +770,7 @@ def _format_completion_choice(
     prompt: str | list[int],
     generation: InferenceResponse,
     index: int,
+    score_mode: LogprobMode,
 ) -> CompletionChoice:
     choice_text = generation.text
     if request.echo:
@@ -807,13 +808,14 @@ def _format_completion_choice(
         logprobs=logprobs,
     )
     if request.return_token_ids:
-        choice = choice.model_copy(
-            update={
-                "token_ids": generation.tokens,
-                "model_version": generation.model_version,
-                "policy_id": generation.policy_id,
-            }
-        )
+        metadata = {
+            "token_ids": generation.tokens,
+            "model_version": generation.model_version,
+            "policy_id": generation.policy_id,
+        }
+        if not request.echo and request.logprobs is not None:
+            metadata[LOGPROB_MODE] = score_mode
+        choice = choice.model_copy(update=metadata)
     return choice
 
 
@@ -837,8 +839,10 @@ async def _create_completion(
         if request.stop_token_ids:
             stop_tokens = (stop_tokens or []) + [[token] for token in request.stop_token_ids]
         config = ctx.config.service
-        vocab_size = ctx.model.Vocab.size
-        _validate_stop_tokens(stop_tokens, config, vocab_size)
+        n = request.n or 1
+        if request.echo and request.expected_logprob_mode is not None:
+            raise HTTPException(status_code=400, detail="expected_logprob_mode applies to sampled scores without echo")
+        _validate_generation_options(ctx, n, stop_tokens, request.expected_logprob_mode)
 
         # Create futures for all prompts
         futures = []
@@ -853,9 +857,7 @@ async def _create_completion(
                 prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
             else:
                 prompt_tokens = prompt
-                if not prompt_tokens or min(prompt_tokens) < 0 or max(prompt_tokens) >= vocab_size:
-                    raise HTTPException(status_code=400, detail="Token prompts must be nonempty and in vocabulary")
-                _validate_generation_context(len(prompt_tokens), request.max_tokens, config)
+                _validate_generation_prompt(prompt_tokens, request.max_tokens, config, ctx.model.Vocab.size)
             scored_token_budget = len(prompt_tokens) + request.max_tokens
             if echo_logprobs_top_k is not None and scored_token_budget > config.max_seq_len:
                 raise HTTPException(
@@ -882,7 +884,7 @@ async def _create_completion(
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=n,
                 echo_logprobs_top_k=echo_logprobs_top_k,
                 abort_event=abort_event,
                 expected_policy_id=request.expected_policy_id,
@@ -896,7 +898,10 @@ async def _create_completion(
         choice_idx = 0
         for prompt, result in zip(prompts, results, strict=True):
             for generation in result:
-                choices.append(_format_completion_choice(ctx.tokenizer, request, prompt, generation, choice_idx))
+                choice = _format_completion_choice(
+                    ctx.tokenizer, request, prompt, generation, choice_idx, config.logprob_mode
+                )
+                choices.append(choice)
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -928,7 +933,8 @@ def _compute_tokens(
     tools: list[dict[str, object]] | None = None,
     chat_template_kwargs: dict[str, object] | None = None,
     *,
-    mode: Literal["generate", "render", "continue"] = "generate",
+    add_generation_prompt: bool = True,
+    continue_final_message: bool = False,
 ) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
@@ -949,23 +955,13 @@ def _compute_tokens(
         raise HTTPException(status_code=400, detail=f"chat_template_kwargs may not override: {names}")
     if tools is not None:
         template_kwargs["tools"] = tools
-    if mode == "continue":
-        if not dict_messages or "content" not in dict_messages[-1]:
-            raise HTTPException(status_code=400, detail="Continuing the final message requires its text")
-        marker = uuid.uuid4().hex
-        dict_messages[-1]["content"] += marker
-        rendered = tokenizer.apply_chat_template(dict_messages, tokenize=False, **template_kwargs)
-        assert isinstance(rendered, str)
-        prefix, found, _ = rendered.rpartition(marker)
-        if not found:
-            raise HTTPException(status_code=400, detail="The chat template omitted the final message text")
-        return tokenizer.encode(prefix, add_special_tokens=False)
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
     result = tokenizer.apply_chat_template(
         dict_messages,
         tokenize=True,
-        add_generation_prompt=mode == "generate",
+        add_generation_prompt=add_generation_prompt,
+        continue_final_message=continue_final_message,
         return_dict=False,
         **template_kwargs,
     )
@@ -1081,13 +1077,30 @@ async def _create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _validate_generation_context(prompt_length: int, max_tokens: int, config: InferenceEngineConfig) -> None:
+def _validate_generation_prompt(
+    prompt: list[int], max_tokens: int, config: InferenceEngineConfig, vocab_size: int
+) -> None:
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt must contain at least one token")
+    if min(prompt) < 0 or max(prompt) >= vocab_size:
+        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
     max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if max_tokens < 1 or prompt_length + max_tokens > config.max_seq_len or prompt_length > max_prefill_size:
+    if max_tokens < 1 or len(prompt) + max_tokens > config.max_seq_len or len(prompt) > max_prefill_size:
         raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
 
 
-def _validate_stop_tokens(stops: list[list[int]] | None, config: InferenceEngineConfig, vocab_size: int) -> None:
+def _validate_generation_options(
+    ctx: InferenceContext,
+    n: int,
+    stops: list[list[int]] | None,
+    expected_logprob_mode: LogprobMode | None,
+) -> None:
+    config = ctx.config.service
+    if expected_logprob_mode is not None and expected_logprob_mode != config.logprob_mode:
+        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
+    if n > config.max_seqs:
+        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
+    vocab_size = ctx.model.Vocab.size
     if stops and (
         len(stops) > config.max_stop_seqs
         or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
@@ -1096,28 +1109,17 @@ def _validate_stop_tokens(stops: list[list[int]] | None, config: InferenceEngine
         raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
 
 
-def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not ctx.engine.supports_route_capture:
-        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
-    config = ctx.engine.config
-    if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
-        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
-    _validate_generation_context(prompt.size, options.max_tokens, config)
-    if options.n > config.max_seqs:
-        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
-    vocab_size = ctx.model.Vocab.size
-    if np.any((prompt < 0) | (prompt >= vocab_size)):
-        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
-    _validate_stop_tokens(options.stop_tokens, config, vocab_size)
-
-
 async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
     prompt, options = await read_generate_request(request)
-    _validate_binary_options(ctx, prompt, options)
+    if options.return_route_captures and not ctx.engine.supports_route_capture:
+        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
+    prompt_tokens = prompt.tolist()
+    _validate_generation_options(ctx, options.n, options.stop_tokens, options.expected_logprob_mode)
+    _validate_generation_prompt(prompt_tokens, options.max_tokens, ctx.config.service, ctx.model.Vocab.size)
     async with ctx.http_generation(request) as abort_event:
         future = asyncio.get_running_loop().create_future()
         ctx.submit_request(
-            prompt.tolist(),
+            prompt_tokens,
             options.max_tokens,
             options.temperature,
             options.top_p,
@@ -1163,7 +1165,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
         if output.expert_routes is not None:
             tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
             tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices, "logprob_mode": score_mode}, tensors)
+    return encode_frame({"choices": choices, LOGPROB_MODE: score_mode}, tensors)
 
 
 class InferenceServer:
@@ -1277,20 +1279,17 @@ class InferenceServer:
 
         @app.post("/tokenize", response_model=ChatTokenizeResponse)
         async def tokenize_chat(request: ChatTokenizeRequest) -> ChatTokenizeResponse:
-            mode: Literal["generate", "render", "continue"] = "generate" if request.add_generation_prompt else "render"
-            if request.continue_final_message:
-                if request.add_generation_prompt:
-                    raise HTTPException(
-                        status_code=400, detail="Continuing the final message requires no generation prompt"
-                    )
-                mode = "continue"
-            tokens = _compute_tokens(
-                request.messages,
-                inference_context.tokenizer,
-                request.tools,
-                request.chat_template_kwargs,
-                mode=mode,
-            )
+            try:
+                tokens = _compute_tokens(
+                    request.messages,
+                    inference_context.tokenizer,
+                    request.tools,
+                    request.chat_template_kwargs,
+                    add_generation_prompt=request.add_generation_prompt,
+                    continue_final_message=request.continue_final_message,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return ChatTokenizeResponse(
                 tokens=tokens, count=len(tokens), max_model_len=inference_context.config.service.max_seq_len
             )

@@ -888,7 +888,12 @@ def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(greedy_c
 
 def test_openai_token_batch_returns_exact_choices_and_sampled_scores(greedy_client):
     prompts = [[18, 7, 3, 18], [7, 18]]
-    options = {"max_tokens": 2, "temperature": 0, "seed": 17}
+    options = {
+        "max_tokens": 2,
+        "temperature": 0,
+        "seed": 17,
+        "expected_logprob_mode": "behavior",
+    }
     response = greedy_client.post(
         "/v1/completions",
         json={"model": TEST_MODEL_NAME, "prompt": prompts, "return_token_ids": True, "logprobs": 0, **options},
@@ -908,6 +913,19 @@ def test_openai_token_batch_returns_exact_choices_and_sampled_scores(greedy_clie
         assert choice["token_ids"] == expected["choice.0.token_ids"].tolist()
         assert choice["logprobs"]["token_logprobs"] == expected["choice.0.behavior_logprobs"].tolist()
         assert choice["finish_reason"] == "length"
+        assert choice["logprob_mode"] == "behavior"
+
+
+def test_openai_rejects_invalid_exact_generation_options(greedy_client):
+    payload = {"model": TEST_MODEL_NAME, "prompt": [18, 7], "max_tokens": 2, "logprobs": 0}
+    for overrides, detail in (
+        ({"expected_logprob_mode": "policy"}, "different logprob mode"),
+        ({"n": 3}, "sequence capacity"),
+        ({"prompt": [[18, 7], [-1]]}, "out-of-vocabulary token"),
+    ):
+        response = greedy_client.post("/v1/completions", json={**payload, **overrides})
+        assert response.status_code == 400, response.text
+        assert detail in response.json()["detail"]
 
 
 def test_tokenize_renders_serving_chat_template(greedy_client, local_gpt2_tokenizer):
@@ -935,6 +953,20 @@ def test_tokenize_renders_serving_chat_template(greedy_client, local_gpt2_tokeni
     full_text = tokenizer.apply_chat_template([*messages, {"role": "assistant", "content": "Hello"}], tokenize=False)
     assert isinstance(full_text, str)
     assert continued.json()["tokens"] == tokenizer.encode(full_text[: full_text.rindex("Hello") + len("Hello")])
+
+
+def test_tokenize_rejects_continuing_a_tool_call_without_text(greedy_client):
+    response = greedy_client.post(
+        "/tokenize",
+        json={
+            "model": TEST_MODEL_NAME,
+            "messages": [{"role": "assistant", "content": None, "tool_calls": [{"id": "call"}]}],
+            "add_generation_prompt": False,
+            "continue_final_message": True,
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert "requires its text" in response.json()["detail"]
 
 
 PREFILL_GATE_TIMEOUT = 30

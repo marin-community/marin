@@ -60,7 +60,9 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Exact-token completions** accept one sequence of token IDs or a batch of sequences
   in `prompt`. Set `return_token_ids: true` for each choice's sampled IDs, `policy_id`,
   and `model_version`. With `echo` disabled, `logprobs: 0` returns a sampled score per
-  token, including an empty array for a choice aborted before sampling. `ignore_eos`
+  token, including an empty array for a choice aborted before sampling. The choice's
+  `logprob_mode` identifies behavior or policy scores. Set `expected_logprob_mode`
+  to require a matching mode before generation. `ignore_eos`
   skips automatic tokenizer stop tokens. Explicit `stop` strings and `stop_token_ids`
   still end the choice. Post chat `messages` to `/tokenize` to render a prompt with
   the serving tokenizer and get its IDs.

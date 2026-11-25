@@ -7,6 +7,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, StrictInt
 
+from levanter.inference.binary import MAX_POLICY_ID_LENGTH
+from levanter.layers.sampler import LogprobMode
+
 
 class ChatMessage(BaseModel):
     """A single chat message in the conversation."""
@@ -52,7 +55,8 @@ class CompletionRequest(BaseModel):
     model: str
     prompt: str | list[str] | list[StrictInt] | list[list[StrictInt]]
     return_token_ids: bool = False
-    expected_policy_id: str | None = None
+    expected_policy_id: str | None = Field(default=None, min_length=1, max_length=MAX_POLICY_ID_LENGTH)
+    expected_logprob_mode: LogprobMode | None = None
     ignore_eos: bool = False
     best_of: int | None = None
     echo: bool | None = None
@@ -60,7 +64,7 @@ class CompletionRequest(BaseModel):
     logit_bias: dict[str, int] | None = None
     logprobs: int | None = None
     max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    n: int | None = None
+    n: int | None = Field(default=None, ge=1)
     presence_penalty: float | None = None
     seed: int | None = None
     stop: str | list[str] | None = None
