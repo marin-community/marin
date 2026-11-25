@@ -87,6 +87,7 @@ from experiments.post_training.task_curation.selection import (
 from experiments.sft.launcher import PreparedData
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+SFT_ARM_TEST_PREFIX = "s3://marin-test/llom"
 
 
 def printed_status(output):
@@ -1328,11 +1329,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
     model, sft_updates, rl_updates, tmp_path, monkeypatch, selection, mochi_sft_presets
 ):
-    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-test/llom")
-    fake_s3_checkpoint(monkeypatch, "s3://marin-test/llom", tmp_path / "cloud")
+    monkeypatch.setenv("MARIN_PREFIX", SFT_ARM_TEST_PREFIX)
+    fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
     monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
     monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
-    monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-test/llom")
+    monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
     sft = mochi_sft_presets["periodic"] if model == "mochi" else MIXTURE_262K_32NODE
     table = MOCHI if model == "mochi" else snowball_model.SNOWBALL
     tokenizer = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"

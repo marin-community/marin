@@ -93,8 +93,8 @@ with a fixed seed and removes them from train by task and prompt identity.
 The derived selection records its parent, seed, count, population and held-out
 IDs. Both train and validation consume that same artifact. Validation runs
 at steps 3, 6, 9, and so on, recording raw reward. The best checkpoint maximizes
-the arithmetic mean of the last three evaluations; a full three-evaluation
-window is required. The score window restores after restart. Main's 99%
+the arithmetic mean of the last three evaluations; all three must meet coverage
+and eligibility requirements. The score window restores after restart. Main's 99%
 coverage requirement remains (198/200 scored and all 200 attempted).
 
 Every validation-step checkpoint is saved and retained. The selected best

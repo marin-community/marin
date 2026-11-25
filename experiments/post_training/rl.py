@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
+from types import MappingProxyType
 from typing import Protocol
 
 import click
@@ -91,7 +92,7 @@ class ArmSteps:
     rl: int
 
 
-ARM_STEPS = {"mochi": ArmSteps(sft=524, rl=72), "snowball": ArmSteps(sft=360, rl=36)}
+ARM_STEPS = MappingProxyType({"mochi": ArmSteps(sft=524, rl=72), "snowball": ArmSteps(sft=360, rl=36)})
 CURRICULUM_HOLDOUT_COUNT = 200
 VALIDATION_EVERY = 3
 BEST_WINDOW = 3
@@ -800,7 +801,6 @@ def command(
                 raise click.BadParameter(
                     f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
                 )
-            from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT  # noqa: PLC0415 - optional Mochi SFT backend
             from experiments.sft.launcher import (  # noqa: PLC0415 - load only for --sft
                 HFModel,
                 PreparedData,
@@ -836,11 +836,6 @@ def command(
                     PreparedData(ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft_data_tokenizer)
                 )
                 sft_steps = budget.sft if sft_steps is None else sft_steps
-                if isinstance(source_recipe, SFTSpec):
-                    model = source_recipe.model
-                    if isinstance(model, HFModel):
-                        model = replace(model, task_timeout_seconds=None)
-                    source_recipe = replace(source_recipe, model=model, timeout=None)
                 sft = replace(
                     sft,
                     recipe=source_recipe,
@@ -848,15 +843,8 @@ def command(
                 )
             if sft_steps is not None:
                 assert isinstance(sft, SFTPreset)
-                source_recipe = sft.recipe
-                if isinstance(source_recipe, MochiSFT):
-                    source_recipe = replace(
-                        source_recipe, stop_after_steps=sft_steps, checkpoints="final", version=preset.revision
-                    )
-                elif isinstance(source_recipe, SFTSpec):
-                    source_recipe = replace(source_recipe, num_train_steps=sft_steps, version=preset.revision)
-                else:
-                    raise click.BadParameter("The selected SFT recipe does not accept an update budget")
+                version = preset.revision if sft_data_mix is not None else resolve_version("sft-steps", None)
+                source_recipe = sft.recipe.with_steps(sft_steps, version=version)
                 sft = replace(sft, recipe=source_recipe)
             try:
                 initializer = sft.model(
@@ -950,23 +938,26 @@ def command(
                 click.Option(
                     ["--sft-steps"],
                     type=click.IntRange(min=1),
-                    help="SFT updates; mix arms default to Mochi 524 / Snowball 360.",
+                    help=(
+                        f"SFT updates; mix arms default to Mochi {ARM_STEPS['mochi'].sft} / "
+                        f"Snowball {ARM_STEPS['snowball'].sft}."
+                    ),
                 ),
                 click.Option(
                     ["--holdout"],
                     type=click.IntRange(min=1),
-                    help="Random prompts removed from the curriculum; mix arms default to 200.",
+                    help=f"Random prompts removed from the curriculum; mix arms default to {CURRICULUM_HOLDOUT_COUNT}.",
                 ),
                 click.Option(["--holdout-seed"], type=int, help="Holdout seed; defaults to the RL preset seed."),
                 click.Option(
                     ["--val-every"],
                     type=click.IntRange(min=1),
-                    help="Validation cadence; mix arms default to 3 updates.",
+                    help=f"Validation cadence; mix arms default to {VALIDATION_EVERY} updates.",
                 ),
                 click.Option(
                     ["--best-window"],
                     type=click.IntRange(min=1),
-                    help="Best-policy score window; mix arms average 3 evaluations.",
+                    help=f"Best-policy score window; mix arms average {BEST_WINDOW} evaluations.",
                 ),
             ]
         )

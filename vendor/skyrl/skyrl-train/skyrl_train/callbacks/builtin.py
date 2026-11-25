@@ -243,6 +243,7 @@ class BestCheckpointCallback(TrainerCallback):
         self.preservation_baseline: dict[str, float] = {}
 
     def _window_score(self, root: str, step: int, score: float | None) -> float | None:
+        """Return the full eligible-window mean, or None for an incomplete or ineligible window."""
         path = join_resource_path(root, BEST_WINDOW_FILENAME)
         if not self.score_history and io.exists(path):
             saved = json.loads(io.read_bytes(path))
