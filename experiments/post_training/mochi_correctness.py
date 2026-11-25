@@ -58,7 +58,9 @@ async def probe_inventory(base_url: str, requests: list[LoadRequest]) -> list[di
     return probes
 
 
-async def prefix_scores(base_url: str, probes: list[dict], concurrency: int) -> dict[str, dict]:
+async def prefix_scores(
+    base_url: str, probes: list[dict], concurrency: int, *, data_parallel_rank: int | None = None
+) -> dict[str, dict]:
     """Score the same known next tokens without retokenizing generated text."""
     semaphore = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient(timeout=1800) as client:
@@ -68,6 +70,7 @@ async def prefix_scores(base_url: str, probes: list[dict], concurrency: int) -> 
                 prompt = probe["prompt"][:-1]
                 response = await client.post(
                     f"{base_url}/completions",
+                    headers=None if data_parallel_rank is None else {"X-data-parallel-rank": str(data_parallel_rank)},
                     json={
                         "model": "mochi",
                         "prompt": prompt,

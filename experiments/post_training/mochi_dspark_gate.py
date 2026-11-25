@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 class GatePurpose(StrEnum):
     QUALIFICATION = "qualification"
     BENCHMARK = "benchmark"
+    PLAIN_BATCHING = "plain-batching"
 
 
 def checked_json(uri: str, sha256: str) -> dict:
@@ -179,6 +180,72 @@ async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibrat
         raise ValueError(f"Strict sampled-distribution check failed: {stage}")
 
 
+async def investigate_plain_batching(environment: VllmEnvironment, spec: dict, calibration: dict) -> None:
+    """Retain plain-server controls without treating diagnostic completion as qualification."""
+    # Each pair repeats the same inventory; adjacent pairs change only request
+    # concurrency or the requested DP rank. Engine options remain gate-exact.
+    conditions = (
+        ("auto-c16", 16, None),
+        ("auto-c1", 1, None),
+        ("rank0-c1", 1, 0),
+        ("rank1-c1", 1, 1),
+        ("rank0-c16", 16, 0),
+    )
+    scores_by_condition = {}
+    summary = []
+    for name, concurrency, rank in conditions:
+        first = None
+        for repeat in range(2):
+            scores = await prefix_scores(
+                environment.server_url, calibration["probes"], concurrency, data_parallel_rank=rank
+            )
+            if first is None:
+                first = scores
+            scores_by_condition[name] = scores
+            difference = score_difference(first, scores)
+            passed = all(difference[key] <= bound for key, bound in calibration["fixed_bounds"].items())
+            record = {
+                "condition": name,
+                "repeat": repeat,
+                "request_concurrency": concurrency,
+                "requested_data_parallel_rank": rank,
+                "scores": scores,
+                "difference_from_same_condition_first": difference,
+                "within_frozen_bounds": passed,
+                "bounds": calibration["fixed_bounds"],
+            }
+            write_json(spec["output"], f"plain-batching/{name}-{repeat}.json", record)
+            summary.append({key: value for key, value in record.items() if key != "scores"})
+            logger.info("Plain batching condition %s repeat %s: %s", name, repeat, difference)
+    comparisons = {}
+    for reference, candidate in (
+        ("auto-c16", "auto-c1"),
+        ("auto-c1", "rank0-c1"),
+        ("rank0-c1", "rank1-c1"),
+        ("rank0-c1", "rank0-c16"),
+    ):
+        comparisons[f"{reference}-vs-{candidate}"] = score_difference(
+            scores_by_condition[reference], scores_by_condition[candidate]
+        )
+    write_json(
+        spec["output"],
+        "plain-batching/investigation-complete.json",
+        {
+            "teacher_model": spec["model"]["weights"],
+            "conditions": summary,
+            "comparisons": comparisons,
+            "engine_options_unchanged": True,
+            "prefix_caching_enabled": True,
+            "cache_state": "Later sweeps share a cache touched by the inventory; eviction is not controlled",
+            "comparison_reference": "Second sweep of each condition; first sweep retained separately",
+            "limitation": "Request concurrency is controlled, not an exact realized GPU microbatch shape",
+            "qualification_passed": False,
+            "RL_launch_authorized": False,
+            "calibration_sha256": spec["calibration_sha256"],
+        },
+    )
+
+
 async def benchmark(environment: VllmEnvironment, spec: dict, stage: str) -> None:
     if not json.loads((StoragePath(spec["output"]) / "correctness-passed.json").read_text())["passed"]:
         raise ValueError("All correctness stages must pass before measuring load")
@@ -209,20 +276,25 @@ def run(spec: dict, purpose: GatePurpose) -> None:
     geometry = ServingGeometry(**spec["geometry"])
     if geometry.tensor_parallel_size != 1 or geometry.data_parallel_size != 16 or geometry.total_gpus != 16:
         raise ValueError("This approval covers one TP1/EP16, 16-GB200 gang")
-    stages = ("plain-check", "dspark-check", "plain-rescore")
+    stages = (
+        ("plain-batching",)
+        if purpose == GatePurpose.PLAIN_BATCHING
+        else ("plain-check", "dspark-check", "plain-rescore")
+    )
     if purpose == GatePurpose.BENCHMARK:
         stages += ("plain-performance", "dspark-performance")
     with tempfile.TemporaryDirectory(prefix="mochi-dspark-gate-") as scratch:
         draft = Path(scratch) / "draft"
-        io.download_directory(spec["draft"], str(draft))
-        manifest = checked_json(spec["draft_manifest"], spec["draft_manifest_sha256"])
-        for entry in manifest["files"]:
-            local = draft / entry["path"]
-            if (
-                local.stat().st_size != entry["size"]
-                or hashlib.sha256(local.read_bytes()).hexdigest() != entry["sha256"]
-            ):
-                raise ValueError("Staged draft differs from the verified-copy SHA manifest")
+        if purpose != GatePurpose.PLAIN_BATCHING:
+            io.download_directory(spec["draft"], str(draft))
+            manifest = checked_json(spec["draft_manifest"], spec["draft_manifest_sha256"])
+            for entry in manifest["files"]:
+                local = draft / entry["path"]
+                if (
+                    local.stat().st_size != entry["size"]
+                    or hashlib.sha256(local.read_bytes()).hexdigest() != entry["sha256"]
+                ):
+                    raise ValueError("Staged draft differs from the verified-copy SHA manifest")
         for stage in stages:
             speculative = stage.startswith("dspark")
             with iris_vllm_launch(geometry, instance_name=f"vllm-{stage}") as launch:
@@ -235,7 +307,9 @@ def run(spec: dict, purpose: GatePurpose) -> None:
                         if launch.is_leader:
                             with iris_vllm_followers(launch):
                                 environment.wait_until_ready()
-                                if stage.endswith("performance"):
+                                if stage == "plain-batching":
+                                    asyncio.run(investigate_plain_batching(environment, spec, calibration))
+                                elif stage.endswith("performance"):
                                     asyncio.run(benchmark(environment, spec, stage))
                                 else:
                                     asyncio.run(qualify(environment, spec, stage, calibration))
