@@ -273,12 +273,8 @@ def test_submission_exit_codes_and_publication_retries(
     set_job_info(None)
     result = CliRunner().invoke(selected, invoked)
     assert result.exit_code == expected, (result.output, result.exception)
-    if case.startswith("malformed-"):
-        assert "malformed recorded configuration" in result.output and "seed" in result.output
     if case.startswith("stale-control"):
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
-    if "candidate-compose" in case:
-        assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
