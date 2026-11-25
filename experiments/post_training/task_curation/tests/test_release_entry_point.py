@@ -184,6 +184,19 @@ def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):
     assert captured == {"verb": "run"}
 
 
+def test_root_command_carries_the_submission_verb():
+    """The resume submission's entrypoint runs resume on attempt 0.
+
+    Regression: the entrypoint mapped attempt 0 to `run` for BOTH modes, so a
+    resume submission refused at the first previously-failed step.
+    """
+    plan = fixture_plan()
+    submit_script = entry_point._root_command(plan, "p/r40.json", mode="run")[-1]
+    assert "VERB=run;" in submit_script
+    resume_script = entry_point._root_command(plan, "p/r40.json", mode="resume")[-1]
+    assert "VERB=resume;" in resume_script
+
+
 def test_interrupted_graph_resumes_and_skips_sealed_nodes(tmp_path, monkeypatch):
     """The auto-resume semantics: a retry runs resume at the same version.
 

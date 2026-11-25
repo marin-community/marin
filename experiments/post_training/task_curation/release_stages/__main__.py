@@ -438,11 +438,12 @@ def _submit_environment() -> dict[str, str]:
     return env
 
 
-def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
+def _root_command(plan: ReleasePlan, plan_relative: str, *, mode: str) -> list[str]:
     """The root job's entrypoint: the attempt-aware run/resume verb.
 
-    Attempt 0 runs the graph; an iris-level retry (preemption, node loss, a killed
-    hung root) reruns ``resume`` at the same version, so sealed steps skip and only
+    A submit runs the graph on attempt 0; a resume submission reruns ``resume`` on
+    every attempt, and any interruption retry (preemption, node loss, a killed hung
+    root) reruns ``resume`` at the same version, so sealed steps skip and only
     failed or unstarted nodes re-run.
     """
     attempt_check = (
@@ -458,7 +459,7 @@ def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
         " mkdir -p ~/.config/marin/credentials;"
         " printf '%s' \"$MARIN_IAP_CREDENTIAL_JSON\" > ~/.config/marin/credentials/marin.json; fi;"
         ' ATTEMPT=$(uv run --frozen python -c "' + attempt_check + '" 2>/dev/null || echo 0);'
-        ' VERB=run; if [ "$ATTEMPT" -gt 0 ]; then VERB=resume; fi;'
+        " VERB=" + mode + '; if [ "$ATTEMPT" -gt 0 ]; then VERB=resume; fi;'
         ' echo "root attempt $ATTEMPT -> $VERB";'
         " exec uv run --frozen atlas-release --version "
         + plan.release_id
@@ -493,7 +494,7 @@ def _submit_root(args, *, verb: str) -> int:
     subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
     try:
         (snapshot / "atlas-landing-log.jsonl").write_bytes(landing_log.read_bytes())
-        command = _root_command(plan, relative)
+        command = _root_command(plan, relative, mode=verb)
         name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{verb}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:
             with IrisClient.remote(
