@@ -580,7 +580,14 @@ class Checkpointer:
         ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
-    def on_step(self, *, tree: PyTree, step: int, force: bool = False, model: object = None):
+    def on_step(
+        self,
+        *,
+        tree: PyTree,
+        step: int,
+        force: bool = False,
+        metadata_provider: CheckpointMetadataProvider | None = None,
+    ):
         step = int(step)
 
         if step == 0:
@@ -661,7 +668,7 @@ class Checkpointer:
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
-                metadata=model.checkpoint_metadata() if isinstance(model, CheckpointMetadataProvider) else None,
+                metadata=metadata_provider.checkpoint_metadata() if metadata_provider is not None else None,
             )
 
     def _promote_temporary_checkpoint(self, step: int) -> None:

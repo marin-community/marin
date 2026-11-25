@@ -954,7 +954,7 @@ def test_checkpoint_promotion_preserves_model_metadata(tmp_path):
     checkpointer = Checkpointer(tmp_path, None, [], metadata={"format": "test"})
     state = {"model": jnp.asarray([1.0, 2.0])}
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
-    checkpointer.on_step(tree=state, step=1, model=Model())
+    checkpointer.on_step(tree=state, step=1, metadata_provider=Model())
     checkpointer.wait_until_finished()
 
     temporary = resolve_checkpoint(tmp_path)
