@@ -225,7 +225,10 @@ Harbor's hosted verifier. See [Harbor integration](../harbor-integration.md).
 Curated agent benchmarks on Daytona use the same eval-org key as Harbor:
 `DAYTONA_EVAL_API_KEY` from the launch environment, then the `DAYTONA_EVAL_API_KEY`
 secret in the `hai-gcp-models` GCP project. The evaluation worker receives it as its
-`DAYTONA_API_KEY` secret and may reach `app.daytona.io`. Judged agent graders use the
+`DAYTONA_API_KEY` secret and may reach `app.daytona.io`. A benchmark whose package
+tests grade in a separate verifier machine grades on the task machines' backend, so a
+run with Daytona task machines executes the agent's changes only on Daytona; other runs
+grade in the worker's local sandbox. Judged agent graders use the
 curated `judge`, `judge_endpoint` and `judge_api_key` run settings; task machines
 receive no judge credentials.
 

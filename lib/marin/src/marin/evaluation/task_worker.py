@@ -130,9 +130,14 @@ def machine_backends(config: EvaluationRunConfig) -> frozenset[str]:
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings.
+
+    A grader runs the agent's changes, so a run whose task machines are on Daytona grades on Daytona too;
+    other runs grade on the local backend.
+    """
+    task_backend = config.task_machine.backend if config.task_machine is not None else None
     verifier = config.verifier_machine or MachineRuntimeSpec(
-        backend=Backend.LOCAL,
+        backend=Backend.DAYTONA if task_backend == Backend.DAYTONA else Backend.LOCAL,
         network=NetworkPolicy.DENY,
         cpus=None,
         memory_mb=None,
