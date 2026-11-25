@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
@@ -92,8 +93,20 @@ class PublicationOutcome(BaseModel):
         return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
 
 
+def _visible_setting(text: str) -> str:
+    key, _, value = text.partition("=")
+    if is_sensitive_key_name(key):
+        return f"{key}={REDACTED_VALUE}"
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return f"{key}={redact_string(value)}"
+    redacted = redact_value(parsed)
+    return f"{key}={json.dumps(redacted)}" if redacted != parsed else text
+
+
 def run_label(inputs: RunInputs) -> str:
-    parts = [inputs.preset_name, *inputs.settings]
+    parts = [inputs.preset_name, *map(_visible_setting, inputs.settings)]
     if inputs.tasks:
         parts.append(f"tasks={inputs.tasks}")
     if inputs.init:

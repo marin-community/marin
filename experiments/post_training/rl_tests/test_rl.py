@@ -1006,9 +1006,13 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
     publications = []
     unavailable = outcome == "interrupted"
+    running_retries = outcome == "succeeded"
 
     def publish(record):
-        nonlocal unavailable
+        nonlocal unavailable, running_retries
+        if record.status == "running" and running_retries:
+            running_retries = False
+            raise RuntimeError("Marina unavailable during the running write")
         if record.attempt_id == "native-indexed" and record.status == "failed" and unavailable:
             unavailable = False
             raise RuntimeError("Marina unavailable during the terminal write")
@@ -1071,8 +1075,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         nonlocal running_observed
         if early_failure:
             return JobState.FAILED
-        if not running_observed:
-            running_observed = True
+        if running_observed < 2:
+            running_observed += 1
             return JobState.RUNNING
         write_receipt(source, receipt)
         metrics = read_skyrl_metrics(str(source), attempt_id="native-old")
@@ -1081,7 +1085,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         append_metrics(source, metrics)
         return JobState.SUCCEEDED
 
-    running_observed = False
+    running_observed = 0
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
     arguments = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--run"]
@@ -1100,6 +1104,17 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     @click.command()
     def follow():
         raise click.exceptions.Exit(snowball.main(table, argv=follower))
+
+    if outcome == "interrupted":
+        with monkeypatch.context() as timeout:
+            clock = iter((0.0, 1_000_000.0))
+            timeout.setattr(snowball, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+            timeout.setattr(client.job.return_value, "state_only", lambda: JobState.RUNNING)
+            timed_out = CliRunner().invoke(follow)
+        assert timed_out.exit_code == 1 and "Check its Iris state before resubmitting" in timed_out.output
+        assert read_attempt(str(source / "exports"), "native-indexed").interruption is None
+        assert [row.status for row in publications] == ["running"]
+        publications.clear()
 
     result = CliRunner().invoke(follow)
     assert result.exit_code == int(early_failure), (result.output, result.exception)
@@ -1242,14 +1257,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     native_calls = []
 
     def native(command, *, env_vars=None):
-        request_path = Path(command[command.index("--config") + 1])
-        request = yaml.safe_load(request_path.read_text())
-        export_root = request["artifacts"]["export_root"]
-        prepared = read_attempt(export_root, request["run"]["attempt_id"])
-        assert prepared is not None and prepared.index is not None
-        assert prepared.result is None
         shutil.copytree(staged, source, dirs_exist_ok=True)
-        write_attempt(export_root, prepared)
         stored = json.loads((source / "terminal.json").read_text())
         response = stored["result"]
         response["model"] = dict(

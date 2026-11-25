@@ -76,8 +76,11 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "completed_at": "2026-11-03T01:00:00+00:00",
         "status": "failed",
         "optimizer_steps": 0,
+        "failed_facts": ["native_attempt"],
     }
-    publish(failed)
+    assert publish(failed) == failed
+    delayed = failed | {"status": "running", "completed_at": None, "elapsed_seconds": None, "failed_facts": []}
+    assert publish(delayed) == failed
     changed = copy.deepcopy(record)
     changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
