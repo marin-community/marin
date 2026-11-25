@@ -130,6 +130,25 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
+Every manifest is immutable and names its parent, and FineStore never deletes data
+files, so every published commit stays readable:
+
+```python
+from finestore.history import commit_log, row_history
+
+past = ReadView.at("gs://bucket/purchases", token.commit_id)
+for record in commit_log("gs://bucket/purchases"):
+    print(record.commit_id, record.info)
+for version in row_history("gs://bucket/purchases", "purchases", ("o-1",)):
+    print(version.commit.commit_id, version.row)
+```
+
+`ReadView.at(root, commit_id)` reads the archive as that commit left it. `commit_log`
+yields commits from `HEAD` back to the first one. `row_history` yields each committed
+version of one row, newest first, with the commit that wrote it. Both read one manifest
+per commit; `row_history` reads row data only from commits whose own shards may hold
+the key.
+
 Each view caches the immutable byte ranges requested by Parquet, including footers
 and selected row-group columns, across all shard handles. The cache shares a
 64 MiB budget across tables and evicts the least recently used ranges when full.

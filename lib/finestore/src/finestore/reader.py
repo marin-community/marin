@@ -28,7 +28,7 @@ from pyarrow.fs import FileInfo, FileType, FSSpecHandler, PyFileSystem
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.commit import ArchiveSnapshot, read_snapshot
+from finestore.commit import ArchiveSnapshot, read_snapshot, read_snapshot_at
 from finestore.layout import (
     BlobColumns,
     BlobTables,
@@ -974,9 +974,17 @@ class ReadView(_ReadOperations):
                 self._read_filesystem = PyFileSystem(_CachedReadHandler(fs, shards, self._cache_bytes))
             return self._read_filesystem
 
+    @classmethod
+    def at(cls, root: str, commit_id: str, *, cache_bytes: int = _READ_CACHE_BYTES) -> ReadView:
+        """Pin the snapshot that commit ``commit_id`` published, however many commits followed it."""
+        return cls(root, read_snapshot_at(FineStoreLayout(root), commit_id), cache_bytes=cache_bytes)
+
     @property
     def token(self) -> CommitToken | None:
-        """The HEAD version that selected this view, or ``None`` for an empty archive."""
+        """The commit this view reads, or ``None`` for an empty archive.
+
+        A view from ``ReadView.at`` carries ``HISTORICAL_VERSION`` in place of a HEAD version.
+        """
         return self._snapshot.token
 
     @property
