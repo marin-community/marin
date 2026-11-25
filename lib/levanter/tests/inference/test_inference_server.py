@@ -622,7 +622,7 @@ def test_tokens_endpoint(test_client):
 def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
     _, server = test_client
     prompt = [18, 7, 3, 18]
-    with grpc.insecure_channel(f"127.0.0.1:{server.app.state.grpc_port}") as channel:
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
         stub = inference_pb2_grpc.InferenceStub(channel)
         result = stub.Generate(
             inference_pb2.GenerateRequest(
