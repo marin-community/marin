@@ -54,17 +54,18 @@ def moe_router_replay_requested(cfg: DictConfig, role: str = "policy") -> bool:
     return bool(cfg.trainer[role].megatron_config.get("moe_router_replay", False))
 
 
-def _policy_dp_size(cfg: DictConfig) -> int:
-    policy_world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
-
-    pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
-    cp = cfg.trainer.policy.megatron_config.context_parallel_size
-    tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
-    assert policy_world_size % (pp * cp * tp) == 0, (
-        f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
+def _dp_size(cfg: DictConfig, role: str) -> int:
+    placement = cfg.trainer.placement
+    world_size = placement[f"{role}_num_nodes"] * placement[f"{role}_num_gpus_per_node"]
+    megatron = cfg.trainer[role].megatron_config
+    pp = megatron.pipeline_model_parallel_size
+    cp = megatron.context_parallel_size
+    tp = megatron.tensor_model_parallel_size
+    assert world_size % (pp * cp * tp) == 0, (
+        f"{role}_world_size {world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
         "This ensures that the data parallel size is an integer."
     )
-    return policy_world_size // (pp * cp * tp)
+    return world_size // (pp * cp * tp)
 
 
 def validate_batch_sizes(cfg: DictConfig):
@@ -84,7 +85,7 @@ def validate_batch_sizes(cfg: DictConfig):
     assert cfg.trainer.micro_forward_batch_size_per_gpu > 0, "micro_forward_batch_size_per_gpu must be greater than 0"
 
     # Validate policy mini batch size
-    policy_dp_size = _policy_dp_size(cfg)
+    policy_dp_size = _dp_size(cfg, "policy")
 
     assert cfg.trainer.train_batch_size % cfg.trainer.policy_mini_batch_size == 0, (
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
@@ -115,15 +116,7 @@ def validate_batch_sizes(cfg: DictConfig):
 
     use_ref_model = reference_model_required(cfg.trainer.algorithm)
     if use_ref_model:
-        ref_world_size = cfg.trainer.placement.ref_num_nodes * cfg.trainer.placement.ref_num_gpus_per_node
-        pp = cfg.trainer.ref.megatron_config.pipeline_model_parallel_size
-        cp = cfg.trainer.ref.megatron_config.context_parallel_size
-        tp = cfg.trainer.ref.megatron_config.tensor_model_parallel_size
-        assert ref_world_size % (pp * cp * tp) == 0, (
-            f"ref_world_size {ref_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
-            "This ensures that the data parallel size is an integer."
-        )
-        ref_dp_size = ref_world_size // (pp * cp * tp)
+        ref_dp_size = _dp_size(cfg, "ref")
         lcm_dp_size = math.lcm(lcm_dp_size, ref_dp_size)
 
     assert cfg.trainer.train_batch_size >= lcm_dp_size, (
@@ -172,7 +165,7 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
         if unsupported:
             return reason
     train_rows = cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg)
-    if train_rows % _policy_dp_size(cfg):
+    if train_rows % _dp_size(cfg, "policy"):
         return "rows requiring DP padding"
     megatron = cfg.trainer.policy.megatron_config
     etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
