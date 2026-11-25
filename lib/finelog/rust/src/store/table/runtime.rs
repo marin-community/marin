@@ -549,11 +549,11 @@ impl TableRuntime {
     /// ram_rows if ram_rows else 0)`; `max_seq = max(seg_max, next_seq - 1) if
     /// (seg_max or ram_rows) else 0`. Segment bounds only consider segments with
     /// rows.
-    pub fn stats(&self) -> Result<NamespaceStats, StatsError> {
+    pub fn stats(&self) -> NamespaceStats {
         let segments = self.segments.totals();
         let buffered = self.buffer.buffered();
         if segments.count == 0 && buffered.rows == 0 {
-            return Ok(NamespaceStats::default());
+            return NamespaceStats::default();
         }
         let segment_min = segments.min_seq.unwrap_or(0);
         let segment_max = segments.max_seq.unwrap_or(0);
@@ -569,14 +569,14 @@ impl TableRuntime {
         } else {
             0
         };
-        Ok(NamespaceStats {
+        NamespaceStats {
             row_count: segments.rows + buffered.rows,
             byte_size: segments.bytes + buffered.bytes,
             min_seq,
             max_seq,
             segment_count: segments.count as i32,
-            segment_count_by_level: count_by_level(segments.count_by_level)?,
-        })
+            segment_count_by_level: count_by_level(segments.count_by_level),
+        }
     }
 
     /// Aggregate in-RAM accounting for the diagnostics line:
@@ -910,7 +910,7 @@ mod tests {
             .expect("policy update blocked behind eviction")
             .unwrap();
 
-        assert_eq!(table.stats().unwrap().segment_count, 0);
+        assert_eq!(table.stats().segment_count, 0);
         assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -983,7 +983,7 @@ mod tests {
         // A segment file exists and stats reflect it.
         let segments = discover_segments(&table_dir);
         assert_eq!(segments.len(), 1);
-        let stats = table.stats().unwrap();
+        let stats = table.stats();
         assert_eq!(stats.row_count, 3);
         assert_eq!(stats.min_seq, 1);
         assert_eq!(stats.max_seq, 3);
@@ -1039,7 +1039,7 @@ mod tests {
         let table = open_table("iris.worker", worker_schema(), None, catalog);
         table.append_aligned_batch(&aligned(3)).unwrap();
         table.append_aligned_batch(&aligned(2)).unwrap();
-        let stats = table.stats().unwrap();
+        let stats = table.stats();
         assert_eq!(stats.row_count, 5);
         assert_eq!(stats.min_seq, 1);
         assert_eq!(stats.max_seq, 5);
@@ -1066,7 +1066,7 @@ mod tests {
         // and a previously-durable seq is already satisfied.
         let catalog2 = Arc::new(Catalog::open(Some(&dir)).unwrap());
         let restarted = open_table("iris.worker", worker_schema(), Some(table_dir), catalog2);
-        let stats = restarted.stats().unwrap();
+        let stats = restarted.stats();
         assert_eq!(stats.row_count, 4);
         assert_eq!(stats.max_seq, 4);
         // A new append continues monotonically from seq 5.
@@ -1102,7 +1102,7 @@ mod tests {
             .unwrap();
         let segments = discover_segments(&table_dir);
         assert_eq!(segments.len(), 1, "one flush coalesces buffered appends");
-        assert_eq!(table.stats().unwrap().row_count, 10);
+        assert_eq!(table.stats().row_count, 10);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

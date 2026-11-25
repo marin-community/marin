@@ -383,7 +383,7 @@ mod tests {
                 .partition
                 .is_some());
         }
-        assert_eq!(table.stats().unwrap().row_count, 2);
+        assert_eq!(table.stats().row_count, 2);
         table.shutdown(Duration::from_secs(10)).await;
         let reopened = open_table(
             "levanter.metrics",
@@ -391,7 +391,7 @@ mod tests {
             Some(table_dir.clone()),
             Arc::new(Catalog::open(Some(&dir)).unwrap()),
         );
-        assert_eq!(reopened.stats().unwrap().row_count, 2);
+        assert_eq!(reopened.stats().row_count, 2);
         assert_eq!(reopened.query_snapshot().unwrap().paths.len(), 2);
         reopened.shutdown(Duration::from_secs(10)).await;
 

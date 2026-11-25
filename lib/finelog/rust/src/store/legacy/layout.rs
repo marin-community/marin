@@ -747,7 +747,7 @@ mod tests {
             pending_placement(&maintenance::local_layout(&table)).migration_l0,
             0
         );
-        assert_eq!(table.stats().unwrap().row_count, 12);
+        assert_eq!(table.stats().row_count, 12);
 
         for path in discover_segments(&table_dir) {
             if read_segment_footer(&path, Some("timestamp_ms"))
@@ -788,7 +788,7 @@ mod tests {
             .unwrap(),
             0
         );
-        assert_eq!(table.stats().unwrap().row_count, 2);
+        assert_eq!(table.stats().row_count, 2);
 
         std::fs::remove_dir_all(&dir).ok();
     }

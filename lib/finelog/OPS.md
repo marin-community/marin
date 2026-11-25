@@ -742,25 +742,6 @@ behind flushes. Reads then open every L0 because an L0
 spans the whole key range. `segment_count_by_level` in the same output lists the
 count at each compaction level, L0 first, so the first number is the backlog.
 
-A server started with `table_segment_history: true` in its deploy config
-(`--table-segment-history`) writes one row per table to `finelog.table_segments`
-every minute: `timestamp_ms`, `namespace`, `segment_count`, `l0_segment_count`
-through `l3_segment_count`, `row_count`, and `byte_size`. Only the hub sets it; the
-config rejects it together with `forwarding`. The table's 30-day `max_age_seconds`
-bounds the hub's local copy. The remote archive keeps every row, as it does for
-every other table. A failed write logs `table segment history write failed` and the
-next minute tries again. Plot one table's L0 count over a day:
-
-```bash
-uv run finelog query marin <<'SQL'
-SELECT timestamp_ms, l0_segment_count
-FROM "finelog.table_segments"
-WHERE namespace = 'log'
-  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '1 day') * 1000 AS BIGINT)
-ORDER BY timestamp_ms
-SQL
-```
-
 `slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
 for one turn, with its source cursor range, row count, chunk count, and encoded
 bytes. `push_ms` includes RPC compression, transport, retries, and the hub's

@@ -2,7 +2,6 @@
 //! aggregate stats, and the segment filename/key helpers shared by the flush
 //! path and the rebuild-from-disk catalog scan.
 
-use crate::errors::StatsError;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -115,21 +114,21 @@ pub struct NamespaceStats {
 
 /// Sum `(level, segments)` pairs into counts indexed by level.
 ///
-/// Nothing in the catalog schema constrains a level's sign, so a negative one
-/// is reported as an error.
-pub fn count_by_level(
-    level_counts: impl IntoIterator<Item = (i32, i32)>,
-) -> Result<Vec<i32>, StatsError> {
+/// Nothing writes a negative level, but the catalog schema does not forbid
+/// one. Such a segment is left out, so the result sums to less than the
+/// table's segment count instead of failing the stats read.
+pub fn count_by_level(level_counts: impl IntoIterator<Item = (i32, i32)>) -> Vec<i32> {
     let mut counts = Vec::new();
     for (level, segments) in level_counts {
-        let index = usize::try_from(level)
-            .map_err(|_| StatsError::Internal(format!("segment has negative level {level}")))?;
+        let Ok(index) = usize::try_from(level) else {
+            continue;
+        };
         if counts.len() <= index {
             counts.resize(index + 1, 0);
         }
         counts[index] += segments;
     }
-    Ok(counts)
+    counts
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:
@@ -196,6 +195,12 @@ pub fn parse_seg_filename(name: &str) -> Option<(i32, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_by_level_fills_gaps_and_leaves_out_negative_levels() {
+        assert_eq!(count_by_level([(2, 1), (0, 3), (-1, 5)]), vec![3, 0, 1]);
+        assert!(count_by_level([]).is_empty());
+    }
 
     #[test]
     fn location_round_trip() {

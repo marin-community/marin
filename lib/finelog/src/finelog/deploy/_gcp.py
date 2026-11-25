@@ -142,7 +142,6 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
         query_index_cache_mb=cfg.query_index_cache_mb,
         object_cache_gb=cfg.object_cache_gb,
         telemetry_migration_mode=cfg.telemetry_migration_mode.value,
-        table_segment_history=cfg.table_segment_history,
     )
 
 

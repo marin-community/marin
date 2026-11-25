@@ -261,13 +261,8 @@ class FinelogConfig:
     # fills the disk on a busy hub; set it on any server with a bounded disk.
     object_cache_gb: int | None = None
     telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
-    # Write each table's segment counts to `finelog.table_segments` once a minute.
-    # For a hub: a forwarding server would ship the rows to its hub as well.
-    table_segment_history: bool = False
 
     def __post_init__(self) -> None:
-        if self.table_segment_history and self.forwarding is not None:
-            raise ValueError("table_segment_history is for a hub; it cannot be set with forwarding")
         if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
             raise ValueError("query_metadata_cache_mb must be > 0")
         if self.query_index_cache_mb is not None and self.query_index_cache_mb <= 0:
@@ -421,7 +416,6 @@ def _load_from_path(path: Path) -> FinelogConfig:
         ),
         object_cache_gb=(None if raw.get("object_cache_gb") is None else int(raw["object_cache_gb"])),
         telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
-        table_segment_history=bool(raw.get("table_segment_history", False)),
     )
 
 

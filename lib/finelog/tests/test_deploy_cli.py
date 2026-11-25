@@ -71,7 +71,6 @@ class _FakeLogClient:
             max_seq=7,
             segment_count=2,
             storage_policy=StoragePolicy(max_bytes=1024),
-            segment_count_by_level=(1, 1),
         )
         return [task, replace(task, namespace="iris.worker", row_count=3)]
 
@@ -127,7 +126,6 @@ def test_namespaces_defaults_to_jsonl_with_schema_metadata() -> None:
     payload = records[0]
     assert payload["namespace"] == "iris.task"
     assert payload["row_count"] == 7
-    assert payload["segment_count_by_level"] == [1, 1]
     assert payload["storage_policy"]["max_bytes"] == 1024
     assert payload["schema"]["columns"][1]["type"] == "int64"
     assert payload["schema"]["implicit_columns"] == [

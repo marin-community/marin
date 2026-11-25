@@ -582,7 +582,7 @@ mod tests {
         }
         assert!(!legacy.exists());
         assert!(!projection.exists());
-        assert_eq!(reopened.stats().unwrap().row_count, 2);
+        assert_eq!(reopened.stats().row_count, 2);
         reopened.shutdown(Duration::from_secs(10)).await;
 
         std::fs::remove_dir_all(&dir).ok();

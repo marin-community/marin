@@ -333,7 +333,7 @@ mod tests {
             .filter(|segment| segment.location == SegmentLocation::Remote)
             .count();
         assert_eq!(remote_rows, 1);
-        let stats = table.stats().unwrap();
+        let stats = table.stats();
         assert_eq!(stats.segment_count, 1, "REMOTE excluded from stats");
         assert_eq!(stats.row_count, 1);
         std::fs::remove_dir_all(&dir).ok();
@@ -393,16 +393,12 @@ mod tests {
 
         // Within window: a fresh maintain keeps it.
         maintain(&table, false).await;
-        assert_eq!(table.stats().unwrap().segment_count, 1);
+        assert_eq!(table.stats().segment_count, 1);
 
         // Backdate past the cutoff (now - 60s); maintain age-evicts it.
         table.backdate_segment(&base, 1).unwrap();
         maintain(&table, false).await;
-        assert_eq!(
-            table.stats().unwrap().segment_count,
-            0,
-            "aged-out segment dropped"
-        );
+        assert_eq!(table.stats().segment_count, 0, "aged-out segment dropped");
         // Remote archive preserved.
         assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
         std::fs::remove_dir_all(&dir).ok();

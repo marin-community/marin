@@ -7,7 +7,6 @@
 //! The line is a diagnostic aid, not a contract, so no test asserts on its
 //! text. The task selects against a shutdown signal and exits when it fires.
 
-use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,20 +62,8 @@ fn emit(store: &Store) {
 }
 
 /// Spawn the diagnostics task. It emits once per [`POOL_DIAGNOSTICS_INTERVAL`]
-/// and stops as [`spawn_periodic`] describes.
-pub fn spawn_pool_diagnostics(
-    store: Arc<Store>,
-    stop: Arc<AtomicBool>,
-    shutdown: Arc<tokio::sync::Notify>,
-) -> JoinHandle<()> {
-    spawn_periodic(POOL_DIAGNOSTICS_INTERVAL, stop, shutdown, move || {
-        emit(&store);
-        std::future::ready(())
-    })
-}
-
-/// Run `tick` once per `interval` until `stop` is latched (set the
-/// `AtomicBool` THEN `notify_waiters` the `Notify`).
+/// and exits when `stop` is latched (set the `AtomicBool` THEN `notify_waiters`
+/// the `Notify`).
 ///
 /// The latch is load-bearing: `Notify::notify_waiters` stores no permit, so a
 /// notify that fires while the task is between the prior `select!` and
@@ -85,16 +72,11 @@ pub fn spawn_pool_diagnostics(
 /// after the select closes that race (the same pattern the per-namespace
 /// flush/maintenance tasks use), so shutdown is prompt and cannot stall the
 /// process drain.
-pub(crate) fn spawn_periodic<F, Fut>(
-    interval: Duration,
+pub fn spawn_pool_diagnostics(
+    store: Arc<Store>,
     stop: Arc<AtomicBool>,
     shutdown: Arc<tokio::sync::Notify>,
-    tick: F,
-) -> JoinHandle<()>
-where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: Future<Output = ()> + Send,
-{
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             if stop.load(Ordering::SeqCst) {
@@ -102,13 +84,13 @@ where
             }
             let stopped = shutdown.notified();
             tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
+                _ = tokio::time::sleep(POOL_DIAGNOSTICS_INTERVAL) => {}
                 _ = stopped => return,
             }
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            tick().await;
+            emit(&store);
         }
     })
 }

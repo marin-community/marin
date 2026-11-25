@@ -357,7 +357,7 @@ impl Catalog {
                     .collect::<Result<Vec<_>, _>>()
             })
             .map_err(sqlite_err)?;
-        let segment_count_by_level = count_by_level(level_counts)?;
+        let segment_count_by_level = count_by_level(level_counts);
         let stats = inner
             .conn
             .query_row(

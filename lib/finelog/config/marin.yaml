@@ -9,8 +9,6 @@ query_index_cache_mb: 3072
 # (shrinks as they migrate) plus staging headroom.
 object_cache_gb: 250
 telemetry_migration_mode: normal
-# The hub records each table's segment counts so a compaction backlog can be graphed.
-table_segment_history: true
 deployment:
   gcp:
     project: hai-gcp-models

@@ -417,7 +417,7 @@ impl Store {
     /// Return the root telemetry sequence fence before this process accepts writes.
     pub fn telemetry_root_max_seq(&self) -> Result<i64, StatsError> {
         match self.tables.get(TELEMETRY_NAMESPACE) {
-            Some(table) => Ok(table.stats()?.max_seq),
+            Some(table) => Ok(table.stats().max_seq),
             None => Ok(self
                 .catalog
                 .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
@@ -1460,7 +1460,7 @@ impl Store {
     /// whose object state has not reached HEAD yet.
     pub fn namespace_visible_seq(&self, name: &str) -> Result<i64, StatsError> {
         match self.tables.get(name) {
-            Some(table) => Ok(table.stats()?.max_seq),
+            Some(table) => Ok(table.stats().max_seq),
             None => {
                 self.catalog.require_live(name)?;
                 Ok(self.catalog.aggregate_namespace_stats(name)?.max_seq)
@@ -1559,7 +1559,7 @@ impl Store {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
             let stats = match self.tables.get(&ns.name) {
-                Some(table) => table.stats()?,
+                Some(table) => table.stats(),
                 None => self.catalog.aggregate_namespace_stats(&ns.name)?,
             };
             let policy = self.catalog.get_policy(&ns.name)?;

@@ -321,7 +321,6 @@ def _namespace_record(info: NamespaceInfo) -> dict[str, object]:
         "min_seq": info.min_seq,
         "max_seq": info.max_seq,
         "segment_count": info.segment_count,
-        "segment_count_by_level": list(info.segment_count_by_level),
         "storage_policy": _storage_policy_record(info.storage_policy),
         "schema": _schema_record(info.schema),
     }
