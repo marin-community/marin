@@ -83,6 +83,10 @@ def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec |
         from .zeroeval import grade_zeroeval_mcqa
 
         return grade_zeroeval_mcqa(config["expected"], response)
+    if scorer == "chembench":
+        from .chembench import grade_chembench
+
+        return grade_chembench(config, response)
     if scorer == "lexam_mcq":
         from .lexam import grade_lexam_mcq
 

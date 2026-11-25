@@ -19,6 +19,7 @@ from experiments.evaluation.benchmarks.environments import (
     BASIC_GRADER,
     INSTRUCTION_ENVIRONMENTS,
     LIVECODEBENCH_GRADER,
+    LIVECODEBENCH_PRO_GRADER,
     MATH_GRADER,
     MATH_JUDGE_GRADER,
     PYTHON_GRADER,
@@ -44,6 +45,7 @@ def declared_environments() -> dict[str, Environment]:
             MATH_JUDGE_GRADER,
             PYTHON_GRADER,
             LIVECODEBENCH_GRADER,
+            LIVECODEBENCH_PRO_GRADER,
             *INSTRUCTION_ENVIRONMENTS,
         )
     }
