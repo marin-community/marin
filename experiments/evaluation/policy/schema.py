@@ -13,7 +13,7 @@ from dataclasses import KW_ONLY, dataclass
 from evalrecords.records import EvaluationOverrides, EvaluationSelection, PromptFormat, TaskMachineSettings
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.evaluation.judges import ApiJudge
+from experiments.evaluation.evals import JUDGES
 
 HF_COMMIT = re.compile(r"[0-9a-f]{40}")
 
@@ -62,18 +62,22 @@ class PolicyEvaluation:
     """None leaves output limited only by the context and the benchmark protocol."""
     seed: int | None = None
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
-    judge: ApiJudge | None = None
-    """The judge that grades the benchmark, for benchmarks that need one."""
+    judge: str | None = None
+    """The name of the judge in ``configs/evaluations.yaml`` that grades the benchmark, for benchmarks that need one."""
     concurrency: int | None = None
     """The most attempts that run at once."""
     task_machine: TaskMachineSettings | None = None
     """The task machines agent episodes run on."""
 
+    def __post_init__(self) -> None:
+        if self.judge is not None and self.judge not in JUDGES:
+            raise ValueError(f"{self.name}: no judge {self.judge!r}; known: {sorted(JUDGES)}")
+
     @property
     def selection(self) -> EvaluationSelection:
         """The catalog selection with the evaluation's judge, concurrency and task machines, without the output
         limit and seed, which can differ by candidate."""
-        run = EvaluationOverrides() if self.judge is None else self.judge.run_settings()
+        run = EvaluationOverrides() if self.judge is None else JUDGES[self.judge]
         return EvaluationSelection(
             benchmark=self.benchmark,
             label=self.label,
