@@ -13,12 +13,13 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.inference.config import (
     ObjectStoreLoadMode,
     SpeculativeServingConfig,
     VllmSource,
     resolve_tokenizer_revision,
-    validate_pipeline_args,
+    validate_serving_geometry_args,
 )
 
 
@@ -136,7 +137,7 @@ class ServeConfig:
                 raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
             if self.instances > 1:
                 raise ValueError("pipeline parallelism requires instances=1")
-            validate_pipeline_args(self.vllm_extra_args)
+            validate_serving_geometry_args(self.vllm_extra_args)
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
                 raise ValueError("gpu_memory_utilization must be in (0, 1]")
@@ -214,12 +215,18 @@ class ModelConfig:
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     evaluation_num_concurrent: int | None = None
+    evaluation_request_timeout: float = field(
+        default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
+        metadata={"fingerprint_omit_value": EVALUATION_REQUEST_TIMEOUT_SECONDS},
+    )
 
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
         if self.evaluation_num_concurrent is not None and self.evaluation_num_concurrent <= 0:
             raise ValueError("evaluation_num_concurrent must be positive")
+        if self.evaluation_request_timeout <= 0:
+            raise ValueError("evaluation_request_timeout must be positive")
         if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
             raise ValueError("pipeline parallelism requires resource_hint.gpu")
 

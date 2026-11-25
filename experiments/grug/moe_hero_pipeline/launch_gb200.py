@@ -113,7 +113,7 @@ def main():
     install = (
         'set -e\nuv pip install --python "$IRIS_VENV/bin/python" '
         "jax==0.11.1 jaxlib==0.11.1 jax-cuda13-plugin==0.11.1 "
-        '"nvidia-nccl-cu13>=2.31.2" "nvidia-cublas>=13.2.0.9" '
+        '"nvidia-cublas>=13.2.0.9" '
         '"flash-attn-4[cu13]==4.0.0b28" "nvidia-cutlass-dsl[cu13]==4.6.2" '
         '"quack-kernels[cu13]==0.6.4"\n'
         'uv pip install --python "$IRIS_VENV/bin/python" --index-url https://download.pytorch.org/whl/cu128 '

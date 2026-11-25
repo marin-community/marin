@@ -7,13 +7,19 @@ import asyncio
 import json
 import pickle
 import tarfile
+import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import pytest
+import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
+from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.http_service import HttpResponse, serve_http
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
     Command,
@@ -27,8 +33,9 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE, GradingFailure, Outcome
 from taskcompendium.models import (
+    AgentMachine,
     AnswerCall,
     AnswerType,
     ArtifactKind,
@@ -40,6 +47,7 @@ from taskcompendium.models import (
     FileReward,
     FinalAction,
     FunctionDefinition,
+    GraderMachine,
     JsonValueAnswer,
     NoGrader,
     ProviderRequirement,
@@ -66,12 +74,14 @@ from verifyit.spec import (
     parse_spec,
 )
 
+import rolloutengine.engine as engine_runtime
+import rolloutengine.event_delivery as event_delivery_runtime
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import task_machine
+from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -252,11 +262,10 @@ class RecordingShellSimFactory(DockerMachineFactory):
         return machine
 
 
-def workspace_grader(**fields) -> ScriptGrader:
+def workspace_grader(*, environment=GRADER_ENVIRONMENT, collect=(), artifacts=(), **fields) -> ScriptGrader:
     """A script grader that reads the agent's workspace files rather than an extracted answer."""
-    return ScriptGrader.model_validate(
-        {"cwd": "/workspace", "environment": GRADER_ENVIRONMENT, "answer_path": None, **fields}
-    )
+    placement = GraderMachine(environment=environment, collect=collect, artifacts=artifacts)
+    return ScriptGrader.model_validate({"cwd": "/workspace", "placement": placement, "answer_path": None, **fields})
 
 
 def file_task(
@@ -291,7 +300,10 @@ def judge_task(answer_type: AnswerType = AnswerType.TEXT, *, model: str = "fixtu
         label_scores={"PASS": 1.0, "FAIL": 0.0},
         model=model,
     )
-    return arithmetic_task(answer_type=answer_type, grader=verifyit_package(spec, environment=GRADER_ENVIRONMENT).grader)
+    return arithmetic_task(
+        answer_type=answer_type,
+        grader=verifyit_package(spec, placement=GraderMachine(environment=GRADER_ENVIRONMENT)).grader,
+    )
 
 
 def judge_url(judge_server) -> str:
@@ -306,8 +318,38 @@ def shell_harnesses(**options) -> dict:
 @pytest.mark.parametrize(
     "content", ["Solve the task.", [{"type": "text", "text": "Solve "}, {"type": "text", "text": "the task."}]]
 )
-async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
-    factory = RecordingShellSimFactory()
+async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content, monkeypatch):
+    clock = [0.0]
+    for module in (engine_runtime, grading_runtime):
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    class TimedMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def upload(self, source, target):
+            clock[0] += 3
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            clock[0] += 5
+            await self.machine.download(source, target)
+
+        async def run(self, command):
+            clock[0] += 11 if command.argv == ("sh", "/tests/grade.sh") else 1
+            return await self.machine.run(command)
+
+        async def close(self):
+            clock[0] += 100
+            await self.machine.close()
+
+    class TimedFactory(RecordingShellSimFactory):
+        async def create(self, spec):
+            clock[0] += 2
+            return TimedMachine(await super().create(spec))
+
+    factory = TimedFactory()
+    observer = RecordingObserver()
     model = ReplayModel([{"role": "assistant", "content": answer}])
     released = asyncio.Event()
 
@@ -326,11 +368,16 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
         model,
         {"local": factory},
         harnesses={"agent": AgentHarness(lambda context, complete: agent(context.machine, complete))},
+        observer=observer,
     ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages == ({"role": "user", "content": content},)
     assert record.rollout.conversations[-1].response_token_ids == (20,)
     assert record.rollout.conversations[-1].loss_mask == (1,)
+    assert record.grade.verifier_setup_seconds == 13.0
+    assert record.rollout.metrics["timing/setup"] == 15.0
+    assert record.rollout.metrics["timing/grading"] == 20.0
+    assert [event.payload.duration for event in observer.events if isinstance(event.payload, Graded)] == [33.0]
     assert released.is_set()
     assert len(factory.machines) == 2
     for machine in factory.machines:
@@ -338,8 +385,17 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
-async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        *(
+            (arguments, "Tool arguments must be a JSON object")
+            for arguments in ('["invalid"]', '"invalid"', "null", "42")
+        ),
+        ('{"command": "echo \\ud83d > /workspace/answer"}', "shell command must be valid Unicode text"),
+    ],
+)
+async def test_shell_rejects_invalid_arguments_and_grades_repaired_file(arguments, error):
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
@@ -348,9 +404,7 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.rollout.conversations[-1].messages[1] == rejected
-    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {
-        "error": "Tool arguments must be a JSON object"
-    }
+    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {"error": error}
 
 
 async def test_shell_harness_cuts_each_command_output_at_its_limit():
@@ -460,6 +514,8 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
     assert caught.value.operation == expected
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+    assert caught.value.grade.diagnostics[GRADING_FAILURE] == GradingFailure.TIMEOUT
+    assert caught.value.grade.diagnostics[GRADING_DURATION_SECONDS] > 0
 
 
 async def test_output_capture_over_the_file_budget_interrupts_grading():
@@ -481,58 +537,95 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert caught.value.operation == RolloutOperation.GRADE
     assert "file or byte budget" in str(caught.value.__cause__)
     assert caught.value.rollout.outputs == {}
+    assert caught.value.grade.diagnostics[GRADING_FAILURE] == GradingFailure.EXECUTION
     # The grader never starts, so only the task machine exists.
     assert len(factory.machines) == 1
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_receives_engine_turns_and_controls_next_history(compact):
+@pytest.mark.parametrize(
+    ("change", "continues"),
+    [
+        ("none", True),
+        ("reserialized", True),
+        ("cut-reserialized", False),
+        ("output-limit", True),
+        ("tools", False),
+        ("compaction", False),
+    ],
+)
+async def test_agent_harness_receives_engine_turns_and_controls_next_history(change, continues):
     first = ({"role": "user", "content": "Return 12."},)
     observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
+    first_options = {"tool_choice": "auto", "max_tokens": 128, "max_completion_tokens": 128}
+    next_options = dict(first_options)
+    if change == "output-limit":
+        next_options.update(max_tokens=96, max_completion_tokens=96, max_output_tokens=64)
+    if change == "tools":
+        next_options["tools"] = [{"type": "function", "function": {"name": "finish", "parameters": {}}}]
     received = []
+    sent_histories = []
     finished = asyncio.Event()
 
     async def agent(complete):
-        turn = await complete(Prompt(first, {"tool_choice": "auto"}))
+        turn = await complete(Prompt(first, first_options))
         received.append(turn)
+        message = turn.message
+        if change in {"reserialized", "cut-reserialized"}:
+            call = message["tool_calls"][0]
+            function = call["function"]
+            arguments = json.dumps(json.loads(function["arguments"]), separators=(",", ":"))
+            message = {
+                **message,
+                "reasoning_content": "",
+                "tool_calls": [{**call, "function": {**function, "arguments": arguments}}],
+            }
         history = (
-            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
+            ({"role": "user", "content": "File written. Finish."},)
+            if change == "compaction"
+            else (*first, message, observation)
         )
-        options = {} if compact else {"tool_choice": "auto"}
-        received.append(await complete(Prompt(history, options)))
+        sent_histories.append(history)
+        received.append(await complete(Prompt(history, next_options)))
         finished.set()
 
-    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
+    class HistoryModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            if change == "cut-reserialized" and len(self.requests) == 1:
+                return replace(turn, stop_reason=LENGTH_STOP_REASON)
+            return turn
+
+    model = HistoryModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
     result = await engine(model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
 
     assert finished.is_set()
     assert result.grade.reward == 1.0
-    assert len(result.rollout.conversations) == (2 if compact else 1)
+    assert len(result.rollout.conversations) == (1 if continues else 2)
     assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
     assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
-    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
-    assert model.requests[1].messages == (
-        ({"role": "user", "content": "File written. Finish."},)
-        if compact
-        else (*first, received[0].message, observation)
-    )
+    assert result.rollout.conversations[-1].loss_mask == ((1, 0, 0, 1) if continues else (1,))
+    assert [request.options for request in model.requests] == [first_options, next_options]
+    assert model.requests[1].messages == ((*first, received[0].message, observation) if continues else sent_histories[0])
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
+@pytest.mark.parametrize("change", ["none", "compaction", "output-limit"])
+async def test_agent_harness_replays_exact_tokens_on_later_turns(change):
     first = ({"role": "user", "content": "Start."},)
     # The task's grader reads this chat, so the observation is a user message: the turn makes no tool call.
     observation = {"role": "user", "content": "Done."}
-    replay = (501, 502) if compact else (10, 11, 20, 90, 91)
+    restart = change != "none"
+    replay = (501, 502) if change == "compaction" else (10, 11, 20, 90, 91)
     requests = []
 
     async def agent(complete):
         turn = await complete(Prompt(first, {}))
-        messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
-        await complete(Prompt(messages, {}, token_ids=replay))
+        messages = (
+            ({"role": "user", "content": "Finish."},) if change == "compaction" else (*first, turn.message, observation)
+        )
+        options = {"max_tokens": 64} if change == "output-limit" else {}
+        await complete(Prompt(messages, options, token_ids=replay))
 
     async def model(request):
         requests.append(request)
@@ -547,9 +640,9 @@ async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
     result = await rollout_engine.run_task(rollout_spec(arithmetic_task(), harness="agent"), model)
 
     assert result.grade.reward == 1.0
-    assert result.rollout.conversations[-1].prompt_token_ids == (replay if compact else (10, 11))
-    assert result.rollout.conversations[-1].response_token_ids == ((21,) if compact else (20, 90, 91, 21))
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert result.rollout.conversations[-1].prompt_token_ids == (replay if restart else (10, 11))
+    assert result.rollout.conversations[-1].response_token_ids == ((21,) if restart else (20, 90, 91, 21))
+    assert result.rollout.conversations[-1].loss_mask == ((1,) if restart else (1, 0, 0, 1))
 
 
 async def test_agent_harness_is_cancelled_when_engine_generation_is_cancelled():
@@ -839,32 +932,178 @@ async def test_spec_preserves_task_and_produces_private_grade_with_training_toke
     assert "12" not in json.dumps(model.requests[0].messages)
 
 
-@pytest.mark.parametrize("unresolved_role", ["actor", "grader"])
-@pytest.mark.parametrize("entrypoint", ["check", "run"])
-async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start(unresolved_role, entrypoint):
-    environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),)),
-    )
+BUILD_ENVIRONMENT = EnvironmentRequirements(
+    command_semantics=CommandSemantics.LINUX_PROCESS,
+    capabilities=("shell", "filesystem"),
+    docker_build=DockerBuildContext(
+        files=(
+            inline_resource("Dockerfile", b"FROM base@sha256:" + b"1" * 64 + b"\nCOPY tools /opt/tools\n"),
+            inline_resource("tools/run.sh", b"echo run\n").model_copy(update={"mode": "0755"}),
+        )
+    ),
+)
+
+
+def test_build_context_is_a_dockerfile_source_while_the_spec_is_open():
+    with _machine_spec(BUILD_ENVIRONMENT, machine_runtime()) as spec:
+        assert isinstance(spec.source, DockerfileSource)
+        context = spec.source.context
+        assert spec.source.dockerfile == context / "Dockerfile"
+        assert (context / "Dockerfile").read_bytes().endswith(b"COPY tools /opt/tools\n")
+        assert (context / "tools" / "run.sh").read_bytes() == b"echo run\n"
+        assert (context / "tools" / "run.sh").stat().st_mode & 0o777 == 0o755
+        # Like a registry image, a built image starts in its own working directory.
+        assert spec.workdir == ""
+    assert not context.exists()
+
+
+@dataclass
+class BuildRecordingFactory(RecordingShellSimFactory):
+    """Record each Dockerfile as the factory reads it when it creates the machine."""
+
+    dockerfiles: list[bytes] = field(default_factory=list)
+    contexts: list[Path] = field(default_factory=list)
+
+    async def create(self, spec):
+        assert isinstance(spec.source, DockerfileSource)
+        self.dockerfiles.append(spec.source.dockerfile.read_bytes())
+        self.contexts.append(spec.source.context)
+        return await super().create(spec)
+
+
+@pytest.mark.parametrize("build_role", ["actor", "grader"])
+async def test_build_context_is_built_by_a_backend_that_builds(build_role):
     task = file_task()
-    if unresolved_role == "actor":
-        task = task.model_copy(update={"environment_requirements": environment})
+    build = BuildRecordingFactory()
+    factories = {"build": build, "local": RecordingShellSimFactory()}
+    if build_role == "actor":
+        task = task.model_copy(update={"environment_requirements": BUILD_ENVIRONMENT})
+        spec = rollout_spec(task, machine=machine_runtime(backend="build"), verifier_machine=machine_runtime())
+    else:
+        artifact = VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE)
+        grader = workspace_grader(argv=("sh", "/tests/grade.sh"), environment=BUILD_ENVIRONMENT, artifacts=(artifact,))
+        task = task.model_copy(update={"grader": grader})
+        spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(backend="build"))
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+
+    record = await engine(model, factories).run_task(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade.error
+    assert [dockerfile.endswith(b"COPY tools /opt/tools\n") for dockerfile in build.dockerfiles] == [True]
+    assert not build.contexts[0].exists()
+
+
+@dataclass
+class NoBuildFactory(RecordingShellSimFactory):
+    """Check machine specs as the local backend does; it cannot build a Dockerfile."""
+
+    backend: Backend = Backend.LOCAL
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        check_local_environment(requirements, spec)
+
+
+@pytest.mark.parametrize("build_role", ["actor", "grader"])
+@pytest.mark.parametrize("entrypoint", ["check", "run"])
+async def test_backend_without_builds_rejects_build_context_before_machine_or_model_start(build_role, entrypoint):
+    task = file_task()
+    if build_role == "actor":
+        task = task.model_copy(update={"environment_requirements": BUILD_ENVIRONMENT})
     else:
         task = task.model_copy(
-            update={"grader": workspace_grader(argv=("sh", "/tests/grade.sh"), environment=environment)}
+            update={"grader": workspace_grader(argv=("sh", "/tests/grade.sh"), environment=BUILD_ENVIRONMENT)}
         )
     spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     reloaded = TaskRolloutSpec.model_validate_json(spec.model_dump_json())
-    factory = RecordingShellSimFactory()
+    factory = NoBuildFactory()
     model = ReplayModel([{"role": "assistant", "content": "Done."}])
     runner = engine(model, {"local": factory})
-    with pytest.raises(UnsupportedMachineSpec):
+    with pytest.raises(UnsupportedMachineSpec, match="not DockerfileSource"):
         if entrypoint == "check":
             runner.check(reloaded)
         else:
             await runner.run_task(reloaded)
     assert factory.machines == []
     assert model.requests == []
+
+
+def agent_machine_task(script: bytes) -> TaskSpec:
+    return arithmetic_task(
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=FIXTURE_IMAGE,
+            capabilities=("shell", "filesystem"),
+        ),
+        grader=ScriptGrader(
+            argv=("sh", "/tests/grade.sh"), cwd="/workspace", env={"GRADE_MODE": "shared"}, placement=AgentMachine()
+        ),
+        resources=ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
+    )
+
+
+AGENT_MACHINE_GRADER = b"""
+test "$GRADE_MODE" = shared || exit 3
+test "$(cat /etc/agent-marker)" = left || exit 4
+test "$(cat /workspace/scratch/notes)" = kept || exit 5
+test ! -e /logs/verifier/forged || exit 6
+grep -q 'six plus six' /tests/conversation.json || exit 7
+if [ "$(cat /app/answer.txt)" = 12 ]; then echo 1; else echo 0; fi
+"""
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_agent_machine_grader_runs_in_the_task_machine_after_the_harness(answer, reward):
+    factory = RecordingShellSimFactory()
+    agent = (
+        "test ! -e /tests/grade.sh && mkdir -p /etc /workspace/scratch /logs/verifier && echo left > /etc/agent-marker "
+        "&& echo kept > /workspace/scratch/notes && echo 1 > /logs/verifier/forged"
+    )
+    model = ReplayModel([shell_call(agent), {"role": "assistant", "content": answer}])
+
+    record = await engine(model, {"local": factory}).run_task(
+        rollout_spec(agent_machine_task(AGENT_MACHINE_GRADER), machine=machine_runtime())
+    )
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward), record.grade.diagnostics
+    # The grader read files the agent left outside output_paths, including one in /etc, on the one machine.
+    assert len(factory.machines) == 1
+
+
+@pytest.mark.docker
+async def test_docker_builds_the_task_context_and_grades_in_the_built_machine():
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        capabilities=("shell", "filesystem"),
+        docker_build=DockerBuildContext(
+            files=(
+                inline_resource("Dockerfile", b"FROM ubuntu:22.04\nWORKDIR /srv\nCOPY payload /srv/payload\n"),
+                inline_resource("payload", b"built"),
+            )
+        ),
+    )
+    grader = b'if [ "$(cat /srv/answer)" = "built /srv" ]; then echo 1; else echo 0; fi\n'
+    task = agent_machine_task(grader).model_copy(
+        update={
+            "environment_requirements": environment,
+            "grader": ScriptGrader(argv=("sh", "/tests/grade.sh"), cwd="/srv", placement=AgentMachine()),
+        }
+    )
+    model = ReplayModel([shell_call('echo "$(cat payload) $(pwd)" > answer'), {"role": "assistant", "content": "Done."}])
+
+    record = await engine(model, {"local": DockerMachineFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime(startup_timeout=300), verifier_timeout=60)
+    )
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade.diagnostics
+
+
+def test_agent_machine_grader_needs_the_task_machine_and_no_verifier_machine():
+    task = arithmetic_task(grader=ScriptGrader(argv=("true",), placement=AgentMachine()))
+    runner = engine(ReplayModel([]), {"local": RecordingShellSimFactory()})
+    with pytest.raises(ValueError, match="agent's machine requires a task machine"):
+        runner.check(rollout_spec(task))
+    with pytest.raises(ValueError, match="does not use a verifier machine"):
+        runner.check(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
 
 
 async def test_native_task_without_dependencies_never_falls_back_to_simulator():
@@ -1312,8 +1551,8 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
 @pytest.mark.parametrize(
     "grader,verifier_machine",
     [
-        (verifyit_package(TWELVE, environment=GRADER_ENVIRONMENT).grader, None),
-        (ScriptGrader(argv=("true",), environment=GRADER_ENVIRONMENT), None),
+        (verifyit_package(TWELVE, placement=GraderMachine(environment=GRADER_ENVIRONMENT)).grader, None),
+        (ScriptGrader(argv=("true",), placement=GraderMachine(environment=GRADER_ENVIRONMENT)), None),
         (verifyit_package(TWELVE).grader, machine_runtime()),
         (NoGrader(reason="No evaluator"), machine_runtime()),
     ],
@@ -1411,12 +1650,6 @@ JUDGE_CONNECTION = JudgeConnection("http://judge.invalid/v1", "private-test-key"
             id="judge-without-model",
         ),
         pytest.param(
-            lambda: rollout_spec(judge_task(AnswerType.FILE), judge_connection=JUDGE_CONNECTION),
-            NotImplementedError,
-            "conversation answer",
-            id="judge-file-answer",
-        ),
-        pytest.param(
             lambda: rollout_spec(judge_task(), verifier_machine=machine_runtime(), judge_connection=JUDGE_CONNECTION),
             ValueError,
             "does not use a verifier machine",
@@ -1489,7 +1722,7 @@ jq --arg answer "$answer" 'if .[0].content == "What is six plus six?" and
     .[-1].content == $answer and $answer == "12" then 1 else 0 end' /tests/conversation.json
 """
     task = arithmetic_task(
-        grader=ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=GRADER_ENVIRONMENT),
+        grader=ScriptGrader(argv=("sh", "/tests/grade.sh"), placement=GraderMachine(environment=GRADER_ENVIRONMENT)),
         resources=ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
     )
     factory = RecordingShellSimFactory()
@@ -1563,7 +1796,7 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
 
 
 @pytest.mark.parametrize("completed_turns", [0, 1])
-async def test_context_limit_keeps_served_evidence_and_grades_only_completed_operations(completed_turns):
+async def test_context_limit_keeps_served_evidence_and_grades_the_work_on_the_machine(completed_turns):
     class LimitedModel(ReplayModel):
         async def complete(self, request):
             if len(self.requests) == completed_turns:
@@ -1575,8 +1808,9 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
         LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": FixtureImageFactory()}
     ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert record.rollout.stop_reason == "length"
+    # Without a turn, the agent wrote no answer file.
     assert (record.grade.status, record.grade.reward) == (
-        (Outcome.GRADED, 1.0) if completed_turns else (Outcome.UNAVAILABLE, None)
+        (Outcome.GRADED, 1.0) if completed_turns else (Outcome.SUBMISSION_FAILURE, 0.0)
     )
     assert record.rollout.conversations[-1].response_token_ids == ((20,) if completed_turns else ())
     assert record.rollout.conversations[-1].loss_mask == ((1,) if completed_turns else ())
@@ -1894,7 +2128,9 @@ async def test_deadlines_keep_generated_tokens_and_close_episodes(phase, budget)
     task, verifier = arithmetic_task(), None
     if phase == "grade":
         task, verifier = (
-            arithmetic_task(grader=ScriptGrader(argv=("true",), environment=GRADER_ENVIRONMENT)),
+            arithmetic_task(
+                grader=ScriptGrader(argv=("true",), placement=GraderMachine(environment=GRADER_ENVIRONMENT))
+            ),
             machine_runtime(),
         )
     pending = asyncio.create_task(
@@ -1955,7 +2191,9 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
             return await super().complete(request)
 
     factory = BlockingFactory(blocked=0)
-    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    task = arithmetic_task(
+        grader=ScriptGrader(argv=("sh", "-c", "echo 1"), placement=GraderMachine(environment=GRADER_ENVIRONMENT))
+    )
     pending = asyncio.create_task(
         engine(
             Model([{"role": "assistant", "content": "12"}]),
@@ -2239,6 +2477,93 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
+@pytest.mark.parametrize("relay", ["ready", "failed", "unsupported"])
+async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(relay):
+    relay_port = 9000
+    relay_commands = []
+    verifier_users = []
+
+    class Session:
+        stderr = b""
+
+        def __init__(self):
+            self.ready = False
+            self.closed = asyncio.Event()
+
+        async def read(self, max_bytes=65536):
+            if self.ready:
+                await self.closed.wait()
+                return b""
+            self.ready = True
+            return b'{"type":"ready"}\n'
+
+        async def close(self):
+            self.closed.set()
+
+    class Machine:
+        async def run(self, command):
+            if command.argv == ("sh", "/tests/grade.sh"):
+                verifier_users.append(command.user)
+                return Result(0, b"1\n", b"", False, False, ExitReason.EXITED)
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def upload(self, source, target):
+            pass
+
+        async def download(self, source, target):
+            raise NotImplementedError
+
+        async def close(self):
+            pass
+
+    class ProcessMachine(Machine):
+        async def open_process(self, command):
+            relay_commands.append(command)
+            if relay == "failed":
+                raise ValueError("Relay startup failed")
+            return Session()
+
+    class Factory(DockerMachineFactory):
+        async def create(self, spec):
+            return Machine() if relay == "unsupported" else ProcessMachine()
+
+    class Episode:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            async def handler(request):
+                return HttpResponse(200, b"{}")
+
+            async with asyncio.TaskGroup() as group:
+                service = serve_http(self.machine, handler, port=relay_port, task_group=group)
+                if relay == "ready":
+                    async with service as base_url:
+                        assert base_url == f"http://127.0.0.1:{relay_port}"
+                else:
+                    error = ValueError if relay == "failed" else UnsupportedMachineSpec
+                    with pytest.raises(error, match=r"Relay startup failed|require persistent process sessions"):
+                        async with service:
+                            pytest.fail("An unavailable relay started")
+            return Prompt(({"role": "user", "content": "Run the task."},), {})
+
+        async def advance(self, turn):
+            return Transition(done=True)
+
+        async def close(self):
+            pass
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        {"local": Factory()},
+        harnesses={"fixture": StepHarness(Episode)},
+    ).run_task(rollout_spec(agent_machine_task(b"echo 1"), machine=machine_runtime(user="learner"), harness="fixture"))
+
+    assert [command.user for command in relay_commands] == ([] if relay == "unsupported" else ["learner"])
+    assert verifier_users == [None]
+    assert record.grade.reward == 1.0
+
+
 async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
     """A setup command that exits non-zero fails the start with the command and its output in the error."""
     stderr = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
@@ -2272,7 +2597,10 @@ async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
 
     assert caught.value.operation == RolloutOperation.START
     cause = caught.value.__cause__
-    assert isinstance(cause, RuntimeError)
+    assert isinstance(cause, MachineSetupError)
+    assert cause.exit_code == 1
+    assert cause.stdout == "made /workspace"
+    assert cause.stderr == stderr.decode().strip()
     assert str(cause) == (
         "Environment setup command failed: exited, exit=1; command: 'mkdir -p /workspace /opt/gen'; "
         "stdout: 'made /workspace'; stderr: \"mkdir: cannot create directory '/opt/gen': Read-only file system\""
@@ -2472,10 +2800,12 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         answer_type=answer_type,
         grader=verifyit_package(
             TWELVE,
-            environment=EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS,
-                docker_image=FIXTURE_IMAGE,
-                setup_commands=("echo private > /workspace/verifier-only",),
+            placement=GraderMachine(
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS,
+                    docker_image=FIXTURE_IMAGE,
+                    setup_commands=("echo private > /workspace/verifier-only",),
+                )
             ),
         ).grader,
         environment_requirements=EnvironmentRequirements(
@@ -2512,6 +2842,9 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         )
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
+    assert {key for key in record.rollout.metrics if key.startswith("timing/")} == (
+        {"timing/grading", "timing/setup"} if expected_reward is not None else set()
+    )
     if answer_type == AnswerType.FILE:
         assert record.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
         assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
@@ -2546,7 +2879,7 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
     """Payloads through the first turn of a rollout whose first response writes the answer file."""
     observation = model.requests[1].messages[-1]
     return [
-        AttemptStarted(),
+        AttemptStarted(SHELL, TraceMode.EXACT_TOKENS, "fixture"),
         MachineReady(0.0),
         ConversationStarted(model.requests[0].messages, model.requests[0].options, 0.0),
         ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
@@ -2558,25 +2891,33 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
 async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    started = time.time()
     record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
     )
+    finished = time.time()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         ModelTurnCompleted(1, record.rollout.conversations[-1].messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), 0.0),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded("stop", None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
-    assert asdict(observer.events[-1]) == {
+    assert [event.index for event in observer.events] == list(range(len(observer.events)))
+    assert all(started <= event.emitted_at <= finished for event in observer.events)
+    assert asdict(replace(observer.events[-1], emitted_at=0.0)) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
+        "index": len(observer.events) - 1,
+        "emitted_at": 0.0,
         "payload": {
             "stop_reason": "stop",
             "operation": None,
             "error": None,
             "duration": observer.events[-1].payload.duration,
+            "turns": 2,
+            "total_tokens": 9,
             "type": RolloutEventType.ATTEMPT_ENDED,
         },
     }
@@ -2597,11 +2938,58 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
+    assert not any(key.startswith("timing/") for key in interrupted.value.rollout.metrics)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0, 1, 3),
     ]
+
+
+async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_emit_time(monkeypatch):
+    monkeypatch.setattr(event_delivery_runtime, "EVENT_QUEUE_CAPACITY", 4)
+    gate = asyncio.Event()
+    room = asyncio.Event()
+    opened_at = []
+
+    class GatedObserver(RecordingObserver):
+        async def on_event(self, event: RolloutEvent) -> None:
+            await gate.wait()
+            await super().on_event(event)
+            if isinstance(event.payload, ToolCallCompleted):
+                room.set()
+
+    class Burst:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            # No await separates the emits, so the blocked observer takes none of them and the queue overflows.
+            for call in range(10):
+                context.events.emit(ToolCallCompleted(f"burst-{call}", "burst", 0, False, 0.0))
+            opened_at.append(time.time())
+            gate.set()
+            # The first delivered burst event leaves a place in the queue, so this event is not dropped.
+            await room.wait()
+            context.events.emit(ToolCallCompleted("after", "burst", 0, False, 0.0))
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    observer = GatedObserver()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Burst()}, observer=observer
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+
+    *burst, after = [event for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    call_ids = [event.payload.call_id for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    indexes = [event.index for event in observer.events]
+    missing = set(range(after.index)) - set(indexes)
+    assert indexes == sorted(indexes)
+    assert call_ids == [*(f"burst-{call}" for call in range(len(burst))), "after"]
+    assert 0 < len(missing) == 10 - len(burst) <= record.rollout.metrics["observer_dropped_events"]
+    # The observer received the burst after the gate opened, and each event has the time of its emit.
+    assert all(event.emitted_at <= opened_at[0] for event in burst)
 
 
 async def test_attempts_without_a_run_id_keep_their_events_apart():
@@ -2721,6 +3109,54 @@ async def test_a_request_that_the_agent_cancels_and_leaves_stays_in_the_record_a
     [conversation] = caught.value.rollout.conversations
     assert (conversation.messages, conversation.steps) == (({"role": "user", "content": "Return 12."},), ())
     assert caught.value.grade.status == Outcome.UNAVAILABLE
+
+
+async def context_rejection(_request):
+    error = GenerationLimitReached((70, 71))
+    raise ContextRejected(error, "Maximum context length exceeded") from error
+
+
+async def unanswered(_request):
+    await asyncio.Future()
+
+
+@pytest.mark.parametrize("model", [context_rejection, unanswered], ids=["context-rejection", "turn-deadline"])
+async def test_an_attempt_that_ends_before_the_first_response_grades_the_work_on_the_machine(model):
+    async def agent(context, complete):
+        await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
+        try:
+            await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        except ContextWindowExceeded:
+            return
+
+    spec = rollout_spec(
+        file_task(),
+        machine=machine_runtime(),
+        verifier_machine=machine_runtime(),
+        harness="agent",
+        total_turn_timeout=0.1,
+    )
+    record = await RolloutEngine({"local": RecordingShellSimFactory()}, {"agent": AgentHarness(agent)}).run_task(
+        spec, model
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert all(conversation.steps == () for conversation in record.rollout.conversations)
+
+
+async def test_a_reply_answer_rejected_for_its_context_before_any_response_has_no_grade():
+    async def agent(_context, complete):
+        try:
+            await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        except ContextWindowExceeded:
+            return
+
+    record = await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent"), context_rejection
+    )
+    assert (record.grade.status, record.grade.error) == (
+        Outcome.UNAVAILABLE,
+        "The model rejected the first request for its context",
+    )
 
 
 async def test_closing_answers_a_server_request_before_the_agent_drains_its_handlers():
@@ -2996,6 +3432,27 @@ async def test_a_judge_task_grades_on_the_host_without_a_verifier_machine(judge_
     assert "Reference: 12\nCandidate: twelve" in request["messages"][-1]["content"]
 
 
+async def test_a_host_judge_grades_the_captured_answer_file_instead_of_the_reply(judge_server):
+    task = file_task(output_paths=("/workspace/answer.txt",), grader=judge_task().grader)
+    harness = StepHarness(lambda context: OutputWritingEpisode(context, "echo twelve > /workspace/answer.txt"))
+    spec = rollout_spec(
+        task,
+        machine=machine_runtime(),
+        harness="fixture",
+        judge_connection=JudgeConnection(judge_url(judge_server), "private-test-key"),
+    )
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "I wrote it."}]),
+        {"local": RecordingShellSimFactory()},
+        harnesses={"fixture": harness},
+    ).run_task(spec)
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    [request] = judge_server.requests
+    assert "Reference: 12\nCandidate: twelve" in request["messages"][-1]["content"]
+
+
 async def test_a_judge_task_without_a_connection_uses_the_environment(judge_server, monkeypatch):
     monkeypatch.setenv(BASE_URL_ENV, judge_url(judge_server))
     monkeypatch.setenv(API_KEY_ENV, "private-test-key")
@@ -3041,7 +3498,7 @@ async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monk
         update={
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                environment=GRADER_ENVIRONMENT,
+                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
                 judge=judge,
                 reward=FileReward(
                     files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
@@ -3151,7 +3608,7 @@ async def test_a_turn_with_recorded_observations_takes_no_reply():
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ADVANCE, RuntimeError)
 
 
-async def test_an_agent_waits_while_the_engine_grades():
+async def test_the_engine_stops_the_agent_before_it_grades():
     returned = asyncio.Event()
 
     async def agent(_context, complete):
@@ -3163,7 +3620,9 @@ async def test_an_agent_waits_while_the_engine_grades():
 
     # The verifier machine is the only machine, so grading blocks while it starts.
     factory = BlockingFactory(blocked=0)
-    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    task = arithmetic_task(
+        grader=ScriptGrader(argv=("sh", "-c", "echo 1"), placement=GraderMachine(environment=GRADER_ENVIRONMENT))
+    )
     pending = asyncio.create_task(
         engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
@@ -3173,12 +3632,40 @@ async def test_an_agent_waits_while_the_engine_grades():
     )
     try:
         await asyncio.wait_for(factory.entered.wait(), timeout=5)
-        assert not returned.is_set()
+        # The agent cannot change the task machine while it is graded.
+        assert returned.is_set()
     finally:
         factory.release.set()
     record = await pending
-    assert returned.is_set()
     assert record.grade.reward == 1.0
+
+
+@pytest.mark.parametrize("push_after_grading,reward", [(True, 1.0), (False, 0.0)])
+async def test_the_engine_grades_a_service_the_agent_left_before_it_releases_the_service(push_after_grading, reward):
+    released = []
+
+    async def agent(context, complete):
+        machine = context.machine
+        # A stand-in for a server the agent started in its terminal: it runs until its owner stops it.
+        await machine.run(Command(("sh", "-c", "mkdir -p /srv && echo up > /srv/service")))
+
+        async def stop_service():
+            await machine.run(Command(("rm", "/srv/service")))
+            released.append("service")
+
+        push = context.cleanup.push_after_grading if push_after_grading else context.cleanup.push
+        push("service", stop_service)
+        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    grader = b"if [ -e /srv/service ]; then echo 1; else echo 0; fi\n"
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        {"local": RecordingShellSimFactory()},
+        harnesses={"agent": AgentHarness(agent)},
+    ).run_task(rollout_spec(agent_machine_task(grader), machine=machine_runtime(), harness="agent", max_turns=1))
+
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward), record.grade.diagnostics
+    assert released == ["service"]
 
 
 async def test_a_harness_that_fails_after_a_model_failure_is_a_harness_failure():
@@ -3242,7 +3729,7 @@ async def test_the_end_of_the_harness_stops_a_model_call_and_drops_its_late_answ
                 try:
                     await asyncio.Future()
                 except asyncio.CancelledError:
-                    # The transport ignores the cancellation, and it answers while the engine grades.
+                    # The transport ignores the cancellation, and it answers while the engine stops the agent.
                     stopped.set()
                     await late.wait()
                 answered.set()
@@ -3250,16 +3737,18 @@ async def test_the_end_of_the_harness_stops_a_model_call_and_drops_its_late_answ
 
     model = LateModel([{"role": "assistant", "content": "12"}] * 2)
     factory = BlockingFactory(blocked=0)
-    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    task = arithmetic_task(
+        grader=ScriptGrader(argv=("sh", "-c", "echo 1"), placement=GraderMachine(environment=GRADER_ENVIRONMENT))
+    )
     spec = rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", total_turn_timeout=0.05)
     pending = asyncio.create_task(
         engine(model, {"local": factory}, harnesses={"agent": AgentHarness(agent)}).run_task(spec)
     )
     try:
-        await asyncio.wait_for(factory.entered.wait(), timeout=5)
         await asyncio.wait_for(stopped.wait(), timeout=5)
         late.set()
         await asyncio.wait_for(answered.wait(), timeout=5)
+        await asyncio.wait_for(factory.entered.wait(), timeout=5)
     finally:
         late.set()
         factory.release.set()
@@ -3373,7 +3862,9 @@ async def test_an_agent_gets_no_turn_after_the_harness_ended():
         await factory.entered.wait()
         received.append(await complete(prompt))
 
-    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    task = arithmetic_task(
+        grader=ScriptGrader(argv=("sh", "-c", "echo 1"), placement=GraderMachine(environment=GRADER_ENVIRONMENT))
+    )
     spec = rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", total_turn_timeout=0.05)
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
@@ -3805,7 +4296,9 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one(w
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
-    assert record.rollout.metrics == {"score": 1.0}
+    assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {
+        "score": 1.0
+    }
 
 
 async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
@@ -3821,6 +4314,35 @@ async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
     assert len(record.rollout.conversations[-1].steps) == 6
     assert record.rollout.stop_reason != "max_turns"
     assert record.grade.reward == 1.0
+
+
+@pytest.mark.parametrize(
+    ("policy", "requests", "stop_reason"),
+    [(LengthStopPolicy.END, 1, LENGTH_STOP_REASON), (LengthStopPolicy.NEW_CONVERSATION, 2, "stop")],
+)
+async def test_agent_harness_length_stop_policy_ends_or_restarts_after_a_cut_reply(policy, requests, stop_reason):
+    class CutFirstModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            return turn if len(self.requests) > 1 else replace(turn, stop_reason=LENGTH_STOP_REASON)
+
+    model = CutFirstModel([{"role": "assistant", "content": "1"}, {"role": "assistant", "content": "12"}])
+    first = ({"role": "user", "content": "Return 12."},)
+
+    async def agent(_context, complete):
+        turn = await complete(Prompt(first, {}))
+        await complete(Prompt((*first, turn.message, {"role": "user", "content": "You were cut off."}), {}))
+
+    record = await engine(model, harnesses={"agent": AgentHarness(agent, length_stop=policy)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent")
+    )
+    assert len(model.requests) == requests
+    assert record.rollout.stop_reason == stop_reason
+    assert len(record.rollout.conversations) == requests
+    if policy == LengthStopPolicy.NEW_CONVERSATION:
+        assert model.requests[1].continuation is None
+        assert model.requests[1].messages[-1] == {"role": "user", "content": "You were cut off."}
+        assert record.grade.reward == 1.0
 
 
 @pytest.mark.parametrize("compact", [False, True])
@@ -3855,3 +4377,44 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_supplied_verifier_remains_caller_owned(fails):
+    task = file_task()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
+    factory = RecordingShellSimFactory()
+    borrowed = []
+
+    async def acquire(prepared):
+        assert prepared.workdir == "/workspace"
+        assert prepared.env["TASKCOMPENDIUM_STOP_REASON"] == "stop"
+        machine = await FixtureImageFactory().create(prepared)
+        borrowed.append(machine)
+        if fails:
+
+            async def fail(command):
+                raise RuntimeError("borrowed verifier interrupted")
+
+            machine.run = fail
+        return machine
+
+    runner = engine(model, {"local": factory}).engine
+    spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    try:
+        if fails:
+            with pytest.raises(GradedRolloutInterrupted):
+                await runner.run_task(spec, model.complete, verifier=acquire)
+        else:
+            assert (await runner.run_task(spec, model.complete, verifier=acquire)).grade.reward == 1
+        assert len(factory.machines) == len(borrowed) == 1
+        with pytest.raises(RuntimeError):
+            await factory.machines[0].run(Command(("true",)))
+        # Unlike the task machine, the supplied verifier still accepts file operations.
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "proof"
+            source.write_text("caller owns cleanup")
+            await borrowed[0].upload(source, "/tmp/proof")
+    finally:
+        for machine in borrowed:
+            await machine.close()

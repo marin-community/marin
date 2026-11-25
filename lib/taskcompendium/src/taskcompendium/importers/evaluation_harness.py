@@ -28,7 +28,7 @@ from taskcompendium.evaluation.spec import (
     LikelihoodRequest,
     TextGeneration,
 )
-from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.fewshot_grader import source_package
 from taskcompendium.importers.evalchemy.scorers.harness_generation import drop_references
 from taskcompendium.importers.fewshot import (
     FEWSHOT_SEED,

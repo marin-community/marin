@@ -62,6 +62,9 @@ pub struct ColumnIndex {
     pub exact_values: Vec<String>,
     /// Exact per-value counts stored in the segment's `.fidx` bundle.
     pub value_counts: bool,
+    /// Per-segment min/max kept in the catalog for segment pruning. Not part of
+    /// the `.fidx` bundle, so it never changes the index policy fingerprint.
+    pub catalog_bounds: bool,
 }
 
 /// One column in a registered schema.
@@ -135,6 +138,12 @@ impl Column {
     /// Builder: persist exact counts for every value in this string column.
     pub fn with_value_counts(mut self) -> Self {
         self.index.value_counts = true;
+        self
+    }
+
+    /// Builder: keep this column's per-segment min/max in the catalog.
+    pub fn with_catalog_bounds(mut self) -> Self {
+        self.index.catalog_bounds = true;
         self
     }
 }
@@ -360,6 +369,11 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             .as_option()
             .and_then(|ix| ix.value_counts)
             .unwrap_or(false);
+        column.index.catalog_bounds = c
+            .index
+            .as_option()
+            .and_then(|ix| ix.catalog_bounds)
+            .unwrap_or(false);
         cols.push(column);
     }
     let projections = view
@@ -415,6 +429,7 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
                     ..ProtoColumnIndex::default()
                         .with_trigram(c.index.trigram)
                         .with_value_counts(c.index.value_counts)
+                        .with_catalog_bounds(c.index.catalog_bounds)
                 }),
                 ..Default::default()
             }
@@ -466,6 +481,8 @@ struct JsonColumnIndex {
     exact_values: Vec<String>,
     #[serde(default)]
     value_counts: bool,
+    #[serde(default)]
+    catalog_bounds: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -559,6 +576,7 @@ pub fn schema_to_json(schema: &Schema) -> String {
                     trigram: c.index.trigram,
                     exact_values: c.index.exact_values.clone(),
                     value_counts: c.index.value_counts,
+                    catalog_bounds: c.index.catalog_bounds,
                 },
             })
             .collect(),
@@ -580,6 +598,7 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
         column.index.exact_values.sort();
         column.index.exact_values.dedup();
         column.index.value_counts = c.index.value_counts;
+        column.index.catalog_bounds = c.index.catalog_bounds;
         cols.push(column);
     }
     let mut schema = Schema::new(cols, payload.key_column);
@@ -742,11 +761,33 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
             schema.max_row_group_rows, MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS,
         )));
     }
+    if schema
+        .columns
+        .iter()
+        .any(|column| column.index.catalog_bounds)
+    {
+        let key_column = resolve_key_column(schema)?;
+        if schema
+            .column(&key_column)
+            .is_some_and(|column| column.index.catalog_bounds)
+        {
+            return Err(StatsError::SchemaValidation(format!(
+                "column {key_column:?}: catalog_bounds cannot flag the key column, whose \
+                 bounds the catalog already records"
+            )));
+        }
+    }
     for column in &schema.columns {
         let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
         if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
             return Err(StatsError::SchemaValidation(format!(
                 "column {:?}: exact_values and value_counts require a STRING column",
+                column.name
+            )));
+        }
+        if column.index.catalog_bounds && column.r#type != ColumnType::COLUMN_TYPE_INT64 {
+            return Err(StatsError::SchemaValidation(format!(
+                "column {:?}: catalog_bounds requires an INT64 column",
                 column.name
             )));
         }
@@ -917,6 +958,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut extras: Vec<Column> = Vec::new();
     let mut enable_trigram: Vec<&str> = Vec::new();
     let mut enable_value_counts: Vec<&str> = Vec::new();
+    let mut enable_catalog_bounds: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
     let sort_columns = if requested.sort_columns.is_empty() {
         registered.sort_columns.clone()
@@ -1018,6 +1060,12 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 if rc.index.value_counts && !existing.index.value_counts {
                     enable_value_counts.push(rc.name.as_str());
                 }
+                // Like the index flags, catalog bounds are only ever turned on:
+                // a sender whose schema predates the flag must not turn it off,
+                // or conflict, during a staged deploy.
+                if rc.index.catalog_bounds && !existing.index.catalog_bounds {
+                    enable_catalog_bounds.push(rc.name.as_str());
+                }
                 let additions: Vec<String> = rc
                     .index
                     .exact_values
@@ -1035,6 +1083,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     if extras.is_empty()
         && enable_trigram.is_empty()
         && enable_value_counts.is_empty()
+        && enable_catalog_bounds.is_empty()
         && exact_values.is_empty()
         && sort_columns == registered.sort_columns
         && max_row_group_rows == registered.max_row_group_rows
@@ -1058,6 +1107,13 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 "register: enabling exact value counts on an existing column",
             );
             column.index.value_counts = true;
+        }
+        if enable_catalog_bounds.contains(&column.name.as_str()) {
+            tracing::info!(
+                column = %column.name,
+                "register: enabling catalog bounds on an existing column",
+            );
+            column.index.catalog_bounds = true;
         }
         if let Some((_, additions)) = exact_values
             .iter()
@@ -1754,6 +1810,56 @@ mod tests {
             "",
         );
         assert_eq!(merge_schemas(&reg, &subset).unwrap(), reg);
+    }
+
+    /// `worker_schema` with catalog bounds on `column`.
+    fn worker_schema_bounding(column_name: &str) -> Schema {
+        let mut schema = worker_schema();
+        for column in &mut schema.columns {
+            if column.name == column_name {
+                column.index.catalog_bounds = true;
+            }
+        }
+        schema
+    }
+
+    #[test]
+    fn catalog_bounds_round_trip_and_merge_on_only() {
+        use buffa::{Message, MessageView};
+
+        let flagged = worker_schema_bounding("mem_bytes");
+        validate_index_policies(&flagged).unwrap();
+        assert_eq!(
+            schema_from_json(&schema_to_json(&flagged)).unwrap(),
+            flagged
+        );
+        let encoded = schema_to_proto_owned(&flagged).encode_to_vec();
+        let view = SchemaView::decode_view(&encoded).unwrap();
+        assert_eq!(schema_from_proto_view(&view).unwrap(), flagged);
+
+        // A newer sender turns the flag on for a registered table.
+        let plain = with_implicit_seq(worker_schema());
+        let merged = merge_schemas(&plain, &with_implicit_seq(flagged)).unwrap();
+        assert!(merged.column("mem_bytes").unwrap().index.catalog_bounds);
+        // An older sender, whose schema predates the flag, neither conflicts nor
+        // turns it off.
+        assert_eq!(merge_schemas(&merged, &plain).unwrap(), merged);
+    }
+
+    #[test]
+    fn catalog_bounds_rejects_the_key_column() {
+        // `worker_schema` has no key_column, so `timestamp_ms` is its key.
+        let error = validate_index_policies(&worker_schema_bounding("timestamp_ms")).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot flag the key column"),
+            "{error}"
+        );
+        let plain = with_implicit_seq(worker_schema());
+        assert!(merge_schemas(
+            &plain,
+            &with_implicit_seq(worker_schema_bounding("timestamp_ms"))
+        )
+        .is_err());
     }
 
     #[test]

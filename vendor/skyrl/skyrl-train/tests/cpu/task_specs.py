@@ -1,5 +1,13 @@
 """Explicit runtime settings for task execution tests."""
 
+import json
+from pathlib import Path
+from collections.abc import Callable, Sequence
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
+from finestore.schema import arrow_schema
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec
 from shellbox.machine import NetworkPolicy
@@ -14,6 +22,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.identity import canonical_sha256
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata
 
 SHELL_ENVIRONMENT = EnvironmentRequirements(
@@ -35,6 +44,22 @@ def text_task(task_id: str = "task", *, prompt="Question", source="fixture") -> 
         grader=NoGrader(reason="Projection fixture"),
         source=Source(dataset=source, revision="1", row="0", importer_revision="1"),
     )
+
+
+def write_selection_panel(
+    root: Path, tasks: Sequence[TaskSpec], name: str, version: str, strata: Callable[[TaskSpec], dict[str, str | bool]]
+) -> None:
+    pq.write_table(pa.table({"task_spec": [task.model_dump_json() for task in tasks]}), root / "validation.parquet")
+    rows = [
+        SelectionTaskRow(
+            task_id=task.id, task_digest=canonical_sha256(task.model_dump(mode="json")),
+            state=MembershipState.ACTIVE, **strata(task)
+        ).model_dump(mode="json")
+        for task in tasks
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=arrow_schema(SelectionTaskRow)), root / "task_manifest.parquet")
+    definition = SelectionDefinition(name=name, version=version, sampling="all", task_files=("validation.parquet",))
+    (root / "summary.json").write_text(json.dumps({"selection_strata": definition.model_dump(mode="json")}))
 
 
 def task_input(

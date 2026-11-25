@@ -267,7 +267,7 @@ def _batch(**fields):
 
 def test_loop_credit_survives_concatenation_with_a_batch_that_did_not_shape_rewards():
     merged = concatenate_trajectory_batches(
-        [_batch(), _batch(loop_advantages=[[-0.2, 0.0]])], tis_lcs_alert_threshold=1.0
+        [_batch(), _batch(loop_advantages=[[-0.2, 0.0]])]
     )
 
     assert merged["loop_advantages"] == [[0.0, 0.0], [-0.2, 0.0]]
@@ -276,7 +276,7 @@ def test_loop_credit_survives_concatenation_with_a_batch_that_did_not_shape_rewa
 def test_reasoning_span_evidence_survives_concatenation_with_a_batch_that_has_none():
     malformed = _batch(reasoning_span_violations=[1], reasoning_span_violation_tokens=[[1]])
 
-    merged = concatenate_trajectory_batches([malformed, _batch()], tis_lcs_alert_threshold=1.0)
+    merged = concatenate_trajectory_batches([malformed, _batch()])
 
     assert merged["reasoning_span_violations"] == [1, 0]
     assert merged["reasoning_span_violation_tokens"] == [[1], []]

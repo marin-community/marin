@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 import httpx
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 
 from harbor.agents.base import BaseAgent
 from harbor.agents.factory import AgentFactory
@@ -131,7 +132,7 @@ class ProcessTaskFactory:
 
 
 def trial_config(
-    root: Path, name: str, *, guest_root: Path, waiting: bool = False
+    root: Path, name: str, *, guest_root: Path, waiting: bool = False, reward: int = 1
 ) -> TrialConfig:
     task = root / name
     environment = task / "environment"
@@ -149,7 +150,7 @@ def trial_config(
     tests.mkdir()
     (tests / "test.sh").write_text(
         '#!/bin/sh\nset -eu\ntest "$(cat answer)" = partial\n'
-        'printf 1 > "$TEST_REWARD_PATH"\n'
+        f'printf {reward} > "$TEST_REWARD_PATH"\n'
     )
     agent = "WaitingAgent" if waiting else "PartialAnswerAgent"
     return TrialConfig(
@@ -328,7 +329,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
 
     assert result.verifier_result is None
     assert (
-        error_category(result.exception_info.exception_type)
+        error_category(result.exception_info.exception_type, categories=ERROR_CATEGORIES)
         is ErrorCategory.INFRASTRUCTURE
     )
     assert Job._is_resume_retryable_result(result)
@@ -337,50 +338,90 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
     native = TrialResult.model_validate_json(victim.paths.result_path.read_text())
     assert native.verifier_result is None
     assert (
-        error_category(native.exception_info.exception_type)
+        error_category(native.exception_info.exception_type, categories=ERROR_CATEGORIES)
         is ErrorCategory.INFRASTRUCTURE
     )
     assert Job._is_resume_retryable_result(native)
 
 
-@pytest.mark.parametrize("failure", ["collection", "collection_deadline", "teardown"])
-async def test_runtime_failure_cannot_publish_a_success(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "collection",
+        "collection_deadline",
+        "teardown",
+        "teardown_deadline",
+        "teardown_cancelled",
+        "teardown_cancelled_after_collection",
+        "teardown_cancelled_before_stop_error",
+    ],
+)
+async def test_runtime_failure_and_unconfirmed_teardown_remain_unscored(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    reward = 0 if failure.startswith("teardown") else 1
     trial = await Trial.create(
-        trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest")
+        trial_config(tmp_path, "runtime-failure", guest_root=tmp_path / "guest", reward=reward)
     )
+    stop_started = asyncio.Event()
+    release_stop = asyncio.Event()
+    cancel_at_stop = failure.startswith("teardown_cancelled")
+    gated_stop = cancel_at_stop or failure == "teardown_deadline"
 
     async def fail():
         if failure == "collection_deadline":
             await asyncio.Event().wait()
         raise RuntimeError("Required runtime output unavailable")
 
-    if failure.startswith("collection"):
+    if "collection" in failure:
         if failure == "collection_deadline":
             trial.config.trial_cleanup_grace_sec = 0.2
         monkeypatch.setattr(trial.agent_environment, "collect_runtime_logs", fail)
-    else:
+    if failure.startswith("teardown"):
         original_stop = trial.agent_environment.stop
+
+        if gated_stop:
+            monkeypatch.setattr("harbor.trial.trial.ENVIRONMENT_STOP_TIMEOUT_SEC", 0.2)
 
         async def failed_stop(delete):
             await original_stop(delete)
-            await fail()
+            stop_started.set()
+            if gated_stop:
+                await release_stop.wait()
+            if not gated_stop or failure == "teardown_cancelled_before_stop_error":
+                await fail()
 
         monkeypatch.setattr(trial.agent_environment, "stop", failed_stop)
 
-    result = await trial.run()
-
-    assert result.verifier_result is None
-    assert (
-        error_category(result.exception_info.exception_type)
-        is ErrorCategory.INFRASTRUCTURE
-    )
-    assert Job._is_resume_retryable_result(result)
-    assert (
-        "TimeoutError" if failure == "collection_deadline" else "RuntimeError"
-    ) in result.exception_info.exception_traceback
-    if failure == "teardown":
-        assert result.completion is None
+    try:
+        if cancel_at_stop:
+            async with asyncio.timeout(5):
+                task = asyncio.create_task(trial.run())
+                await stop_started.wait()
+                task.cancel()
+                if failure == "teardown_cancelled_before_stop_error":
+                    await asyncio.sleep(0)
+                    release_stop.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        else:
+            result = await trial.run()
+    finally:
+        release_stop.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
+    stored = TrialResult.model_validate_json(trial.paths.result_path.read_text())
+    if cancel_at_stop:
+        assert stored.exception_info.exception_type == "CancelledError"
+        assert stored.completion is None and stored.verifier_result is None
+        return
+    if failure.startswith("teardown"):
+        assert result.verifier_result is None and stored.verifier_result is None
+        assert result.exception_info.exception_type == stored.exception_info.exception_type == "EnvironmentStopError"
+        assert result.completion is None and stored.completion is None
     else:
+        assert result.verifier_result is None and stored.verifier_result is None
+        assert error_category(result.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+        assert (
+            "TimeoutError" if failure == "collection_deadline" else "RuntimeError"
+        ) in result.exception_info.exception_traceback
         assert result.completion is not None

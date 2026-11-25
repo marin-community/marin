@@ -118,23 +118,71 @@ def test_prepared_model_is_a_dependency_and_resolves_both_refs():
     assert train_config.data.tokenizer == prepared_path
 
 
-def test_hf_model_has_no_prep_dep_and_uses_literal_refs():
-    """An HFModel adds no model dependency and passes its ids straight through."""
-    step = sft_step(_spec(HFModel("Qwen/Qwen3-0.6B")), ResourceConfig.with_cpu())
+_HF_REF = "Qwen/Qwen3-0.6B@" + "c" * 40
 
-    # Only the dataset transform is a dependency — no preparation step.
-    assert [d.name for d in step.deps] == ["documents/ds"]
+
+def test_hf_model_mirrors_hub_ref_on_cpu_before_training():
+    """A Hub HFModel adds a CPU download dep; init and the default tokenizer read its bucket copy."""
+    step = sft_step(_spec(HFModel(_HF_REF)), ResourceConfig.with_cpu())
+
+    mirror = next(d for d in step.deps if d.name != "documents/ds")
+    assert mirror.name == "models/Qwen--Qwen3-0-6B--" + "c" * 40
     train_config = materialized_config(step, _PREFIX).train_config
-    assert train_config.initialize_from_hf == "Qwen/Qwen3-0.6B"
-    assert train_config.data.tokenizer == "Qwen/Qwen3-0.6B"
+    assert train_config.initialize_from_hf == mirror.path(_PREFIX)
+    assert train_config.data.tokenizer == mirror.path(_PREFIX)
 
 
 def test_hf_model_separate_tokenizer_path():
     """A distinct tokenizer_path is honored for the data tokenizer, not the init ref."""
-    step = sft_step(_spec(HFModel("org/model", tokenizer_path="org/tokenizer")), ResourceConfig.with_cpu())
+    step = sft_step(_spec(HFModel(_HF_REF, tokenizer_path="org/tokenizer")), ResourceConfig.with_cpu())
     train_config = materialized_config(step, _PREFIX).train_config
-    assert train_config.initialize_from_hf == "org/model"
+    assert train_config.initialize_from_hf.startswith(_PREFIX)
     assert train_config.data.tokenizer == "org/tokenizer"
+
+
+def test_hf_model_bucket_path_loads_in_place():
+    """A bucket-path HFModel adds no model dependency and is passed straight through."""
+    path = "gs://bucket/models/qwen3"
+    step = sft_step(_spec(HFModel(path)), ResourceConfig.with_cpu())
+
+    assert [d.name for d in step.deps] == ["documents/ds"]
+    train_config = materialized_config(step, _PREFIX).train_config
+    assert train_config.initialize_from_hf == path
+    assert train_config.data.tokenizer == path
+
+
+def test_hf_model_relative_local_dir_loads_in_place(tmp_path, monkeypatch):
+    """A relative local directory shaped like ``org/model`` is loaded in place, not treated as a Hub repo."""
+    monkeypatch.chdir(tmp_path)
+    path = "checkpoints/prepared"
+    (tmp_path / path).mkdir(parents=True)
+    step = sft_step(_spec(HFModel(path)), ResourceConfig.with_cpu())
+
+    assert [d.name for d in step.deps] == ["documents/ds"]
+    train_config = materialized_config(step, _PREFIX).train_config
+    assert train_config.initialize_from_hf == path
+    assert train_config.data.tokenizer == path
+
+
+@pytest.mark.parametrize("model_ref", ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-0.6B@main", "Qwen/Qwen3-0.6B@c1899de"])
+def test_hf_model_rejects_unpinned_hub_ref(model_ref):
+    """A Hub ref must name a full commit, so the mirror's address and identity cannot drift."""
+    with pytest.raises(ValueError, match="pinned to a full commit sha"):
+        HFModel(model_ref)
+
+
+def test_hf_model_mirrors_hf_url_like_hub_ref():
+    """An hf:// ref is the same Hub ref: it gets the same CPU mirror, not a Hub stream on the accelerator."""
+    step = sft_step(_spec(HFModel("hf://" + _HF_REF)), ResourceConfig.with_cpu())
+
+    mirror = next(d for d in step.deps if d.name != "documents/ds")
+    assert mirror.name == "models/Qwen--Qwen3-0-6B--" + "c" * 40
+    assert materialized_config(step, _PREFIX).train_config.initialize_from_hf == mirror.path(_PREFIX)
+
+
+def test_hf_model_rejects_unpinned_hf_url():
+    with pytest.raises(ValueError, match="pinned to a full commit sha"):
+        HFModel("hf://Qwen/Qwen3-0.6B@main")
 
 
 def test_fingerprint_tracks_preparation_inputs():

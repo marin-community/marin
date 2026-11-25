@@ -16,6 +16,12 @@ from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
+GRADING_SECONDS_METRIC = "timing/grading"
+SETUP_SECONDS_METRIC = "timing/setup"
+SETUP_COMPLETED_METRIC = "setup_completed"
+TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
+TASK_ROLLOUT_COLUMN = "task_rollout_spec"
+
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
@@ -218,7 +224,10 @@ class GradedRollout:
 
     rollout: Rollout
     grade: GradeResult
-    """The verdict of the task's grader on the last conversation that has a model turn. Unavailable if none has."""
+    """The verdict of the task's grader on the last conversation that has a model turn.
+
+    Without one, the grader grades the work on the machine, and a task whose answer is the conversation is unavailable.
+    """
 
 
 class RolloutOperation(StrEnum):
@@ -318,6 +327,15 @@ class RolloutEventType(StrEnum):
 
 @dataclass(frozen=True)
 class AttemptStarted:
+    """The attempt passed validation: the spec's harness and trace mode, and the dataset of the task's source.
+
+    ``trace`` tells a reader whether the token counts in the attempt's events are checked. Under
+    ``TraceMode.MESSAGES`` they are the endpoint's report.
+    """
+
+    harness: str
+    trace: "TraceMode"
+    dataset: str
     type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_STARTED, init=False)
 
 
@@ -400,13 +418,16 @@ class Graded:
 class AttemptEnded:
     """The attempt returned with ``stop_reason``, or was interrupted during ``operation`` by ``error``.
 
-    ``duration`` covers the whole attempt, including resource cleanup.
+    ``duration`` covers the whole attempt, including resource cleanup. ``turns`` counts the model turns and
+    ``total_tokens`` the tokens that the model requests spent, so this event summarizes the attempt.
     """
 
     stop_reason: str | None
     operation: RolloutOperation | None
     error: str | None
     duration: float
+    turns: int
+    total_tokens: int
     type: RolloutEventType = field(default=RolloutEventType.ATTEMPT_ENDED, init=False)
 
 
@@ -424,10 +445,19 @@ RolloutEventPayload = (
 
 @dataclass(frozen=True)
 class RolloutEvent:
-    """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``."""
+    """One event of the attempt that ``RolloutEngine.run_task`` started with ``run_id`` for task ``task_id``.
+
+    ``index`` is the event's position in the attempt, counted when the engine emits it, so a missing index
+    is an event that the observer did not receive. ``(run_id, index)`` identifies the event, because each
+    ``run_task`` call has its own ``run_id``. The last events of an attempt can be lost without a gap,
+    so the events are complete when ``AttemptEnded`` is among them and every lower index is present.
+    ``emitted_at`` is the wall-clock time of the emit in seconds since the epoch, because delivery is later.
+    """
 
     run_id: str
     task_id: str
+    index: int
+    emitted_at: float
     payload: RolloutEventPayload
 
 

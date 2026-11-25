@@ -29,6 +29,15 @@ def unwrap_fence(text: str) -> str:
     return match.group(1) if match else text
 
 
+def unwrap_enclosing_fence(text: str) -> str:
+    """Unwrap one code fence only when it encloses the entire text."""
+    stripped = text.strip()
+    match = _FENCE.match(stripped)
+    if match is None or match.end() != len(stripped):
+        return stripped
+    return unwrap_fence(stripped)
+
+
 def extract_boxed(text: str) -> str | None:
     """The brace-balanced content of the last ``\\boxed{...}``, or ``None`` when there is none.
 

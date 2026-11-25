@@ -4,7 +4,6 @@
 """Shared secret redaction helpers."""
 
 import itertools
-import json
 import math
 import re
 
@@ -20,6 +19,7 @@ PREFIXED_SECRET_RE = re.compile(
     r"|AKIA[0-9A-Z]{16}"
     r"|ASIA[0-9A-Z]{16}"
     r"|gh[pousr]_[A-Za-z0-9]{36,}"
+    r"|hf_[A-Za-z0-9]{20,}"
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"
     r"|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
     r")(?![A-Za-z0-9_-])"
@@ -230,18 +230,3 @@ def redact_value(value: object) -> object:
             return REDACTED_VALUE
         return redact_string(value)
     return value
-
-
-def redact_json_text(rendered: str) -> str:
-    """Parse *rendered* as JSON, redact the structure, and re-emit a compact JSON string.
-
-    Falls back to :func:`redact_string` when the input is not valid JSON, so callers
-    never lose protection on malformed previews. An empty string is returned as-is.
-    """
-    if not rendered:
-        return rendered
-    try:
-        tree = json.loads(rendered)
-    except (ValueError, TypeError):
-        return redact_string(rendered)
-    return json.dumps(redact_value(tree), separators=(",", ":"))

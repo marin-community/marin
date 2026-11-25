@@ -105,6 +105,9 @@ class PreferencePairDataset(PromptDataset):
                         metadata=TrajectoryMetadata(
                             uid=uid,
                             metric_class=PREFERENCE_PAIR_ENV_CLASS,
+                            subset_id=(
+                                extra_info.get("data_source") or preference.get("data_source") or PREFERENCE_PAIR_ENV_CLASS
+                            ),
                             data_source=extra_info.get("data_source") or preference.get("data_source"),
                             teacher_route=preference.get("teacher_route"),
                         ),

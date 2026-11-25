@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-
 from rigging.redaction import (
     REDACTED_VALUE,
     is_safe_key_name,
     is_sensitive_key_name,
     looks_like_key,
-    redact_json_text,
     redact_string,
     redact_value,
 )
@@ -99,10 +96,12 @@ def test_redact_value_preserves_tokenizers_parallelism():
 
 def test_redact_string_redacts_prefixed_tokens():
     slack_token = "xox" + "b-1234567890-abcdefghijklmnopqrstuvwxyz"
+    hf_token = "hf_" + "Q" * 32
     raw = (
         "aws=AKIAIOSFODNN7EXAMPLE "
         "github=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ "
         f"slack={slack_token} "
+        f"hf={hf_token} "
         "jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     )
 
@@ -111,8 +110,9 @@ def test_redact_string_redacts_prefixed_tokens():
     assert "AKIAIOSFODNN7EXAMPLE" not in redacted
     assert "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ" not in redacted
     assert slack_token not in redacted
+    assert hf_token not in redacted
     assert "eyJhbGciOiJIUzI1NiJ9" not in redacted
-    assert redacted.count(REDACTED_VALUE) == 4
+    assert redacted.count(REDACTED_VALUE) == 5
 
 
 def test_redact_string_redacts_private_keys():
@@ -146,32 +146,6 @@ def test_redact_value_redacts_secret_like_strings_under_benign_keys():
     value = {"cache_buster": "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ", "log_level": "info"}
 
     assert redact_value(value) == {"cache_buster": REDACTED_VALUE, "log_level": "info"}
-
-
-def test_redact_json_text_redacts_nested_sensitive_keys():
-    raw = json.dumps(
-        {
-            "name": "train-job",
-            "environment": {"env_vars": {"HF_TOKEN": "hf_xyz", "LOG_LEVEL": "info"}},
-            "metadata": [{"api_key": "sk-abc"}, {"benign": "ok"}],
-        }
-    )
-
-    out = json.loads(redact_json_text(raw))
-
-    assert out["environment"]["env_vars"]["HF_TOKEN"] == REDACTED_VALUE
-    assert out["environment"]["env_vars"]["LOG_LEVEL"] == "info"
-    assert out["metadata"][0]["api_key"] == REDACTED_VALUE
-    assert out["metadata"][1]["benign"] == "ok"
-    assert out["name"] == "train-job"
-
-
-def test_redact_json_text_falls_back_to_string_redaction_on_invalid_json():
-    # Not valid JSON, but contains a prefixed token — caller still gets protection.
-    leaky = "not json{{{ ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"
-    assert redact_json_text(leaky) == "not json{{{ " + REDACTED_VALUE
-    assert redact_json_text("plain not json") == "plain not json"
-    assert redact_json_text("") == ""
 
 
 def test_is_safe_key_name_matches_identifier_suffixes():
@@ -250,18 +224,3 @@ def test_safe_key_strips_embedded_prefixed_secrets():
     assert "/alice/job/0" in redacted["reason"]
     assert "ghp_" not in redacted["reason"]
     assert REDACTED_VALUE in redacted["reason"]
-
-
-def test_redact_json_text_preserves_task_id_in_status_payload():
-    # End-to-end repro of the bug from the issue: SetTaskStatusTextRequest
-    # rendered to JSON should keep its task_id intact.
-    raw = json.dumps(
-        {
-            "task_id": "/yonromai/awesome-pipeline-name/0",
-            "status_text_detail_md": "**Stage**: stage0-Map → Write\n**Shard**: 966/3575",
-            "status_text_summary_md": "**stage0-Map → Write**\nshard 966/3575",
-        }
-    )
-    out = json.loads(redact_json_text(raw))
-    assert out["task_id"] == "/yonromai/awesome-pipeline-name/0"
-    assert "Map" in out["status_text_detail_md"]

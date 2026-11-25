@@ -30,6 +30,7 @@ use crate::indices::{
     parse_group_extrema_config, parse_trigram_coverage, IndexRegistry, SegmentArtifacts,
 };
 use crate::query::metadata_cache_stats;
+use crate::read_executor::ReadExecutor;
 use crate::server::diagnostics::read_proc_self_status_kb;
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
@@ -47,6 +48,7 @@ struct IntrospectionState {
     health: Arc<IngestHealth>,
     forwarding: Option<ForwardingConfig>,
     tail_cache: Arc<LogTailCache>,
+    reads: Arc<ReadExecutor>,
 }
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -183,6 +185,7 @@ struct ServerInfoResponse {
     /// Registration state of the namespaces this process ingests into itself.
     /// A namespace stuck here rejects every write to it, across restarts.
     ingest: Vec<NamespaceRegistration>,
+    read_workers: usize,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,
     log_tail_cache: LogTailCacheInfo,
@@ -355,6 +358,7 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
             ram_chunks: memory.chunks,
         },
         ingest: state.health.snapshot(),
+        read_workers: state.reads.workers(),
         metadata_cache: MetadataCacheInfo {
             limit_bytes: cache.limit_bytes as i64,
             size_bytes: cache.size_bytes as i64,
@@ -616,6 +620,7 @@ pub fn introspection_router(
     health: Arc<IngestHealth>,
     forwarding: Option<ForwardingConfig>,
     tail_cache: Arc<LogTailCache>,
+    reads: Arc<ReadExecutor>,
 ) -> Router {
     process_started();
     Router::new()
@@ -627,5 +632,6 @@ pub fn introspection_router(
             health,
             forwarding,
             tail_cache,
+            reads,
         })
 }

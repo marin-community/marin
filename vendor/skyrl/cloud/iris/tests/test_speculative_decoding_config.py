@@ -4,7 +4,6 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
-from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 
@@ -18,7 +17,6 @@ from marinskyrl.speculative_decoding import (  # noqa: E402
     SpeculativeDecodingConfigError,
     parse_speculative_decoding_config,
 )
-from skyrl_train.entrypoints.main_base import config_dir  # noqa: E402
 
 
 _DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
@@ -101,29 +99,22 @@ def test_local_speculator_uses_model_without_hub_resolution() -> None:
     }
 
 
-def test_null_speculator_keeps_the_default_disabled() -> None:
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name="ppo_base_config")
-
-    assert cfg.generator.speculative_decoding is None
-    assert (
-        parse_speculative_decoding_config(
-            None,
-            backend=cfg.generator.backend,
-            run_engines_locally=cfg.generator.run_engines_locally,
-            entrypoint="skyrl_train.entrypoints.main_base",
-            colocate_all=cfg.trainer.placement.colocate_all,
-        )
-        is None
-    )
-
-
-def test_frozen_object_store_speculator_is_supported() -> None:
+@pytest.mark.parametrize(
+    ("method", "vllm_sampling"),
+    (
+        ("eagle3", {}),
+        ("dspark", {"draft_sample_method": "probabilistic", "rejection_sample_method": "standard"}),
+    ),
+)
+def test_frozen_object_store_speculator_is_supported(method: str, vllm_sampling: dict[str, str]) -> None:
     config = _base_config()
-    model = config["generator"]["speculative_decoding"]["model"]
-    model["source_uri"] = "s3://models/snowball/eagle3"
+    draft = config["generator"]["speculative_decoding"]
+    draft["method"] = method
+    draft["training"] = None
+    model = draft["model"]
+    source_uri = "s3://models/snowball/draft"
+    model["source_uri"] = source_uri
     model["source_identity"] = "sha256:" + "a" * 64
-    config["generator"]["speculative_decoding"]["training"] = None
 
     parsed = parse_rl_config(config)
 
@@ -139,11 +130,19 @@ def test_frozen_object_store_speculator_is_supported() -> None:
     )
     assert resolved is not None
     assert resolved.vllm_speculative_config() == {
-        "method": "eagle3",
-        "model": "s3://models/snowball/eagle3",
+        "method": method,
+        "model": source_uri,
         "num_speculative_tokens": 3,
         "draft_load_config": {"load_format": "runai_streamer"},
+        **vllm_sampling,
     }
+
+
+def test_dspark_rejects_online_training_config() -> None:
+    config = _base_config()
+    config["generator"]["speculative_decoding"]["method"] = "dspark"
+    with pytest.raises(SpeculativeDecodingConfigError, match=r"\btraining\b.*\beagle3\b"):
+        parse_rl_config(config)
 
 
 def test_gcs_alias_is_normalized_for_vllm_runai_loading() -> None:

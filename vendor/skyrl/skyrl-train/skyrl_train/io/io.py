@@ -10,11 +10,8 @@ Uses fsspec for cloud storage abstraction.
 """
 
 import os
-import shutil
 import tempfile
 from contextlib import contextmanager
-from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -25,54 +22,6 @@ from marinskyrl.resource_locator import is_cloud_uri
 
 class DirectoryPublisher(Protocol):
     def __call__(self, local_path: str, cloud_path: str) -> None: ...
-
-
-@dataclass
-class PendingDirectoryUpload:
-    """A cloud directory staged on local disk and ready for publication."""
-
-    local_path: str
-    output_path: str
-
-    def publish(self) -> None:
-        try:
-            upload_directory(self.local_path, self.output_path)
-        finally:
-            try:
-                shutil.rmtree(self.local_path)
-            except OSError:
-                logger.exception(f"Failed to remove checkpoint staging directory {self.local_path}")
-
-
-class DeferredLocalWorkDir:
-    """Stage cloud output locally while leaving publication to the caller."""
-
-    def __init__(self, output_path: str) -> None:
-        self.output_path = output_path
-        self._local_path: str | None = None
-        self._cloud_backed = is_cloud_path(output_path)
-
-    def __enter__(self) -> str:
-        if self._cloud_backed:
-            self._local_path = tempfile.mkdtemp(prefix="skyrl-checkpoint-")
-        else:
-            makedirs(self.output_path, exist_ok=True)
-            self._local_path = self.output_path
-        return self._local_path
-
-    def __exit__(self, exc_type, _exc_value, _traceback) -> None:
-        if exc_type is not None and self._cloud_backed and self._local_path is not None:
-            shutil.rmtree(self._local_path, ignore_errors=True)
-
-    def pending_upload(self) -> PendingDirectoryUpload | None:
-        if not self._cloud_backed:
-            return None
-        assert self._local_path is not None
-        return PendingDirectoryUpload(self._local_path, self.output_path)
-
-    def discard(self) -> None:
-        if self._cloud_backed and self._local_path is not None:
-            shutil.rmtree(self._local_path, ignore_errors=True)
 
 
 def is_cloud_path(path: str) -> bool:
@@ -199,7 +148,7 @@ def upload_directory(local_path: str, cloud_path: str) -> None:
     logger.info(f"Uploaded {local_path} to {cloud_path}")
 
 
-def download_directory(cloud_path: str, local_path: str) -> None:
+def download_directory(cloud_path: str, local_path: str, *, batch_size: int | None = None) -> None:
     """Download a cloud directory to local storage."""
     if not is_cloud_path(cloud_path):
         raise ValueError(f"Source must be a cloud path, got: {cloud_path}")
@@ -210,9 +159,9 @@ def download_directory(cloud_path: str, local_path: str) -> None:
     # _strip_protocol, which rstrips separators and would silently undo it.
     if cloud_path.startswith("s3://"):
         source_path = fs._strip_protocol(cloud_path) + "/"
-        fs.get(source_path, local_path, recursive=True)
+        fs.get(source_path, local_path, recursive=True, batch_size=batch_size)
     else:
-        fs.get(cloud_path.rstrip("/") + "/", local_path, recursive=True)
+        fs.get(cloud_path.rstrip("/") + "/", local_path, recursive=True, batch_size=batch_size)
     logger.info(f"Downloaded {cloud_path} to {local_path}")
 
 
@@ -239,30 +188,6 @@ def download_file(cloud_path: str, local_path: str) -> None:
 
 
 @contextmanager
-def local_read_files(input_paths: Sequence[str]):
-    """Stage an explicit set of cloud objects locally without reading sibling objects."""
-    paths = list(input_paths)
-    cloud_paths = [is_cloud_path(path) for path in paths]
-    if any(cloud_paths) and not all(cloud_paths):
-        raise ValueError("input_paths must be entirely local or entirely cloud-backed")
-
-    if not any(cloud_paths):
-        missing_paths = [path for path in paths if not exists(path)]
-        if missing_paths:
-            raise FileNotFoundError(f"Paths do not exist: {missing_paths}")
-        yield paths
-        return
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        local_paths = []
-        for index, input_path in enumerate(paths):
-            local_path = os.path.join(temp_dir, str(index), os.path.basename(input_path))
-            download_file(input_path, local_path)
-            local_paths.append(local_path)
-        yield local_paths
-
-
-@contextmanager
 def local_output_dir(
     output_path: str,
     publisher: DirectoryPublisher,
@@ -286,7 +211,7 @@ def local_work_dir(output_path: str):
 
 
 @contextmanager
-def local_read_dir(input_path: str):
+def local_read_dir(input_path: str, *, staging_dir: str | None = None):
     """
     Context manager that provides a local directory with content from input_path.
 
@@ -295,6 +220,7 @@ def local_read_dir(input_path: str):
 
     Args:
         input_path: The source path (local or cloud)
+        staging_dir: Parent for temporary staging. Use disk-backed storage for large exports.
 
     Yields:
         str: Local directory path containing the content
@@ -305,9 +231,10 @@ def local_read_dir(input_path: str):
             model = AutoModel.from_pretrained(read_dir)
     """
     if is_cloud_path(input_path):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Download everything from cloud path to temp_dir
-            download_directory(input_path, temp_dir)
+        with tempfile.TemporaryDirectory(dir=staging_dir) as temp_dir:
+            # s3fs buffers several 50 MiB ranges per active file. Limit the number
+            # of simultaneous files so large exports fit in the publication job.
+            download_directory(input_path, temp_dir, batch_size=4)
             logger.info(f"Downloaded directory contents from {input_path}")
             yield temp_dir
     else:

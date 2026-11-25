@@ -156,7 +156,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-erapids
-    hostname: g8fc280
+    hostname: g8feb7e
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -178,6 +178,12 @@ defaults:
     # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
     # silently unmatched by the current task image's NCCL build, breaking bootstrap.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    # A privileged task pod also sees the front-end Ethernet NIC's RoCE functions
+    # (mlx5_*, 100G) beside the four InfiniBand rails (ibp0..ibp3). NCCL merges
+    # them into virtual NICs and routes channels over them; they do not reach the
+    # peer's rails, so transfers fail with IBV_WC_RETRY_EXC_ERR(12). Restrict NCCL
+    # to the rails, as CoreWeave documents.
+    NCCL_IB_HCA: "ibp"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
