@@ -3,8 +3,7 @@
 
 """The authored request budget and its launch-side token limits."""
 
-from collections.abc import Mapping
-from typing import Annotated, Any, Self
+from typing import Annotated, Self
 
 from pydantic import Field, PositiveInt, model_validator
 
@@ -49,8 +48,8 @@ class ContextBudget(Section):
     def overlong_cache_tokens(self) -> int:
         return int(self.generated_tokens_per_trajectory * self.overlong_cache_fraction)
 
-    def derived_values(self, terminal_bench: Mapping[str, Any] | None) -> dict[str, int]:
-        values = {
+    def derived_values(self) -> dict[str, int]:
+        return {
             "trainer.max_prompt_length": self.max_input_tokens,
             "generator.max_input_length": self.max_input_tokens,
             "generator.max_turns": self.max_turns,
@@ -60,6 +59,3 @@ class ContextBudget(Section):
             "generator.trajectory_reward_shaping.overlong.l_cache": self.overlong_cache_tokens,
             "environment.task_sessions.session.max_turns": self.max_turns,
         }
-        if terminal_bench is not None:
-            values["terminal_bench.harbor.max_turns"] = self.max_turns
-        return values

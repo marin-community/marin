@@ -46,7 +46,6 @@ OPTIMIZER_CHECKPOINT_SHARDING = 'Literal["fully_reshardable", "dp_reshardable"]'
 
 TYPES = MappingProxyType(
     {
-        "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
         "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
@@ -131,6 +130,7 @@ TYPES = MappingProxyType(
         "trainer.max_steps": "NonNegativeInt | None",
         "trainer.resume_path": "str | None",
         "trainer.eval_num_prompts": "PositiveInt | None",
+        "trajectory_runner.max_concurrent_training_machine_tasks": "PositiveInt | None",
         "trainer.callbacks": "tuple[Callback, ...] | None",
         "trainer.rollout_buffer.max_in_flight": "PositiveInt | None",
         "trainer.rollout_buffer.object_store_root": "str | None",
@@ -157,7 +157,6 @@ TYPES = MappingProxyType(
         "generator.error_handling.mask_exceptions": "tuple[str, ...]",
         "generator.error_handling.zero_exceptions": "tuple[str, ...]",
         "generator.trajectory_retention.redact_fields": "tuple[str, ...]",
-        "data.terminal_bench_data": "tuple[str, ...]",
         "trainer.trajectory_selector.type": _literal(TrajectorySelectorKind) + " | None",
         "trainer.policy.grug_query_bias_interpolation_weight": "int | float | None",
         "trainer.policy.grug_query_bias_update_rate": "int | float | None",

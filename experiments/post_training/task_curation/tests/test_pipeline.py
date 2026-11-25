@@ -632,20 +632,14 @@ def archive_rows(path, context):
 
 def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    original_run = pipeline_module.subprocess.run
     acquired = []
 
-    def exporter(command, **kwargs):
-        if str(pipeline_module.HARBOR_EXPORTER) not in command:
-            return original_run(command, **kwargs)
-        release = command[command.index("--release") + 1]
-        output = StoragePath(command[command.index("--output") + 1])
+    def acquire(release, output, _selected):
         acquired.append(release)
         (output / "tasks/task.tar.gz").write_bytes(release.encode(), auto_mkdir=True)
         (output / "release.json").write_text(json.dumps({"release": release}))
-        return None
 
-    monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
+    monkeypatch.setattr(pipeline_module, "acquire_release", acquire)
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
     runtime = CampaignRuntime()
     client = LocalClient()

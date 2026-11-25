@@ -93,9 +93,8 @@ def test_generate_launch_reserves_local_resources(local):
         assert derive_num_nodes(plan) == 4
 
 
-@pytest.mark.parametrize("runner", ["task", "harbor"])
-def test_preference_pair_task_validation_reserves_generation_capacity(runner):
-    plan = derive_role_plan(skyrl_config(**{"trainer.evaluation_runner": runner}))
+def test_preference_pair_task_validation_reserves_generation_capacity():
+    plan = derive_role_plan(skyrl_config(**{"trainer.evaluation_runner": "task"}))
     assert sorted(claim.kind.value for claim in plan.claims) == ["policy", "reference", "rollout"]
     assert derive_num_nodes(plan) == 2
     assert plan.claim(ModelRoleKind.ROLLOUT).execution is RoleExecution.LOCAL
