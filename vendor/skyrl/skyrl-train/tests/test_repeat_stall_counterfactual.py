@@ -5,7 +5,7 @@
 
 import json
 
-from vendor.skyrl.scripts.repeat_stall_counterfactual import StallSimulation, simulate_trial, verdict_passed
+from vendor.skyrl.scripts.repeat_stall_counterfactual import simulate_trial, summarize, verdict_passed
 
 
 def assistant(command):
@@ -47,3 +47,12 @@ def test_counterfactual_does_not_fire_on_changed_observations():
     assert (trial["fired"], trial["cut_turns"]) == (False, 0)
     assert verdict_passed(row([assistant("x")], passed=True)) is True
     assert verdict_passed(row([assistant("x")])) is None
+
+
+def test_counterfactual_counts_native_full_credit_without_optional_pass_flag():
+    saved = row([assistant("cat a.txt"), user("same")] * 6)
+    saved["verification"] = {"status": "verified", "score": 1.0, "passed": None}
+    trial, suppressed = simulate_trial(saved, 3)
+    report = summarize("tb2", [trial], suppressed, 3, 30)
+    assert report["stopped_trials_with_passing_verdict"] == 1
+    assert report["at_risk_passes_cut_before_their_last_turn"] == 1

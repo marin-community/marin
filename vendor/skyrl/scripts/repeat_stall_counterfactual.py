@@ -22,7 +22,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from rolloutengine.repetition import ActionPair, detect_stall
-from vendor.skyrl.scripts.loop_audit import trial_turns
+from vendor.skyrl.scripts.loop_audit import trial_turns, verdict_passed
 
 DEFAULT_BATCHES = 3
 
@@ -61,14 +61,6 @@ class StallSimulation:
         return all(
             pair.action == first.action and pair.observation == first.observation for pair in window[1:]
         ) and any(pair.wait for pair in window)
-
-
-def verdict_passed(row: Mapping[str, Any]) -> bool | None:
-    """The trial's recorded full-credit verdict, or ``None`` when it has none."""
-    verification = row.get("verification") or {}
-    if verification.get("status") == "verified" and type(verification.get("passed")) is bool:
-        return bool(verification["passed"])
-    return None
 
 
 def simulate_trial(row: Mapping[str, Any], batches: int) -> tuple[dict[str, Any], int]:

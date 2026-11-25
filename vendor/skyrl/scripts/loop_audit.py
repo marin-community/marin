@@ -329,6 +329,16 @@ def _wall_seconds(row: Mapping[str, Any]) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def verdict_passed(row: Mapping[str, Any]) -> bool | None:
+    """Read full credit from the native verifier score or an explicit pass verdict."""
+    verification = row.get("verification") or {}
+    if verification.get("status") != "verified":
+        return None
+    score = _outcome_reward(verification.get("score"))
+    passed = score == 1.0 if score is not None else verification.get("passed")
+    return passed if type(passed) is bool else None
+
+
 def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> tuple[Incidence, AgentIncidence]:
     """Count missing or damaged generations in the loop upper bound, never as passes.
 
@@ -436,8 +446,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
             if wall is not None:
                 wall_times.append(wall)
         row_error = status == "error" or infrastructure_error
-        score = _outcome_reward(verification.get("score"))
-        passed = score == 1.0 if score is not None else verification.get("passed")
+        passed = verdict_passed(row)
         errors += int(row_error)
         unavailable += int(not row_error and (status != "verified" or type(passed) is not bool))
         passes += int((not damaged or graded_agent_error) and not row_error and status == "verified" and passed is True)
