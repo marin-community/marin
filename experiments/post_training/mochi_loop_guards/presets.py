@@ -181,6 +181,8 @@ PANEL_COHORTS = (
     ("swe100", "swe100", 1),
     ("swesmith_ho", "swesmith_ho", 2),
 )
+# DESIGN's second budget drop, fixed before S0 results after its T+6 window elapsed.
+FOLLOWUP_COHORTS = tuple(cohort for cohort in PANEL_COHORTS if cohort[0] != "swe100")
 
 
 def evaluation(name: str, file: str, trials: int, *, sampling: EvalSamplingParams = PANEL_SAMPLING) -> Evaluation:
@@ -203,6 +205,7 @@ def panel_preset(
     layout: Layout = GUARDS_LAYOUT,
     repeat_stall_batches: int | None = None,
     repetition_penalty: float = 1.0,
+    cohorts: tuple[tuple[str, str, int], ...] = PANEL_COHORTS,
 ) -> Preset:
     """One panel stage: S0 baseline, S1-stop, or S1-rp, differing only in its intervention."""
     environment = mochi_rl._ONE_TURN.merge(PANEL_ENVIRONMENT)
@@ -219,7 +222,7 @@ def panel_preset(
     sampling = PANEL_SAMPLING.replace(repetition_penalty=repetition_penalty)
     evaluations = tuple(
         evaluation(name, f"{file}_stop" if repeat_stall_batches is not None else file, trials, sampling=sampling)
-        for name, file, trials in PANEL_COHORTS
+        for name, file, trials in cohorts
     )
     return Preset(
         name=name,
@@ -297,19 +300,19 @@ GUARD_ARM_LAYOUT = replace(
     name="mochi-guards-generate-64",
     workload=Generation(replace(GUARDS_LAYOUT.workload.plan, num_inference_engines=4)),
 )
-S1_STOP = panel_preset("s1-stop", repeat_stall_batches=3, layout=GUARD_ARM_LAYOUT)
-S1_RP = panel_preset("s1-rp", repetition_penalty=1.1, layout=GUARD_ARM_LAYOUT)
+S1_STOP = panel_preset("s1-stop", repeat_stall_batches=3, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
+S1_RP = panel_preset("s1-rp", repetition_penalty=1.1, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
 S2_CONTROL = rl_arm("s2-antithrash-control", antithrash=False, updates=8)
 S2_TREATMENT = rl_arm("s2-antithrash-treatment", antithrash=True, updates=8)
 
 
 def s3_panel(name: str, export: ArtifactHfModel) -> Preset:
-    """One S3 arm: the full panel on one S2 export, run exactly like S0.
+    """One S3 arm: the budgeted follow-up cohorts on one S2 export, with S0's frozen protocol.
 
     The export binds at T+34 from the S2x export artifact; the plan preflight validates the
     stage with the declared start checkpoint standing in for the export.
     """
-    return panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT)
+    return panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
 
 
 def export_command(ckpt_path: str, step: int, launch_config: str, *, export_path: str | None = None) -> str:

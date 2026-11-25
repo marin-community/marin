@@ -52,11 +52,15 @@ def main() -> None:
     parser.add_argument("--run-output", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--baseline")
+    parser.add_argument("--exclude-cohort", action="append", default=[], choices=tuple(MANIFEST_COHORTS.values()))
     args = parser.parse_args()
     configure_coreweave_s3()
     source = StoragePath(args.manifest).read_bytes()
     manifest = resolved_manifest(json.loads(source), args.selection)
     manifest["frozen_manifest_file_sha256"] = hashlib.sha256(source).hexdigest()
+    manifest["excluded_cohorts"] = sorted(set(args.exclude_cohort))
+    for cohort in manifest["excluded_cohorts"]:
+        del manifest["cohorts"][cohort]
     output = StoragePath(args.output)
     output.mkdirs()
     manifest_path = str(output / "resolved-manifest.json")
