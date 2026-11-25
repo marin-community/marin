@@ -28,7 +28,6 @@ from evalrecords.records import (
     EvaluationSelection,
     ModelConfigRef,
     ModelRef,
-    PromptFormat,
     RLAttemptRef,
     RunStatus,
     TaskEvidence,
@@ -54,7 +53,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, prompt_format
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
@@ -119,11 +118,6 @@ _SERVE_THROUGHPUT_FIELDS = frozenset({"max_num_batched_tokens", "max_num_seqs", 
 _EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
 
 logger = logging.getLogger(__name__)
-
-
-def prompt_format(model: ModelConfig) -> PromptFormat:
-    """The prompt format a model's evaluations use: chat if it applies a chat template."""
-    return PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
 
 
 def model_identity(model: ModelRef) -> dict:

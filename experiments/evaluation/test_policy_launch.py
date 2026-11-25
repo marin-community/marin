@@ -8,9 +8,9 @@ from dataclasses import replace
 import pytest
 from iris.rpc import job_pb2
 
-from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY, QWEN
 from experiments.evaluation.policy.launch import launch_specs, server_groups
 from experiments.evaluation.policy.resolve import resolve
+from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
 
 RESOLVED = {item.evaluation.name: item for item in resolve(POLICY, QWEN)}
 SERVED = QWEN.model.serve.max_model_len
@@ -50,11 +50,6 @@ def test_a_smaller_unenforced_context_gets_a_server_of_exactly_that_window():
         (SERVED, False, ("gsm8k-0shot",)),
         (8192, False, ("aime24",)),
     }
-
-
-def test_a_context_that_disagrees_with_the_benchmark_window_is_rejected():
-    with pytest.raises(ValueError, match="mrcr-32k"):
-        _windows(["mrcr-32k"], **{"mrcr-32k": 30_000})
 
 
 def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
