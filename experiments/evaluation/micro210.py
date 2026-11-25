@@ -133,7 +133,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
-        json.dumps({**asdict(config.evaluation.record()), "smoke_rows": config.smoke_rows}, indent=2)
+        json.dumps(asdict(replace(config.evaluation.record(), smoke_rows=config.smoke_rows)), indent=2)
     )
     evaluation_policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(JudgeConfig, evaluation_policy["judge"])

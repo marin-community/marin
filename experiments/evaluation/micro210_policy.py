@@ -80,6 +80,7 @@ class Micro210Record:
     run_id: str
     output_uri: str
     policy_reference: Micro210PolicyReference
+    smoke_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

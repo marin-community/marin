@@ -7,6 +7,7 @@ import re
 from dataclasses import replace
 from types import SimpleNamespace
 
+import draccus
 import pytest
 import yaml
 from marin.execution.artifact import read_record
@@ -19,6 +20,7 @@ from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
+    Micro210Record,
     micro210_evaluation,
     read_micro210_policy,
 )
@@ -122,8 +124,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
     assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
-    record = json.loads((output / "canonical-evaluation.json").read_text())
-    assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
+    record = draccus.decode(Micro210Record, json.loads((output / "canonical-evaluation.json").read_text()))
+    assert record.canonical_spec_sha256 == hashlib.sha256(raw).hexdigest()
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
