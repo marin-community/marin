@@ -3,6 +3,7 @@
 
 """Full pinned long-context populations and run-time eligibility policy."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     CohortOrder,
     CohortPolicy,
@@ -46,7 +47,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 MRCR_REVISION = "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d"
 LONG_CONTEXT_RESOURCE_BYTES = 64 * 1024 * 1024
@@ -92,9 +93,12 @@ GRAPHWALKS_CONTEXT_POLICY = ContextPolicy(
 def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + name.lower(),
-            title=name,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name.lower(),
+            upstream_name=name.lower(),
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
             count=MRCR_SOURCE_POPULATION,
@@ -145,9 +149,12 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         mrcr_source(name="MRCR-65k", max_context=65472),
         RlDataSource(
             info=SourceInfo(
-                id="Evalchemy:graphwalks",
-                title="GraphWalks",
-                origin="Evalchemy",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="graphwalks",
+                upstream_name="graphwalks",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="long-context",
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
                 count=1150,

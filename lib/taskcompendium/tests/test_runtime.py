@@ -13,6 +13,7 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import httpx
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -27,6 +28,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+from shellbox.process_session import SubprocessSession
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
     RUBRIC_LABELS,
@@ -309,6 +311,23 @@ class LocalGradingMachine:
     async def close(self):
         self.closed = True
 
+    async def open_process(self, command: Command) -> SubprocessSession:
+        process = await asyncio.create_subprocess_exec(
+            *self.local_arguments(command.argv),
+            cwd=self.local(command.cwd or self.workdir),
+            env={**os.environ, **self.env, **command.env},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def stop() -> None:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+
+        return SubprocessSession(process, stop=stop)
+
     async def run(self, command: Command):
         program = command.argv[0]
         if command.argv[:2] == ("rm", "-f"):
@@ -538,10 +557,62 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
     assert request["model"] == "pinned-judge"
     assert request["messages"][-1]["content"] == "Reference: 12\nCandidate: twelve"
     assert "runtime-private-key" not in task.model_dump_json()
-    assert "runtime-private-key" not in json.dumps(result.diagnostics)
-    assert all(
-        b"runtime-private-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_daytona_script_judge_uses_a_host_credential(tmp_path, script_grading_task, judge_server, monkeypatch):
+    class DaytonaGradingMachines(LocalGradingMachines):
+        backend = Backend.DAYTONA
+
+    handle_request = httpx.AsyncHTTPTransport.handle_async_request
+
+    async def check_judge_timeout(transport, request):
+        assert request.extensions["timeout"]["read"] == 240
+        return await handle_request(transport, request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", check_judge_timeout)
+    script = b"""
+import json, os, urllib.error, urllib.request
+
+url = os.environ['VERIFYIT_JUDGE_BASE_URL']
+body = json.dumps({'model': os.environ['VERIFYIT_JUDGE_MODEL'], 'top_k': 20}).encode()
+try:
+    urllib.request.urlopen(urllib.request.Request(url + '/files', data=body))
+except urllib.error.HTTPError as error:
+    assert error.code == 404
+else:
+    raise AssertionError('An undeclared route was accepted')
+request = urllib.request.Request(url + '/chat/completions', data=body, headers={'Authorization': 'Bearer guest-key'})
+with urllib.request.urlopen(request) as response:
+    print(float(json.load(response)['choices'][0]['message']['content'] == 'PASS'))
+"""
+    task = script_grading_task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/grade.py"),
+                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
+                answer_path=None,
+                judge=JudgeSpec(references=("PASS",), request_timeout=240),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        }
     )
+    machines = DaytonaGradingMachines(tmp_path)
+    connection = JudgeConnection(
+        f"http://127.0.0.1:{judge_server.server_port}/v1", "host-only-key", default_model="pinned-judge"
+    )
+    result = await grade_in_sandbox(
+        task, GradingAttempt(finished(task)), machines, GRADER_MACHINE, judge_connection=connection
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+    assert judge_server.requests == [{"model": "pinned-judge", "top_k": 20}]
+    assert judge_server.authorization == ["Bearer host-only-key"]
+    [machine] = machines.machines
+    assert "host-only-key" not in machine.env.values()
+    assert machine.closed
+    assert "host-only-key" not in json.dumps(result.diagnostics)
+    assert all(b"host-only-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file())
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])

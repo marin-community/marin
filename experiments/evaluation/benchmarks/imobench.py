@@ -11,6 +11,8 @@ Neither is declared.
 
 from collections.abc import Callable
 
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationItem,
     EvaluationProtocol,
@@ -62,9 +64,11 @@ def _source(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="IMOBench:" + name,
-            title=benchmark,
-            origin="Google DeepMind",
+            data_restriction=DataRestriction.OPEN,
+            origin=SourceOrigin.IMOBENCH,
+            upstream_dataset=name,
+            upstream_name=benchmark,
+            build_path="IMOBench",
             family="judged-math",
             tags=("eval", "source:imobench", "single-turn", "benchmark", "math", "llm-judge"),
             count=population,

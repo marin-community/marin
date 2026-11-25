@@ -19,10 +19,10 @@ HARNESS_SOURCES = {
 # The revision each harness's sources were last reviewed at, and their digest. An edit to these sources changes
 # what an episode is graded on; bump the harness's revision in EPISODE_HARNESS_REVISIONS and update its pin.
 PINNED = {
-    "shell": ("2026.11.21.1", "0d4b84d771b227db3b8059a81a0d344a33f5bc21872001b46e3fa5dd2cb34d06"),
-    "terminus-2": ("2026.11.21.1", "8e490d7d1232944122ba7bd59622fdccb9698a20baaf2671e4aee67871e6354b"),
-    "pi": ("2026.11.21.1", "729477f28a6a5cc3e94bc7852f94a4628611e29e73e829522e5281aec46255d4"),
-    "mini-swe-agent": ("2026.11.21.1", "be3917f43eb9fc1a7f93deb9299a15071a4ca8d84dcf673ac794eae2c6a21245"),
+    "shell": ("2026.11.23.1", "1b77535d3f21ef3ec4fc91d6a2d7c161acb990b6b5ada1a0a23b1f02c8bce2e9"),
+    "terminus-2": ("2026.11.23.1", "8c4a6367cd3443f5e1df83aa456af04d64e9b4350cc0c9465672d7eb8edb5da8"),
+    "pi": ("2026.11.24.1", "f119b027cca4f9c6dcb559e20ca85affaff0ddb549806a5026a36536736299e2"),
+    "mini-swe-agent": ("2026.11.23.1", "c34f776312ed1608f2cfdf1ad8fa7504397bfc5c2ddc8b482fd8663657d122d4"),
 }
 
 

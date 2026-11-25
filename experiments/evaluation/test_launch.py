@@ -15,7 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from evalrecords.records import CuratedAgentRef, RunStatus, TaskEvidence, TaskMachineBackend, TaskMachineSettings
+from evalrecords.records import (
+    CuratedAgentRef,
+    EvaluationSelection,
+    RunStatus,
+    TaskEvidence,
+    TaskMachineBackend,
+    TaskMachineSettings,
+)
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
@@ -41,6 +48,7 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
 
 
 @pytest.fixture
@@ -529,7 +537,20 @@ def test_relaunch_matches_records_without_a_request_deadline(tmp_path, request_t
     assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
-def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("agent_selection", "expected_hosts"),
+    [
+        (None, set()),
+        (EvaluationSelection(benchmark="terminal-bench-2.1"), {REGISTRY_HOST}),
+        (
+            EvaluationSelection(benchmark="ot-tblite", protocol="campaign-2026-09-25"),
+            {"codeload.github.com"},
+        ),
+    ],
+)
+def test_curated_group_submission_declares_resources_and_source_egress(
+    tmp_path, monkeypatch, agent_selection, expected_hosts
+):
     requests = []
 
     def submit(request, **_kwargs):
@@ -541,13 +562,22 @@ def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, mon
         "ControllerServiceClientSync",
         lambda **_kwargs: SimpleNamespace(launch_job=submit, close=lambda: None),
     )
-    batch = prepare_evaluation_batch(_pipeline_spec(tmp_path))
+    spec = _pipeline_spec(tmp_path)
+    if agent_selection is not None:
+        spec = replace(
+            spec,
+            evals=(agent_selection,),
+            model=_agent_model(),
+            task_machine_backend=TaskMachineBackend.DOCKER,
+        )
+    batch = prepare_evaluation_batch(spec)
     with IrisClient.remote("http://controller.invalid") as client:
         launch_module.launch_group(batch, client)
 
     (request,) = requests
     assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
     assert request.constraints[0].value.string_value == "cw-rno2a"
+    assert {rule.domain for rule in request.egress_allow} == expected_hosts
 
 
 @pytest.mark.parametrize("cache_key", [None, "caller-owned-immutable-artifact"])
