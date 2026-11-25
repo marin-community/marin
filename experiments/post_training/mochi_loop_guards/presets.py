@@ -29,7 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
-RUN_VERSION = "2026.11.25.7"
+RUN_VERSION = "2026.11.25.8"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -167,6 +167,9 @@ PANEL_ENVIRONMENT = RecipePatch(
             max_bytes_per_step=None,
             max_bytes_per_run=None,
         ),
+    ),
+    trajectory_runner=sections.TrajectoryRunner(
+        rollout_workers=sections.RolloutWorkers(placement="spread"),
     ),
 )
 """One shared panel environment: the frozen protocol and full eval-trajectory retention."""

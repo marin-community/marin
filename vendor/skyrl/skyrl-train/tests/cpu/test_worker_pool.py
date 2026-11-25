@@ -11,6 +11,7 @@ from omegaconf import DictConfig, OmegaConf
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 from skyrl_train.utils.algorithm_registry import sync_registries
 from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkerResources, WorkerShard
+from skyrl_train.config.rollout_workers import RolloutWorkerPlacement
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ async def test_shutdown_kills_every_worker_after_startup_failure(ray_init, tmp_p
             executor_threads=1,
             progress_timeout_seconds=30,
             start_interval_seconds=start_interval_seconds,
+            placement=RolloutWorkerPlacement.DRIVER,
         ),
     )
     # Retain the failed startup task while shutdown releases its workers.

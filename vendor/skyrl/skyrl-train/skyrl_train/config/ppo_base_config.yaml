@@ -464,6 +464,14 @@ generator:
       minimum_occurrences: 4
       advantage_penalty_per_token: 0.0
       max_advantage_penalty: 0.2
+    antithrash:
+      enabled: false
+      # Subtract once per repeated identical action beyond the first of each maximal run.
+      per_repeat_penalty: 0.02
+      # The maximum antithrash charge for one trajectory.
+      cap: 0.1
+      # `correct_only` charges only trajectories whose outcome has full credit.
+      applies_to: all
     passthrough:
       # Subtract from optimization reward for terminal exceptions classified as PASSTHROUGH.
       penalty: 0.0
@@ -533,8 +541,10 @@ trajectory_runner:
   max_concurrent_tasks: 1024
   # Training machine trajectories across the rollout worker pool, with at least one slot per worker.
   max_concurrent_training_machine_tasks: null
-  # One worker pool executes all task families on the trainer's node.
+  # One worker pool executes all task families.
   rollout_workers:
+    # Driver keeps workers beside the rollout buffer; spread distributes their host memory.
+    placement: driver
     num_workers: 4
     cpus_per_worker: 8
     executor_threads: 256 # Default thread pool for blocking task operations.

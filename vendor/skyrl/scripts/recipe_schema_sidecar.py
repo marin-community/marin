@@ -8,7 +8,9 @@ from skyrl_train.config.ftpo import FTPOBoundary
 from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
+from skyrl_train.config.reward_shaping import AntithrashScope
 from skyrl_train.config.rollout_validation import BatchPolicy
+from skyrl_train.config.rollout_workers import RolloutWorkerPlacement
 from skyrl_train.config.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
 from skyrl_train.curriculum import SamplingKind, WeightingKind
@@ -46,6 +48,8 @@ OPTIMIZER_CHECKPOINT_SHARDING = 'Literal["fully_reshardable", "dp_reshardable"]'
 
 TYPES = MappingProxyType(
     {
+        "trajectory_runner.rollout_workers.placement": _literal(RolloutWorkerPlacement),
+        "generator.trajectory_reward_shaping.antithrash.applies_to": _literal(AntithrashScope),
         "trainer.strategy": 'Literal["megatron"]',
         "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',

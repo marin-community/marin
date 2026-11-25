@@ -15,6 +15,7 @@ from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from transformers import PreTrainedTokenizerBase
 
+from skyrl_train.config.rollout_workers import RolloutWorkerPlacement
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
 from skyrl_train.tokenizer import tokenizer_from_config
@@ -70,6 +71,7 @@ class RolloutWorkerResources:
     executor_threads: int
     progress_timeout_seconds: float
     start_interval_seconds: float
+    placement: RolloutWorkerPlacement
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutWorkerResources:
@@ -80,6 +82,7 @@ class RolloutWorkerResources:
             executor_threads=int(workers.executor_threads),
             progress_timeout_seconds=float(workers.progress_timeout_seconds),
             start_interval_seconds=float(workers.start_interval_seconds),
+            placement=RolloutWorkerPlacement(workers.placement),
         )
 
 
@@ -97,6 +100,12 @@ class RolloutWorker:
         start_fd_monitor()
         self._executor_threads = executor_threads
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
+        logger.info(
+            "Rollout worker initialized: shard={}/{}, node={}",
+            shard.index,
+            shard.count,
+            ray.get_runtime_context().get_node_id(),
+        )
         if sink is not None:
             self._runner.set_trajectory_sink(sink)
 
@@ -144,7 +153,7 @@ class RolloutWorkerPool:
     new training submissions wait until evaluation finishes. A request fails with
     ``RolloutWorkerStalledError`` when its worker completes nothing for the progress timeout.
 
-    Workers run on the driver's node beside the rollout buffer actor.
+    Placement can keep workers beside the driver's rollout buffer or spread their host memory across nodes.
     """
 
     def __init__(self, spec: RunnerSpec, resources: RolloutWorkerResources):
@@ -186,8 +195,13 @@ class RolloutWorkerPool:
             logger.info("Rollout worker {}/{} started", index + 1, count)
 
     def _launch_worker(self, index: int) -> ActorHandle:
-        node = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
-        worker = RolloutWorker.options(num_cpus=self._resources.cpus_per_worker, scheduling_strategy=node)
+        placement = self._resources.placement
+        strategy = (
+            "SPREAD"
+            if placement is RolloutWorkerPlacement.SPREAD
+            else NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
+        )
+        worker = RolloutWorker.options(num_cpus=self._resources.cpus_per_worker, scheduling_strategy=strategy)
         return worker.remote(
             self._spec, WorkerShard(index, self._resources.num_workers), self._sink, self._resources.executor_threads
         )

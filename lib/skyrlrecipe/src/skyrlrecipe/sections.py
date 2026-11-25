@@ -679,6 +679,16 @@ class Loop(Section):
     max_advantage_penalty: int | float = field(0.2)
 
 
+class Antithrash(Section):
+    enabled: bool = field(False)
+    per_repeat_penalty: int | float = field(0.02)
+    "Subtract once per repeated identical action beyond the first of each maximal run."
+    cap: int | float = field(0.1)
+    "The maximum antithrash charge for one trajectory."
+    applies_to: Literal["all", "correct_only"] = field("all")
+    "`correct_only` charges only trajectories whose outcome has full credit."
+
+
 class Passthrough(Section):
     penalty: int | float = field(0.0)
     "Subtract from optimization reward for terminal exceptions classified as PASSTHROUGH."
@@ -705,16 +715,6 @@ class ReasoningSpan(Section):
     target: Literal["rollout", "marker"] = field("rollout")
     """`rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token where
     each span goes wrong, or charges the reward when a violation has no such token."""
-
-
-class Antithrash(Section):
-    enabled: bool = field(False)
-    per_repeat_penalty: int | float = field(0.02)
-    "Subtract once per repeated identical action beyond the first of each maximal run."
-    cap: int | float = field(0.1)
-    "The maximum antithrash charge for one trajectory."
-    applies_to: Literal["all", "correct_only"] = field("all")
-    "`correct_only` charges only trajectories whose outcome has full credit."
 
 
 class TrajectoryRewardShaping(Section):
@@ -848,6 +848,8 @@ class Environment(Section):
 
 
 class RolloutWorkers(Section):
+    placement: Literal["driver", "spread"] = field("driver")
+    "Driver keeps workers beside the rollout buffer; spread distributes their host memory."
     num_workers: int = field(4)
     cpus_per_worker: int = field(8)
     executor_threads: int = field(256)
@@ -867,7 +869,7 @@ class TrajectoryRunner(Section):
     max_concurrent_training_machine_tasks: PositiveInt | None = field(None)
     "Training machine trajectories across the rollout worker pool, with at least one slot per worker."
     rollout_workers: RolloutWorkers = Field(default_factory=RolloutWorkers)
-    "One worker pool executes all task families on the trainer's node."
+    "One worker pool executes all task families."
 
 
 class RecipeSections(Section):
