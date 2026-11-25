@@ -56,6 +56,7 @@ Sequencing decisions wired here (flagged for the r39 builder's quirk review):
 
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -1825,6 +1826,20 @@ def _fresh_qc_index_step(
     )
 
 
+def measured_module_path(module: str) -> str:
+    """The measured module as a file path catalog_load can digest.
+
+    A derived plan records the repo-relative path; the hand-written R40 plan names the
+    dotted module. Normalized here, once, at the load's input boundary.
+    """
+    if "/" in module:
+        return str(REPO_ROOT / module)
+    spec = importlib.util.find_spec(module)
+    if spec is None or spec.origin is None:
+        raise ValueError(f"measured module {module!r} is neither a repo path nor an importable module")
+    return spec.origin
+
+
 def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["catalog_load"]
     identity = _identity_fields(
@@ -1865,7 +1880,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
             "expected_contract_tasks": plan.expected_contract_tasks,
             "expected_selected_panels": plan.expected_selected_panels,
             "expected_browse_source_count": plan.expected_browse_source_count,
-            "measured_module": plan.measured.module,
+            "measured_module": measured_module_path(plan.measured.module),
             "measured_revision": plan.measured.revision,
             "measured_sha256": plan.measured.sha256,
             "measured_schema_sha256": plan.measured.schema_sha256,

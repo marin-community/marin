@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
+from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
 from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
@@ -115,7 +116,7 @@ def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication
         raise ValueError(f"catalog snapshot is {snapshot.snapshot_id!r}, expected {inputs.snapshot_id!r}")
     backend_document = read_ref(ArtifactRef(**publication["backend"]))
     identity_document = read_ref(ArtifactRef(**publication["identity"]))
-    snapshot_sources = [canonical_snapshot_source(row) for row in catalog.sources(inputs.snapshot_id)]
+    snapshot_sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     source_ids = {row.id for row in snapshot_sources}
     fingerprint_ids = set(identity_document["fingerprints"])
     backend_ids = {row["source_id"] for row in backend_document["sources"]}
@@ -258,7 +259,7 @@ def _run_write(
     publication = read_ref(inputs.publication)
     backend = canonical_backend_survey(read_ref(ArtifactRef(**publication["backend"])))
     identity = canonical_identity_survey(read_ref(ArtifactRef(**publication["identity"])))
-    sources = [canonical_snapshot_source(row) for row in catalog.sources(inputs.snapshot_id)]
+    sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     if len(sources) != inputs.expected_source_count or {row.id for row in sources} != set(identity.fingerprints):
         raise ValueError("catalog sources and identity fingerprints disagree at write time")
     browse = read_ref(inputs.staging["prior_qc_completion"])

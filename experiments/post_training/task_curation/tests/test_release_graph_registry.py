@@ -365,7 +365,7 @@ def test_catalog_load_staging_flows_from_the_catalog_stage_proof(tmp_path):
     assert inputs["publication"] == staged_refs["publication"]
     assert sorted(inputs["staging"]) == ["contracts", "fresh_qc_index", "history_receipt", "prior_qc_completion"]
     assert inputs["target_load_id"] == plan.catalog_target_load_id
-    assert inputs["measured_module"] == plan.measured.module
+    assert inputs["measured_module"] == str(release_graph_module.REPO_ROOT / plan.measured.module)
     assert inputs["previously_available"] == plan.previously_available
 
 
@@ -656,6 +656,15 @@ def test_cpu_embed_dispatch_installs_the_torch_cpu_extra(tmp_path, monkeypatch):
     monkeypatch.setattr(release_graph_module, "remote", fake_remote)
     release_graph(plan).stages["embed"].run({"graph_receipt_root": f"{release_root}/graph"})
     assert captured["pip_dependency_groups"] == [release_graph_module.EMBED_CPU_DEPENDENCY_GROUP]
+
+
+def test_measured_module_path_resolves_a_dotted_module_or_a_repo_path():
+    """A hand-written plan names the measured module; a derived plan records its repo path."""
+    from_name = release_graph_module.measured_module_path("taskcompendium.models")
+    relative = str(Path(from_name).resolve().relative_to(release_graph_module.REPO_ROOT.resolve()))
+    assert Path(release_graph_module.measured_module_path(relative)).resolve() == Path(from_name).resolve()
+    with pytest.raises(ValueError, match="neither a repo path nor an importable module"):
+        release_graph_module.measured_module_path("not_a_module_anywhere")
 
 
 def test_stage_child_env_forwards_the_attestation_and_credentials(monkeypatch):

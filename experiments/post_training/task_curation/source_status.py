@@ -13,12 +13,13 @@ population, conversion pipeline or schema change.
 import argparse
 import json
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import SourceUse, source_display_name
+from finestore.rl.curation import CurationCatalog, SnapshotSource, SourceUse, source_display_name
 from finestore.rl.status_taxonomy import (
     REASON_EXPLANATIONS,
     ExclusionReason,
@@ -113,6 +114,16 @@ def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage
     if any(covered):
         return PendingStage.MEASUREMENTS_PENDING
     return PendingStage.INTAKE_QUEUED
+
+
+def served_snapshot_sources(catalog: CurationCatalog, snapshot_id: str) -> Iterator[SnapshotSource]:
+    """A served snapshot's sources; a pre-stage Pending row takes its stage from receipt evidence.
+
+    Served snapshots store a Pending row without a stage (the stage is computed, never
+    entered), so every reader binds the same evidence: the measurement registries.
+    """
+    receipts = cache(receipt_registry_keys)
+    return catalog.sources(snapshot_id, pending_stage_of=lambda source_id: pending_stage(source_id, receipts()))
 
 
 def pending_rows() -> list[dict[str, Any]]:

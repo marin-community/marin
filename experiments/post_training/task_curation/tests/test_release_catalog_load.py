@@ -110,7 +110,8 @@ def _aligned_state(tmp_path, monkeypatch):
         def current(self):
             return FakeSnapshot()
 
-        def sources(self, snapshot_id):
+        def sources(self, snapshot_id, *, pending_stage_of=None):
+            assert pending_stage_of is not None  # pre-stage Pending rows need the computed stage
             return [{"id": "s1"}, {"id": "s2"}]
 
     monkeypatch.setattr(cl, "CurationCatalog", FakeCatalog)

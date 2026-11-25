@@ -326,8 +326,20 @@ class _FakeCatalog:
     def current(self) -> _FakeSnapshot:
         return self._snapshot
 
-    def sources(self, snapshot_id: str) -> list:
+    def sources(self, snapshot_id: str, *, pending_stage_of=None) -> list:
+        assert pending_stage_of is not None  # pre-stage Pending rows need the evidence-computed stage
         return [SimpleNamespace(id=source_id) for source_id in self._source_ids]
+
+
+def test_catalog_stage_reads_snapshot_ids_canonically(tmp_path, monkeypatch):
+    """The snapshot keeps original source ids; the stage compares canonical ones."""
+    inputs = _sealed_staged_inputs(tmp_path)
+    monkeypatch.setattr(catalog_stage, "canonical_source_id", lambda sid: {"Marin:alias-a": SOURCE_A}.get(sid, sid))
+    monkeypatch.setattr(
+        catalog_stage, "CurationCatalog", lambda root: _FakeCatalog("assembly-test-v1", ["Marin:alias-a", SOURCE_B])
+    )
+    proof = catalog_stage.run_catalog_stage(inputs, dry_run=True, feeds=_feeds(tmp_path))
+    assert proof["source_count"] == 2
 
 
 def test_catalog_stage_dry_run_verifies_and_writes_nothing(tmp_path, monkeypatch):

@@ -53,6 +53,7 @@ from experiments.post_training.task_curation.full_content_results import FullCon
 from experiments.post_training.task_curation.method_variants import source_variants
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
+from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load_counts import staged_row_count
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
@@ -527,7 +528,7 @@ def load_catalog(
                 "display_policy": display_policy,
             },
         )
-    sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
+    sources = [canonical_snapshot_source(source) for source in served_snapshot_sources(catalog, snapshot.snapshot_id)]
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     previously_available = (
