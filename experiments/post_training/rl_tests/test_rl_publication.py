@@ -428,7 +428,10 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
             index=index,
             native=SimpleNamespace(result=SimpleNamespace(state=SimpleNamespace(is_terminal=True))),
         )
-        return None, {row.attempt_id: terminal}
+        foreign = SimpleNamespace(**vars(terminal))
+        foreign.attempt_id = "different-source"
+        foreign.index = index.model_copy(update={"source_revision": "different-commit"})
+        return None, {foreign.attempt_id: foreign, row.attempt_id: terminal}
 
     monkeypatch.setattr(publication, "read_stored_skyrl_attempts", stored_attempts)
     recovered = []
