@@ -358,6 +358,7 @@ def _clone_sequence(
         return state.cache
 
     cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = cache.copy_sequence(parent_local_id, child_local_id)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -655,6 +656,7 @@ def _handle_clones(
             return cache
 
         cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
+        cache = cache.copy_sequence(src_slot_id, dst_slot_id)
         return decode_state, cache
 
     decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))

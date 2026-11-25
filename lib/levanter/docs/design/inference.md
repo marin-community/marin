@@ -90,3 +90,15 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
 - **Error Handling**: Comprehensive error reporting with proper HTTP status codes
 - **Logging**: Structured logging with configurable verbosity levels
+
+### Short-convolution state
+
+Each request slot keeps the last `kernel_size - 1` convolution inputs.
+Packed prefill and decode use persistent slot IDs to find that history.
+Position-zero inputs clear history on slot reuse. Cloning copies history into
+the new slot, so the two continuations can update it independently. Resetting
+the cache clears every slot.
+
+The current history describes the processed prefix at one position. Reusing KV
+pages for an earlier prefix requires restoring the convolution history at that
+position, or recomputing it.
