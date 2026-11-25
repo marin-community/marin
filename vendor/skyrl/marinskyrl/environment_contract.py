@@ -757,10 +757,10 @@ def wandb_launch_environment(*, entity: str | None, environ: Mapping[str, str] |
     return {WANDB_ENTITY_ENV: entity or ambient.get(WANDB_ENTITY_ENV, "dogml")}
 
 
-def write_task_runtime(path: Path, profile: str, project: Path) -> None:
+def write_task_runtime(path: Path, *, cuda: bool, project: Path) -> None:
     """Write the frozen task environment as NUL-terminated data records."""
     values = {PATH_ENV: str(Path(sys.executable).parent)}
-    if profile != "hub-publish":
+    if cuda:
         manager = EnvVarManager.for_frozen_cuda_runtime(site.getsitepackages())
         values.update(manager.environment_for(EnvVarScope.TASK_RUNTIME))
         values.update(
@@ -779,15 +779,15 @@ def write_task_runtime(path: Path, profile: str, project: Path) -> None:
 
 
 def _main(argv: list[str]) -> None:
-    if len(argv) == 5 and argv[1] == "write-task-runtime":
-        write_task_runtime(Path(argv[2]), argv[3], Path(argv[4]))
+    if len(argv) == 5 and argv[1] == "write-task-runtime" and argv[3] in {"cpu", "cuda"}:
+        write_task_runtime(Path(argv[2]), cuda=argv[3] == "cuda", project=Path(argv[4]))
         return
     if len(argv) >= 5 and argv[1] == "run-grug-gpu-gate" and argv[3] == "--":
         environment = dict(os.environ)
         environment.update(grug_gpu_gate_environment(argv[2]))
         os.execvpe(argv[4], argv[4:], environment)
     raise SystemExit(
-        f"usage: {argv[0]} write-task-runtime ENVIRONMENT_FILE PROFILE PROJECT_ROOT | "
+        f"usage: {argv[0]} write-task-runtime ENVIRONMENT_FILE cpu|cuda PROJECT_ROOT | "
         "run-grug-gpu-gate REPOSITORY_ROOT -- COMMAND [ARG ...]"
     )
 

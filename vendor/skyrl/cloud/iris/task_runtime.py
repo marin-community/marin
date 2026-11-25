@@ -2170,7 +2170,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model = config.inputs.model
     skyrl = config.skyrl
     checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
-    task_env = {str(key): str(value) for key, value in config.runtime.task_env.items()}
     model_uri = str(model.uri)
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
@@ -2185,7 +2184,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         draft_model = SpeculatorModelConfig.from_mapping(
             _container(draft_mapping), context="generator.speculative_decoding.model"
         )
-    offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
@@ -2199,7 +2198,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         driver_liveness_timeout=int(config.ray.driver_liveness_timeout),
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
-        task_env=task_env,
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
@@ -2311,9 +2309,9 @@ def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
-    args = _runtime_namespace(launch_config)
     if not cli_args.environment_prepared:
-        os.environ.update(args.task_env)
+        os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
+    args = _runtime_namespace(launch_config)
     if args.role_topology is not None:
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),

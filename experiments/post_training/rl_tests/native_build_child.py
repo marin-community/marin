@@ -17,7 +17,7 @@ def main() -> None:
                 marker.write("cancelled")
             raise SystemExit(0)
 
-        signal.signal(signal.SIGTERM, cleanup)
+        signal.signal(signal.SIGINT, cleanup)
         os.kill(os.getppid(), signal.SIGINT)
         signal.alarm(8)
         signal.pause()
