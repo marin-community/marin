@@ -28,13 +28,17 @@ class RayPort(StrEnum):
 
 # Ray 2.51 passes zero through to these listeners. Its remaining services either
 # reject zero or select and close a temporary socket before starting the service.
-_NATIVE_ZERO_PORTS = {RayPort.DASHBOARD, RayPort.NODE_MANAGER, RayPort.OBJECT_MANAGER}
+_NATIVE_ZERO_PORTS = frozenset((RayPort.DASHBOARD, RayPort.NODE_MANAGER, RayPort.OBJECT_MANAGER))
 _MAX_CANDIDATES_PER_PORT = 64
+
+
+def _port_env(port: RayPort) -> str:
+    return f"IRIS_PORT_{port.value.upper()}"
 
 
 def allocated_ray_port(port: RayPort) -> int:
     """Return the task's required scheduler allocation for a Ray endpoint."""
-    return int(os.environ[f"IRIS_PORT_{port.value.upper()}"])
+    return int(os.environ[_port_env(port)])
 
 
 def _service_port_candidates(reserved: set[int]) -> list[int]:
@@ -77,7 +81,7 @@ def _lease_service_port(port: RayPort, candidates: Iterator[int], leases: ExitSt
 
 @contextmanager
 def resolve_ray_ports() -> Iterator[None]:
-    """Lease Kubernetes placeholder ports until the Ray task launcher exits."""
+    """Hold leases around Ray bootstrap and execution for services requiring concrete ports."""
     ports = {port: allocated_ray_port(port) for port in RayPort}
     pending = [port for port, value in ports.items() if not value and port not in _NATIVE_ZERO_PORTS]
     with ExitStack() as leases:
@@ -85,7 +89,7 @@ def resolve_ray_ports() -> Iterator[None]:
             candidates = iter(_service_port_candidates(set(ports.values())))
             for port in pending:
                 value = _lease_service_port(port, candidates, leases)
-                key = f"IRIS_PORT_{port.value.upper()}"
+                key = _port_env(port)
                 leases.callback(os.environ.__setitem__, key, "0")
                 os.environ[key] = str(value)
         yield

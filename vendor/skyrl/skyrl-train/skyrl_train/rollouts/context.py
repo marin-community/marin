@@ -60,6 +60,7 @@ from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
+    CONSUMED,
     SAMPLING_SOURCE,
     Admission,
     AdmittedRollout,
@@ -558,7 +559,7 @@ class TrainingContext:
                     verified_scores=result.verified_scores,
                     generated_tokens=outcome.tokens,
                     nonzero_advantage_tokens=(
-                        counts[outcome.uid] if counts is not None and outcome.disposition == "consumed" else None
+                        counts[outcome.uid] if counts is not None and outcome.disposition == CONSUMED else None
                     ),
                 )
             )

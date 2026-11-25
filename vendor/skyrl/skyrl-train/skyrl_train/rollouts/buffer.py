@@ -46,6 +46,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 SAMPLING_SOURCE = "sampling_source"
+CONSUMED = "consumed"
 type SourceRejections = dict[int, collections.Counter[tuple[str, AdmissionRejection]]]
 
 
@@ -751,7 +752,7 @@ class RolloutBuffer:
             selection = None
             if self._batch_complete():
                 for rollout in self._admitted[self._policy_step]:
-                    self._dispose(rollout, "consumed", feedback_batch=self._policy_step)
+                    self._dispose(rollout, CONSUMED, feedback_batch=self._policy_step)
                 stats = self._stats.pop(self._policy_step)
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.groups_per_family:

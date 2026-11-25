@@ -35,9 +35,6 @@ from verifyit.modes.extract import extract_boxed
 from experiments.models import qwen3_0_6b
 from experiments.post_training.task_curation import qwen_sampler_lab as lab
 
-SERVING_MODEL = load_model_config(
-    find_project_root(Path(__file__)) / "experiments/evaluation/serve/models/Qwen/Qwen3-0.6B.yaml"
-)
 MODEL_URI = qwen3_0_6b.path(prefix=lab.CANONICAL_ARTIFACT_ROOT)
 GROUP_SIZE = 4
 TERSE_INSTRUCTION = (
@@ -121,7 +118,7 @@ def completion_seed(seed: int, task_id: str, group: int) -> int:
 
 
 async def verified_answer(task: TaskSpec, text: str, factory: ShellSimMachineFactory) -> bool:
-    """Record the reward from the same boxed-answer and sandboxed grader path as training."""
+    """Return whether the native sandbox grader awarded the full binary reward."""
     messages = [*conversation_messages(task.context.events), {"role": "assistant", "content": text}]
     attempt = GradingAttempt(chat_conversation(messages))
     grade = await grade_in_sandbox(task, attempt, factory, MachineSpec(PackageSpec()))
@@ -274,7 +271,10 @@ def main(
 ) -> None:
     if len(set(caps)) != len(caps):
         raise click.BadParameter("each cap must be distinct", param_hint="--cap")
-    tokenizer = AutoTokenizer.from_pretrained(SERVING_MODEL.location, revision=SERVING_MODEL.revision)
+    serving_model = load_model_config(
+        find_project_root(Path(__file__)) / "experiments/evaluation/serve/models/Qwen/Qwen3-0.6B.yaml"
+    )
+    tokenizer = AutoTokenizer.from_pretrained(serving_model.location, revision=serving_model.revision)
     assert isinstance(tokenizer, PreTrainedTokenizerFast) and isinstance(tokenizer.chat_template, str)
     excluded = [] if exclude_task_ids is None else json.loads(exclude_task_ids.read_text())
     if not isinstance(excluded, list) or not all(isinstance(task_id, str) for task_id in excluded):
@@ -311,7 +311,7 @@ def main(
         "selection": f"{lab.NAME}@{lab.VERSION}",
         "split": "train",
         "model_uri": MODEL_URI,
-        "model_revision": SERVING_MODEL.revision,
+        "model_revision": serving_model.revision,
         "tokenizer_sha256": hashlib.sha256(tokenizer.backend_tokenizer.to_str().encode()).hexdigest(),
         "template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
         "endpoint": endpoint,
