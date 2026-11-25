@@ -273,11 +273,7 @@ def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison])
     effect = (
         Effect.TRADE_OFF
         if better and worse
-        else Effect.IMPROVES
-        if better
-        else Effect.REGRESSION
-        if worse
-        else Effect.NO_CHANGE
+        else Effect.IMPROVES if better else Effect.REGRESSION if worse else Effect.NO_CHANGE
     )
     return verdict, effect
 

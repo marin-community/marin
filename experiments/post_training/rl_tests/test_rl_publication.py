@@ -283,9 +283,11 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     assert family_identity(row) == family_identity(baseline) and family_identity(row) is not None
     outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
     changed = [
-        item.model_copy(update={"strata": item.strata.model_copy(update={"family": "alternate-family"})})
-        if item.task_id == outputs[0].task_id
-        else item
+        (
+            item.model_copy(update={"strata": item.strata.model_copy(update={"family": "alternate-family"})})
+            if item.task_id == outputs[0].task_id
+            else item
+        )
         for item in outputs
     ]
     replace_evaluations(source, changed)
