@@ -214,9 +214,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
-    preset_label, *settings = row["label"].split()
-    assert preset_label == name
-    assert set(settings) == {*inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"}
+    assert row["label"] == " ".join((name, *inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"))
     assert row["issue"] is None and row["gate_result"] is None
     assert row["branch"] == "fixture/branch"
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
