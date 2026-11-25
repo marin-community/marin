@@ -697,32 +697,38 @@ def run_step(
     preset: presets.Preset, spec: SkyRLSpec, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
 ) -> ArtifactStep[SkyRLRun]:
     """Bind an RL specification to its declared execution resources."""
-    layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
+    return skyrl_step(
+        spec,
+        run_execution(preset, wandb_entity=wandb_entity, forward_env=(*forward_env, *_recipe_env(config))),
+        export_hf=preset.export != "none",
+    )
+
+
+def run_execution(
+    preset: presets.Preset, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
+) -> IrisSkyRLExecution:
+    """Use the preset's coordinator route for an SFT stage or its continuing RL stage."""
+    layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    required_env += tuple(_recipe_env(config))
-    return skyrl_step(
-        spec,
-        IrisSkyRLExecution(
-            cluster=layout.cluster,
-            cluster_config=cluster_config_path(layout.cluster),
-            cpu=layout.host_cpu,
-            memory=layout.host_memory,
-            disk=layout.host_disk,
-            priority=layout.priority,
-            max_retries=0,
-            target_cluster=layout.cluster,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=layout.coordinator_timeout_hours,
-            job_timeout_seconds=layout.job_timeout_seconds,
-            wandb_entity=wandb_entity or preset.wandb_entity,
-            required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
-            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-            role_topology=layout.role_topology,
-        ),
-        export_hf=preset.export != "none",
+    return IrisSkyRLExecution(
+        cluster=layout.cluster,
+        cluster_config=cluster_config_path(layout.cluster),
+        cpu=layout.host_cpu,
+        memory=layout.host_memory,
+        disk=layout.host_disk,
+        priority=layout.priority,
+        max_retries=0,
+        target_cluster=layout.cluster,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=layout.coordinator_timeout_hours,
+        job_timeout_seconds=layout.job_timeout_seconds,
+        wandb_entity=wandb_entity or preset.wandb_entity,
+        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
+        container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+        role_topology=layout.role_topology,
     )
 
 

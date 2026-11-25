@@ -124,6 +124,42 @@ uv run python -m experiments.post_training.snowball_rl \
   --version 2026.11.25.2 --plan
 ```
 
+To build only SFT and its final export, add `--through sft`. This stage uses the
+selected RL preset's coordinator route, but constructs no RL or task-selection
+steps. The coordinator checks the submitted SFT fingerprint before execution.
+Omit `--wait`, which reports RL results.
+
+The Snowball SFT preset `exp7-262k-32node` ports the resolved Exp6 SFT157
+recipe: 32 eight-H100 nodes, context parallelism 8 within each node and data
+parallelism 32 across nodes, batch 256 at 262,144 positions, MuonH with a
+constant learning rate after 30 warmup updates, FP32 parameters with BF16
+compute, token-weighted accumulation, special-token initialization and update
+scaling, and the initial C4 reference check. It keeps the same staged Snowball
+base and tokenizer bindings. Its all-position view reads existing cached
+`input_ids` with `TextLmDatasetFormat`, packing 256 documents with lookahead
+128. Stored assistant masks are ignored; padding still contributes no loss.
+The source caches and release manifest are unchanged.
+
+For an Exp7 launch, use the approved V10.1 release and set `--sft-steps` to its
+sealed one-epoch receipt's update count. The preset's inherited Exp6 count and
+the generic mix-arm default are not the V10.1 epoch count. V10 can be used for
+a no-run preflight with its receipt's 1,679 updates; it is not the launch mix.
+Once V10.1 is approved and sealed, bind every `EXP7_*` value below to that
+release and its epoch receipt:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long-agentic --sft exp7-262k-32node --through sft \
+  --sft-data-mix "$EXP7_MIX@$EXP7_MIX_VERSION" --sft-data-uri "$EXP7_MIX_URI" \
+  --sft-data-file data.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-steps "$EXP7_EPOCH_UPDATES" --priority production \
+  --version "$EXP7_RUN_VERSION" --plan
+```
+
+Replace `--plan` with `--run` only for the approved, sealed release. This
+submits SFT without starting RL or evaluation. The subsequent RL stage still
+needs its own normalized preset and qualified Exp6 curriculum binding.
+
 SFT uses its preset allocation in the RL coordinator's region. Stage weights,
 corpus and tokenizer in that region before any launch; this command performs
 no cross-region transfer. The existing `--init NAME@VERSION` path remains
