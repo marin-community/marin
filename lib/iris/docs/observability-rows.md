@@ -209,6 +209,10 @@ What a backfilled row cannot hold:
   was removed: NULL, because only the live path keeps the cleared value.
 - `ts` is the entity's own time, not when its row was written.
 
+A backfilled entity has one row, its state in the checkpoint, at its latest
+time; an as-of query for a time before `live_start` sees an entity only after
+that time.
+
 Before writing, the script refuses a `--live-start-ms` less than 15 minutes
 old, later than the checkpoint, earlier than the live rows' real start (a job
 submitted after it has no live config row), or later than it (rows before it
@@ -216,7 +220,9 @@ already exist, unless `--rerun` declares an earlier run). It reads Finelog's
 keys one table and day at a time, halving a failed window down to an hour, and
 stops without writing when that fails. It writes 5,000-row batches, one table
 after another, flushing each and stopping at the first that does not land; a
-rerun writes the rest.
+rerun writes the rest. After a stopped run, wait a minute before `--rerun`: for a few
+seconds the server's buffer is not visible to the key scan, so a rerun that
+starts too early writes identical copies of rows that already landed.
 
 ```bash
 # In a job on the cluster, from the checkpoint taken after live_start:

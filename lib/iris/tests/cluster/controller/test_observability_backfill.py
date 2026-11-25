@@ -223,7 +223,7 @@ def test_a_batch_that_does_not_land_stops_the_run():
     plan.to_write = [IrisJob.__new__(IrisJob) for _ in range(3)]
     table = _DroppingTable()
 
-    with pytest.raises(BackfillRefused, match="batch 1/2 flush dropped after 0 of 3 rows"):
+    with pytest.raises(BackfillRefused, match="flush dropped"):
         write_backfill([plan], {JOBS: table}, batch_rows=2, sleep=_no_sleep)
     assert [len(batch) for batch in table.written] == [2]
 

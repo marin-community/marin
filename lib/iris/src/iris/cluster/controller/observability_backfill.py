@@ -35,6 +35,7 @@ from itertools import batched
 from typing import Protocol
 
 import pyarrow as pa
+from finelog.client.log_client import DEFAULT_BATCH_ROWS as FINELOG_QUEUE_ROWS
 from finelog.client.log_client import FlushResult, NamespaceInfo
 from finelog.client.log_client import Table as FinelogTable
 from finelog.errors import NamespaceNotFoundError, SchemaValidationError, StatsError
@@ -79,7 +80,7 @@ MIN_KEY_WINDOW = timedelta(hours=1)
 KEY_WINDOW = timedelta(days=1)
 MAX_KEY_ROWS = 2_000_000
 # The Finelog client's default queue bound: it drops the oldest rows past it.
-MAX_BATCH_ROWS = 10_000
+MAX_BATCH_ROWS = FINELOG_QUEUE_ROWS
 DEFAULT_BATCH_ROWS = 5_000
 DEFAULT_PAUSE_SECONDS = 2.0
 QUERY_PAUSE_SECONDS = 1.0
@@ -105,7 +106,7 @@ class Target:
     """One ``iris.controller_db__*`` table: its rows' key and the entity time a backfilled ``ts`` comes from."""
 
     namespace: str
-    row_class: type
+    row_class: type[Row]
     storage_policy: StoragePolicy
     key_columns: tuple[str, ...]
     entity_time: Callable[[Row], datetime]
@@ -114,7 +115,7 @@ class Target:
         return tuple(getattr(row, column) for column in self.key_columns)
 
 
-def _ms(value: int) -> datetime:
+def _utc_from_ms(value: int) -> datetime:
     return Timestamp.from_ms(value).as_naive_utc()
 
 
@@ -124,7 +125,7 @@ JOBS = Target(
     IrisJob,
     CONTROLLER_JOB_STORAGE_POLICY,
     _JOB_KEY,
-    lambda r: r.finished_at or r.started_at or _ms(r.submitted_at_ms),
+    lambda r: r.finished_at or r.started_at or _utc_from_ms(r.submitted_at_ms),
 )
 JOB_CONFIGS = Target(
     CONTROLLER_JOB_CONFIG_NAMESPACE,
@@ -132,7 +133,7 @@ JOB_CONFIGS = Target(
     CONTROLLER_JOB_CONFIG_STORAGE_POLICY,
     _JOB_KEY,
     # The live path writes a config row once, at submit.
-    lambda r: _ms(r.submitted_at_ms),
+    lambda r: _utc_from_ms(r.submitted_at_ms),
 )
 TASKS = Target(
     CONTROLLER_TASK_NAMESPACE,
@@ -157,7 +158,7 @@ def db_rows(db: ControllerDB, cluster: str, live_start_ms: int) -> dict[Target, 
     A removed worker's attempts read ``worker_id`` as NULL: only the live path
     keeps the cleared value, in memory.
     """
-    cap = _ms(live_start_ms - 1)
+    cap = _utc_from_ms(live_start_ms - 1)
     with db.read_snapshot() as tx:
         rows: dict[Target, list[Row]] = {
             JOBS: [job_row(r, cluster, cap) for r in tx.execute(job_rows_query())],
@@ -251,7 +252,7 @@ def plan_backfill(
     """
     if not _CLUSTER_NAME.fullmatch(cluster):
         raise BackfillRefused(f"cluster {cluster!r} is not a cluster config name")
-    live_start = _ms(live_start_ms)
+    live_start = _utc_from_ms(live_start_ms)
     if live_start > now - LIVE_START_MARGIN:
         raise BackfillRefused(f"G1: live_start {live_start} is less than {LIVE_START_MARGIN} before now ({now})")
     checkpoint_ms = probe_database(DiagnosticDependencies(db=db))
@@ -259,7 +260,7 @@ def plan_backfill(
         raise BackfillRefused("G2: the DB copy records no checkpoint time; restore it from a checkpoint")
     if checkpoint_ms < live_start_ms:
         raise BackfillRefused(
-            f"G2: the checkpoint ({_ms(checkpoint_ms)}) predates live_start ({live_start}); take one after it"
+            f"G2: the checkpoint ({_utc_from_ms(checkpoint_ms)}) predates live_start ({live_start}); take one after it"
         )
 
     rows = db_rows(db, cluster, live_start_ms)
