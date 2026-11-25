@@ -65,7 +65,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 Set `InferenceServerConfig.grpc_port` to enable a plaintext gRPC listener on the
 configured serving host. The unary `levanter.inference.v1.Inference/Generate`
 RPC takes prompt token IDs and returns each choice's generated token IDs and
-behavior log probabilities. Exact-token requests default to temperature 1 and
+log probabilities. Exact-token requests default to temperature 1 and
 top-p 1, and draw a seed when the caller omits it. Both listeners submit to the
 same inference queue.
 Run the gRPC listener on the private rollout network.
