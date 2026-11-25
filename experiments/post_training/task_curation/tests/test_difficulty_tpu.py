@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import importlib
 import json
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,8 +16,9 @@ import httpx
 import pytest
 from finestore.rl.difficulty import SampleTask, Solver
 from iris.cli.job import run as iris_run_command
+from iris.cluster.types import EndpointAccess
 from iris.rpc.proto_display import priority_band_value
-from marin.inference.config import ObjectStoreLoadMode, VllmCompilationCacheMode, VllmLauncherType
+from marin.inference.config import EffectiveServing, ObjectStoreLoadMode, VllmCompilationCacheMode, VllmLauncherType
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
 from taskcompendium.harbor.runtime import read_source_runtime
@@ -177,7 +179,7 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
         assert config.iris.priority == priority_band_value("interactive")
         assert config.iris.worker_resources.regions == ["us-central2"]
         assert config.iris.max_retries_failure > 0 and config.iris.max_retries_preemption > 0
-        assert shape.tensor_parallel * shape.data_parallel == shape.chips
+        assert shape.tensor_parallel * shape.data_parallel * shape.attention_data_parallel == shape.chips
         assert not any("eager" in argument for argument in config.engine.extra_args)
     # Snowball's 20 Q / 5 KV heads cannot be split across TP8 or TP16.
     assert tpu.SHAPES[Solver.SNOWBALL].tensor_parallel == 1
@@ -371,3 +373,120 @@ def test_full_allocation_waits_for_cancelled_pilot_tasks_to_release_chips(tmp_pa
     with pytest.raises(TimeoutError, match="refusing full allocation"):
         checks.clear()
         tpu_launch.await_pilot_teardown(str(tmp_path), timeout_seconds=0)
+
+
+@pytest.mark.parametrize("registry_failure", [False, True])
+def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
+    tmp_path, monkeypatch, review_server, registry_failure
+):
+    """Run the whole owner, including its real HTTP router and publication boundary."""
+    solver = Solver.SMALL
+    model = tpu.SOLVER_MODELS[solver]
+    review_server.model_ids = [model]
+    endpoint = f"http://127.0.0.1:{review_server.server_port}/v1"
+    (tmp_path / "staging").mkdir()
+    (tmp_path / "staging/small.json").write_text(
+        json.dumps(
+            {
+                "model": model,
+                "revision": PINS[solver].revision,
+                "weights": "gs://marin-us-central2/fixture",
+            }
+        )
+    )
+    lifecycle = []
+    addresses = {}
+    sweeps = []
+
+    class EndOwner(Exception):
+        pass
+
+    @contextmanager
+    def remote(config):
+        lifecycle.append("slice_enter")
+        try:
+            yield SimpleNamespace(
+                ready_direct_session=lambda: SimpleNamespace(
+                    effective_serving=EffectiveServing(8, 1, 1, 2, 65536),
+                    model=SimpleNamespace(endpoint=SimpleNamespace(base_url=endpoint)),
+                ),
+                endpoint_name="slice-fixture",
+                jobs=[SimpleNamespace(job_id="/benfeuer/atlas-difficulty-engines-small-v4-fixture-pilot/inference")],
+            )
+        finally:
+            lifecycle.append("slice_exit")
+
+    @contextmanager
+    def registered(name, address, metadata, *, access):
+        assert access == EndpointAccess.ENDPOINT_ACCESS_LINK
+        assert metadata == {"model": model}
+        lifecycle.append("register")
+        addresses[name] = address
+        if registry_failure:
+            raise EndOwner("registry unavailable")
+        try:
+            yield
+        finally:
+            lifecycle.append("unregister")
+
+    async def warm(endpoint, model, chips, *, concurrency):
+        sweeps.append(concurrency)
+        return {"output_tokens_per_second": concurrency * 2, "output_tokens_per_second_per_gpu": concurrency * 2 / chips}
+
+    publish = tpu.publish_pool_receipt
+
+    def publish_then_exit(root, solver, receipt):
+        # The actual socket, ASGI lifespan, discovery and streaming proxy all run.
+        address = addresses[receipt["endpoint_name"]]
+        response = httpx.get(address + "/models")
+        assert response.status_code == 200
+        assert response.json() == {"data": [{"id": model}]}
+        publish(root, solver, receipt)
+        raise EndOwner("qualified owner stopped by test")
+
+    monkeypatch.setattr(tpu, "regional_worker", lambda: None)
+    monkeypatch.setattr(tpu, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(tpu, "require_secret", lambda name: "fixture")
+    monkeypatch.setattr(tpu, "remote_inference", remote)
+    monkeypatch.setattr(tpu, "probe_endpoint", lambda *args: {"qualified": True})
+    monkeypatch.setattr(tpu, "long_context_probe", lambda *args: {"prompt_tokens": 49009})
+    monkeypatch.setattr(tpu, "warm_throughput", warm)
+    monkeypatch.setattr(tpu, "get_job_info", lambda: SimpleNamespace(advertise_host="127.0.0.1"))
+    monkeypatch.setattr(
+        tpu,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(resolve_endpoint=lambda name: endpoint.removesuffix("/v1")),
+            registry=SimpleNamespace(registered=registered),
+        ),
+    )
+    monkeypatch.setattr(tpu, "publish_pool_receipt", publish_then_exit)
+    with pytest.raises(EndOwner):
+        tpu.run_tpu_pool(solver, str(tmp_path), 1)
+    assert sweeps == [8, 32, 128]
+    assert lifecycle == (
+        ["slice_enter", "register", "slice_exit"]
+        if registry_failure
+        else ["slice_enter", "register", "unregister", "slice_exit"]
+    )
+    (qualification,) = (tmp_path / "qualification/small").glob("*.json")
+    archived = json.loads(qualification.read_text())
+    assert archived["replicas"][0]["warm_throughput"]["output_tokens_per_second_per_chip"] == 32
+    assert (tmp_path / "pools/small.json").exists() is not registry_failure
+
+
+def test_pilot_teardown_uses_receipt_owners_across_generations_and_rejects_foreign_jobs(tmp_path):
+    (tmp_path / "pools").mkdir()
+    owners = []
+    for index, solver in enumerate(tpu.SHAPES):
+        owner = f"/benfeuer/atlas-difficulty-engines-{solver.value}-v4-r{index}-pilot"
+        owners.append(owner)
+        (tmp_path / "pools" / f"{solver.value}.json").write_text(
+            json.dumps({"replicas": [{"engine_jobs": [owner + "/inference-a", owner + "/inference-b"]}]})
+        )
+    assert tpu_launch.pilot_owners(str(tmp_path)) == sorted(owners)
+    (tmp_path / "pools/small.json").write_text(
+        json.dumps({"replicas": [{"engine_jobs": ["/someone/foreign/inference"]}]})
+    )
+    with pytest.raises(ValueError, match="owned pilot"):
+        tpu_launch.pilot_owners(str(tmp_path))

@@ -22,7 +22,7 @@ import httpx
 from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.rpc import job_pb2
+from iris.cluster.types import EndpointAccess
 from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
@@ -38,7 +38,6 @@ from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.difficulty.campaign import stage_campaign
-from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.pool_receipts import publish_pool_receipt, warm_throughput
 from experiments.post_training.task_curation.difficulty.regional import immutable_json, regional_worker
@@ -67,12 +66,13 @@ class TpuShape:
     tensor_parallel: int
     data_parallel: int
     replicas: int
+    attention_data_parallel: int = 1
 
 
 SHAPES = {
     Solver.SMALL: TpuShape("v4-16", 8, 8, 1, 8),
     Solver.LARGE: TpuShape("v4-32", 16, 16, 1, 8),
-    Solver.SNOWBALL: TpuShape("v4-32", 16, 1, 16, 4),
+    Solver.SNOWBALL: TpuShape("v4-32", 16, 1, 1, 4, attention_data_parallel=16),
 }
 
 
@@ -108,7 +108,25 @@ def tpu_model(solver: Solver, weights: str) -> ModelConfig:
         raise ValueError("TPU weights must be staged in us-central2")
     extra = ("--enable-auto-tool-choice", "--enable-prefix-caching")
     if solver == Solver.SNOWBALL:
-        extra += ("--enable-expert-parallel",)
+        # Ordinary DP replicates the expert weights. Attention DP keeps all five
+        # KV heads local while the backend's EXPERT axis shards the MoE weights.
+        extra += (
+            "--enable-expert-parallel",
+            "--api-server-count",
+            "1",
+            "--additional-config",
+            json.dumps(
+                {
+                    "sharding": {
+                        "sharding_strategy": {
+                            "tensor_parallelism": shape.attention_data_parallel,
+                            "enable_dp_attention": True,
+                            "attn_dp_size": shape.attention_data_parallel,
+                        }
+                    }
+                }
+            ),
+        )
     return ModelConfig(
         name=f"atlas-difficulty-v4-{solver.value}",
         location=weights,
@@ -140,7 +158,12 @@ def tpu_config(solver: Solver, weights: str) -> RemoteInferenceConfig:
     config = inference_config_for_model(
         tpu_model(solver, weights),
         AcceleratorChoice(Platform.TPU, tpu_type=shape.slice_type, region=REGION, preemptible=False),
-        env_vars={"MARIN_TEMP_PREFIX": "gs://marin-us-central2", "MODEL_IMPL_TYPE": "auto", "TPU_MULTIPROCESS_DP": "0"},
+        env_vars={
+            "MARIN_TEMP_PREFIX": "gs://marin-us-central2",
+            "MODEL_IMPL_TYPE": "auto",
+            "TPU_MULTIPROCESS_DP": "0",
+            **({"NEW_MODEL_DESIGN": "1"} if solver == Solver.SNOWBALL else {}),
+        },
         priority=priority_band_value("interactive"),
         api_model=SOLVER_MODELS[solver],
     )
@@ -153,7 +176,7 @@ def tpu_config(solver: Solver, weights: str) -> RemoteInferenceConfig:
             config.iris,
             max_retries_failure=FAILURE_RETRIES,
             max_retries_preemption=PREEMPTION_RETRIES,
-            worker_timeout=JOB_TIMEOUT,
+            worker_timeout=None,
             endpoint_ready_timeout_seconds=7200,
         ),
         engine=replace(config.engine, startup_timeout_seconds=7200),
@@ -295,6 +318,8 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
                 "compilation_cache": config.engine.compilation_cache,
                 "ready_at": datetime.now(UTC).isoformat(),
             }
+            # Retain expensive qualification measurements even if publication fails.
+            immutable_json(StoragePath(root) / "qualification" / solver.value / (digest(receipt) + ".json"), receipt)
             context = iris_ctx()
             info = get_job_info()
             assert info is not None
@@ -303,7 +328,7 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int) -> None:
             with bind_serving_socket(info.advertise_host, 0) as sock, serve_app_background(app, sock):
                 address = f"http://{info.advertise_host}:{sock.getsockname()[1]}"
                 with context.registry.registered(
-                    name, address, {"model": receipt["model"]}, access=job_pb2.ENDPOINT_ACCESS_LINK
+                    name, address, {"model": receipt["model"]}, access=EndpointAccess.ENDPOINT_ACCESS_LINK
                 ):
                     receipt["endpoint_name"] = name
                     publish_pool_receipt(root + "/pools", solver, receipt)

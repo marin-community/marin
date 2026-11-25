@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from finestore.rl.difficulty import Solver
+from iris.cluster.types import JobName
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.campaign import identity_bundle
@@ -94,6 +95,7 @@ def commands_for_phase(
             command = regional_cpu_command(
                 f"atlas-difficulty-engines-{solver.value}-v4-{generation}-{phase}", cpu="2", memory="4GB"
             )
+            command[command.index("--timeout") + 1] = "0"
             commands.append(
                 [
                     *command,
@@ -184,6 +186,21 @@ def await_pilot_teardown(root: str, timeout_seconds: float = 600) -> None:
         time.sleep(5)
 
 
+def pilot_owners(root: str) -> list[str]:
+    owners = set()
+    for solver in SHAPES:
+        receipt = json.loads((StoragePath(root) / "pools" / f"{solver.value}.json").read_text())
+        for replica in receipt["replicas"]:
+            for job in replica["engine_jobs"]:
+                owner = str(JobName.from_string(job).root_job)
+                if not owner.startswith(f"/benfeuer/atlas-difficulty-engines-{solver.value}-v4-") or not owner.endswith(
+                    "-pilot"
+                ):
+                    raise ValueError(f"Receipt does not identify an owned pilot: {owner}")
+                owners.add(owner)
+    return sorted(owners)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("stage", "pilot", "full", "controller"))
@@ -235,8 +252,7 @@ def main() -> None:
     environment = controller_environment(args.secrets_env)
     if args.phase == "full":
         # Free the 40-chip pilots before reserving the 256-chip measured layout.
-        for solver in SHAPES:
-            name = f"/benfeuer/atlas-difficulty-engines-{solver.value}-v4-{args.generation}-pilot"
+        for name in pilot_owners(root):
             subprocess.run(
                 ["iris-cancel-own", "--cluster", "marin", name],
                 check=True,

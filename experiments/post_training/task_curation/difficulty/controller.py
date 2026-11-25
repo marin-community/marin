@@ -201,6 +201,7 @@ def launch_controller(
     environment[REFRESH_TOKEN_ENV] = record.edge_refresh_token
     command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
     if campaign_record(ledger) is not None:
+        command[command.index("--timeout") + 1] = "0"
         command.remove("--target-cluster=cw-rno2a")
         command.extend(
             [
