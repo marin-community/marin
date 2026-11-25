@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Union
 
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
@@ -161,6 +162,11 @@ def _mark_aborted_choice[Choice: CompletionChoice | ChatCompletionChoice](
     return choice
 
 
+class PauseGenerationRequest(BaseModel):
+    mode: str
+    clear_cache: bool
+
+
 class AbortRequest(BaseModel):
     request_ids: list[str] = Field(min_length=1)
 
@@ -226,6 +232,7 @@ class InferenceContext:
         self.model_lock = threading.Lock()
         self._publication_lock = threading.Lock()
         self._publication_pending = threading.Event()
+        self._paused = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
@@ -256,6 +263,28 @@ class InferenceContext:
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
+
+    def pause_generation(self) -> None:
+        """Abort outstanding generation and wait for the serving cache to clear."""
+        with self._publication_lock:
+            with self._requests_lock:
+                self._paused.set()
+                for request in self._queued_requests.values():
+                    request.abort_event.set()
+                    self._abort_queued_request(request)
+                self._queued_requests.clear()
+            with (
+                self.model_lock,
+                hax.partitioning.set_mesh(self.mesh),
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+                self.engine.reset()
+                jax.block_until_ready(self.engine.gen_state)
+
+    def resume_generation(self) -> None:
+        """Reopen admission after any in-flight pause or publication completes."""
+        with self._publication_lock, self._requests_lock:
+            self._paused.clear()
 
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
@@ -328,7 +357,7 @@ class InferenceContext:
                 return_route_captures=return_route_captures,
                 expected_policy_id=expected_policy_id,
             )
-            if request.abort_event.is_set():
+            if self._paused.is_set() or request.abort_event.is_set():
                 self._abort_queued_request(request)
             else:
                 self._queued_requests[request_id] = request
@@ -565,7 +594,7 @@ class InferenceContext:
             return admitted
 
         def receive(capacity: int) -> list[Request]:
-            if self._publication_pending.is_set() or self.shutdown_event.is_set():
+            if self._paused.is_set() or self._publication_pending.is_set() or self.shutdown_event.is_set():
                 return []
             return admit(poll(capacity, capture_routes))
 
@@ -580,7 +609,7 @@ class InferenceContext:
 
         def should_abort(request_id: int) -> bool:
             request = outstanding[request_id]
-            return request.abort_event.is_set() or request.future.cancelled()
+            return self._paused.is_set() or request.abort_event.is_set() or request.future.cancelled()
 
         try:
             initial = admit(requests)
@@ -1157,6 +1186,18 @@ class InferenceServer:
         @app.get("/health")
         async def health_check():
             return _health_check()
+
+        @app.post("/pause_generation")
+        async def pause_generation(request: PauseGenerationRequest):
+            if request.mode != "abort" or not request.clear_cache:
+                raise HTTPException(status_code=400, detail="Native serving requires mode=abort and clear_cache=true")
+            await asyncio.to_thread(inference_context.pause_generation)
+            return {"status": "ok"}
+
+        @app.post("/resume_generation")
+        async def resume_generation():
+            await asyncio.to_thread(inference_context.resume_generation)
+            return {"status": "ok"}
 
         @app.post("/abort")
         async def abort(request: AbortRequest):

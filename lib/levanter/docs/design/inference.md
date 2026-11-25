@@ -65,6 +65,12 @@ The inference server is built around a `GenerationService` that encapsulates:
   `{"request_ids": ["<id>"]}` to `/abort`. Unfinished choices return `abort` with their
   sampled tokens and scores so far. Queued choices return zero completion tokens.
   Disconnecting cancels the same request.
+- **Pause and resume**: Post `{"mode": "abort", "clear_cache": true}` to
+  `/pause_generation` to abort active requests and discard queued work. The
+  server clears its cache state before returning. Requests received while
+  paused return zero completion tokens with reason `abort`. Post to
+  `/resume_generation` to reopen admission. A binary client can append returned
+  token IDs to the prompt and request the rest of its token budget.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations
