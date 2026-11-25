@@ -11,6 +11,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import DatasetRelease
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -26,17 +28,14 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
+import experiments.post_training.task_curation.retained_release as retained_release
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.retained_release import (
-    RETAINED_SCHEMA,
     RetainedCohort,
     RetainedImport,
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceReference
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import file_sha256
-
 
 FIXTURE_IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -85,11 +84,7 @@ def published_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
         local,
     )
-    import experiments.post_training.task_curation.retained_release as retained_release
-
-    monkeypatch.setattr(
-        retained_release, "hf_hub_download", lambda *args, **kwargs: str(local), raising=True
-    )
+    monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local), raising=True)
     return local
 
 
@@ -147,8 +142,6 @@ def test_admitted_import_populates_the_final_view_with_normalized_rows(
     The lexical qualification itself is exercised at bind time (the pin-table
     validators); this test stubs it to focus on the evidence views.
     """
-    import experiments.post_training.task_curation.retained_release as retained_release
-
     monkeypatch.setattr(retained_release, "require_lexical_qualification", lambda *args, **kwargs: None)
     invocation = RetainedImport(
         _cohort(published_tasks, tmp_path, expected_rows=1),
@@ -175,8 +168,6 @@ def test_admitted_import_populates_the_final_view_with_normalized_rows(
 def test_a_row_count_or_digest_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:
     """A published release that differs from its receipt refuses to import."""
     cohort = _cohort(published_tasks, tmp_path, expected_rows=2)
-    invocation = RetainedImport(
-        cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None
-    )
+    invocation = RetainedImport(cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None)
     with pytest.raises(ValueError, match="count differs"):
         run_retained_import(invocation)
