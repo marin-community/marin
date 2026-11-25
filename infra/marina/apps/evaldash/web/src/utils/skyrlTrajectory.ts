@@ -1,16 +1,10 @@
-// Adapter: SkyRL schema_v7 turn records (the native long-loop/Micro210 rollout dumps) onto the
-// ATIF Trajectory type, so TrajectoryViewer renders them. One artifact blob holds one turn record
-// or a list of them (one per rollout step). Messages map to steps by role; the raw prompt and each
-// record's full output_response (think block included) render as their own steps; a record's
-// stop_reason and verification ride that record's final step as string annotations.
 import type { Trajectory, TrajectoryStep } from '@/types/api'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** One SkyRL schema_v7 turn record: the rollout's identity, prompt, response, and verification. */
-export function isSkyrlTurnRecord(value: unknown): boolean {
+function isSkyrlTurnRecord(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.uid === 'string' &&
@@ -19,7 +13,6 @@ export function isSkyrlTurnRecord(value: unknown): boolean {
   )
 }
 
-/** Flatten one message's content: a string, or a list of ``{type, text}`` parts. */
 function messageText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -31,13 +24,11 @@ function messageText(content: unknown): string {
   return ''
 }
 
-/** The step source a message role maps to; ATIF's agent step carries the assistant turns. */
 function messageSource(role: unknown): string {
   if (role === 'assistant') return 'agent'
   return typeof role === 'string' && role ? role : 'user'
 }
 
-/** A record's outcome facts (stop reason, verification) as the string annotations a step carries. */
 function recordAnnotations(record: Record<string, unknown>): Record<string, string> | undefined {
   const annotations: Record<string, string> = {}
   if (typeof record.stop_reason === 'string' && record.stop_reason) annotations['stop reason'] = record.stop_reason
@@ -67,7 +58,6 @@ function sameMessage(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
-/** Drop the head of ``next`` that repeats ``previous`` verbatim: cumulative per-step transcripts. */
 function dropRepeatedPrefix(previous: unknown[], next: unknown[]): unknown[] {
   if (previous.length === 0 || next.length < previous.length) return next
   for (let index = 0; index < previous.length; index++) {
@@ -88,7 +78,6 @@ function recordSteps(record: Record<string, unknown>, firstStepId: number, inclu
     if (!text) continue
     steps.push({ step_id: stepId++, source: messageSource(message.role), message: text })
   }
-  // The record's terminal step: the raw response with its think block, plus its outcome facts.
   const annotations = recordAnnotations(record)
   const response = typeof record.output_response === 'string' ? record.output_response : ''
   if (response || annotations) {
@@ -97,7 +86,7 @@ function recordSteps(record: Record<string, unknown>, firstStepId: number, inclu
   return steps
 }
 
-/** Map one SkyRL turn record, or a list of them, onto the Trajectory type; null when not SkyRL. */
+/** Map SkyRL eval-dump rows onto Trajectory; return null for other formats. */
 export function skyrlTurnsToTrajectory(parsed: unknown): Trajectory | null {
   const records = (Array.isArray(parsed) ? parsed : [parsed]) as unknown[]
   if (records.length === 0 || !records.every(isSkyrlTurnRecord)) return null
