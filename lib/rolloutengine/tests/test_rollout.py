@@ -3475,7 +3475,8 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
         pytest.param("", None, id="ambient-connection"),
     ],
 )
-async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monkeypatch, source_model, connection):
+@pytest.mark.parametrize("placement", ["grader", "agent"])
+async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_model, connection, placement):
     monkeypatch.setenv(BASE_URL_ENV, "http://judge.invalid/v1")
     monkeypatch.setenv(API_KEY_ENV, "runtime-private-key")
     monkeypatch.setenv(MODEL_ENV, "ambient-must-not-win" if source_model else "fixture-judge")
@@ -3496,10 +3497,15 @@ async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monk
     )
     task = source_task.model_copy(
         update={
+            "answer_type": AnswerType.WORKSPACE_STATE if placement == "agent" else source_task.answer_type,
+            "environment_requirements": (
+                GRADER_ENVIRONMENT if placement == "agent" else source_task.environment_requirements
+            ),
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
+                placement=AgentMachine() if placement == "agent" else GraderMachine(environment=GRADER_ENVIRONMENT),
                 judge=judge,
+                answer_path=None if placement == "agent" else "/app/answer.txt",
                 reward=FileReward(
                     files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
                 ),
@@ -3510,7 +3516,8 @@ async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monk
     factory = RecordingShellSimFactory()
     spec = rollout_spec(
         task,
-        verifier_machine=machine_runtime(),
+        machine=machine_runtime() if placement == "agent" else None,
+        verifier_machine=machine_runtime() if placement == "grader" else None,
         judge_connection=connection,
     )
     record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)

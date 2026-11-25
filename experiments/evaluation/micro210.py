@@ -33,6 +33,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import resolve_secret_spec
+from taskcompendium.evaluation.corpus import file_sha256
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
@@ -99,7 +100,7 @@ def prepare_native_inputs(
             json.dumps(
                 {
                     "source_sha256": policy["prepared_rollouts_sha256"],
-                    "native_sha256": hashlib.sha256(native.read_bytes()).hexdigest(),
+                    "native_sha256": file_sha256(StoragePath(str(native))),
                     "image_digests": image_digests,
                     "smoke_rows": rows,
                 },

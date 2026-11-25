@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.agents.pi.agent import PI_HARNESS
 
 MODEL_IDENTITY_PREFIX = "sha256:"
 LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
@@ -132,9 +133,9 @@ def runtime_policy_config(policy: dict) -> dict:
     sessions["agent_max_retries"] = harbor["max_retries"]
     sessions["max_concurrent_agents"] = harbor["n_concurrent_trials"]
     sessions["agent_harnesses"] = {
-        "pi": {key: agent["kwargs"][key] for key in ("version", "thinking", "thinking_format")}
+        PI_HARNESS: {key: agent["kwargs"][key] for key in ("version", "thinking", "thinking_format")}
     }
-    sessions["agent_harnesses"]["pi"]["setup_timeout"] = installed["setup_timeout"]
+    sessions["agent_harnesses"][PI_HARNESS]["setup_timeout"] = installed["setup_timeout"]
     config["generator"]["error_handling"] = {
         "enable_error_classification": True,
         "default_error_treatment": "mask",

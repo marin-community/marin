@@ -13,7 +13,9 @@ from tempfile import TemporaryDirectory
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomli_w
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from taskcompendium.importers.harbor.config import read_task_config
 from taskcompendium.importers.harbor.package import JobSettings, PackageTests, lower_package
 from taskcompendium.models import ScriptGrader, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -33,6 +35,19 @@ JUDGE_COMMAND = (
 )
 
 
+TASK_OWNED_JUDGE_REFERENCE = "task-owned rubric"
+
+
+def bind_script_judge(grader: ScriptGrader, model: str, request_timeout: float) -> ScriptGrader:
+    """Declare the judge transport while the frozen script retains its rubric."""
+    return grader.model_copy(
+        update={
+            "argv": (*JUDGE_COMMAND, *grader.argv),
+            "judge": JudgeSpec(model=model, references=(TASK_OWNED_JUDGE_REFERENCE,), request_timeout=request_timeout),
+        }
+    )
+
+
 def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mapping[str, str]) -> TaskRolloutSpec:
     """Lower a frozen package without selecting new tasks or changing its verifier."""
     task = rollout.task
@@ -41,15 +56,8 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
         assert isinstance(grader, ScriptGrader)
         # Only equivalence-judged rows need a provider connection. The task's script retains its rubric.
         if any(resource.path == "config.json" for resource in task.resources.verifier):
-            grader = grader.model_copy(
-                update={
-                    "argv": (*JUDGE_COMMAND, *grader.argv),
-                    "judge": JudgeSpec(
-                        model=policy["evaluation"]["judge"]["model"],
-                        references=("task-owned rubric",),
-                        request_timeout=policy["evaluation"]["judge"]["request_timeout"],
-                    ),
-                }
+            grader = bind_script_judge(
+                grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
             )
             task = task.model_copy(update={"grader": grader})
         return rollout.model_copy(update={"task": task})
@@ -64,6 +72,7 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
             if resource.mode is not None:
                 path.chmod(int(resource.mode, 8))
         config_path = package / "task.toml"
+        settings = read_task_config(package)
         config = tomllib.loads(config_path.read_text())
         judge_env = config["verifier"].get("env", {})
         needs_judge = "OPENAI_API_KEY" in judge_env
@@ -86,15 +95,8 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
     grader = native.grader
     assert isinstance(grader, ScriptGrader)
     if needs_judge:
-        grader = grader.model_copy(
-            update={
-                "argv": (*JUDGE_COMMAND, *grader.argv),
-                "judge": JudgeSpec(
-                    model=policy["evaluation"]["judge"]["model"],
-                    references=("task-owned rubric",),
-                    request_timeout=policy["evaluation"]["judge"]["bixbench_request_timeout"],
-                ),
-            }
+        grader = bind_script_judge(
+            grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["bixbench_request_timeout"]
         )
     native = native.model_copy(update={"tags": task.tags, "labels": task.labels, "grader": grader})
     machine = MachineRuntimeSpec(
@@ -104,8 +106,8 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
         memory_mb=episode.memory_mb,
         storage_mb=episode.storage_mb,
         gpus=episode.gpus,
-        user=None,
-        startup_timeout=config["environment"].get("build_timeout_sec", 600),
+        user=None if settings.agent.user is None else str(settings.agent.user),
+        startup_timeout=settings.environment.build_timeout_sec,
         cleanup_timeout=60,
     )
     limits = rollout.limits.model_copy(
@@ -118,7 +120,7 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
     return rollout.model_copy(
         update={
             "task": native,
-            "harness": "pi",
+            "harness": PI_HARNESS,
             "task_machine": machine,
             "limits": limits,
         }

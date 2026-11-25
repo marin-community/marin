@@ -119,7 +119,7 @@ AGENT_RETRY_BACKOFF = 1.0
 async def _tokenize(
     inference: InferenceEngineClient, template_kwargs: Mapping[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Count agent prompt tokens with the same serving actors that produce sampled tokens."""
+    """Render agent prompt tokens with the serving actors that produce sampled tokens."""
     body = {**payload, "model": inference.model_name}
     if "messages" in body and template_kwargs:
         body["chat_template_kwargs"] = {**template_kwargs, **body.get("chat_template_kwargs", {})}
