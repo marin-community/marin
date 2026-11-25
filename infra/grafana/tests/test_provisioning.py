@@ -1351,7 +1351,9 @@ def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
     dashboard = json.loads(path.read_text())
 
     assert dashboard.get("refresh", "") == ""
-    queries = [sql for panel in dashboard["panels"] for sql in _finelog_sql(panel)]
+    panels = list(dashboard["panels"])
+    panels += [inner for panel in dashboard["panels"] for inner in panel.get("panels", [])]  # collapsed rows
+    queries = [sql for panel in panels for sql in _finelog_sql(panel)]
     for variable in dashboard.get("templating", {}).get("list", []):
         if variable.get("type") == "query":
             infinity = variable["query"]["infinityQuery"]

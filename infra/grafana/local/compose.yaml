@@ -31,7 +31,7 @@ services:
       # Local editing: anonymous users can change and save dashboards.
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_UNIFIED_ALERTING_EXECUTE_ALERTS: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards-local/topline.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards-local/utilization.json
     volumes:
       - ${HOME}/.config/marin/credentials/marin.json:/home/grafana/.config/marin/credentials/marin.json:ro
       - ./dashboards.yaml:/etc/grafana/provisioning/dashboards/marin.yaml:ro
