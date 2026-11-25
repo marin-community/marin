@@ -36,9 +36,11 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
+from jax.experimental import multihost_utils
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask
+from levanter.tensorstore_serialization import TensorStoreWriteConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from rigging.log_setup import configure_logging
@@ -68,6 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-root", required=True)
     parser.add_argument("--output-root", help="Checkpoints go to <output-root>/<run id>; unset, none are written.")
     parser.add_argument("--checkpoint-every", type=int, default=0)
+    parser.add_argument(
+        "--max-staged-host-gib",
+        type=float,
+        default=16.0,
+        help="Host memory a save may stage per process before it blocks training (TensorStoreWriteConfig).",
+    )
     parser.add_argument("--log-dir", type=Path, default=Path("logs/drill"))
     parser.add_argument("--diagnose-numerics", action="store_true")
     parser.add_argument("--damage-inputs-at", type=int, nargs="*", default=[])
@@ -95,6 +103,7 @@ def build_run_config(args: argparse.Namespace) -> GrugRunConfig:
         append_run_id_to_base_path=False,
         save_interval=timedelta(days=1),
         keep=[{"every": args.checkpoint_every or args.steps}],
+        write=TensorStoreWriteConfig(max_staged_host_bytes=int(args.max_staged_host_gib * 1024**3)),
     )
     trainer = TrainerConfig(
         id=args.run_id,
@@ -163,7 +172,7 @@ class _Faults:
 
 def _damaged_arrays(batch, vocab_size: int) -> dict[str, str]:
     """The input arrays of ``batch`` outside the ranges ``train._batch_inputs_valid`` checks, with their first values."""
-    host = jax.device_get(batch)
+    host = multihost_utils.process_allgather(batch, tiled=True)
     found = {}
 
     def report(name, bad, values):
