@@ -13,7 +13,14 @@ from types import MappingProxyType
 
 import yaml
 from evalrecords.eval_policy import source_config_digest
-from evalrecords.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
+from evalrecords.records import (
+    EvalRef,
+    EvalTaskRef,
+    EvaluationOverrides,
+    EvaluationSelection,
+    HarborRef,
+    ModelConfigRef,
+)
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
@@ -24,7 +31,6 @@ from rigging.secrets import SecretSpec
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.curated import requires_judge
-from experiments.evaluation.judges import ApiJudge, api_judge
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +138,9 @@ _CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evaluations.yam
 EVALS: dict[str, EvaluationSelection] = {
     name: EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in _CONFIG["evaluations"].items()
 }
-JUDGES: dict[str, ApiJudge] = {name: api_judge(entry) for name, entry in _CONFIG["judges"].items()}
+JUDGES: dict[str, EvaluationOverrides] = {
+    name: EvaluationOverrides.model_validate(entry) for name, entry in _CONFIG["judges"].items()
+}
 
 
 def evaluation_for(name: str) -> EvaluationSelection:
