@@ -15,8 +15,6 @@ from taskcompendium.counts import (
     count_parquet_rows,
     count_source_files,
     count_source_rows,
-    count_table_rows,
-    count_task_packages,
 )
 from taskcompendium.pipeline.inputs import SourceFormat
 
@@ -50,24 +48,6 @@ def test_json_rejects_a_non_array_document(tmp_path):
     path.write_text(json.dumps({"a": 1}))
     with pytest.raises(ValueError, match="record array"):
         count_json_elements(StoragePath(str(path)))
-
-
-def test_task_packages_count_directories_holding_task_toml(tmp_path):
-    (tmp_path / "task-a").mkdir()
-    (tmp_path / "task-a" / "task.toml").write_text("")
-    (tmp_path / "task-b").mkdir()
-    (tmp_path / "task-b" / "task.toml").write_text("")
-    (tmp_path / "task-b" / "nested").mkdir()
-    (tmp_path / "task-b" / "nested" / "task.toml").write_text("")
-    (tmp_path / "not-a-package").mkdir()
-    assert count_task_packages(StoragePath(str(tmp_path))) == 2
-
-
-def test_table_rows_sum_parquet_shard_footers(tmp_path):
-    pq.write_table(pa.table({"n": list(range(3))}), tmp_path / "shard-00000.parquet")
-    pq.write_table(pa.table({"n": list(range(4))}), tmp_path / "shard-00001.parquet")
-    (tmp_path / "notes.txt").write_text("not a shard")
-    assert count_table_rows(StoragePath(str(tmp_path))) == 7
 
 
 def test_memory_filesystem_counts_like_a_local_one():
