@@ -3,6 +3,7 @@
 
 """Validate gate results and retained progress records."""
 
+import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -95,7 +96,6 @@ class GateResult(BaseModel):
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
-    control_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GradingLatency(TypedDict):
@@ -140,7 +140,6 @@ class GraderReport(BaseModel):
 
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
-    format_version: Literal[1] = 1
     run_id: Identity
     native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
@@ -151,10 +150,7 @@ class AttemptSummary(BaseModel):
     base_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaluation_task_set: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     is_control: bool | None = Field(default=None, exclude_if=lambda value: value is None)
-    evaldash_run_ids: tuple[Identity, ...] | None = Field(default=None, exclude=True)
     user: Identity | None = None
     branch: str | None = None
     commit: Identity | None = None
@@ -240,7 +236,13 @@ def completed_controls(
                 or (
                     record.base_commit is not None
                     and record.commit is not None
-                    and record.base_commit.startswith(record.commit)
+                    and (
+                        record.commit == record.base_commit
+                        or (
+                            re.fullmatch(r"[0-9a-f]{7,40}", record.commit)
+                            and record.base_commit.startswith(record.commit)
+                        )
+                    )
                 )
             )
             and record.status == "succeeded"

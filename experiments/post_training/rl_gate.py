@@ -28,6 +28,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
+    SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
@@ -52,6 +53,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_index
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand, visible_setting
+from experiments.post_training.rl_measurements import InvalidComparison as InvalidComparison
 from experiments.post_training.rl_measurements import (
     RunInputs,
     RunMeasurements,
@@ -59,8 +61,6 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     read_run_inputs,
 )
-from experiments.post_training.rl_preset_plan import InvalidComparison as InvalidComparison
-from experiments.post_training.rl_preset_plan import preset_launch_yaml
 from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
@@ -192,7 +192,7 @@ def read_control_measurements(
             raise InvalidComparison(
                 f"stored control config version {actual_version} disagrees with the run index: {path}"
             )
-    data = with_objectives(read_measurements(path, preset, inputs, attempt=attempt), preset)
+    data = with_objectives(read_measurements(path, preset, inputs, attempt=attempt, gate_profiles=True), preset)
     missing = [
         metric.key
         for metric in (*preset.objectives, *preset.guards)
@@ -293,7 +293,7 @@ def read_gate_report(path: str | None) -> GateReport | None:
     if path is None:
         return None
     try:
-        return read_artifact(path, GateReport)
+        return read_artifact(path, GateReport).model_copy(update={"path": path})
     except FileNotFoundError:
         return None
 
@@ -731,10 +731,29 @@ def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
     return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
 
 
+def preset_launch_yaml(
+    preset: presets.Preset,
+    *,
+    name: str,
+    tasks: ArtifactStep | None = None,
+    init: SkyRLModelSource | ResolvedModelLocator | None = None,
+    resume: presets.StoredResume | None = None,
+    settings: tuple[str, ...] = (),
+) -> str:
+    spec = recipe.run_spec(preset, name=name, tasks=tasks, init=init, resume=resume, settings=settings)
+    if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
+        spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
+    step = recipe.run_step(preset, spec)
+    return materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml
+
+
 def compose_preset(preset: presets.Preset) -> dict:
-    """Compose the preset with its published inputs and defaults."""
-    (config,) = _compose_plans(preset, (RunInputs(preset_name=preset.name),))
-    return config
+    """Compose the nominal preset in the checkout's SkyRL CPU environment."""
+    with tempfile.TemporaryDirectory(prefix="rl-preset-") as directory:
+        path = Path(directory) / "launch.yaml"
+        path.write_text(preset_launch_yaml(preset, name="nominal"))
+        (config,) = compose_configs([str(path)])
+        return config
 
 
 def _compose_plans(
@@ -913,7 +932,8 @@ def _write_gate(
                     raise InvalidComparison(f"no stored native attempt at {path}")
         runs = [
             with_requirements(
-                with_objectives(read_measurements(path, preset, inputs, attempt=receipt), preset), inputs.requirements
+                with_objectives(read_measurements(path, preset, inputs, attempt=receipt, gate_profiles=True), preset),
+                inputs.requirements,
             )
             for path, receipt in zip(run_paths, run_attempts, strict=True)
         ]
@@ -1034,62 +1054,78 @@ def _gate_artifact(
     )
 
 
-def _stored_attempt(path: str) -> AttemptRecord | None:
+def _stored_attempt(path: str, attempt_id: str | None = None) -> AttemptRecord | None:
     try:
+        if attempt_id is not None:
+            return read_stored_skyrl_attempts(path)[1].get(attempt_id)
         return read_stored_skyrl_attempt(path)
     except (FileNotFoundError, SkyRLReceiptLookupError):
         return None
 
 
-def _gate_with_evidence(
-    step: ArtifactStep[GateReport], run_attempts: tuple[AttemptRecord | None, ...] | None = None
-) -> ArtifactStep[GateReport]:
-    target = gate_target(step)
-    if run_attempts is None:
-        run_attempts = tuple(map(_stored_attempt, target.outputs))
-    control_attempts = tuple(map(_control_attempt, target.controls))
-    return replace(
-        step,
-        name=target.evidence_name(run_attempts, control_attempts),
-        runtime_args={
-            **step.runtime_args,
-            "evidence": {"run_attempts": run_attempts, "control_attempts": control_attempts},
-        },
+class GateAddress(BaseModel):
+    """The submitted gate address and the candidate and control receipts that determine its suffix."""
+
+    path: str
+    candidates: tuple[tuple[str, str], ...]
+    controls: tuple[ControlAttempt, ...]
+
+    def candidate_receipts(self, attempt_ids: Sequence[str | None] | None = None) -> tuple[AttemptRecord | None, ...]:
+        if attempt_ids is None:
+            attempt_ids = (None,) * len(self.candidates)
+        return tuple(
+            _stored_attempt(path, attempt_id) for (_, path), attempt_id in zip(self.candidates, attempt_ids, strict=True)
+        )
+
+    def control_receipts(self) -> tuple[AttemptRecord | None, ...]:
+        return tuple(map(_control_attempt, self.controls))
+
+    def suffix(self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]) -> str:
+        evidence = [
+            (identity, receipt.model_dump(mode="json", exclude={"issue", "interruption"}) if receipt else None)
+            for identities, group in zip(
+                (
+                    tuple(identity for identity, _ in self.candidates),
+                    tuple(member.attempt_id for member in self.controls),
+                ),
+                (candidates, controls),
+                strict=True,
+            )
+            for identity, receipt in zip(identities, group, strict=True)
+        ]
+        return "-evidence-" + fingerprint_hash(canonical_json(evidence))
+
+    def completed_path(self, candidates: tuple[AttemptRecord | None, ...] | None = None) -> str:
+        parent, version = self.path.rsplit("/", 1)
+        if candidates is None:
+            candidates = self.candidate_receipts()
+        return f"{parent}{self.suffix(candidates, self.control_receipts())}/{version}"
+
+
+def gate_address(step: ArtifactStep[GateReport], prefix: str | None = None) -> GateAddress:
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    paths = step.runtime_args["paths"]
+    return GateAddress(
+        path=replace(step, name=step.runtime_args["name"]).path(prefix),
+        candidates=tuple(zip(config["run_paths"], paths["run_paths"], strict=True)),
+        controls=config["cohort"].attempts,
     )
 
 
-class GateTarget(BaseModel):
-    """The gate and ordered input addresses fixed at submission."""
-
-    name: str
-    version: str
-    candidates: tuple[str, ...]
-    outputs: tuple[str, ...]
-    controls: tuple[ControlAttempt, ...]
-
-    def evidence_name(
-        self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
-    ) -> str:
-        evidence = [
-            (identity, receipt.model_dump(mode="json", exclude={"issue"}) if receipt is not None else None)
-            for identities, receipts in (
-                (self.candidates, candidates),
-                (tuple(member.attempt_id for member in self.controls), controls),
-            )
-            for identity, receipt in zip(identities, receipts, strict=True)
-        ]
-        return self.name + "-evidence-" + fingerprint_hash(canonical_json(evidence))
-
-
-def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    paths = step.runtime_args["paths"]
-    return GateTarget(
-        name=step.runtime_args["name"],
-        version=step.version,
-        candidates=tuple(config["run_paths"]),
-        outputs=tuple(paths["run_paths"]),
-        controls=config["cohort"].attempts,
+def _gate_with_evidence(
+    step: ArtifactStep[GateReport],
+    run_attempts: tuple[AttemptRecord | None, ...] | None = None,
+    *,
+    attempt_ids: Sequence[str | None] | None = None,
+) -> ArtifactStep[GateReport]:
+    address = gate_address(step)
+    if run_attempts is None:
+        run_attempts = address.candidate_receipts(attempt_ids)
+    controls = address.control_receipts()
+    return replace(
+        step,
+        name=step.runtime_args["name"] + address.suffix(run_attempts, controls),
+        runtime_args={**step.runtime_args, "evidence": {"run_attempts": run_attempts, "control_attempts": controls}},
     )
 
 
@@ -1184,7 +1220,9 @@ def command(table: ModelPresets) -> click.Command:
 
 
 def completed_gate(
-    gate: ArtifactStep[GateReport] | None, attempts: tuple[AttemptRecord | None, ...] | None = None
+    gate: ArtifactStep[GateReport] | None, attempt_ids: Sequence[str | None] | None = None
 ) -> ArtifactStep[GateReport] | None:
     """Bind native attempt evidence to the gate identity fixed at submission."""
-    return _gate_with_evidence(gate, attempts) if gate is not None else None
+    if gate is None:
+        return None
+    return _gate_with_evidence(gate, attempt_ids=attempt_ids)

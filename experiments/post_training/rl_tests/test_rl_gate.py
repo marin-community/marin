@@ -50,7 +50,13 @@ from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
+from experiments.post_training.rl_measurements import (
+    RUN_INPUTS_FILENAME,
+    RunInputs,
+    RunOptions,
+    read_run_inputs,
+    run_inputs,
+)
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     cohort_from_fixtures,
@@ -226,7 +232,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     candidates = []
     roots = []
     for index, value in enumerate((0, 0.01)):
-        name = f"users/test/requirements-{index}"
+        name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
         roots.append(root)
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
@@ -235,10 +241,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         return gate.gate_step(
             preset,
             tuple(candidates),
-            group_name="users/test/requirements",
-            inputs=RunInputs(
-                preset_name=preset.name,
+            inputs=run_inputs(
+                preset.name,
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
+                preset=preset,
             ),
             cohort=cohort_from_fixtures(roots[0]),
         )

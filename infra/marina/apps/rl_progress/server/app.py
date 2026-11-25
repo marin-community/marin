@@ -21,8 +21,6 @@ _RETAINED_FIELDS = (
     "grader_report",
     "is_control",
     "evaluation_data_identity",
-    "evaluation_task_set",
-    "evaluation_protocol_identity",
     "native_run_id",
     "base_commit",
     "base_preset_version",
@@ -35,6 +33,11 @@ _UPSERT = text(
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
+        WHEN :older_publication
+          AND rl_runs.record -> 'commit' IS NOT NULL
+          AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record || jsonb_build_object(
+            'issue', COALESCE(NULLIF(rl_runs.record -> 'issue', 'null'::jsonb), EXCLUDED.record -> 'issue')
+          )
         ELSE EXCLUDED.record || (
             SELECT jsonb_object_agg(key, COALESCE(NULLIF(EXCLUDED.record -> key, 'null'::jsonb),
                                                   rl_runs.record -> key, 'null'::jsonb))
@@ -59,31 +62,6 @@ def migrate(connection: Connection) -> None:
     """
         )
     )
-    connection.execute(
-        text(
-            """CREATE TABLE IF NOT EXISTS rl_legacy_runs (
-            run_id text NOT NULL,
-            attempt_id text NOT NULL,
-            record jsonb NOT NULL,
-            imported_at timestamptz NOT NULL
-        )"""
-        )
-    )
-    connection.execute(
-        text(
-            """WITH legacy AS (
-            DELETE FROM rl_runs
-            WHERE NOT record ? 'format_version' AND record ?& ARRAY['evaluation', 'baseline', 'final']
-            RETURNING run_id, attempt_id, record, imported_at
-        ) INSERT INTO rl_legacy_runs SELECT * FROM legacy"""
-        )
-    )
-    connection.execute(
-        text(
-            """UPDATE rl_runs SET record = record || jsonb_build_object('format_version', 1)
-            WHERE jsonb_typeof(record) = 'object' AND NOT record ? 'format_version'"""
-        )
-    )
 
 
 def create_api(services):
@@ -92,6 +70,8 @@ def create_api(services):
 
     @api.post("/runs")
     def publish(record: dict[str, Any]) -> dict:
+        older_publication = "evaldash_run_ids" in record and "commit" not in record
+        record.pop("evaldash_run_ids", None)
         try:
             encoded = json.dumps(record, allow_nan=False)
             summary = AttemptSummary.model_validate_json(encoded, extra="forbid")
@@ -104,12 +84,15 @@ def create_api(services):
         try:
             with engine.begin() as connection:
                 incoming = summary.model_dump(mode="json")
+                if older_publication:
+                    del incoming["commit"]
                 stored = connection.execute(
                     _UPSERT,
                     {
                         "run_id": summary.run_id,
                         "attempt_id": summary.attempt_id,
-                        "record": summary.model_dump_json(),
+                        "record": json.dumps(incoming, allow_nan=False),
+                        "older_publication": older_publication,
                         "retained_fields": list(_RETAINED_FIELDS),
                     },
                 ).scalar_one()
@@ -129,6 +112,8 @@ def create_api(services):
                             repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
+                if "commit" not in stored:
+                    del normalized["commit"]
                 if normalized != stored:
                     connection.execute(
                         text(
@@ -138,9 +123,19 @@ def create_api(services):
                         {
                             "run_id": summary.run_id,
                             "attempt_id": summary.attempt_id,
-                            "record": summary.model_dump_json(),
+                            "record": json.dumps(normalized, allow_nan=False),
                         },
                     )
+                if older_publication:
+                    response = {key: normalized[key] for key in record}
+                    groups = (
+                        response.get("evaluations", ()),
+                        (response.get("gate_result") or {}).get("comparisons", ()),
+                    )
+                    for group in groups:
+                        for comparison in group:
+                            comparison.pop("evaluation_score", None)
+                    return response
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]

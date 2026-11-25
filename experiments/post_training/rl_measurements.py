@@ -35,7 +35,6 @@ from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
-from experiments.post_training.rl_preset_plan import InvalidComparison as InvalidComparison
 from experiments.post_training.rl_scoring import (
     ANSWER_SCHEMA,
     answer_table,
@@ -44,6 +43,10 @@ from experiments.post_training.rl_scoring import (
     score_slices,
 )
 from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
+
+
+class InvalidComparison(ValueError):
+    """Required configuration or measurement evidence is unavailable or inconsistent."""
 
 
 def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
@@ -398,14 +401,15 @@ def _declared_evaluations(preset: presets.Preset) -> tuple[StoredEvaluation, ...
 
 
 def _recorded_evaluations(
-    preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs
+    preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs, *, gate_profiles: bool = False
 ) -> tuple[StoredEvaluation, ...]:
     declarations = inputs.evaluation_profiles
-    if declarations is None:
+    if declarations is None and gate_profiles:
         declarations = _declared_evaluations(preset)
         primary_files = {source.relative_path for source in launch.validation_data}
         if preset.evaluations and f"{preset.evaluations[0].file}.parquet" not in primary_files:
             declarations = tuple(row for row in declarations if not row.primary)
+    declarations = declarations or ()
     by_name = {profile.name: profile for profile in declarations if not profile.primary}
     profiles = []
     if launch.validation_data:
@@ -440,7 +444,6 @@ class RunMeasurements:
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
-    evaluation_task_set: str | None
     gpu_hours: float | None
     engine: dict
     attempt_id: str
@@ -450,7 +453,6 @@ class EvaluationStatus(BaseModel):
     evaluations: tuple[Comparison, ...] = ()
     evaluation_invariants: tuple[Invariant, ...] = ()
     evaluation_error: str | None = None
-    evaluation_task_set: str | None = None
 
 
 def evaluation_status(
@@ -475,7 +477,6 @@ def evaluation_status(
         names = tuple(profile.name + "/" for profile in _recorded_evaluations(effective, launch, inputs))
         return EvaluationStatus(
             evaluations=data.evaluations,
-            evaluation_task_set=data.evaluation_task_set,
             evaluation_invariants=tuple(fact for fact in data.invariants if fact.name.startswith(names)),
         )
     except (InvalidComparison, FileNotFoundError) as error:
@@ -498,8 +499,13 @@ def read_measurements(
     inputs: RunInputs | None = None,
     *,
     attempt: AttemptRecord | None = None,
+    gate_profiles: bool = False,
 ) -> RunMeasurements:
-    inputs = inputs or RunInputs(preset_name=preset.name)
+    if inputs is None:
+        try:
+            inputs = read_run_inputs(path)
+        except FileNotFoundError:
+            inputs = RunInputs(preset_name=preset.name)
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
@@ -513,7 +519,7 @@ def read_measurements(
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    profiles = _recorded_evaluations(preset, launch, inputs)
+    profiles = _recorded_evaluations(preset, launch, inputs, gate_profiles=gate_profiles)
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {
@@ -549,16 +555,6 @@ def read_measurements(
         ids = frozenset(table["task_id"].to_pylist())
         intended_step = workload.metric_step(preset.updates)
         sessions = [(evaluation.name, table, intended_step)]
-        if evaluation.held_out:
-            task_digest, protocol = identities[evaluation.name]
-            identities[evaluation.name] = (
-                task_digest,
-                {
-                    **protocol,
-                    "family_scoring": score_membership(table, "family_mean"),
-                    "aai_scoring": score_membership(table, "aai_weighted_mean"),
-                },
-            )
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
@@ -587,7 +583,7 @@ def read_measurements(
                                 (
                                     recorded_task_sets[evaluation.name].task_set_sha256,
                                     evaluation_protocol(launch, evaluation.name),
-                                    score_membership(session, statistic, scored_only=True),
+                                    score_membership(session, statistic),
                                 ),
                                 sort_keys=True,
                             ).encode()
@@ -646,7 +642,6 @@ def read_measurements(
             values[key + "/gain"] = values[key] - value
     gpu_hours = native_gpu_hours(terminal, launch)
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
-    task_sets = [(name, recorded.task_set_sha256) for name, recorded in sorted(recorded_task_sets.items())]
     return RunMeasurements(
         config=terminal.native.config,
         recorded=launch,
@@ -658,7 +653,6 @@ def read_measurements(
         evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
-        evaluation_task_set=hashlib.sha256(json.dumps(task_sets).encode()).hexdigest() if task_sets else None,
         gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,

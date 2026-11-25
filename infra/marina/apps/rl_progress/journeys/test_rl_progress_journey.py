@@ -164,17 +164,13 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         }
 
     controls = [
-        attempt(f"control-{i}", i + 1, raw, comparable=identity)
-        | {
-            "evaluation_data_identity": f"panel@selection-v{i}",
-            "evaluation_task_set": "tasks-a" if i < 2 else "tasks-b",
-            "evaluation_protocol_identity": "grader-a" if i < 3 else "grader-b",
-        }
+        attempt(f"control-{i}", i + 1, raw, comparable=identity) | {"evaluation_data_identity": f"panel@selection-v{i}"}
         for i, (raw, identity) in enumerate(
             ((0.5, "tasks-a/grader-a"), (0.4, "tasks-a/grader-a"), (0.7, "tasks-b/grader-a"), (0.75, "tasks-b/grader-b"))
         )
     ]
     controls[0]["run_id"] = controls[1]["run_id"] = "shared-index-run"
+    controls[0]["commit"] = controls[0]["base_commit"][:10]
     branch = attempt("branch-at-first-preset", 5, 0.55) | {
         "branch": "experiment",
         "is_control": False,
@@ -193,7 +189,8 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     }
     early_only = attempt("early-only", 6, 0.2, final=False)
     unpushed_main = attempt("unpushed-main", 7, 0.65) | {"base_commit": controls[0]["base_commit"]}
-    for record in (*controls, branch, superseded, early_only, unpushed_main):
+    main_without_control = attempt("main-without-control", 8, 0.68) | {"is_control": False}
+    for record in (*controls, branch, superseded, early_only, unpushed_main, main_without_control):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
@@ -209,7 +206,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     for attempt_id in ("control-2", "control-3"):
         expect(chart.locator(f'line.history-marker[data-attempt="{attempt_id}"]')).to_have_count(1)
     expect(chart.get_by_role("link")).to_have_count(4)
-    for name in ("superseded", "early-only", "unpushed-main"):
+    for name in ("superseded", "early-only", "unpushed-main", "main-without-control"):
         expect(chart.get_by_role("link", name=re.compile(f"^{name}"))).to_have_count(0)
     journey.shoot("preset-main-controls")
     chart.get_by_role("link", name="control-0 · 50.0%").click()

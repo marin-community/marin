@@ -15,13 +15,13 @@ import logging
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -66,6 +66,7 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output, username_segment
+from skyrlrecipe.documents import MISSING, get_path
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate, rl_publication
@@ -142,11 +143,10 @@ def _run_rl(
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
-    if issue is not None or index is not None:
-        rl_publication.reserve_issue(config.output.export_root, issue)
+    rl_publication.assign_issue(config.output.export_root, config.run_id, config.attempt_id, issue)
     if index is not None:
         launch = yaml.safe_load(config.launch_config_yaml)
-        if "trainer.project_name" in recipe.override_document(inputs.settings):
+        if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
             index = index.model_copy(update={"wandb_project": launch["skyrl"]["trainer"]["project_name"]})
         launch["run"]["index"] = index.model_dump(mode="json")
         config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
@@ -592,26 +592,9 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
             path = Path(directory)
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
-            # The launcher owns the JSON protocol, including for bases that predate it.
-            for name in ("rl_preset_cli.py", "rl_preset_plan.py"):
-                source = Path(__file__).with_name(name)
-                destination = path / "experiments/post_training" / name
-                if not destination.is_file():
-                    shutil.copyfile(source, destination)
-            native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            if not (path / native_cli).is_file():
-                shutil.copyfile(root / native_cli, path / native_cli)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "experiments.post_training.rl_preset_cli",
-                    "describe",
-                    module,
-                    index.model,
-                    preset,
-                ],
+                [sys.executable, "-m", module, "_preset-config", preset],
                 text=True,
                 capture_output=True,
                 check=True,
@@ -634,7 +617,7 @@ class _PublicationWatch(BaseModel):
     job: str
     preset: str
     outputs: tuple[str, ...]
-    gate_required: bool
+    gate: rl_gate.GateAddress | None
     timeout_seconds: float
     service_url: str | None
     issue: int | None = None
@@ -649,7 +632,7 @@ def _publication_watch(
         job=str(job),
         preset=preset.name,
         outputs=tuple(step.path(prefix) for step in run.runs),
-        gate_required=run.gate is not None,
+        gate=rl_gate.gate_address(run.gate, prefix) if run.gate is not None else None,
         timeout_seconds=preset.recipe.layout.coordinator_timeout_hours * 3600,
         service_url=service_url,
         issue=issue,
@@ -690,20 +673,15 @@ def _watch_publication(
                 )
                 raise click.exceptions.Exit(EXIT_CODES[None])
             time.sleep(_PUBLICATION_POLL_SECONDS)
-    gate_path = None
     try:
-        evidence = rl_publication.read_coordinator_evidence(watch.outputs[0], watch.job)
-        gate_path = evidence.gate_path if evidence is not None else None
         publication = rl_publication.publish_runs(
             watch.outputs,
             preset,
             table=table,
-            gate_path=gate_path,
             service_url=watch.service_url,
             coordinator=watch.job,
-            evidence=evidence,
             interrupted=state != JobState.SUCCEEDED,
-            gate_required=watch.gate_required,
+            submitted_gate=watch.gate,
             issue=watch.issue,
         )
     except Exception as error:
@@ -712,7 +690,8 @@ def _watch_publication(
             errors=[str(error)],
             retry="Repeat the original command with --wait.",
         )
-    return state, publication, gate_path if publication.gate_report is not None else None
+    gate_path = str(publication.gate_report.path) if publication.gate_report is not None else None
+    return state, publication, gate_path
 
 
 def _follow_command(table: presets.ModelPresets) -> click.Command:
@@ -872,9 +851,9 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
-        if (coordinator := get_job_info()) is not None:
+        if get_job_info() is not None:
             validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent, preset, str(coordinator.job_id))
+            _run_graph(rl_handles, max_concurrent)
             if following := handles[count:]:
                 build_artifacts(*following, max_concurrent=max_concurrent)
             return
@@ -1160,23 +1139,24 @@ def command(
     return run_command
 
 
-def _run_graph(handles: list[ArtifactStep], max_concurrent: int, preset: presets.Preset, coordinator: str) -> None:
+def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
     planned = _from_handles(handles)
-    prefix = recipe.run_prefix(preset)
-    outputs = tuple(step.path(prefix) for step in planned.runs)
-    artifacts = build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-    attempts = tuple(
-        rl_publication.completed_artifact_attempt(path, artifact.attempt_id)
-        for path, artifact in zip(outputs, artifacts, strict=True)
-    )
-    gate = rl_gate.completed_gate(planned.gate, attempts)
-    evidence = rl_publication.CoordinatorEvidence(
-        attempts=dict(zip(outputs, (row.attempt_id if row is not None else None for row in attempts), strict=True)),
-        gate_path=gate.path(prefix) if gate is not None else None,
-    )
-    rl_publication.store_coordinator_evidence(outputs[0], coordinator, evidence)
+    attempts = build_artifacts(*planned.runs, max_concurrent=max_concurrent)
+    gate = rl_gate.completed_gate(planned.gate, [artifact.attempt_id for artifact in attempts])
     if gate is not None:
         build_artifacts(gate, max_concurrent=max_concurrent)
+
+
+def _preset_config_command(table: presets.ModelPresets) -> click.Command:
+    @click.command()
+    @click.argument("preset")
+    def describe(preset: str) -> None:
+        selected = table.by_name.get(preset)
+        with redirect_stdout(sys.stderr):
+            config = rl_gate.compose_preset(selected) if selected is not None else None
+        click.echo(json.dumps(config))
+
+    return describe
 
 
 def main(
@@ -1193,6 +1173,8 @@ def main(
     try:
         if args and args[0] == "_follow-publication":
             selected, args = _follow_command(table), args[1:]
+        elif args and args[0] == "_preset-config":
+            selected, args = _preset_config_command(table), args[1:]
         elif args and args[0] in {"compare", "publish"}:
             if init is not None and args[0] == "compare":
                 raise click.UsageError("Python init cannot be used with compare")

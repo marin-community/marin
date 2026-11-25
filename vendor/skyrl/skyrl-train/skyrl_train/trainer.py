@@ -585,7 +585,6 @@ class RayPPOTrainer:
             return
         try:
             await self._drain_checkpoint_upload()
-            await self._guarded_async(self.context.write_grader_report(), timeout=30, label="Final grader report")
         finally:
             try:
                 await self._guarded_async(self.context.close(), timeout=30, label="Rollout context shutdown")

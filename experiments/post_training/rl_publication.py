@@ -32,7 +32,6 @@ from finestore.rl.run_records import (
     write_attempt,
 )
 from marin.execution.artifact import read_record
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
@@ -42,7 +41,7 @@ from marin.rl.skyrl_records import (
     recorded_launch,
 )
 from pydantic import BaseModel, Field, ValidationError
-from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
+from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_value
@@ -63,7 +62,6 @@ from experiments.post_training.rl_measurements import (
 )
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 
-ISSUE_FILENAME = "issue.json"
 logger = logging.getLogger(__name__)
 
 
@@ -96,7 +94,6 @@ class _TerminalMeasurements:
     optimizer_steps: int | None = None
     elapsed_seconds: float | None = None
     elapsed_excluding_eval_seconds: float | None = None
-    evaluation_task_set: str | None = None
 
 
 def _terminal_measurements(
@@ -119,7 +116,6 @@ def _terminal_measurements(
     invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
-    evaluation_task_set = None
     has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
         callback.type == "evaluation" for callback in launch.callbacks or ()
     )
@@ -131,12 +127,10 @@ def _terminal_measurements(
             evidence.append(str(error))
         else:
             evaluations = list(control.evaluations)
-            evaluation_task_set = control.evaluation_task_set
             failed = [fact.name for fact in control.invariants if not fact.holds]
     elif has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
         status = evaluation_status(run_output, preset, attempt, launch, inputs=inputs)
         evaluations = list(status.evaluations)
-        evaluation_task_set = status.evaluation_task_set
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
         if status.evaluation_error is not None:
             evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
@@ -163,9 +157,7 @@ def _terminal_measurements(
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
         evidence.append("Training time excluding evaluation is unknown for this checkpoint lineage.")
-    return _TerminalMeasurements(
-        failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval, evaluation_task_set
-    )
+    return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
 
 
 def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[str]) -> GraderReport | None:
@@ -201,22 +193,19 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         comparisons=[*decisions, *history_scores],
         attempt_ids=[attempt for attempt in report.run.attempt_ids if attempt is not None],
         replicates=report.run.replicates,
-        control_version=report.control.version,
     )
 
 
-def _evaluation_identities(launch: RecordedLaunch, evidence: list[str]) -> tuple[str | None, str | None]:
-    """Return the stored evaluation sources and the evaluation protocol digest."""
+def _evaluation_data_identity(launch: RecordedLaunch, evidence: list[str]) -> str | None:
     sources = [*launch.validation_data, *(source for group in launch.evaluation_data.values() for source in group)]
     if not sources:
-        return None, None
-    data = "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
+        return None
     try:
-        protocols = {name: evaluation_protocol(launch, name) for name in ("", *launch.evaluation_data)}
+        for name in launch.evaluation_data:
+            evaluation_protocol(launch, name)
     except InvalidComparison:
         evidence.append("The stored evaluation protocol is unavailable.")
-        return data, None
-    return data, fingerprint_hash(canonical_json(protocols))
+    return "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
 
 
 def build_record(
@@ -265,7 +254,7 @@ def build_record(
     if index is not None and index.base_preset_version is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
-    evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
+    evaluation_data = _evaluation_data_identity(launch, evidence)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
@@ -274,12 +263,10 @@ def build_record(
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=index.is_control if index is not None else False,
+        is_control=index.is_control if index is not None else None,
         base_commit=index.base_commit if index is not None else None,
         base_preset_version=index.base_preset_version if index is not None else None,
         evaluation_data_identity=evaluation_data,
-        evaluation_task_set=measured.evaluation_task_set,
-        evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else provenance.get("branch"),
         commit=index.source_revision if index is not None else provenance.get("base_commit"),
@@ -324,12 +311,9 @@ class IssueConflict(ValueError):
     """The native output already has a different assigned issue."""
 
 
-def _check_issue(export_root: str, requested: int | None, reservation: VersionedBytes | None) -> int | None:
-    issues = (
-        {int(reservation.data)}
-        if reservation is not None
-        else {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
-    )
+def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
+    """Read the run's issue and verify a proposed value against stored assignments."""
+    issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
     if requested is not None:
         issues.add(requested)
     if len(issues) > 1:
@@ -337,23 +321,11 @@ def _check_issue(export_root: str, requested: int | None, reservation: Versioned
     return next(iter(issues), None)
 
 
-def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
-    """Read the run's issue and verify a proposed value against stored assignments."""
-    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
-    return _check_issue(export_root, requested, assignment.read())
-
-
-def reserve_issue(export_root: str, requested: int | None) -> int | None:
-    """Reserve the lineage issue once for all writers to the native output."""
-    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
-    reservation = assignment.read()
-    assigned = _check_issue(export_root, requested, reservation)
-    if assigned is not None and reservation is None:
-        try:
-            assignment.write(str(assigned).encode(), expected_version=None)
-        except ConditionalWriteError:
-            return _check_issue(export_root, assigned, assignment.read())
-    return assigned
+def assign_issue(export_root: str, run_id: str, attempt_id: str, requested: int | None) -> int | None:
+    issue = lineage_issue(export_root, requested)
+    if issue is not None:
+        write_attempt(export_root, AttemptRecord(run_id=run_id, attempt_id=attempt_id, issue=issue))
+    return issue
 
 
 def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecord]:
@@ -396,56 +368,24 @@ class _OutputAttempts:
     records: dict[str, AttemptRecord]
 
 
-class CoordinatorEvidence(BaseModel):
-    """The successful native artifacts and gate selected by one coordinator."""
-
-    attempts: dict[str, str | None]
-    gate_path: str | None
-
-
-def _coordinator_evidence_path(path: str, coordinator: str) -> StoragePath:
-    key = sha256(coordinator.encode()).hexdigest()
-    return StoragePath(path) / "coordinators" / f"{key}.json"
-
-
-def store_coordinator_evidence(path: str, coordinator: str, evidence: CoordinatorEvidence) -> None:
-    target = _coordinator_evidence_path(path, coordinator)
-    target.parent.mkdirs()
-    target.write_text(evidence.model_dump_json())
-
-
-def read_coordinator_evidence(path: str, coordinator: str) -> CoordinatorEvidence | None:
-    target = _coordinator_evidence_path(path, coordinator)
-    try:
-        return CoordinatorEvidence.model_validate_json(target.read_text())
-    except FileNotFoundError:
-        return None
-
-
-def completed_artifact_attempt(path: str, attempt_id: str | None) -> AttemptRecord | None:
-    """Read the exact native receipt, with a fallback for artifacts without an attempt ID."""
-    current, records = read_stored_skyrl_attempts(path)
-    receipt = records.get(attempt_id or current)
-    return receipt if receipt is not None and receipt.native.result.state == "succeeded" else None
-
-
 def _prepare_publication_attempts(
     path: str,
     coordinator: str | None,
-    evidence: CoordinatorEvidence | None,
     interrupted: bool,
 ) -> _OutputAttempts:
+    current, stored = read_stored_skyrl_attempts(path)
     if coordinator is None:
-        current, attempts = read_stored_skyrl_attempts(path)
-        return _OutputAttempts(current, attempts)
+        return _OutputAttempts(current, stored)
     attempts = _coordinator_attempts(path, coordinator)
-    current = evidence.attempts[path] if evidence is not None else None
-    if current is not None and current not in attempts:
-        _, stored = read_stored_skyrl_attempts(path)
-        if current in stored:
+    if current not in attempts:
+        if attempts:
+            succeeded = [key for key, row in attempts.items() if row.native.result.state == "succeeded"]
+            candidates = succeeded or list(attempts)
+            current = candidates[0] if len(candidates) == 1 else None
+        elif not interrupted and current in stored and stored[current].native.result.state == "succeeded":
             attempts[current] = stored[current]
-    elif evidence is None and len(attempts) == 1:
-        current = next(iter(attempts))
+        else:
+            current = None
     if interrupted:
         for key, record in attempts.items():
             if record.native.result.state.is_terminal or record.interruption is not None:
@@ -480,9 +420,8 @@ def publish_runs(
     attempt_id: str | None = None,
     issue: int | None = None,
     coordinator: str | None = None,
-    evidence: CoordinatorEvidence | None = None,
     interrupted: bool = False,
-    gate_required: bool = False,
+    submitted_gate: gate.GateAddress | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
@@ -491,21 +430,20 @@ def publish_runs(
     snapshots = {}
     for path in outputs:
         try:
-            snapshots[path] = _prepare_publication_attempts(path, coordinator, evidence, interrupted)
+            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
     report = None
     report_error = None
     try:
-        current_ids = tuple(
-            (
-                snapshot.current
-                if (snapshot := snapshots.get(path)) is not None and snapshot.current in snapshot.records
-                else None
-            )
+        candidates = tuple(
+            snapshot.records.get(snapshot.current) if (snapshot := snapshots.get(path)) is not None else None
             for path in outputs
         )
+        if submitted_gate is not None:
+            gate_path = submitted_gate.completed_path(candidates)
+        current_ids = tuple(row.attempt_id if row is not None else None for row in candidates)
         report = _read_publication_gate(gate_path, current_ids, len(outputs))
         result.gate_report = report
     except Exception as error:
@@ -533,7 +471,7 @@ def publish_runs(
                     raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
-                    (gate_required or gate_path is not None)
+                    (submitted_gate is not None or gate_path is not None)
                     and selected_id == current_id
                     and receipt.native.result.state == "succeeded"
                     and current_report is None
@@ -552,9 +490,8 @@ def publish_runs(
                     gate_failure=missing_gate,
                 )
                 if issue is not None:
-                    record = record.model_copy(
-                        update={"issue": reserve_issue(recorded_launch(receipt).export_root, issue)}
-                    )
+                    assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
+                    record = record.model_copy(update={"issue": assigned})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if (

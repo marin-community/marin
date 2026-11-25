@@ -1,0 +1,1 @@
+This task came from another source and runs in the containers its source provides: {images}. Keep its `environment_requirements` and its grader `environment` on those images, and do not replace them with any other image, the pinned container included; the exact objects above and under Solver machine are for generated tasks.

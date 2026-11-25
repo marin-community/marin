@@ -64,18 +64,9 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         else:
             write_tasks(path, [lowered_task(task)])
         write_selection_panel(
-            path.parent,
-            [task],
-            path.parent.name,
-            "1",
-            lambda _: {
-                "family": path.parent.name,
-                "source": "declared-source",
-                "aai_category": "general",
-                "topic": "algebra",
-                "difficulty": "hard",
-                "agentic": True,
-            },
+            path.parent, [task], path.parent.name, "1",
+            lambda _: {"family": path.parent.name, "source": "declared-source",
+                       "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
         )
     config.data.val_data = [str(primary)]
     manifest_path = primary.parent / "summary.json"
@@ -197,7 +188,9 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     task = text_task("validation-task")
     row = task_input(lowered_task(task), metric_class="script", data_source="validation")
     identity = TaskEvaluationIdentity(strata=TaskStrata(family="math", source="fixture"))
-    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity, task_id=task.id, subset_id="math"))
+    row = replace(
+        row, metadata=replace(row.metadata, evaluation_identity=identity, task_id=task.id, subset_id="math")
+    )
     loader = StatefulDataLoader([{"input": row}], collate_fn=list)
     tokenizer = SimpleNamespace(eos_token_id=2, decode=lambda _tokens: "answer")
     projection = WholeTaskProjection(config.generator, tokenizer)
@@ -233,7 +226,8 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     assert set(report["evaluation"]) == {"0", "named/0"}
     assert report["evaluation"]["named/0"][0]["subset_id"] == "math"
     assert {
-        key: [(row["task_id"], row["success_rate"]) for row in rows] for key, rows in report["evaluation_tasks"].items()
+        key: [(row["task_id"], row["success_rate"]) for row in rows]
+        for key, rows in report["evaluation_tasks"].items()
     } == {"0": [(task.id, 1.0)], "named/0": [(task.id, 1.0)]}
 
 

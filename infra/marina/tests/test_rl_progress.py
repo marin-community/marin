@@ -20,7 +20,7 @@ def _projection(record: dict, *, main_control: bool = False) -> dict:
 
 
 def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
-    client, request, _ = rl_progress_client
+    client, request = rl_progress_client
     api = f"/a/{APPLET_ID}/api"
     record = progress_record()
     report = grader_report()
@@ -54,7 +54,7 @@ def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progre
 
 
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
-    client, request, _ = rl_progress_client
+    client, request = rl_progress_client
     query_path = f"/a/{APPLET_ID}/query"
     api_path = f"/a/{APPLET_ID}/api/runs"
     insert_sql = "INSERT INTO rl_runs (run_id, attempt_id, record) VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))"
@@ -72,6 +72,33 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(running)["status"] == "running"
     assert publish(sparse) == record
     assert publish(running) == record
+    main_publication = copy.deepcopy(
+        {
+            key: value
+            for key, value in record.items()
+            if key
+            not in {
+                "native_run_id",
+                "preset_version",
+                "is_control",
+                "user",
+                "branch",
+                "dirty",
+                "pr_number",
+                "coordinator_iris_job_id",
+                "elapsed_excluding_eval_seconds",
+                "base_commit",
+                "base_preset_version",
+                "commit",
+                "evaluation_data_identity",
+                "launch_config",
+                "settings",
+            }
+        }
+    )
+    for comparison in main_publication["gate_result"]["comparisons"]:
+        comparison.pop("evaluation_score", None)
+    assert publish(main_publication | {"evaldash_run_ids": None}) == main_publication
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -188,6 +215,42 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
+    rich = changed | {
+        "commit": "a" * 40,
+        "settings": ["trainer.max_steps=25"],
+        "is_control": True,
+        "evaluations": [
+            {
+                "metric": "eval_lite@25/family_mean",
+                "role": "slice",
+                "run": 0.7,
+                "n_run": 1,
+                "n_control": 0,
+                "evaluation_score": {
+                    "profile": "eval_lite",
+                    "step": 25,
+                    "statistic": "family_mean",
+                    "final": True,
+                    "comparability": "example-comparison",
+                },
+            }
+        ],
+    }
+    assert publish(rich)["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    for evaldash_ids in (None, ["existing-evaluation"]):
+        previous_format = main_publication | {
+            "preset_version": "same-version",
+            "is_control": False,
+            "evaldash_run_ids": evaldash_ids,
+        }
+        response = publish(previous_format)
+        assert response["attempt_id"] == changed["attempt_id"]
+        assert response["issue"] == changed["issue"] and response["status"] == rich["status"]
+        assert "evaluation_score" not in response["evaluations"][0]
+        served = next(row for row in client.get(api_path).json()["runs"] if row["attempt_id"] == changed["attempt_id"])
+        assert served["issue"] == changed["issue"]
+        assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
+        assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "status: literal_error" in skipped["test/bad-status"]
@@ -222,46 +285,3 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert response.status_code == 422
         assert response.json()["detail"]
         assert client.get(api_path).json() == before
-
-
-def test_release_archives_v9_rows_and_versions_retained_attempts(rl_progress_client):
-    client, request, publish_release = rl_progress_client
-    query_path = f"/a/{APPLET_ID}/query"
-
-    def query(sql, parameters=None):
-        return request("http://localhost", "POST", query_path, json_body={"sql": sql, "parameters": parameters or {}})
-
-    # Shape and measurements captured from the hosted v9 control listing.
-    legacy = {
-        "run_id": "checkpoints/snowball-rl/v9",
-        "attempt_id": "av9",
-        "evaluation": {
-            "name": "test_panel",
-            "task_count": 1500,
-            "version": "rl-data/task-selection/snowball-test-panel@2026.11.06.1:88ee12a7",
-        },
-        "baseline": {"reward": 0.5280307370790129, "scored": 1500, "attempted": 1500},
-        "final": {"reward": 0.6195039305522064, "scored": 1500, "attempted": 1500},
-        "preset": "learning-medium",
-    }
-    retained = progress_record()
-    retained.pop("format_version")
-    archive = legacy | {"attempt_id": "previously-archived"}
-    query("CREATE TABLE rl_archived_runs (LIKE rl_runs INCLUDING ALL)")
-    query(
-        "INSERT INTO rl_archived_runs (run_id,attempt_id,record) VALUES (:run_id,:attempt_id,CAST(:record AS jsonb))",
-        {"run_id": archive["run_id"], "attempt_id": archive["attempt_id"], "record": json.dumps(archive)},
-    )
-    for row in (legacy, retained):
-        query(
-            "INSERT INTO rl_runs (run_id,attempt_id,record) VALUES (:run_id,:attempt_id,CAST(:record AS jsonb))",
-            {"run_id": row["run_id"], "attempt_id": row["attempt_id"], "record": json.dumps(row)},
-        )
-
-    publish_release()
-
-    assert query("SELECT record FROM rl_legacy_runs")["rows"] == [{"record": legacy}]
-    assert query("SELECT record FROM rl_archived_runs")["rows"] == [{"record": archive}]
-    payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
-    assert payload["runs"] == [_projection(retained | {"format_version": 1})]
-    assert payload["skipped_records"] == []

@@ -3,12 +3,10 @@
 
 import copy
 import json
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Barrier
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -48,7 +46,7 @@ from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_index import APPLET_ID
 from experiments.post_training.rl_index import list_attempts as read_progress_index
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     cohort_from_fixtures,
@@ -114,19 +112,20 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         tokenizer_revision=preset.model.tokenizer_revision,
         iris_job_id="/tests/initializer",
     )
-    inputs = RunInputs(
-        preset_name=name,
-        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
-        + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
-        tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
-        init=recipe.stored_initializer(recipe.published_model("weights@2026.11.10", preset=preset), preset=preset),
-    )
     native_table = table
     if case == "native-no-evaluation":
         without_evaluation = replace(preset, evaluations=(), checkpoints="none", checkpoint_every=None, export="none")
         native_table = replace(
             table, presets=tuple(without_evaluation if row.name == name else row for row in table.presets)
         )
+    inputs = run_inputs(
+        name,
+        preset=native_table.by_name[name],
+        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
+        + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
+        tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
+        init=recipe.stored_initializer(recipe.published_model("weights@2026.11.10", preset=preset), preset=preset),
+    )
     source = recorded_runs(
         name,
         "tests/stored-progress",
@@ -222,9 +221,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
-    preset_label, *settings = row["label"].split()
-    assert preset_label == name
-    assert set(settings) == {*inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"}
+    assert row["label"] == " ".join((name, *inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"))
     assert row["issue"] is None and row["gate_result"] is None
     assert row["branch"] == "fixture/branch"
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
@@ -245,7 +242,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["grader_report"] is None
 
 
-def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(preset_table, recorded_runs):
+def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset_table, recorded_runs):
     preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
     table = preset_table(preset)
     built = runner.build_experiment(preset, table=table)
@@ -275,7 +272,6 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     (selection,) = native.validation_data
     expected_source = f"{selection.identity}/{selection.relative_path}"
     assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
-    assert row.evaluation_task_set == baseline.evaluation_task_set
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
     assert row.gate_result is not None and row.gate_result.reason == report.reason
     assert {
@@ -283,21 +279,21 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     } == {preset.updates}
 
     def family_identity(summary):
-        return next(
+        digest = next(
             score.comparability
             for entry in summary.evaluations
             if (score := entry.evaluation_score) and score.final and score.statistic == "family_mean"
         )
+        assert digest is not None
+        return digest
 
-    assert family_identity(row) == family_identity(baseline) and family_identity(row) is not None
+    assert family_identity(row) == family_identity(baseline)
     outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
     index, item = next((i, item) for i, item in enumerate(outputs) if item.step == preset.updates)
     unanswered = item.answers[0].model_copy(update={"verification_status": "unavailable", "verifier_score": None})
     rewritten = item.model_copy(update={"answers": [unanswered, *item.answers[1:]]})
     replace_evaluations(source, [*outputs[:index], rewritten, *outputs[index + 1 :]])
     fewer_answers = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert fewer_answers.evaluation_task_set == baseline.evaluation_task_set
-    assert fewer_answers.evaluation_protocol_identity == baseline.evaluation_protocol_identity
     assert family_identity(fewer_answers) != family_identity(baseline)
 
     changed = [
@@ -310,8 +306,6 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     ]
     replace_evaluations(source, changed)
     differently_grouped = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert differently_grouped.evaluation_task_set == baseline.evaluation_task_set
-    assert differently_grouped.evaluation_protocol_identity == baseline.evaluation_protocol_identity
     assert family_identity(differently_grouped) != family_identity(baseline)
 
     source_path = Path(selection.uri) / selection.relative_path
@@ -321,46 +315,13 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     samples[0]["task_spec"] = json.dumps(task)
     pq.write_table(pa.Table.from_pylist(samples), source_path)
     changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
-    assert changed_tasks.evaluation_task_set != baseline.evaluation_task_set
     assert family_identity(changed_tasks) != family_identity(differently_grouped)
-    assert changed_tasks.evaluation_protocol_identity == baseline.evaluation_protocol_identity
 
     altered_config = copy.deepcopy(attempt.native.config)
     altered_config["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.314
     altered = attempt.model_copy(update={"config": altered_config})
     changed_protocol = publication.build_record(str(source), preset, table=table, attempt=altered)
-    assert changed_protocol.evaluation_task_set == changed_tasks.evaluation_task_set
-    assert changed_protocol.evaluation_protocol_identity != changed_tasks.evaluation_protocol_identity
     assert family_identity(changed_protocol) != family_identity(changed_tasks)
-
-
-def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
-    export_root = str(tmp_path / "exports")
-    conditional_object = publication.conditional_object
-    rendezvous = Barrier(2, timeout=10)
-
-    def concurrent_object(path):
-        object_store = conditional_object(path)
-
-        def write(data, *, expected_version):
-            rendezvous.wait()
-            return object_store.write(data, expected_version=expected_version)
-
-        return SimpleNamespace(read=object_store.read, write=write)
-
-    monkeypatch.setattr(publication, "conditional_object", concurrent_object)
-
-    def claim(issue):
-        try:
-            return publication.reserve_issue(export_root, issue)
-        except publication.IssueConflict:
-            return None
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        assigned = [issue for issue in executor.map(claim, (73, 74)) if issue is not None]
-
-    [winner] = assigned
-    assert publication.lineage_issue(export_root, None) == winner
 
 
 def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatch):
@@ -396,6 +357,7 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
         base.model_copy(update={"run_id": "branch-control", "branch": "pull-branch"}),
         base.model_copy(update={"run_id": "old-control", "preset_version": "old"}),
         base.model_copy(update={"run_id": "failed-control", "status": "failed"}),
+        base.model_copy(update={"run_id": "short-provenance", "commit": "a", "base_commit": "a" * 40}),
     ]
     monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda _service_url=None: list(records))
     monkeypatch.setattr(publication, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
@@ -497,7 +459,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-r{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -623,7 +585,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
-        "control_version": report.control.version,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics

@@ -70,7 +70,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_index
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, run_inputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
     write_training_families,
@@ -517,7 +517,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         preset = table.by_name[preset_name]
         root = tmp_path / name / recipe.RUN_ARTIFACT_VERSION
         root.mkdir(parents=True, exist_ok=True)
-        inputs = inputs or RunInputs(preset_name=preset.name)
+        inputs = inputs or run_inputs(preset.name, preset=preset)
         source_root, config = composed(preset, inputs, table.model)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
