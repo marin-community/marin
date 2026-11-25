@@ -14,6 +14,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 
+from rolloutengine.models import GradedRollout
+
 from taskforge.effects.events import Note, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.log import Record, Status
 from taskforge.model.llm import Usage
@@ -103,35 +105,53 @@ def usage_from(raw: Mapping[str, int]) -> Usage:
     return Usage(*(raw.get(name, 0) for name in USAGE_FIELDS))
 
 
-def workpiece_metrics(
-    status: Status, workpiece: Workpiece, records: Sequence[Record], *, since: float
-) -> WorkpieceMetrics:
-    """Summarize one workpiece; events before ``since`` add no tokens, durations or latency samples."""
-    if not records:
-        raise ValueError(f"Workpiece {workpiece.id} has no events")
-    terminal = str(status.terminal or RUNNING)
-    reasons: tuple[str, ...] = ()
-    if status.terminal in (Terminal.HELD, Terminal.ABANDONED):
-        last = workpiece.decisions[-1] if workpiece.decisions else None
-        reasons = tuple(sorted({reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}))
+def failure_reasons(status: Status, workpiece: Workpiece) -> tuple[str, ...]:
+    """Reason classes of the decision that held or abandoned the workpiece."""
+    if status.terminal not in (Terminal.HELD, Terminal.ABANDONED):
+        return ()
+    last = workpiece.decisions[-1] if workpiece.decisions else None
+    return tuple(sorted({reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}))
+
+
+def final_solve_rate(workpiece: Workpiece) -> float | None:
+    """The solve rate of the latest validation of the submission the workpiece ends with."""
+    submission = workpiece.submission
+    if submission is None:
+        return None
+    final = next((r for r in reversed(workpiece.evidence) if r.task_digest == submission.digest), None)
+    return None if final is None else solve_rate(final)
+
+
+def solver_usage(value: GradedRollout) -> Usage:
+    usage = Usage()
+    for conversation in value.rollout.conversations:
+        for step in conversation.steps:
+            recorded = step.turn.usage
+            usage += usage_from(step.turn.metadata.get("usage", asdict(recorded) if recorded else {}))
+    return usage
+
+
+@dataclass(frozen=True, slots=True)
+class Spend:
+    tokens: Mapping[Role, Usage]
+    stage_seconds: Mapping[Stage, tuple[float, ...]]
+    event_gaps: Mapping[str, tuple[float, ...]]
+
+
+def spend(records: Sequence[Record], since: float) -> Spend:
+    """Tokens by role, stage durations and event gaps from events at or after ``since``.
+
+    Open scopes attribute inference to a role; a ``workpiece`` scope starts a new process, so it
+    discards scopes an interrupted process left open.
+    """
     tokens: dict[Role, Usage] = defaultdict(Usage)
     stage_seconds: dict[Stage, list[float]] = defaultdict(list)
     event_gaps: dict[str, list[float]] = defaultdict(list)
     scopes: dict[str, list[float]] = defaultdict(list)
-    author_rounds: set[int] = set()
-    fallbacks = timeouts = 0
-    accepted_at = None
     previous = records[0].wall_time
     for record in records:
         event, stamp = record.event, record.wall_time
-        if isinstance(event, StageCompleted):
-            if event.terminal is Terminal.ACCEPTED:
-                accepted_at = stamp
-            if event.stage is Stage.AUTHOR and event.terminal is not Terminal.HELD:
-                author_rounds.add(event.round)
-        elif isinstance(event, Note) and event.msg.startswith(AUTHOR_IMAGE_FALLBACK):
-            fallbacks += 1
-        elif isinstance(event, ScopeEntered):
+        if isinstance(event, ScopeEntered):
             if event.name == "workpiece":
                 scopes.clear()
             scopes[event.name].append(stamp)
@@ -139,47 +159,58 @@ def workpiece_metrics(
             start = scopes[event.name].pop()
             if event.name in Stage and stamp >= since:
                 stage_seconds[Stage(event.name)].append(max(0, stamp - start))
-        elif isinstance(event, Resolved) and not event.replayed:
+        elif isinstance(event, Resolved) and not event.replayed and stamp >= since:
             request = event.request
-            if isinstance(request, RunCommand) and event.value.exit_code == TIMEOUT_EXIT_CODE:
-                timeouts += 1
-            if stamp >= since:
-                if isinstance(request, GAP_EVENTS):
-                    event_gaps[type(request).__name__].append(max(0, stamp - previous))
-                if isinstance(request, InferenceRequest):
-                    adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
-                    role = Role.JUDGE if scopes["judge"] else Role.ADVERSARY if adversary else Role.AUTHOR
-                    tokens[role] += event.value.usage
-                elif isinstance(request, SolverRollout):
-                    for conversation in event.value.rollout.conversations:
-                        for step in conversation.steps:
-                            recorded = step.turn.usage
-                            usage = step.turn.metadata.get("usage", asdict(recorded) if recorded else {})
-                            tokens[Role.SOLVER] += usage_from(usage)
+            if isinstance(request, GAP_EVENTS):
+                event_gaps[type(request).__name__].append(max(0, stamp - previous))
+            if isinstance(request, InferenceRequest):
+                adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
+                role = Role.JUDGE if scopes["judge"] else Role.ADVERSARY if adversary else Role.AUTHOR
+                tokens[role] += event.value.usage
+            elif isinstance(request, SolverRollout):
+                tokens[Role.SOLVER] += solver_usage(event.value)
         previous = stamp
-    submission = workpiece.submission
-    final = next(
-        (
-            result
-            for result in reversed(workpiece.evidence)
-            if submission is not None and result.task_digest == submission.digest
-        ),
-        None,
+    return Spend(
+        dict(tokens),
+        {stage: tuple(values) for stage, values in stage_seconds.items()},
+        {name: tuple(values) for name, values in event_gaps.items()},
     )
+
+
+def workpiece_metrics(
+    status: Status, workpiece: Workpiece, records: Sequence[Record], *, since: float
+) -> WorkpieceMetrics:
+    """Summarize one workpiece; events before ``since`` add no tokens, durations or latency samples."""
+    if not records:
+        raise ValueError(f"Workpiece {workpiece.id} has no events")
+    events = [(record.event, record.wall_time) for record in records]
+    completed = [(event, stamp) for event, stamp in events if isinstance(event, StageCompleted)]
+    accepted = [stamp for event, stamp in completed if event.terminal is Terminal.ACCEPTED]
+    used = spend(records, since)
     return WorkpieceMetrics(
         id=workpiece.id,
         origin=Origin.PROPOSAL if workpiece.proposal is not None else Origin.SOURCE,
-        terminal=terminal,
-        reasons=reasons,
-        author_sessions=len(author_rounds),
-        author_image_fallbacks=fallbacks,
-        command_timeouts=timeouts,
+        terminal=str(status.terminal or RUNNING),
+        reasons=failure_reasons(status, workpiece),
+        author_sessions=len(
+            {e.round for e, _ in completed if e.stage is Stage.AUTHOR and e.terminal is not Terminal.HELD}
+        ),
+        author_image_fallbacks=sum(
+            isinstance(event, Note) and event.msg.startswith(AUTHOR_IMAGE_FALLBACK) for event, _ in events
+        ),
+        command_timeouts=sum(
+            isinstance(event, Resolved)
+            and not event.replayed
+            and isinstance(event.request, RunCommand)
+            and event.value.exit_code == TIMEOUT_EXIT_CODE
+            for event, _ in events
+        ),
         started=records[0].wall_time,
         finished=records[-1].wall_time,
-        accepted_at=accepted_at if status.terminal is Terminal.ACCEPTED else None,
+        accepted_at=accepted[-1] if accepted and status.terminal is Terminal.ACCEPTED else None,
         initial_solve_rate=solve_rate(workpiece.evidence[0]) if workpiece.evidence else None,
-        final_solve_rate=None if final is None else solve_rate(final),
-        tokens=dict(tokens),
-        stage_seconds={stage: tuple(values) for stage, values in stage_seconds.items()},
-        event_gaps={name: tuple(values) for name, values in event_gaps.items()},
+        final_solve_rate=final_solve_rate(workpiece),
+        tokens=used.tokens,
+        stage_seconds=used.stage_seconds,
+        event_gaps=used.event_gaps,
     )
