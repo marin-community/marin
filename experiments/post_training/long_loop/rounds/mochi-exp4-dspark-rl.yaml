@@ -1,0 +1,345 @@
+schema: 1
+cluster: cw-us-east-08a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
+adopted_model:
+  name: mochi-long-loop/adopted-sft
+  version: 2026.11.19.110
+  uri: s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
+  export_manifest_sha256: 1a7886b05df25338a12642b25f25525c0eb6c5551384934a2f089d7ec5b4a88d
+  config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
+  checkpoint_step: 400407
+  tokenizer_uri: marin-community/marin-tokenizer-tools
+  tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+name: long-loop/mochi-exp4-dspark-rl
+version: 2026.11.25.130
+slug: mochi-exp4-dspark-rl
+rl:
+  role_plan:
+    colocate_all: false
+    policy_num_nodes: 12
+    policy_num_gpus_per_node: 4
+    num_inference_engines: 5
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 16
+    inference_engine_expert_parallel_size: 16
+    train_batch_size: 64
+    policy_mini_batch_size: 64
+    micro_train_batch_size_per_gpu: 1
+    n_samples_per_prompt: 8
+    reference_num_nodes: null
+  megatron:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 12
+    context_parallel_size: 4
+    expert_model_parallel_size: 4
+    expert_tensor_parallel_size: 1
+  execution:
+    cluster: cw-us-east-08a
+    cluster_config: lib/iris/config/cw-us-east-08a.yaml
+    cpu: 120
+    memory: 900GB
+    disk: 2TB
+    priority: production
+    max_retries: 0
+    target_cluster: cw-us-east-08a
+    parent_cluster_config: lib/iris/config/marin.yaml
+    coordinator_timeout_hours: 96
+    coordinator_name: null
+    coordinator_gpu: null
+    wandb_entity: marin-community
+    job_timeout_seconds: 172800
+    required_env_vars:
+    - DAYTONA_RL_API_KEY
+    - DAYTONA_EVAL_API_KEY
+    - DAYTONA_TARGET
+    - TOGETHER_API_KEY
+    - MARIN_PREFIX
+    container_profile: 4
+    role_topology: nvlink.domain
+    excluded_nvlink_domains:
+    - dh1-r136-us-east-08a
+  recipe:
+    data:
+      shuffle: true
+      kind: parquet
+    trainer:
+      training_metrics: true
+      policy_train_spans: true
+      rollout_spans: true
+      strategy: megatron
+      policy:
+        optimizer_config:
+          optimizer: MuonH
+          lr: 1.0e-05
+          adam_betas:
+          - 0.9
+          - 0.95
+          weight_decay: 0.0
+          max_grad_norm: 0.5
+          num_warmup_steps: 0
+          scheduler: constant_with_warmup
+          optimizer_kwargs:
+            adam_lr: 2.307692307692308e-06
+            momentum: 0.95
+            nesterov: true
+            backend_steps: 5
+            epsilon: 1.0e-08
+            muon_epsilon: 1.0e-08
+            offload_momentum: true
+            expert_normalization: all_experts
+        megatron_config:
+          optimizer_config_kwargs: {}
+          optimizer_checkpoint_sharding_type: dp_reshardable
+          checkpoint_plan_cache: true
+          moe_router_replay: true
+      algorithm:
+        advantage_estimator: rloo_n
+        group_advantage_min_size: 2
+        kl_estimator_type: k3_unbiased_gradient
+        use_kl_in_reward: false
+        use_kl_loss: false
+        use_entropy_loss: false
+        advantage_batch_normalize: false
+        policy_loss_type: regular
+        loss_reduction: token_mean
+        rloo_n_filter_zero_reward_groups: true
+        eps_clip_low: 0.2
+        eps_clip_high: 0.2
+        off_policy_correction: tis
+        group_admission:
+          stall_timeout: 18000
+      rollout_buffer:
+        eval_drain: priority
+        source_routes:
+          agentic: agentic
+          nonagentic: nonagentic
+          long-loop-smartie-swesmith: agentic
+          PRIME-RL/Eurus-2-RL-Data: nonagentic
+          nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
+          nvidia/OpenScience: nonagentic
+          ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
+          : nonagentic
+          open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
+          open-thoughts/TaskTrove: nonagentic
+          Reasoning Gym:reasoning_gym: nonagentic
+          nemotron_if: nonagentic
+          allenai/IF_multi_constraints_upto5: nonagentic
+        max_staleness_steps: 3
+        batch_policy: rolling
+        max_in_flight: 1024
+        object_store_root: null
+      gradient_checkpointing: true
+      resume_mode: latest
+      restore_dataloader_state: true
+      reset_global_step_on_resume: false
+      callbacks:
+      - type: checkpoint
+        save_steps: 3
+        save_on_train_end: true
+        save_after_fraction: 0.0
+      - type: evaluation
+        eval_steps: 3
+        eval_on_train_end: true
+        eval_before_train: true
+      - type: best_checkpoint
+        initial_model_uri: model-input
+        ema_window: 5
+        evaluation_interval: 3
+      - type: inference_stats
+        poll_interval_seconds: 5.0
+        log_every_steps: 1
+      - type: hf_model_save
+        save_steps: -1
+        save_on_train_end: true
+        save_after_fraction: 0.0
+      ckpt_interval: 3
+      update_epochs_per_batch: 1
+      use_sample_packing: true
+      offload_optimizer_during_rollouts: false
+      eval_batch_size: 200
+      eval_num_prompts: null
+      eval_interval: 3
+      flash_attn: true
+      project_name: mochi-rl
+      logger: wandb
+      tracker_commit_each_step: true
+      dump_data_batch: true
+      dump_eval_results: true
+      step_wise_training: false
+      hf_export_checkpoint: best
+    generator:
+      model_dtype: bfloat16
+      run_engines_locally: true
+      backend: vllm
+      vllm_attention_backend: FLASH_ATTN
+      weight_sync_backend: nccl
+      weight_sync_pause:
+        mode: keep
+        clear_cache: true
+      weight_sync_transport: expert_block
+      expert_block_sync:
+        timeout_seconds: 600
+        verify: false
+      enable_prefix_caching: true
+      enable_chunked_prefill: true
+      max_num_batched_tokens: 8192
+      enforce_eager: false
+      gpu_memory_utilization: 0.775
+      max_num_seqs: 64
+      enable_http_endpoint: false
+      error_handling:
+        enable_error_classification: true
+        default_error_treatment: mask
+        preserve_logprobs_on_timeout: true
+      chat_template: null
+      chat_template_kwargs:
+        enable_thinking: true
+      engine_init_kwargs:
+        moe_backend: triton
+        enable_auto_tool_choice: true
+        tool_call_parser: hermes
+        model_loader_extra_config:
+          distributed: false
+          concurrency: 4
+          memory_limit: 8589934592
+        compilation_config:
+          mode: 3
+          cudagraph_mode: PIECEWISE
+          splitting_ops:
+          - vllm::unified_attention_with_output
+          - vllm::unified_kv_cache_update
+          - vllm::grug_moe_short_conv
+        enable_return_routed_experts: true
+      sampling_params:
+        temperature: 0.7
+        top_p: 1.0
+        logprobs: 0
+        min_tokens: 0
+        stop_token_ids:
+        - 128001
+        - 128009
+        skip_special_tokens: false
+      eval_sampling_params:
+        temperature: 0.7
+        top_p: 1.0
+        logprobs: 0
+        min_tokens: 0
+        stop_token_ids:
+        - 128001
+        - 128009
+        skip_special_tokens: false
+      trajectory_reward_shaping:
+        enabled: true
+        overlong:
+          penalty_scale: 0.0
+        reasoning_span:
+          penalty: 0.1
+          target: marker
+      trajectory_retention:
+        enabled: true
+        phases:
+        - train
+        - eval
+        sample_count_per_step: 0
+        sample_fraction: 0.1
+        always_retain_failures: false
+        always_retain_non_terminating: false
+        always_retain_loops: false
+        max_bytes_per_step: 67108864
+        max_bytes_per_run: 536870912
+        required: true
+    environment:
+      task_sessions:
+        max_verifier_workers: 256
+        nemotron_ultra:
+          genrm:
+            max_concurrent_comparisons: 64
+        local: {}
+        daytona:
+          api_key_env: DAYTONA_RL_API_KEY
+          ttl_minutes: 60
+          eval_api_key_env: DAYTONA_EVAL_API_KEY
+        task_spec:
+          harness_by_dataset:
+            long-loop-smartie-swesmith: harbor_trial
+          session:
+            max_turns: 128
+            attempt_timeout: 2280
+            total_turn_timeout: 1800
+            model_turn_timeout: 1800
+            cleanup_timeout: 120
+        remote_judge:
+          base_url: https://api.together.xyz/v1
+          api_key_env: TOGETHER_API_KEY
+    trajectory_runner:
+      max_concurrent_tasks: 1024
+      rollout_workers:
+        num_workers: 16
+        executor_threads: 256
+        progress_timeout_seconds: 43200
+        cpus_per_worker: 2
+        start_interval_seconds: 0
+    terminal_bench:
+      harbor:
+        environment_type: daytona
+        daytona_image_build: snapshot
+        eval_daytona_image_build: declarative
+        daytona_api_key_env: DAYTONA_RL_API_KEY
+        eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+        override_timeout_sec: 1800
+        trial_attempt_timeout_sec: 2280
+        n_concurrent_trials: 384
+        max_retries: 1
+        enable_reward_shaping: false
+        eval_timeout_override_sec: 1800
+        verifier_override_timeout_sec: 900
+        override_memory_mb: 4096
+      installed_agent:
+        agent:
+          name: pi
+          override_setup_timeout_sec: 360
+          kwargs:
+            version: 0.87.0
+            mcp_adapter_version: 7.0.0
+            thinking: high
+            thinking_format: chat-template
+            http_idle_timeout: 1800
+            model_info:
+              max_input_tokens: 131072
+              max_output_tokens: 24576
+            compaction_reserve_tokens: 24576
+        setup_timeout: 360
+        run_timeout: 1800
+        cleanup_timeout: 120
+        service_startup_timeout: 60
+        service_shutdown_timeout: 60
+        trial_reward_key: reward
+    entrypoint: taskcompendium
+    context_budget:
+      request_window_tokens: 131072
+      max_new_tokens_per_turn: 24576
+      max_turns: 128
+      generated_budget_fraction: 0.75
+      overlong_cache_fraction: 0.16666666666666666
+      max_new_tokens_per_trajectory: 98304
+    extra_env:
+      DAYTONA_TARGET: us
+      OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
+      NCCL_NET: IB
+      NCCL_IB_DISABLE: '0'
+      NCCL_IB_HCA: ibp
+  max_steps: 10000
+  selection_eligibility: covered
+  pools:
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.2
+  export_hf: true
+  retained_checkpoints: 1
+  draft: mochi-interleaved-766m-step400407
+evaluation: frozen-micro210
+evaluation_profile: mochi-gb200-cw-us-east-08a
+evaluation_checkpoints: best_and_final

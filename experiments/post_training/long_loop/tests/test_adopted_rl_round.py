@@ -360,6 +360,63 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert generator["eval_sampling_params"]["max_generate_length"] == 98304
 
 
+def test_exp4_dspark_round_keeps_normalized_training_and_derives_curriculum_quotas(round_inputs, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    model, data = round_inputs
+    authored = load_round(ROUND_DIR / "mochi-exp4-dspark-rl.yaml")
+    draft = round_draft(authored)
+    assert draft.trained_for_initializer == authored.adopted_model.uri
+    assert authored.adopted_model.checkpoint_step == 400407
+    assert authored.evaluation_checkpoints == "best_and_final"
+    spec = dataclasses.replace(
+        authored,
+        adopted_model=dataclasses.replace(
+            authored.adopted_model,
+            uri=str(model),
+            config_sha256=hashlib.sha256((model / "config.json").read_bytes()).hexdigest(),
+            export_manifest_sha256=hashlib.sha256((model / "export-manifest.json").read_bytes()).hexdigest(),
+        ),
+        rl=dataclasses.replace(authored.rl, pools={"uri": str(data)}),
+    )
+    training = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=training.deps, runtime_args=training.runtime_args
+    )
+    built = training.build_config(context)
+    document = yaml.safe_load(built.launch_config_yaml)
+    document["inputs"]["model"]["uri"] = authored.adopted_model.uri
+    validate_launch(yaml.safe_dump(document), tmp_path / "composed", model_config=b"{}")
+    launch = yaml.safe_load((tmp_path / "composed/compiled.yaml").read_text())
+    trainer, generator = launch["skyrl"]["trainer"], launch["skyrl"]["generator"]
+    buffer = trainer["rollout_buffer"]
+    assert (buffer["batch_policy"], buffer["eval_drain"], buffer["max_staleness_steps"]) == ("rolling", "priority", 3)
+    assert buffer["consumed_route_quotas"] == {"agentic": 22, "nonagentic": 42}
+    assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 64
+    assert generator["n_samples_per_prompt"] == 8
+    assert generator["gpu_memory_utilization"] == 0.775
+    assert generator["speculative_decoding"] == draft.speculative_decoding()
+    assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
+    assert generator["inference_engine_tensor_parallel_size"] == 1
+    assert generator["model_dtype"] == "bfloat16"
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+    assert generator["engine_init_kwargs"]["max_model_len"] == 131072
+    agent = launch["skyrl"]["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]
+    assert agent["model_info"] == {"max_input_tokens": 131072, "max_output_tokens": 24576}
+    optimizer = trainer["policy"]["optimizer_config"]
+    assert (optimizer["optimizer"], optimizer["lr"], optimizer["max_grad_norm"]) == ("MuonH", 1e-5, 0.5)
+    assert optimizer["optimizer_kwargs"]["offload_momentum"]
+    callbacks = {cb["type"]: cb for cb in trainer["callbacks"]}
+    assert (callbacks["best_checkpoint"]["expected_tasks"], callbacks["best_checkpoint"]["minimum_scored_tasks"]) == (
+        200,
+        180,
+    )
+    assert {key: callbacks["wall_time_budget"][key] for key in RL_TRAINING_BUDGET} == RL_TRAINING_BUDGET
+    allocation = launch["iris"]["allocation"]
+    assert allocation["num_nodes"] * allocation["gpus_per_node"] == 128
+    assert built.export_hf and trainer["hf_export_checkpoint"] == "best"
+
+
 def test_v5_exp3_round_preserves_route_mix_and_context_through_native_composition(round_inputs, tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     model, data = round_inputs

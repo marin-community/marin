@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 from iris.cluster.client.job_info import get_job_info
@@ -39,6 +40,11 @@ from experiments.post_training.mochi_decode_window import DecodeWindowConfig, st
 logger = logging.getLogger(__name__)
 
 
+class GatePurpose(StrEnum):
+    QUALIFICATION = "qualification"
+    BENCHMARK = "benchmark"
+
+
 def checked_json(uri: str, sha256: str) -> dict:
     payload = StoragePath(uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != sha256:
@@ -61,9 +67,8 @@ def engine_config(spec: dict, draft: Path | None) -> VllmEngineConfig:
         "--gpu-memory-utilization",
         str(spec["gpu_memory_utilization"]),
         "--enable-prefix-caching",
-        "--mamba-cache-mode",
-        "none",
-        "--no-async-scheduling",
+        "--scheduling-policy",
+        "priority",
         "--compilation-config",
         json.dumps(spec["compilation_config"]),
     )
@@ -164,7 +169,7 @@ async def benchmark(environment: VllmEnvironment, spec: dict, stage: str) -> Non
         logger.info("Measured %s running%s: %s", stage, running, result["summary"])
 
 
-def run(spec: dict) -> None:
+def run(spec: dict, purpose: GatePurpose) -> None:
     info = get_job_info()
     if info is None or (info.worker_region is not None and info.worker_region.casefold() != "us-east-08a"):
         raise ValueError("Run this gate only in the registered 08a Iris gang")
@@ -177,15 +182,15 @@ def run(spec: dict) -> None:
     geometry = ServingGeometry(**spec["geometry"])
     if geometry.tensor_parallel_size != 1 or geometry.data_parallel_size != 16 or geometry.total_gpus != 16:
         raise ValueError("This approval covers one TP1/EP16, 16-GB200 gang")
-    stages = ("plain-check", "dspark-check", "plain-rescore", "plain-performance", "dspark-performance")
+    stages = ("plain-check", "dspark-check", "plain-rescore")
+    if purpose == GatePurpose.BENCHMARK:
+        stages += ("plain-performance", "dspark-performance")
     with tempfile.TemporaryDirectory(prefix="mochi-dspark-gate-") as scratch:
         draft = Path(scratch) / "draft"
         io.download_directory(spec["draft"], str(draft))
         manifest = checked_json(spec["draft_manifest"], spec["draft_manifest_sha256"])
         for entry in manifest["files"]:
-            if not entry["path"].startswith("hf/"):
-                continue
-            local = draft / entry["path"].removeprefix("hf/")
+            local = draft / entry["path"]
             if (
                 local.stat().st_size != entry["size"]
                 or hashlib.sha256(local.read_bytes()).hexdigest() != entry["sha256"]
@@ -197,7 +202,7 @@ def run(spec: dict) -> None:
                 with VllmBackend(engine_config(spec, draft if speculative else None)).start(
                     ModelSpec(**spec["model"]),
                     extra_args=launch.extra_cli_args,
-                    subprocess_env={**launch.subprocess_env, "VLLM_USE_V2_MODEL_RUNNER": "1"},
+                    subprocess_env=launch.subprocess_env,
                 ) as environment:
                     try:
                         if launch.is_leader:
@@ -227,10 +232,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--purpose", type=GatePurpose, choices=list(GatePurpose), required=True)
     args = parser.parse_args()
     spec = json.loads(StoragePath(args.spec).read_text())
     spec["source_revision"] = args.source_revision
-    run(spec)
+    run(spec, args.purpose)
 
 
 if __name__ == "__main__":

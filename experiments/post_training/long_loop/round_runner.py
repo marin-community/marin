@@ -312,6 +312,17 @@ class RoundDraft:
 # trained against a different initializer is unmeasured on that round and stays behind its
 # gate (median update time, rollout-group p95, acceptance length, fresh-policy KL).
 DRAFTS = {
+    "mochi-interleaved-766m-step400407": RoundDraft(
+        name="mochi-interleaved-766m-step400407",
+        trained_for_initializer=(
+            "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/" "step-400407/2af3f828aa-cpu-a1"
+        ),
+        source_uri=(
+            "s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/" "ablation-interleaved-two-layer/2026.11.25-skyrl"
+        ),
+        source_identity="sha256:e163ef4fb50cbdfd578f1d26a27adf35b7c22e5a597a8da63b4591a2190aa468",
+        num_speculative_tokens=4,
+    ),
     "dspark-dr-doom-datakit-sft-0921": RoundDraft(
         name="dspark-dr-doom-datakit-sft-0921",
         trained_for_initializer=(

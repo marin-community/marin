@@ -1585,12 +1585,39 @@ reported. Neither signal is a correctness grade.
 
 ## Mochi DSpark serving gate
 
+`rounds/mochi-exp4-dspark-rl.yaml` prepares Exp4 RL from the regional Mochi SFT
+step-400407 export and the interleaved two-layer 766M draft from
+[PR12239](https://github.com/marin-community/marin/pull/12239). It keeps the
+128-GB200 layout (48 trainer and 80 rollout GPUs), TP1/BF16, batch64×8,
+priority drain, rolling route quotas, and the normalized Mochi context and
+optimizer. The Exp4 curriculum derives 22 agentic and 42 nonagentic groups.
+Four proposals use vLLM memory fraction0.775 and the Nov24 ShortConv-fixed
+wheel. The draft's verifier is step400407; it is not fitted to V5 step2100.
+
+Prepare the complete RL/best-and-distinct-final evaluation graph without
+submitting it:
+
+```sh
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/mochi-exp4-dspark-rl.yaml \
+  --version 2026.11.25.130 --source-revision <landed-sha> \
+  --validation-output /tmp/mochi-exp4-dspark-validation --through eval
+```
+
+Launch readiness also requires a matched sampled-token logprob gate. The
+PR's 37% reduction in warm-update time was measured on a different 60-GB200
+workload and is not a speed prediction for this round. Its trainer/rollout
+mismatch means do not replace the sampled-prefix check below.
+
 `experiments.post_training.mochi_dspark_gate` runs one TP1/BF16 EP16 gang.
 It applies the EAGLE3 harness's frozen probability, routed-expert and sampled
 distribution bounds to independent plain controls, then DSpark, then a plain
 teacher rescore. Any failure stops the gate before performance measurement.
-The spec pins the checkpoint's verified-copy manifest and the private runtime
-overlay; the runtime never changes the production vLLM release.
+Use `--purpose qualification` to stop after the plain, DSpark and independent
+plain-rescore checks; `--purpose benchmark` also measures performance after
+all correctness checks pass. The spec pins the flat draft's verified-copy
+manifest and the runtime script. The script uses the published Nov24 wheel
+without source patches, in an isolated environment.
 
 After correctness passes, `mochi_decode_window` measures exact token arrivals
 after every rank-pinned stream has prefetched. Each plain/DSpark cell requires
