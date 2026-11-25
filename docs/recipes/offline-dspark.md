@@ -137,6 +137,8 @@ Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
 and training budget as the default and publishes a separate checkpoint.
 Both sizes share one prepared Arrow artifact and the same teacher activation
 cache. The trainer builds its decoder config from the chosen size.
+Mochi's one-rack RL presets use the qualified two-layer export from the interleaved
+50M mix. [Mochi RL launch defaults](../references/rl-launching.md)
 
 ## Scale the Mochi mix to about 50M input tokens
 

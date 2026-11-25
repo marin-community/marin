@@ -259,9 +259,9 @@ JSON object with `source_uri` and `source_identity`. For `hf://` sources, use th
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
 compatible draft. Online draft training remains EAGLE3-only.
 
-Mochi one-rack presets use four DSpark proposals with the step-400407 initializer.
-The one-rack vLLM memory fraction is 0.775, which restores the KV token capacity
-available with plain decoding at 0.75. Use `--set generator.speculative_decoding=null`
+Mochi one-rack presets use a 766M two-layer DSpark draft with four proposals
+and the step-400407 initializer. The one-rack vLLM memory fraction of 0.775 gave
+about 119,400 KV tokens per inference GPU in the five-update trial. Use `--set generator.speculative_decoding=null`
 to run plain decoding. Also set `--set generator.gpu_memory_utilization=0.75` to
 reproduce the previous one-rack serving budget. Three-rack presets use plain decoding.
 

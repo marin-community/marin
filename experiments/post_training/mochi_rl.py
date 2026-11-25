@@ -48,8 +48,8 @@ _MODEL = ArtifactHfModel(
 _DSPARK = sections.SpeculativeDecoding(
     method="dspark",
     model=sections.SpeculatorModel(
-        source_uri="s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/e43c1b81/2026.11.24-skyrl",
-        source_identity="sha256:4a327e965aa38cb7a06c4afd49faec296e45dcf052f7cd2aa7a2fc70929d71af",
+        source_uri="s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/ablation-interleaved-two-layer/2026.11.25-skyrl",
+        source_identity="sha256:e163ef4fb50cbdfd578f1d26a27adf35b7c22e5a597a8da63b4591a2190aa468",
     ),
     num_speculative_tokens=4,
 )

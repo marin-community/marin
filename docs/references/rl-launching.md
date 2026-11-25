@@ -60,6 +60,18 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
 
 The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
 step-400407 export. Its SkyRL model manifest binds the weights to the SFT run's tokenizer.
+Use the `train-long` preset to plan the standard one-rack loop with the default initializer.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long --version YYYY.MM.DD --plan
+```
+
+The one-rack presets use the pinned two-layer DSpark draft with four proposals when
+the resolved initializer matches step 400407. Selecting a different task mix with
+`--tasks` keeps that inference default. Custom `SkyRLSpec` launchers define their own inference recipe.
+Three-rack Mochi presets use plain decoding.
+
 Use `--init NAME@VERSION`
 to start from another published model or select an SFT preset with `--sft`.
 Mochi writes artifacts under the cluster's
