@@ -5,21 +5,35 @@
 
 import json
 import sys
+import uuid
 from types import SimpleNamespace
 
+import pynvml
 import pytest
 from skyrlrecipe.locality import LocalityPlan
 
 from cloud.iris import task_runtime
-from cloud.iris.role_topology import FABRIC_LABEL, HOST_LABEL, RoleTopology, node_physical_labels
+from cloud.iris.role_topology import (
+    FABRIC_LABEL,
+    HOST_LABEL,
+    FabricSample,
+    RoleTopology,
+    node_physical_labels,
+)
+
+CLUSTER_UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
-def fabric_xml(state="Completed"):
-    device = (
-        f"<gpu><fabric><state>{state}</state><status>Success</status>"
-        "<clusterUuid>cluster</clusterUuid><cliqueId>1</cliqueId></fabric></gpu>"
-    )
-    return f"<nvidia_smi_log>{device * 4}</nvidia_smi_log>"
+def fabric_info(**overrides):
+    """Four GPUs on one healthy NVLink fabric, with every GPU carrying the same overrides."""
+    fields = {
+        "cluster_uuid": CLUSTER_UUID,
+        "clique_id": 1,
+        "state": pynvml.NVML_GPU_FABRIC_STATE_COMPLETED,
+        "status": pynvml.NVML_SUCCESS,
+    }
+    fields.update(overrides)
+    return tuple(FabricSample(**fields) for _ in range(4))
 
 
 def role_nodes(topology):
@@ -28,7 +42,7 @@ def role_nodes(topology):
             "Alive": True,
             "Labels": {
                 **topology.node_labels(rank),
-                **node_physical_labels(rank=rank, gpus_per_node=4, host=f"host-{rank}", fabric_xml=fabric_xml()),
+                **node_physical_labels(rank=rank, gpus_per_node=4, host=f"host-{rank}", fabric_info=fabric_info()),
             },
         }
         for rank in range(topology.num_nodes)
@@ -57,7 +71,7 @@ def test_healthy_single_node_writes_a_verified_report(audit):
     topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 1
-    assert report["nodes"][0]["fabric"] == "cluster:1"
+    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}:1"
 
 
 def test_healthy_multi_node_groups_may_share_a_fabric(audit):
@@ -65,11 +79,11 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 3
     assert len({row["host"] for row in report["nodes"]}) == 3
-    assert {row["fabric"] for row in report["nodes"]} == {"cluster:1"}
+    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}:1"}
 
 
 @pytest.mark.parametrize(
-    "label,value", [(FABRIC_LABEL, "cluster:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
+    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
 )
 def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
@@ -80,6 +94,16 @@ def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
     assert not (tmp_path / "role-topology.json").exists()
 
 
-def test_unhealthy_node_fabric_is_rejected():
+@pytest.mark.parametrize(
+    "overrides",
+    [{"state": pynvml.NVML_GPU_FABRIC_STATE_IN_PROGRESS}, {"status": pynvml.NVML_ERROR_UNINITIALIZED}],
+    ids=["in-progress-fabric", "failed-fabric-attach"],
+)
+def test_unhealthy_node_fabric_is_rejected(overrides):
     with pytest.raises(ValueError):
-        node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_xml=fabric_xml("In Progress"))
+        node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_info=fabric_info(**overrides))
+
+
+def test_wrong_gpu_count_is_rejected():
+    with pytest.raises(ValueError):
+        node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_info=fabric_info()[:3])

@@ -104,7 +104,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology, node_physical_labels, validate_role_nodes
+from cloud.iris.role_topology import RoleTopology, node_physical_labels, probe_fabric_info, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -2358,16 +2358,13 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        fabric_xml = subprocess.run(
-            ["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30
-        ).stdout
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),
             **node_physical_labels(
                 rank=_rank(),
                 gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
                 host=os.environ[IRIS_NODE_NAME_ENV],
-                fabric_xml=fabric_xml,
+                fabric_info=probe_fabric_info(),
             ),
         }
     _print_env_snapshot()

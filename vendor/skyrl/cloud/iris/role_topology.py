@@ -1,10 +1,11 @@
 """Assign each model to an Iris group confined to one NVLink domain."""
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-import xml.etree.ElementTree as ET
 
+import pynvml
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_nvlink_roles
 
@@ -73,20 +74,49 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
     return RoleTopology(tuple(roles), locality)
 
 
-def node_physical_labels(*, rank: int, gpus_per_node: int, host: str, fabric_xml: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class FabricSample:
+    """One GPU's NVLink fabric identity and health, as NVML reports it."""
+
+    cluster_uuid: uuid.UUID
+    clique_id: int
+    state: int
+    status: int
+
+
+def probe_fabric_info() -> tuple[FabricSample, ...]:
+    """Read every GPU's NVLink fabric identity and health through NVML."""
+    pynvml.nvmlInit()
+    try:
+        samples = []
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            info = pynvml.c_nvmlGpuFabricInfoV_t()
+            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, info)
+            samples.append(
+                FabricSample(
+                    cluster_uuid=uuid.UUID(bytes=bytes(info.clusterUuid)),
+                    clique_id=info.cliqueId,
+                    state=info.state,
+                    status=info.status,
+                )
+            )
+        return tuple(samples)
+    finally:
+        pynvml.nvmlShutdown()
+
+
+def node_physical_labels(
+    *, rank: int, gpus_per_node: int, host: str, fabric_info: Sequence[FabricSample]
+) -> dict[str, str]:
     """Check the node's allocated GPU count and NVLink fabric health."""
-    devices = ET.fromstring(fabric_xml).findall("gpu")
-    if len(devices) != gpus_per_node:
+    if len(fabric_info) != gpus_per_node:
         raise ValueError("Physical GPU count disagrees with the allocated node width")
     fabrics = set()
-    for device in devices:
-        fabric = device.find("fabric")
-        if fabric is None or fabric.findtext("state") != "Completed" or fabric.findtext("status") != "Success":
+    for sample in fabric_info:
+        if sample.state != pynvml.NVML_GPU_FABRIC_STATE_COMPLETED or sample.status != pynvml.NVML_SUCCESS:
             raise ValueError("Every GPU must report a completed, healthy NVLink fabric")
-        identity = (fabric.findtext("clusterUuid") or "", fabric.findtext("cliqueId") or "")
-        if any(not value or value == "N/A" for value in identity):
-            raise ValueError("Missing NVLink fabric identity")
-        fabrics.add(":".join(identity))
+        fabrics.add(f"{sample.cluster_uuid}:{sample.clique_id}")
     if len(fabrics) != 1:
         raise ValueError("A physical node must fit inside one NVLink domain")
     return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
