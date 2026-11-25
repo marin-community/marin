@@ -229,7 +229,7 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
             ),
             item_builder=livecodebench_pro_item,
             protocol_name="official",
-            # Test archives reach 377 MiB per problem; an attempt keeps a corpus reference instead of a copy.
+            # Test archives reach 203 MiB per problem; an attempt keeps a corpus reference instead of a copy.
             task_evidence=TaskEvidence.REFERENCE,
         ),
         pipeline=prepare_evaluation,

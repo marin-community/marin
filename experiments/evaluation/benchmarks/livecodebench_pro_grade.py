@@ -86,13 +86,22 @@ def limits(cpu: float, memory: int | None):
     return apply
 
 
+def child_cpu() -> float:
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
 def run(argv: list[str], cpu: float, wall: float, memory: int | None = None, **streams) -> bool:
-    """Whether ``argv`` exits 0 within its limits."""
+    """Whether ``argv`` exits 0 within its limits.
+
+    ``RLIMIT_CPU`` counts whole seconds, so the CPU time the finished child used is checked against ``cpu``.
+    """
+    before = child_cpu()
     try:
         completed = subprocess.run(argv, timeout=wall, preexec_fn=limits(cpu, memory), check=False, **streams)
     except subprocess.TimeoutExpired:
         return False
-    return completed.returncode == 0
+    return completed.returncode == 0 and child_cpu() - before <= cpu
 
 
 def compile_program(source: Path, binary: Path, *include: str) -> bool:

@@ -34,6 +34,12 @@ SUM = "#include <iostream>\nint main() { long long a, b; std::cin >> a >> b; std
 DIFFERENCE = "#include <iostream>\nint main() { long long a, b; std::cin >> a >> b; std::cout << a - b << std::endl; }"
 SPIN = "#include <iostream>\nint main() { volatile unsigned long long i = 0; while (true) ++i; }"
 CRASH = "#include <cstdlib>\nint main() { std::abort(); }"
+SLOW_SUM = (
+    "#include <ctime>\n#include <iostream>\n"
+    "int main() { while (std::clock() < 3 * CLOCKS_PER_SEC / 4) {}\n"
+    "long long a, b; std::cin >> a >> b; std::cout << a + b << std::endl; }"
+)
+"""A correct program that first spends 0.75 CPU seconds."""
 
 
 def grader():
@@ -135,15 +141,26 @@ def test_tests_that_share_an_input_must_agree_when_the_checker_reads_the_answer(
     ],
 )
 def test_judge_accepts_only_a_program_that_passes_every_test(tmp_path, reply, reward):
+    assert judge(tmp_path, reply, time_limit=1.0) == reward
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or shutil.which("g++") is None, reason="judging sets Linux rlimits and compiles with g++"
+)
+@pytest.mark.parametrize(("program", "reward"), [(SUM, 1.0), (SLOW_SUM, 0.0)])
+def test_judge_enforces_a_fractional_time_limit(tmp_path, program, reward):
+    assert judge(tmp_path, f"```cpp\n{program}\n```", time_limit=0.5) == reward
+
+
+def judge(tmp_path, reply: str, time_limit: float) -> float:
     archive = tmp_path / "tests.zip"
     archive.write_bytes(archive_bytes())
     config = {
         "cases": [["testdata/1.in", "testdata/1.ans"], ["testdata/2.in", "testdata/2.ans"]],
-        "time_limit": 1.0,
+        "time_limit": time_limit,
         "memory_mb": 256,
         "deadline": 60,
     }
     workdir = tmp_path / "work"
     workdir.mkdir()
-
-    assert grader().reward(reply, config, archive, workdir) == reward
+    return grader().reward(reply, config, archive, workdir)
