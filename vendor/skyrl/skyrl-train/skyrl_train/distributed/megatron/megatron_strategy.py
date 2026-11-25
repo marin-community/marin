@@ -50,7 +50,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelSaveStrategyWrapper,
 )
 from transformers import PreTrainedTokenizer
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import Adam, ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer.clip_grads import clip_grad_by_total_norm_fp32
 from skyrl_train.distributed.step_policy import (
     NonfiniteStepPolicy,
@@ -441,7 +441,7 @@ class MegatronStrategy(DistributedStrategy):
 
         muonh = self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh"
         model_weights_from_optimizer = False
-        with remote_checkpoint_metadata(ckpt_dir) as read_dir:
+        with remote_checkpoint_metadata(ckpt_dir, optimizer_classes=(optim.AdamW, Adam)) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
                 if muonh and common_state.get("optimizer_recipe") != _muonh_checkpoint_recipe(self.optimizer_config):

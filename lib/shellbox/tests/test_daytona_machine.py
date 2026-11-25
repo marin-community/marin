@@ -76,9 +76,31 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     UnsupportedMachineSpec,
 )
 from yarl import URL
+
+
+def sandbox_json(sandbox_id: str, state: str, toolbox_url: str) -> dict:
+    """A Daytona API sandbox record named ``fixture``."""
+    return {
+        "id": sandbox_id,
+        "organizationId": "fixture",
+        "name": "fixture",
+        "user": "root",
+        "env": {},
+        "labels": {},
+        "public": False,
+        "networkBlockAll": False,
+        "target": "us",
+        "cpu": 2,
+        "gpu": 0,
+        "memory": 4,
+        "disk": 10,
+        "state": state,
+        "toolboxProxyUrl": toolbox_url,
+    }
 
 
 @pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
@@ -119,27 +141,11 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             ):
                 created = True
                 return web.json_response(
-                    {
-                        "id": "created-once",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "started",
-                        "toolboxProxyUrl": (
-                            ""
-                            if failure == "late_get" and request.method == "POST"
-                            else "https://fixture.invalid/toolbox"
-                        ),
-                    }
+                    sandbox_json(
+                        "created-once",
+                        "started",
+                        "" if failure == "late_get" and request.method == "POST" else "https://fixture.invalid/toolbox",
+                    )
                 )
             return web.json_response(
                 {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
@@ -184,6 +190,26 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     assert sandbox.id == "created-once"
                     assert requests == ["POST", "GET", "POST", "GET"]
                     assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailable():
+    async def scenario():
+        async def endpoint(request):
+            if request.method == "POST":
+                return web.json_response(sandbox_json("removed", "starting", "https://fixture.invalid/toolbox"))
+            return web.json_response({"message": "Sandbox with ID or name removed not found"}, status=404)
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                with pytest.raises(MachineUnavailable):
+                    await _create_sandbox(client, params, 60)
 
     asyncio.run(scenario())
 
@@ -1968,15 +1994,13 @@ def test_daytona_network_policy_parses_declarative_fields() -> None:
 
 
 def test_connection_hides_the_api_key_from_every_representation() -> None:
-    connection = DaytonaConnection(
-        api_key="synthetic-secret-key", api_url="https://fixture.invalid/api", target="fixture"
-    )
+    connection = DaytonaConnection(api_key="synthetic-secret-key")
     factory = connection.client_factory()
 
     assert "synthetic-secret-key" not in repr(connection)
     assert "synthetic-secret-key" not in repr(factory)
-    with pytest.raises(ValueError, match="explicit api_key, api_url and target"):
-        DaytonaConnection(api_url="https://fixture.invalid/api", target="fixture").client_factory()
+    with pytest.raises(ValueError, match="explicit api_key"):
+        DaytonaConnection().client_factory()
 
 
 def test_connection_module_imports_without_the_daytona_sdk() -> None:
@@ -1986,7 +2010,7 @@ def test_connection_module_imports_without_the_daytona_sdk() -> None:
             "sys.modules['daytona'] = None  # the optional extra is absent",
             "import shellbox.backends.daytona.connection",
             "connection = shellbox.backends.daytona.connection.DaytonaConnection(",
-            "    api_key='synthetic-secret-key', api_url='https://fixture.invalid/api', target='fixture'",
+            "    api_key='synthetic-secret-key'",
             ")",
             "factory = connection.client_factory()",
             "assert callable(factory)",

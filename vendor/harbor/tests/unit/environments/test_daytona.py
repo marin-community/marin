@@ -27,7 +27,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
+from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
@@ -246,8 +246,6 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="host-daytona-private",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
                     ),
                     model_authentication={
                         "https://api.together.xyz/v1": "host-provider-private"
@@ -655,6 +653,7 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
 ):
     monkeypatch.setenv("DAYTONA_JWT_TOKEN", "ambient-jwt-must-not-be-used")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
+    monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
     protected = {
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
@@ -678,8 +677,6 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="explicit-key",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
                     ),
                     model_authentication={},
                 ),
