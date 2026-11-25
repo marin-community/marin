@@ -76,6 +76,7 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     UnsupportedMachineSpec,
 )
 from yarl import URL
@@ -184,6 +185,44 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     assert sandbox.id == "created-once"
                     assert requests == ["POST", "GET", "POST", "GET"]
                     assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailable():
+    async def scenario():
+        async def endpoint(request):
+            if request.method == "POST":
+                return web.json_response(
+                    {
+                        "id": "removed",
+                        "organizationId": "fixture",
+                        "name": "fixture",
+                        "user": "root",
+                        "env": {},
+                        "labels": {},
+                        "public": False,
+                        "networkBlockAll": False,
+                        "target": "us",
+                        "cpu": 2,
+                        "gpu": 0,
+                        "memory": 4,
+                        "disk": 10,
+                        "state": "starting",
+                        "toolboxProxyUrl": "https://fixture.invalid/toolbox",
+                    }
+                )
+            return web.json_response({"message": "Sandbox with ID or name removed not found"}, status=404)
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                with pytest.raises(MachineUnavailable):
+                    await _create_sandbox(client, params, 60)
 
     asyncio.run(scenario())
 
