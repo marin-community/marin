@@ -97,7 +97,11 @@ GUARDS_LAYOUT = Layout(
     ),
     megatron=MegatronGeometry(1, 12, 4, 4, 1),
     cluster="cw-us-east-08a",
-    host_memory="900GB",
+    # Standing rule (coordinator, 2026-11-25): production jobs request memory from MEASURED
+    # peaks plus explicit headroom, never near node allocatable — a 900 GB request made a
+    # Doom stage unplaceable this morning. Basis: the Mochi Micro210 serving measured peak is
+    # 72.2 GiB per task, so the panel stages request 128GiB per host.
+    host_memory="128GiB",
     gpu_variant="GB200",
     host_cpu=120,
     host_disk="2TB",
@@ -110,6 +114,11 @@ GUARDS_LAYOUT = Layout(
 RL_LAYOUT = replace(
     mochi_rl.ONE_RACK,
     name="mochi-guards-one-rack",
+    # Basis for memory: the Mochi RL measured peak is 539.6 GiB per task (the .129 run's
+    # ONE_RACK geometry, which this layout keeps), so the S2 arms request 704GiB per host —
+    # measured peak plus explicit headroom, well under node allocatable (coordinator rule,
+    # 2026-11-25).
+    host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
     excluded_nvlink_domains=("dh1-r136-us-east-08a",),
@@ -119,6 +128,9 @@ RL_LAYOUT = replace(
 EXPORT_LAYOUT = replace(
     mochi_rl.THREE_RACK,
     name="mochi-guards-export-96",
+    # The export restores only model tensors, so the training arms' measured peak bounds it;
+    # request the S2 arms' 704GiB per host rather than the inherited near-allocatable value.
+    host_memory="704GiB",
     coordinator_timeout_hours=72,
     job_timeout_seconds=72 * 3600,
     excluded_nvlink_domains=("dh1-r136-us-east-08a",),

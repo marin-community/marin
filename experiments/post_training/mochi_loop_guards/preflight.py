@@ -144,6 +144,7 @@ def plan_stage(stage: str, output: Path, *, pool_selection: Path | None = None) 
         "workload": type(preset.recipe.layout.workload).__name__,
         "gpus": _stage_gpus(preset),
         "layout": preset.recipe.layout.name,
+        "host_memory": document["iris"]["allocation"]["memory"],
         "excluded_nvlink_domains": list(preset.recipe.layout.excluded_nvlink_domains),
         "coordinator_timeout_hours": preset.recipe.layout.coordinator_timeout_hours,
         "job_timeout_seconds": preset.recipe.layout.job_timeout_seconds,

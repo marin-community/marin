@@ -1,7 +1,7 @@
 schema_version: 1
 run:
   id: preflight-s2-antithrash-treatment-2026.11.25.1
-  attempt_id: afc89f0748b8
+  attempt_id: afca4f0bc607
   seed: 20261125
   mode: train
   submission: wait
@@ -18,7 +18,7 @@ runtime:
 iris:
   cluster: cw-us-east-08a
   cluster_config: lib/iris/config/cw-us-east-08a.yaml
-  job_name: preflight-s2-antithrash-treatment-2026.11.25.1-afc89f0748b8
+  job_name: preflight-s2-antithrash-treatment-2026.11.25.1-afca4f0bc607
   wandb_entity: marin-community
   role_topology: nvlink.domain
   excluded_nvlink_domains:
@@ -28,7 +28,7 @@ iris:
     gpus_per_node: 4
     gpu_variant: GB200
     cpu: 120
-    memory: 900GB
+    memory: 704GiB
     disk: 2TB
   priority: production
   max_retries: 0
@@ -39,17 +39,17 @@ iris:
 ray:
   spill_backend: local
   spill_dir: /tmp/skyrl-ray-spill
-  rendezvous_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/rendezvous
-  log_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/ray-logs
+  rendezvous_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/rendezvous
+  log_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/ray-logs
   rendezvous_timeout: 1800
   cluster_join_timeout: 1800
   driver_liveness_timeout: 9000
 artifacts:
-  checkpoint_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/checkpoints
-  export_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/exports
-  attempts_root: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts
-  resolved_config_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/resolved-launch.yaml
-  terminal_manifest_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/terminal.json
+  checkpoint_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/checkpoints
+  export_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/exports
+  attempts_root: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/attempts
+  resolved_config_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/resolved-launch.yaml
+  terminal_manifest_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/preflight-s2-antithrash-treatment/2026.11.25.1/terminal.json
   resume_checkpoint_count: 2
 inputs:
   model:
@@ -61,8 +61,8 @@ inputs:
     chat_template: null
   data_kind: parquet
   train_data:
-  - uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/selection-root/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded/2026.11.25.1
-    identity: rl-data/task-selection/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@2026.11.25.1:3f52f8e6
+  - uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/selection-root/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded/2026.11.25.1
+    identity: rl-data/task-selection/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@2026.11.25.1:fe11a8dc
     local_path: /tmp/marinskyrl/data/snowball-100k-agentic-ho-excluded
     relative_path: train.parquet
     kind: directory

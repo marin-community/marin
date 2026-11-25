@@ -6,6 +6,7 @@
       "workload": "Generation",
       "gpus": 128,
       "layout": "mochi-guards-generate-128",
+      "host_memory": "128GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -18,7 +19,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s0-baseline.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s0-baseline.yaml"
     },
     {
       "stage": "s1-stop",
@@ -26,6 +27,7 @@
       "workload": "Generation",
       "gpus": 128,
       "layout": "mochi-guards-generate-128",
+      "host_memory": "128GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -38,7 +40,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s1-stop.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s1-stop.yaml"
     },
     {
       "stage": "s1-rp",
@@ -46,6 +48,7 @@
       "workload": "Generation",
       "gpus": 128,
       "layout": "mochi-guards-generate-128",
+      "host_memory": "128GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -58,7 +61,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s1-rp.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s1-rp.yaml"
     },
     {
       "stage": "s2-antithrash-control",
@@ -66,6 +69,7 @@
       "workload": "Training",
       "gpus": 60,
       "layout": "mochi-guards-one-rack",
+      "host_memory": "704GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -78,7 +82,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s2-antithrash-control.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s2-antithrash-control.yaml"
     },
     {
       "stage": "s2-antithrash-treatment",
@@ -86,6 +90,7 @@
       "workload": "Training",
       "gpus": 60,
       "layout": "mochi-guards-one-rack",
+      "host_memory": "704GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -98,7 +103,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s2-antithrash-treatment.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s2-antithrash-treatment.yaml"
     },
     {
       "stage": "s3-control-panel",
@@ -106,6 +111,7 @@
       "workload": "Generation",
       "gpus": 128,
       "layout": "mochi-guards-generate-128",
+      "host_memory": "128GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -118,7 +124,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s3-control-panel.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s3-control-panel.yaml"
     },
     {
       "stage": "s3-treatment-panel",
@@ -126,6 +132,7 @@
       "workload": "Generation",
       "gpus": 128,
       "layout": "mochi-guards-generate-128",
+      "host_memory": "128GiB",
       "excluded_nvlink_domains": [
         "dh1-r136-us-east-08a"
       ],
@@ -138,7 +145,7 @@
         ],
         "priority": "production"
       },
-      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s3-treatment-panel.yaml"
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight2/s3-treatment-panel.yaml"
     }
   ],
   "s2x_export_command": "uv run --project vendor/skyrl python vendor/skyrl/cloud/iris/export_hf_checkpoint.py --ckpt_path s3://marin-us-east-08a/tmp/ttl=3d/mochi-loop-guards/s2-antithrash-treatment --step 8 --launch-config <S2 launch document, resolved at T+32> --cluster cw-us-east-08a --priority production --num-nodes 12 --gpus-per-node 4 --gpu-variant GB200 --export_path s3://marin-us-east-08a/tmp/ttl=3d/mochi-loop-guards/s2-antithrash-treatment/exports --dry-run"
