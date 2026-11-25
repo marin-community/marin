@@ -27,8 +27,7 @@ def rl_progress_client(tmp_path, monkeypatch):
         ensure_applet_provisioning(store.engine)
         store.migrate()
         source = Path(__file__).parents[1] / "apps/rl_progress"
-        package = read_applet_package(package_applet(source))
-        release = store.publish(package, "test", UUID(APPLET_ID))
+        store.publish(read_applet_package(package_applet(source)), "test", UUID(APPLET_ID))
         client = TestClient(
             create_app(MarinaConfig(data_root=str(tmp_path), iap_audience=None, database=database)),
             client=("127.0.0.1", 40000),
@@ -39,13 +38,9 @@ def rl_progress_client(tmp_path, monkeypatch):
             response.raise_for_status()
             return response.json()
 
-        def publish_release():
-            nonlocal release
-            release = store.publish(package, "test", UUID(APPLET_ID), base_version=release.version)
-
         monkeypatch.setattr("marina.client.marina_request", request)
         try:
-            yield client, request, publish_release
+            yield client, request
         finally:
             client.close()
             store.engine.dispose()

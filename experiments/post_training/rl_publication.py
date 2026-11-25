@@ -512,8 +512,6 @@ def publish_runs(
     controls: Mapping[str, ControlReplicate] | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
-    if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
-        raise ValueError("An issue requires exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
     snapshots = {}
     for path in outputs:

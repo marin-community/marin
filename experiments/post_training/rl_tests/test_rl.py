@@ -46,6 +46,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_preset_plan import preset_launch_yaml
 from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -977,7 +978,7 @@ def test_submission_exit_codes_and_publication_retries(
     ],
 )
 def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
-    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number
+    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number, tmp_path
 ):
     early_failure = outcome != "succeeded"
     real_archive = model == "snowball" and not early_failure
@@ -1026,9 +1027,11 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     launch = receipt["config"]
     historical_launch = json.loads(json.dumps(launch))
     historical_launch["skyrl"]["trainer"]["max_steps"] += 1
-    historical_version = (
-        gate.config_version(gate.compose_preset(nominal)) if real_archive else gate.config_version(historical_launch)
-    )
+    if real_archive:
+        plan = tmp_path / "nominal.yaml"
+        plan.write_text(preset_launch_yaml(nominal, name="nominal"))
+        (historical_launch,) = gate.compose_configs([str(plan)])
+    historical_version = gate.config_version(historical_launch)
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
@@ -1313,27 +1316,26 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         )
         response_path = tmp_path / "native-response.json"
         _json(response_path, response)
-        inspection = run_native_test(
-            "cloud.iris.tests.native_inspect_launch",
-            ["--record-response", str(response_path), *command[command.index("marinskyrl") + 1 :]],
+        recorded = run_native_test(
+            "cloud.iris.tests.native_record_attempt",
+            [str(response_path), *command[command.index("marinskyrl") + 1 :]],
         )
-        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
-            ["HF_TEST_KEY"],
-            "3TB",
-            "tests/python-tokenizer",
-        )
-        completed = read_attempt(inspection["export"], inspection["attempt"])
+        assert recorded["forward_env"] == ["HF_TEST_KEY"]
+        receipt = recorded["receipt"]
+        export_root = receipt["config"]["artifacts"]["export_root"]
+        completed = read_attempt(export_root, receipt["result"]["attempt_id"])
         assert completed is not None and completed.index is not None
         assert completed.result is not None and completed.result.state == "succeeded"
         assert completed.index.model == table.model and completed.index.preset == preset.name
+        assert completed.native.config["iris"]["allocation"]["disk"] == "3TB"
+        assert completed.native.config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
         assert completed.issue is None
-        assert snowball.rl_publication.lineage_issue(inspection["export"]) == 73
+        assert snowball.rl_publication.lineage_issue(export_root) == 73
         native_calls.append(command)
         # The fixture supplies metrics and startup writes that normally come from the trainer.
-        receipt = inspection["receipt"]
         write_receipt(source, receipt)
         write_attempt(
-            inspection["export"],
+            export_root,
             AttemptRecord(
                 run_id=completed.run_id,
                 attempt_id=completed.attempt_id,
@@ -1381,7 +1383,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert command == ["python", "-m", coordinator_module, *arguments]
         if coordinator_module == default_module and mode == "valid" and not native_calls:
             opened = subprocess.run(
-                [sys.executable, *command[1:3], "--help"],
+                [sys.executable, "-m", snowball_model.__name__, "--help"],
                 cwd=recipe.REPO_ROOT,
                 capture_output=True,
                 text=True,

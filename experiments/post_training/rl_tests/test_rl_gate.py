@@ -178,7 +178,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         control_roots.append(root)
     candidates = []
     for index, value in enumerate((0, 0.01)):
-        name = f"users/test/requirements-{index}"
+        name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
 
@@ -186,7 +186,6 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         return gate.gate_step(
             preset,
             tuple(candidates),
-            group_name="users/test/requirements",
             inputs=RunInputs(
                 preset_name=preset.name,
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
@@ -720,7 +719,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
-        original_subprocess = subprocess.run
+        monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *_args, **_kwargs: sys.executable)
         for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
@@ -729,16 +728,15 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
                 )
 
-                def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if "schema-defaults" in command:
-                        if diagnostic == "timeout":
-                            raise subprocess.TimeoutExpired(command, 120)
-                        if diagnostic == "oserror":
-                            raise FileNotFoundError("native composer executable missing")
-                        return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
-                    return original_subprocess(command, *args, **kwargs)
+                def unavailable_defaults(command, *, timeout, diagnostic=diagnostic):
+                    assert "schema-defaults" in command
+                    if diagnostic == "timeout":
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    if diagnostic == "oserror":
+                        raise FileNotFoundError("native composer executable missing")
+                    return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
 
-                unavailable.setattr(subprocess, "run", unavailable_defaults)
+                unavailable.setattr(gate, "run_skyrl_cpu", unavailable_defaults)
                 report = compare(preset.name, "--candidate", name)
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]

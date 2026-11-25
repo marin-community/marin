@@ -5,11 +5,10 @@
 
 import json
 import subprocess
-from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.rl import skyrl
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
@@ -41,40 +40,21 @@ def preset_launch_yaml(
     return materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml
 
 
-def run_native_json(*command: str, timeout: int = 120, env: Mapping[str, str] | None = None):
-    """Run a SkyRL CPU command that returns JSON on stdout."""
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            env=env if env is not None else skyrl.skyrl_cpu_environment(),
-            text=True,
-            timeout=timeout,
-        )
-        result.check_returncode()
-        return json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
-
-
-def compose_configs(
-    paths: Sequence[str], *, validate_driver: bool = False, env: Mapping[str, str] | None = None
-) -> list[dict]:
-    """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    options = ("--validate-driver",) if validate_driver else ()
-    return run_native_json(
+def compose_archived_config(path: Path) -> dict:
+    """Compose a launch with the archived checkout's frozen SkyRL environment."""
+    command = skyrl_cpu_command(
         "python",
         "-I",
         "-m",
         "cloud.iris.config_cli",
         "--checkout",
         str(recipe.REPO_ROOT / "vendor/skyrl"),
+        "--progress-file",
+        str(path.with_suffix(".progress")),
         "compose",
-        *options,
         "--",
-        *paths,
-        env=env,
+        str(path),
     )
+    result = subprocess.run(command, capture_output=True, check=True, text=True, timeout=120)
+    (config,) = json.loads(result.stdout)
+    return config

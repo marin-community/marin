@@ -217,6 +217,13 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
+  swebench-science:
+    benchmark: swebench-science
+    protocol: pi-xhigh
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
   gaia:
     benchmark: gaia
     protocol: terminus-2

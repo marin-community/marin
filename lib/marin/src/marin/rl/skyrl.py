@@ -7,18 +7,19 @@ from __future__ import annotations
 
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 import tempfile
-import tomllib
 import uuid
-from collections import deque
 from collections.abc import Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import Literal, cast
 
 import fsspec
@@ -57,7 +58,8 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
-_LAUNCHER_DIAGNOSTIC_LINES = 20
+_CPU_DIAGNOSTIC_BYTES = 64 * 1024
+_LAUNCHER_CANCEL_GRACE_SECONDS = 10
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
@@ -872,14 +874,19 @@ class SkyRLRun(Artifact):
     attempt_id: str | None = None
 
 
-def skyrl_cpu_command(*arguments: str) -> list[str]:
-    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
+def skyrl_project_root() -> Path:
+    """Locate the vendored SkyRL project that supplies the native executable."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
-    project_root = workspace_root / SKYRL_PROJECT
+    return workspace_root / SKYRL_PROJECT
+
+
+def skyrl_cpu_command(*arguments: str, project_root: Path | None = None) -> list[str]:
+    """Return argv for the frozen SkyRL CPU environment."""
+    project_root = project_root or skyrl_project_root()
     uv_version = (project_root / ".uv-version").read_text().strip()
-    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
+    python_requirement = (project_root / ".python-version").read_text().strip()
     # Match Iris task setup: older cached managed builds can lack Linux pidfd APIs.
     python_selection = ["--python-preference", "system", "--python", python_requirement, "--no-python-downloads"]
     return [
@@ -915,28 +922,95 @@ def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str
     return environment
 
 
-def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
-    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+def run_skyrl_cpu(
+    command: list[str],
+    *,
+    env_vars: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+    stream_stderr: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
     environment = skyrl_cpu_environment(env_vars)
+    tail = b""
+    deadline = None if timeout is None else monotonic() + timeout
     with (
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
+        tempfile.TemporaryFile() as stdout,
+        tempfile.TemporaryFile() as stderr,
         subprocess.Popen(
-            command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace", env=environment
+            command,
+            stdout=stdout,
+            stderr=subprocess.PIPE if stream_stderr else stderr,
+            env=environment,
+            start_new_session=True,
         ) as process,
     ):
+        pipe = process.stderr
+
+        def stream_diagnostics(wait: float) -> None:
+            nonlocal tail, pipe
+            if pipe is None:
+                select.select([], [], [], wait)
+            elif select.select([pipe], [], [], wait)[0]:
+                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+                if data:
+                    sys.stderr.write(data.decode(errors="replace"))
+                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+                else:
+                    pipe = None
+
+        def diagnostics() -> bytes:
+            if not stream_stderr:
+                stderr.seek(max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES))
+                return stderr.read()
+            stream_diagnostics(0)
+            return tail
+
         try:
-            assert process.stderr is not None
-            for line in process.stderr:
-                sys.stderr.write(line)
-                tail.append(line)
-            returncode = process.wait()
-        except BaseException:
-            # Popen.__exit__ waits but never kills, so without this an interrupt orphans the launcher.
-            process.kill()
+            if stream_stderr:
+                while process.poll() is None:
+                    remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    stream_diagnostics(remaining)
+            else:
+                process.wait(timeout=timeout)
+        except BaseException as error:
+            try:
+                if stream_stderr and isinstance(error, KeyboardInterrupt):
+                    # Let the native launcher interrupt its Iris wait and cancel the job.
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGINT)
+                        cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
+                        while monotonic() < cleanup:
+                            process.poll()
+                            os.killpg(process.pid, 0)
+                            stream_diagnostics(0.1)
+            finally:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            if isinstance(error, subprocess.TimeoutExpired):
+                error.stderr = diagnostics()
             raise
-        response.seek(0)
-        return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
+        returncode = process.wait()
+        if returncode:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        output = diagnostics().decode(errors="replace")
+        stdout.seek(0)
+        return subprocess.CompletedProcess(command, returncode, stdout.read().decode(errors="replace"), output)
+
+
+def prepare_skyrl_cpu_python(timeout: float, *, project_root: Path | None = None) -> Path:
+    """Sync the frozen CPU environment and return its isolated interpreter."""
+    project_root = project_root or skyrl_project_root()
+    interpreter = project_root / ".venv/bin/python"
+    command = skyrl_cpu_command(str(interpreter), "-I", "--version", project_root=project_root)
+    run_skyrl_cpu(command, timeout=timeout).check_returncode()
+    return interpreter
+
+
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return run_skyrl_cpu(command, env_vars=env_vars, stream_stderr=True)
 
 
 def run_skyrl(

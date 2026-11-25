@@ -155,22 +155,20 @@ def _run_name(
     preset: presets.Preset,
     provenance: Provenance,
     inputs_hash: str,
-    replicate: int | None,
+    replicate: int,
     *,
     table: presets.ModelPresets,
     control: bool,
     resume_step: int | None,
 ) -> str:
     if control:
-        if replicate is None:
-            raise ValueError("a control output requires a replicate")
         if provenance.base_commit is None:
             raise click.BadParameter("controls require a recorded source commit")
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
-    return user_owned_name(name + (f"-r{replicate}" if preset.gated and replicate is not None else ""))
+    return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
 
 def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
@@ -315,21 +313,7 @@ def build_experiment(
             recorded_inputs = inputs.model_copy(update={"control": member})
         runs.append(replace(run, run=partial(_run_rl, inputs=recorded_inputs, issue=issue, forward_env=forward_env)))
     gate = (
-        rl_gate.gate_step(
-            preset,
-            tuple(runs),
-            group_name=_run_name(
-                preset,
-                provenance,
-                inputs_hash,
-                None,
-                table=table,
-                control=False,
-                resume_step=resume.step if resume is not None else None,
-            ),
-            inputs=inputs,
-            table=table,
-        )
+        rl_gate.gate_step(preset, tuple(runs), inputs=inputs, table=table)
         if preset.gated and not control and (not plan_only or preset.control_preset in table.control_pins)
         else None
     )
@@ -606,14 +590,14 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
             # The launcher owns the JSON protocol, including for bases that predate it.
+            native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
+            if not (path / "experiments/post_training/rl_preset_plan.py").is_file() or not (path / native_cli).is_file():
+                shutil.copyfile(root / native_cli, path / native_cli)
             for name in ("rl_preset_cli.py", "rl_preset_plan.py"):
                 source = Path(__file__).with_name(name)
                 destination = path / "experiments/post_training" / name
                 if not destination.is_file():
                     shutil.copyfile(source, destination)
-            native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            if not (path / native_cli).is_file():
-                shutil.copyfile(root / native_cli, path / native_cli)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
                 [

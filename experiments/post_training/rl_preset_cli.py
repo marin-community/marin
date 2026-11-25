@@ -5,7 +5,6 @@
 
 import argparse
 import json
-import os
 import sys
 import tempfile
 from contextlib import redirect_stdout
@@ -16,7 +15,7 @@ from pathlib import Path
 def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
     from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415 - reserve stdout for JSON
 
-    from experiments.post_training.rl_preset_plan import compose_configs, preset_launch_yaml  # noqa: PLC0415
+    from experiments.post_training.rl_preset_plan import compose_archived_config, preset_launch_yaml  # noqa: PLC0415
     from experiments.post_training.rl_presets import ModelPresets  # noqa: PLC0415
 
     entry = import_module(entry_module)
@@ -38,9 +37,7 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
     with tempfile.TemporaryDirectory(prefix="rl-main-config-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(preset_launch_yaml(preset, name="main-base"))
-        # The caller selected this checkout and already cleaned the Python environment.
-        (config,) = compose_configs([str(path)], env=os.environ)
-        return config
+        return compose_archived_config(path)
 
 
 def main() -> None:

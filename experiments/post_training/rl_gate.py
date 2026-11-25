@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import statistics
@@ -15,6 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -30,13 +32,17 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLSpec,
+    prepare_skyrl_cpu_python,
+    run_skyrl_cpu,
     skyrl_execution,
+    skyrl_project_root,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rigging.redaction import redact_string
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
@@ -52,18 +58,18 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     read_run_inputs,
 )
-from experiments.post_training.rl_preset_plan import (
-    InvalidComparison,
-    compose_configs,
-    preset_launch_yaml,
-    run_native_json,
-)
+from experiments.post_training.rl_preset_plan import InvalidComparison, preset_launch_yaml
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
 GATE_REVISION = "2026.11.24"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
+_NATIVE_PREPARATION_TIMEOUT = 300
+_NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
+_NATIVE_ERROR = "native configuration cannot be composed"
+
+logger = logging.getLogger(__name__)
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -634,12 +640,6 @@ def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
     return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
 
 
-def compose_preset(preset: presets.Preset) -> dict:
-    """Compose the preset with its published inputs and defaults."""
-    (config,) = _compose_plans(preset, (RunInputs(preset_name=preset.name),))
-    return config
-
-
 def _compose_plans(
     preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
@@ -664,6 +664,75 @@ def _compose_plans(
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
 
         return compose_configs(paths)
+
+
+def _native_diagnostic(
+    error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired, progress: Path | None
+) -> str:
+    phase = progress.read_text().strip() if progress is not None and progress.exists() else ""
+    if isinstance(error, OSError):
+        cause, diagnostic = error.strerror or str(error), ""
+    else:
+        cause = (
+            f"timed out after {error.timeout:g} s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"exited with status {error.returncode}"
+        )
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        diagnostic = next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), "")
+    context = " ".join(part for part in (phase, cause, diagnostic) if part)
+    return redact_string("".join(char for char in context if char.isprintable()))[:400]
+
+
+def _native_config(operation: str, *args: str, checkout: Path | None = None):
+    checkout = checkout or skyrl_project_root()
+    preparation = "Prepare SkyRL CPU environment"
+    started = monotonic()
+    try:
+        interpreter = prepare_skyrl_cpu_python(_NATIVE_PREPARATION_TIMEOUT, project_root=checkout)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise InvalidComparison(
+            f"{_NATIVE_ERROR}: {preparation} after {monotonic() - started:.2f} s. {_native_diagnostic(error, None)}"
+        ) from error
+    logger.info("%s took %.2f s", preparation, monotonic() - started)
+    with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
+        progress = Path(directory) / "stage"
+        command = [
+            str(interpreter),
+            "-I",
+            "-m",
+            _NATIVE_CONFIG_MODULE,
+            "--checkout",
+            str(checkout),
+            "--progress-file",
+            str(progress),
+            *args,
+        ]
+        started = monotonic()
+        try:
+            result = run_skyrl_cpu(command, timeout=120)
+            result.check_returncode()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise InvalidComparison(
+                f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. "
+                f"{_native_diagnostic(error, progress)}"
+            ) from error
+        logger.info("%s took %.2f s", operation, monotonic() - started)
+        output = result.stdout.strip()
+        if not output:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
+        try:
+            return json.loads(output)
+        except ValueError as error:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
+
+
+def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
+    """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
+    options = ["--validate-driver"] if validate_driver else []
+    return _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -714,17 +783,13 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 
 @lru_cache(maxsize=16)
-def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return run_native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        native_project,
-        "schema-defaults",
-        json.dumps(dict(groups)),
+def _schema_defaults(checkout: Path, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
+    defaults = _native_config(
+        "Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout
     )
+    if not isinstance(defaults, dict):
+        raise InvalidComparison(f"{_NATIVE_ERROR}: schema defaults must be an object")
+    return defaults
 
 
 def _check_control_config(
@@ -736,9 +801,8 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(
-            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
-        )
+        checkout = skyrl_project_root()
+        defaults = _schema_defaults(checkout, Provenance.capture(checkout).tree_hash, groups)
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:
@@ -947,13 +1011,23 @@ def _stored_attempt(path: str) -> AttemptRecord | None:
 def _gate_with_evidence(
     step: ArtifactStep[GateReport], run_attempts: tuple[AttemptRecord | None, ...] | None = None
 ) -> ArtifactStep[GateReport]:
-    target = gate_target(step)
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    paths = step.runtime_args["paths"]
     if run_attempts is None:
-        run_attempts = tuple(map(_stored_attempt, target.outputs))
-    control_attempts = tuple(map(_stored_attempt, target.control_outputs))
+        run_attempts = tuple(map(_stored_attempt, paths["run_paths"]))
+    control_attempts = tuple(map(_stored_attempt, paths["control_paths"]))
+    evidence = [
+        (
+            identity,
+            receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt is not None else None,
+        )
+        for key, receipts in (("run_paths", run_attempts), ("control_paths", control_attempts))
+        for identity, receipt in zip(config[key], receipts, strict=True)
+    ]
+    name = step.runtime_args["name"] + "-evidence-" + fingerprint_hash(canonical_json(evidence))
     return replace(
         step,
-        name=target.evidence_name(run_attempts, control_attempts),
+        name=name,
         runtime_args={
             **step.runtime_args,
             "evidence": {"run_attempts": run_attempts, "control_attempts": control_attempts},
@@ -961,57 +1035,15 @@ def _gate_with_evidence(
     )
 
 
-class GateTarget(BaseModel):
-    """The gate and ordered input addresses fixed at submission."""
-
-    name: str
-    version: str
-    candidates: tuple[str, ...]
-    outputs: tuple[str, ...]
-    controls: tuple[str, ...]
-    control_outputs: tuple[str, ...]
-
-    def evidence_name(
-        self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
-    ) -> str:
-        evidence = [
-            (
-                identity,
-                (
-                    receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"})
-                    if receipt is not None
-                    else None
-                ),
-            )
-            for identities, receipts in ((self.candidates, candidates), (self.controls, controls))
-            for identity, receipt in zip(identities, receipts, strict=True)
-        ]
-        return self.name + "-evidence-" + fingerprint_hash(canonical_json(evidence))
-
-
-def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    paths = step.runtime_args["paths"]
-    return GateTarget(
-        name=step.runtime_args["name"],
-        version=step.version,
-        candidates=tuple(config["run_paths"]),
-        outputs=tuple(paths["run_paths"]),
-        controls=tuple(config["control_paths"]),
-        control_outputs=tuple(paths["control_paths"]),
-    )
-
-
 def gate_step(
     preset: presets.Preset,
     runs: tuple[ArtifactStep[SkyRLRun], ...],
     *,
-    group_name: str,
     table: ModelPresets,
     inputs: RunInputs,
 ) -> ArtifactStep[GateReport]:
     pin = control_pin(preset, table=table)
-    name = f"{group_name}/gate-n{len(runs)}-{pin.commit}"
+    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
     return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)

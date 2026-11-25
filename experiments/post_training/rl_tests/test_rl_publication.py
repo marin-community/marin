@@ -362,7 +362,7 @@ def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
 def test_snowball_publication_updates_attempts_and_publishes_controls(
     preset_table, rl_progress_client, recorded_runs, monkeypatch
 ):
-    client, request, _ = rl_progress_client
+    client, request = rl_progress_client
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"],
         guards=(*snowball_model.SNOWBALL.by_name["learning-medium"].guards, presets.Metric("policy/entropy", True)),
@@ -388,7 +388,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-r{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -409,7 +409,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             gate.gate_step(
                 preset,
                 handles,
-                group_name="tests/publication",
                 table=table,
                 inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )

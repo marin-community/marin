@@ -151,7 +151,6 @@ class ControlReplicate(BaseModel, frozen=True):
 
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
-    format_version: Literal[1] = 1
     run_id: Identity
     native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity

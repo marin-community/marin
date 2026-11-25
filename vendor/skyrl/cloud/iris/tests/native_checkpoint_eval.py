@@ -8,13 +8,14 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
+from cloud.iris import launch_config
+from cloud.iris.config_cli import verify_checkout
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
 
 
 def checkpoint_coverage(path: Path) -> list[dict | None]:
-    config = load_launch_config(path)
+    config = launch_config.load_launch_config(path)
     assert not config.skyrl.generator.enable_http_endpoint
     state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
     scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26), (100, 100, 29, 29), (99, 99, 31, 30))
@@ -53,4 +54,5 @@ def checkpoint_coverage(path: Path) -> list[dict | None]:
 
 
 if __name__ == "__main__":
-    print(json.dumps(checkpoint_coverage(Path(sys.argv[1]))))
+    verify_checkout(Path(sys.argv[1]), launch_config)
+    print(json.dumps(checkpoint_coverage(Path(sys.argv[2]))))
