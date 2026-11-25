@@ -71,6 +71,47 @@ no separate packing token budget, and the campaign layout splits a 102,400-token
 `train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
 `DAYTONA_RL_API_KEY`.
 
+### Compose a versioned SFT data mix with RL
+
+`experiments.post_training.long_loop` builds SFT and RL as one graph. Pass a
+published `LmDataConfig` JSON manifest through `PreparedData`; both Snowball's
+`SFTSpec.with_data_mix` and `MochiSFT.with_data_mix` retain the preset's optimizer,
+batch size, context length, and allocation. The manifest owns the data components,
+weights, packing, and data validation splits. Its tokenizer must match the trainer.
+For Mochi, set the manifest's `mixture_start_step` for the native initializer's
+absolute step. Explicit Snowball steps set the optimizer schedule horizon. The Mochi stop
+bounds the preset's existing schedule without rescaling it to the mix's token count.
+
+The entrypoint requires immutable mix and run versions and separate SFT and RL
+update counts. Changed mixes receive distinct training names. It passes the
+unbuilt SFT export directly to `rl.build_experiment(init=...)`, then enables
+best-checkpoint selection and export using the RL preset's held-out evaluation.
+The existing `--init NAME@VERSION` path in the model RL entrypoints remains
+available for published models.
+
+Print a plan without submitting any work:
+
+```bash
+uv run python -m experiments.post_training.long_loop \
+  --model snowball --sft-preset mixture-262k-32node --rl-preset train-long \
+  --data-mix "$MIX_NAME@$MIX_VERSION" --data-uri "$MIX_URI" \
+  --data-file mix.json --data-tokenizer "$MIX_TOKENIZER" \
+  --sft-steps 360 --rl-steps 36 --version 2026.11.25.1
+```
+
+The mix, model weights, and output must be staged in the selected region before
+launch. SFT presets with a fixed target cluster must match the RL coordinator;
+the Snowball mixture targets `cw-us-east-02a`, whereas `train-long-agentic`
+targets `cw-rno2a`. This entrypoint does not transfer artifacts between regions.
+
+Micro210 is not yet attached to this entrypoint. The native frozen 2026.11.23
+binding must land through [PR #12249](https://github.com/marin-community/marin/pull/12249)
+before adding the downstream export consumer. That follow-up must bind the
+model's serving profile and read its export manifest after the dependency
+completes. The Mochi profile is `mochi-gb200-cw-us-east-08a`; the Snowball profile
+is `snowball-h100-cw-us-east-02a`. Evaluation should consume the best RL export,
+including the SFT initializer when step zero wins, and optionally the SFT export.
+
 ### Task selection and native resume
 
 Pass `--tasks snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned

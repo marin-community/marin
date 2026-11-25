@@ -83,6 +83,7 @@ from experiments.grug.moe_hero_ep.train import (
     WatchMode,
     run_grug,
 )
+from experiments.sft.launcher import PreparedData
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +349,7 @@ def build_sft_run(
     version: str | None = None,
     resources: ResourceConfig | None = None,
     checkpoints: Literal["periodic", "final", "none"] = "periodic",
+    prepared_data: PreparedData | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
@@ -360,6 +362,10 @@ def build_sft_run(
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
     allocation = sft_resources(dp_racks)
+    if prepared_data is not None:
+        prepared_data.mix_name()
+        if prepared_data.tokenizer != SFT_TOKENIZER:
+            raise ValueError("prepared_data.tokenizer must match the Mochi SFT tokenizer")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
     if expert_placement is not None and not expert_placement.permutes(initialize_from):
@@ -505,16 +511,26 @@ def build_sft_run(
             ),
             context_axis_size=context_axis_size,
         )
-        replay = harrier_long_context_data_config(
-            ctx=ctx,
-            start_step=0,
-            max_seq_len=model.max_seq_len,
-            validation=[],
-            stats_path=ctx.artifact_path(length_statistics),
-        )
-        data = sft_data_config(
-            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
-        )
+        if prepared_data is None:
+            replay = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=0,
+                max_seq_len=model.max_seq_len,
+                validation=[],
+                stats_path=ctx.artifact_path(length_statistics),
+            )
+            data = sft_data_config(
+                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            )
+        else:
+            if ctx.is_fingerprint:
+                data = LmDataConfig(
+                    tokenizer=prepared_data.tokenizer,
+                    cache_dir=prefix_join(ctx.artifact_path(prepared_data.step), prepared_data.file),
+                    auto_build_caches=False,
+                )
+            else:
+                data = prepared_data.load(ctx)
         return GrugRunConfig(
             model=model,
             data=data,
@@ -544,7 +560,11 @@ def build_sft_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation),
+        deps=(
+            (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
+            if prepared_data is None
+            else (prepared_data.step,)
+        ),
         runtime_args={"train_resources": train_resources},
     )
 

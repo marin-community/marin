@@ -91,7 +91,8 @@ from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
@@ -578,6 +579,23 @@ class PreparedData:
     file: str
     tokenizer: str
 
+    def mix_name(self) -> str:
+        """Identify a versioned mix without reading its unbuilt manifest."""
+        if is_mutable_version(self.step.version):
+            raise ValueError("SFT data mixes require an immutable artifact version")
+        return fingerprint_hash(
+            json.dumps((self.step.name, self.step.version, self.step.fingerprint_payload(), self.file, self.tokenizer))
+        )
+
+    def load(self, ctx: StepContext) -> LmDataConfig:
+        """Read the completed manifest, checking its declared tokenizer."""
+        path = prefix_join(ctx.artifact_path(self.step), self.file)
+        with StoragePath(path).open("r") as stream:
+            data = draccus.decode(LmDataConfig, json.load(stream))
+        if data.tokenizer != self.tokenizer:
+            raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+        return data
+
 
 @dataclass(frozen=True)
 class SFTSpec:
@@ -640,6 +658,10 @@ class SFTSpec:
                 raise ValueError("prepared_data and datasets are mutually exclusive")
             if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
+
+    def with_data_mix(self, data: PreparedData) -> SFTSpec:
+        """Replace only the data input and give the changed run its own identity."""
+        return replace(self, name=f"{self.name}-mix-{data.mix_name()}", datasets=(), prepared_data=data)
 
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
@@ -924,10 +946,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
             if ctx.is_fingerprint:
                 data_config = LmDataConfig(tokenizer=prepared.tokenizer, auto_build_caches=False)
                 return {"prepared_data_manifest": path, "training": train_config(ctx, data_config, spec.num_train_steps)}
-            with StoragePath(path).open("r") as stream:
-                data_config = draccus.decode(LmDataConfig, json.load(stream))
-            if data_config.tokenizer != prepared.tokenizer:
-                raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+            data_config = prepared.load(ctx)
             if data_config.tokenizer != model.resolve_tokenizer(ctx):
                 raise ValueError("prepared_data file tokenizer must match the resolved SFT model tokenizer")
             return train_config(ctx, data_config, spec.num_train_steps)
