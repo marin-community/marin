@@ -24,6 +24,8 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
+from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 
 try:
@@ -823,8 +825,11 @@ def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_mod
     config = dataclasses.replace(inference_server_config, service=service)
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
-    with TestClient(server.app) as client:
-        yield client
+    try:
+        with TestClient(server.app) as client:
+            yield client
+    finally:
+        server.shutdown()
 
 
 @pytest.mark.parametrize("chat", [False, True])
@@ -1046,3 +1051,31 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
         finally:
             release.set()
         assert running.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
+
+
+def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inference_server_config, fixed_token_model):
+    llama3_style_chat_tokenizer().save_pretrained(tmp_path)
+    tokenizer = load_tokenizer(str(tmp_path))
+    model = fixed_token_model(len(tokenizer), tokenizer.get_vocab()["<|eot_id|>"])
+    options = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, max_pages=32),
+    )
+    with options.trainer.use_device_mesh(), hax.axis_mapping(options.trainer.compute_axis_mapping):
+        server = InferenceServer.create(options, model, tokenizer)  # type: ignore[arg-type]
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": TEST_MODEL_NAME,
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "temperature": 0,
+                    "max_tokens": 1,
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["finish_reason"] == "stop"
+        assert response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.shutdown()
