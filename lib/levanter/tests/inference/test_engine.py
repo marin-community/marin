@@ -159,3 +159,59 @@ def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_a
     assert list(completed) == [11, 10]
     assert completed[11].tokens == [[3]]
     assert completed[10].tokens == [[3] * 5]
+
+
+def test_continuous_abort_returns_partial_scores_while_peer_keeps_decoding(fixed_token_model):
+    engine = InferenceEngine.from_model_with_config(
+        model=fixed_token_model(vocab_size=10, token_id=3),  # type: ignore
+        tokenizer=None,
+        config=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=8,
+            page_size=4,
+            max_rounds=1,
+            max_seqs=2,
+            max_seqs_in_prefill=2,
+            max_queued_tokens=4,
+        ),
+    )
+    short = Request(
+        [1, 2],
+        request_id=0,
+        n_generations=1,
+        decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(5)),
+    )
+    long = Request(
+        [1, 2],
+        request_id=1,
+        n_generations=1,
+        decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(12)),
+    )
+    queued = replace(short, request_id=2)
+    results = {}
+    cancelled = {queued.request_id}
+
+    def cancel_short(iteration):
+        if iteration == 0:
+            cancelled.add(short.request_id)
+
+    engine.generate_continuously(
+        [short, long, queued],
+        on_complete=results.__setitem__,
+        should_abort=cancelled.__contains__,
+        step_callback=cancel_short,
+    )
+    assert list(results) == [queued.request_id, short.request_id, long.request_id]
+    assert results[queued.request_id].tokens == [[]]
+    assert results[queued.request_id].logprobs == [[]]
+    assert results[queued.request_id].finish_reasons == [FinishReason.ABORT]
+    assert results[long.request_id].tokens == [[3] * 10]
+    assert results[long.request_id].finish_reasons == [FinishReason.LENGTH]
+
+    partial = results[short.request_id]
+    assert partial.tokens == [[3]]
+    assert partial.finish_reasons == [FinishReason.ABORT]
+    uninterrupted = engine.generate([short])
+    continued = engine.generate([replace(short, prompt_tokens=short.prompt_tokens + partial.tokens[0])])
+    assert partial.tokens[0] + continued.tokens[0] == uninterrupted.tokens[0]
+    assert partial.logprobs[0] + continued.logprobs[0] == pytest.approx(uninterrupted.logprobs[0])

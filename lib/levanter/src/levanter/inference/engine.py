@@ -48,6 +48,7 @@ from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_
 logger = logging.getLogger(__name__)
 
 _release_finished_slots = jax.jit(DecodeState.free_pages_for_finished, donate_argnums=0)
+_abort_slots = jax.jit(DecodeState.abort_slots, donate_argnums=0)
 
 
 @dataclass(frozen=True)
@@ -1226,6 +1227,7 @@ class InferenceEngine:
         on_complete: Callable[[int, GenerationResult], None],
         poll_requests: Callable[[int], Sequence[Request]] | None = None,
         step_callback: Callable[[int], None] | None = None,
+        should_abort: Callable[[int], bool] | None = None,
         capture_routes: bool = False,
     ) -> None:
         """Admit more requests between rounds and publish each response when it finishes.
@@ -1233,6 +1235,8 @@ class InferenceEngine:
         The nonblocking poll receives free sequence capacity. It returns requests
         with unique IDs and at most that many choices in total. When no work
         remains, the loop returns and the caller can wait for another request.
+        At each scheduling boundary, should_abort can terminate one request
+        and publish its partial choices while leaving peers in the decode queue.
         """
         if not requests:
             return
@@ -1282,7 +1286,21 @@ class InferenceEngine:
                     for choice in range(request.n_generations):
                         route_chunks.pop((request_id, choice), None)
                 finish_reasons = [choices[i].finish_reason for i in range(request.n_generations)]
-                on_complete(request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, routes))
+                on_complete(
+                    request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, routes)
+                )
+
+        def abort_requested() -> bool:
+            if should_abort is None:
+                return False
+            cancelled = {request_id for request_id in outstanding if should_abort(request_id)}
+            if not cancelled:
+                return False
+
+            pending[:] = [request for request in pending if request.request_id not in cancelled]
+            self._abort_requests(cancelled)
+            publish_finished()
+            return True
 
         admit(requests)
         decode_iteration = 0
@@ -1295,6 +1313,10 @@ class InferenceEngine:
                     if sum(request.n_generations for request in incoming) > available:
                         raise ValueError("The request poll returned more choices than available slots")
                     admit(incoming)
+            abort_requested()
+            if not outstanding:
+                break
+            prefill_outputs = None
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, capture_routes)
                 if prefill_outputs is not None:
@@ -1306,6 +1328,8 @@ class InferenceEngine:
 
             if step_callback is not None:
                 step_callback(decode_iteration)
+            if (prefill_outputs is not None or step_callback is not None) and abort_requested():
+                continue
             started = time.monotonic()
             self.gen_state, outputs = _run_generation_loop(
                 self.gen_state,
@@ -1321,6 +1345,22 @@ class InferenceEngine:
             decode_iteration += 1
             if generated == 0 and outstanding:
                 raise RuntimeError("Inference made no progress with unfinished requests")
+
+    def _abort_requests(self, cancelled: set[int]) -> None:
+        slots = [slot for slot, (request_id, _) in self.local_map.items() if request_id in cancelled]
+        if slots:
+            mask = np.zeros(self.gen_state.decode_state.max_seqs, dtype=bool)
+            mask[slots] = True
+            decode_state = _abort_slots(self.gen_state.decode_state, jnp.asarray(mask))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            for slot in slots:
+                del self.local_map[slot]
+            self.free_slots.extend(slots)
+
+        for request_id in cancelled:
+            for choice in self.results[request_id].values():
+                if not choice.done:
+                    choice.finish_reason = FinishReason.ABORT
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """

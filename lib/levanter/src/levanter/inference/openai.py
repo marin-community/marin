@@ -17,6 +17,7 @@ import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
@@ -25,6 +26,7 @@ import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
+from pydantic import BaseModel, Field
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
 from fastapi.responses import StreamingResponse
@@ -78,6 +80,8 @@ from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
 
+POLICY_MISMATCH = "The requested policy is no longer active"
+
 
 DEFAULT_MODEL_NAME = "levanter"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
@@ -120,6 +124,7 @@ class InferenceRequest:
     stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
+    abort_event: threading.Event = field(default_factory=threading.Event)
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
@@ -144,8 +149,12 @@ class InferenceResponse:
     policy_id: str | None = None
 
 
+class AbortRequest(BaseModel):
+    request_ids: list[str] = Field(min_length=1)
+
+
 class PolicyMismatchError(ValueError):
-    """A generate request was queued for a different immutable policy."""
+    """The requested policy ID differs from the active policy ID."""
 
 
 class InferenceBatch(list):
@@ -210,6 +219,9 @@ class InferenceContext:
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
+        self._requests_lock = threading.Lock()
+        self._http_requests: dict[str, threading.Event] = {}
+        self._queued_requests: dict[str, InferenceRequest] = {}
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -260,8 +272,9 @@ class InferenceContext:
                             axis_resources=self.config.trainer.compute_axis_mapping,
                         )
                     self.model, self.engine = model, engine
-                    self._model_version += 1
-                    self._policy_id = policy_id
+                    with self._requests_lock:
+                        self._model_version += 1
+                        self._policy_id = policy_id
                     return self._model_version
             finally:
                 self._publication_pending.clear()
@@ -278,32 +291,99 @@ class InferenceContext:
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
         *,
+        abort_event: threading.Event | None = None,
         return_route_captures: bool = False,
         expected_policy_id: str | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
-        request_id = f"req_{self._next_request_id}"
-        self._next_request_id += 1
+        with self._requests_lock:
+            request_id = f"req_{self._next_request_id}"
+            self._next_request_id += 1
 
-        request = InferenceRequest(
-            request_id=request_id,
-            prompt_tokens=prompt_tokens,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop_tokens=stop_tokens,
-            seed=seed,
-            future=future,
-            n_generations=n_generations,
-            echo_logprobs_top_k=echo_logprobs_top_k,
-            return_route_captures=return_route_captures,
-            expected_policy_id=expected_policy_id,
+            request = InferenceRequest(
+                request_id=request_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop_tokens=stop_tokens,
+                seed=seed,
+                future=future,
+                abort_event=abort_event if abort_event is not None else threading.Event(),
+                n_generations=n_generations,
+                echo_logprobs_top_k=echo_logprobs_top_k,
+                return_route_captures=return_route_captures,
+                expected_policy_id=expected_policy_id,
+            )
+            if request.abort_event.is_set():
+                self._abort_queued_request(request)
+            else:
+                self._queued_requests[request_id] = request
+                self.request_queue.put(request)
+            return request_id
+
+    @asynccontextmanager
+    async def http_generation(self, request: HttpRequest) -> collections.abc.AsyncIterator[threading.Event]:
+        """Track a generation and cancel it if the HTTP client disconnects."""
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        event = threading.Event()
+        with self._requests_lock:
+            if request_id in self._http_requests:
+                raise HTTPException(status_code=409, detail="Request ID is already active")
+            self._http_requests[request_id] = event
+
+        async def wait_for_disconnect() -> None:
+            while (await request.receive())["type"] != "http.disconnect":
+                pass
+            self.abort([request_id])
+
+        disconnect = asyncio.create_task(wait_for_disconnect())
+        try:
+            yield event
+        except BaseException:
+            self.abort([request_id])
+            raise
+        finally:
+            disconnect.cancel()
+            with self._requests_lock:
+                del self._http_requests[request_id]
+            with suppress(asyncio.CancelledError):
+                await disconnect
+
+    def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
+        """Abort queued or running generation for the supplied HTTP request IDs."""
+        with self._requests_lock:
+            for request_id in request_ids:
+                event = self._http_requests.get(request_id)
+                if event is not None:
+                    event.set()
+            cancelled = [request for request in self._queued_requests.values() if request.abort_event.is_set()]
+            for request in cancelled:
+                del self._queued_requests[request.request_id]
+                self._abort_queued_request(request)
+
+    def _abort_queued_request(self, request: InferenceRequest) -> None:
+        if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
+            self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
+            return
+        self._resolve_request(
+            request,
+            [
+                InferenceResponse(
+                    request_id=request.request_id,
+                    text="",
+                    tokens=[],
+                    logprobs=[],
+                    prompt_tokens=len(request.prompt_tokens),
+                    completion_tokens=0,
+                    finish_reason=FinishReason.ABORT,
+                    model_version=self._model_version,
+                    policy_id=self._policy_id,
+                )
+                for _ in range(request.n_generations)
+            ],
         )
-
-        logger.info("Enqueuing request %s", request)
-        self.request_queue.put(request)
-        return request_id
 
     def _inference_loop(self) -> None:
         """Collect requests from the serving and batch them into batches of appropriate size for inference."""
@@ -320,6 +400,8 @@ class InferenceContext:
             logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
 
             for r in requests:
+                if r.abort_event.is_set():
+                    continue
                 if len(r.prompt_tokens) > max_tokens_per_seq:
                     # slice down requests that are too long
                     logger.warning(
@@ -337,7 +419,9 @@ class InferenceContext:
                         f"the maximum allowed {self.engine.config.max_seqs}"
                     )
                     logger.error(error_msg)
-                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    with self._requests_lock:
+                        if self._queued_requests.pop(r.request_id, None) is not None:
+                            self._resolve_request(r, ValueError(error_msg))
                     continue
 
                 if (
@@ -396,26 +480,35 @@ class InferenceContext:
             except Exception as exc:
                 logger.exception("Inference window failed")
                 for request in batch:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
 
     def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
         admitted = InferenceBatch()
         for request in requests:
-            if request.future.cancelled():
+            with self._requests_lock:
+                queued = self._queued_requests.pop(request.request_id, None)
+                if queued is not None and request.abort_event.is_set():
+                    self._abort_queued_request(request)
+                    continue
+            if queued is None or request.future.cancelled():
                 continue
             if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
-                self._fail_request(request, PolicyMismatchError("The requested policy is no longer active"))
+                self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
             else:
                 admitted.append(request)
         return admitted
 
     @staticmethod
-    def _fail_request(request: InferenceRequest, error: Exception) -> None:
-        def fail() -> None:
-            if not request.future.done():
-                request.future.set_exception(error)
+    def _resolve_request(request: InferenceRequest, outcome: list[InferenceResponse] | Exception) -> None:
+        def resolve() -> None:
+            if request.future.done():
+                return
+            if isinstance(outcome, Exception):
+                request.future.set_exception(outcome)
+            else:
+                request.future.set_result(outcome)
 
-        request.future.get_loop().call_soon_threadsafe(fail)
+        request.future.get_loop().call_soon_threadsafe(resolve)
 
     @staticmethod
     def _engine_request(request: InferenceRequest, request_id: int) -> Request:
@@ -452,7 +545,7 @@ class InferenceContext:
                 try:
                     engine_request = self._engine_request(request, next_id)
                 except Exception as exc:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
                     continue
                 outstanding[next_id] = request
                 admitted.append(engine_request)
@@ -471,23 +564,33 @@ class InferenceContext:
             try:
                 self._complete_request(request, result)
             except Exception as exc:
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
+
+        def should_abort(request_id: int) -> bool:
+            request = outstanding[request_id]
+            return request.abort_event.is_set() or request.future.cancelled()
 
         try:
             initial = admit(requests)
             self.engine.generate_continuously(
-                initial, on_complete=complete, poll_requests=receive, capture_routes=capture_routes
+                initial,
+                on_complete=complete,
+                poll_requests=receive,
+                should_abort=should_abort,
+                capture_routes=capture_routes,
             )
         except Exception as exc:
             for request in outstanding.values():
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
             raise
 
     def _complete_request(self, request: InferenceRequest, result: GenerationResult) -> None:
         outputs = []
         for index, tokens in enumerate(result.tokens):
             echo_token_ids = echo_logprobs = None
-            if request.echo_logprobs_top_k is not None:
+            if request.echo_logprobs_top_k is not None and (
+                tokens or result.finish_reasons[index] != FinishReason.ABORT
+            ):
                 echo_token_ids = request.prompt_tokens + tokens
                 echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, request.echo_logprobs_top_k)
             outputs.append(
@@ -511,11 +614,7 @@ class InferenceContext:
                 )
             )
 
-        def finish() -> None:
-            if not request.future.done():
-                request.future.set_result(outputs)
-
-        request.future.get_loop().call_soon_threadsafe(finish)
+        self._resolve_request(request, outputs)
 
 
 def _health_check() -> dict:
@@ -545,7 +644,9 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
             delta=ChoiceDelta(role="assistant", content=choice.message.content),
             logprobs=logprobs,
         )
-        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
+        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
+            update={"finish_reason": choice.finish_reason}
+        )
         for chunk_choice in (content, finish):
             chunk = ChatCompletionChunk(
                 id=completion.id,
@@ -625,7 +726,9 @@ def _completion_logprobs(
     )
 
 
-async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
+async def _create_completion(
+    ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
+) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
         if isinstance(request.prompt, str):
@@ -674,6 +777,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 future=future,
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                abort_event=abort_event,
             )
 
         # Wait for all results
@@ -687,7 +791,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
                 # Format logprobs if available
                 logprobs = None
-                if request.logprobs:
+                if request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
                     if request.echo:
                         if generation.echo_token_ids is None or generation.echo_logprobs is None:
                             raise RuntimeError("Echo logprobs requested but missing from generation result.")
@@ -724,7 +828,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         )
 
                 choices.append(
-                    CompletionChoice(
+                    CompletionChoice.model_construct(
                         text=choice_text,
                         index=choice_idx,
                         finish_reason=format_finish_reason(generation.finish_reason),
@@ -809,7 +913,9 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+async def _create_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, abort_event: threading.Event | None = None
+) -> ChatCompletion:
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
@@ -833,6 +939,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             seed=request.seed,
             future=future,
             n_generations=request.n or 1,
+            abort_event=abort_event,
         )
 
         # Wait for result
@@ -867,7 +974,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 logprobs = ChoiceLogprobs(content=content_logprobs)
 
             choices.append(
-                ChatCompletionChoice(
+                ChatCompletionChoice.model_construct(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
                     finish_reason=format_finish_reason(generation.finish_reason),
@@ -923,25 +1030,27 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
 async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
     prompt, options = await read_generate_request(request)
     _validate_binary_options(ctx, prompt, options)
-    future = asyncio.get_running_loop().create_future()
-    ctx.submit_request(
-        prompt.tolist(),
-        options.max_tokens,
-        options.temperature,
-        options.top_p,
-        options.stop_tokens,
-        options.seed,
-        future,
-        n_generations=options.n,
-        return_route_captures=options.return_route_captures,
-        expected_policy_id=options.expected_policy_id,
-    )
-    try:
-        outputs = await future
-    except PolicyMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with ctx.http_generation(request) as abort_event:
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt.tolist(),
+            options.max_tokens,
+            options.temperature,
+            options.top_p,
+            options.stop_tokens,
+            options.seed,
+            future,
+            n_generations=options.n,
+            abort_event=abort_event,
+            return_route_captures=options.return_route_captures,
+            expected_policy_id=options.expected_policy_id,
+        )
+        try:
+            outputs = await future
+        except PolicyMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     score_mode = LogprobMode(ctx.config.service.logprob_mode)
     if options.return_route_captures:
@@ -1035,6 +1144,11 @@ class InferenceServer:
         async def health_check():
             return _health_check()
 
+        @app.post("/abort")
+        async def abort(request: AbortRequest):
+            inference_context.abort(request.request_ids)
+            return {"status": "ok"}
+
         @app.get("/v1/models")
         async def list_models() -> dict:
             model = Model(id=model_name, object="model", created=int(time.time()), owned_by="levanter")
@@ -1048,15 +1162,17 @@ class InferenceServer:
         # A streaming request returns a StreamingResponse, which FastAPI passes through
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
-        async def create_chat_completion(request: ChatCompletionRequest):
-            completion = await _create_chat_completion(inference_context, request)
+        async def create_chat_completion(request: ChatCompletionRequest, raw_request: HttpRequest):
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_chat_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
 
         @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest):
-            completion = await _create_completion(inference_context, request)
+        async def create_completion(request: CompletionRequest, raw_request: HttpRequest):
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
