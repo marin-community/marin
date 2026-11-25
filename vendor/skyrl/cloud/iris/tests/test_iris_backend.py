@@ -36,6 +36,7 @@ from skyrl_train.hf_export_schema import HFExportRequest
         ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, (), "local"),
         (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, (), "local"),
         ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8), "local"),
+        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (15,), "local"),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
@@ -94,13 +95,16 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     document["skyrl"]["trainer"]["placement"].update(policy_num_nodes=2, ref_num_nodes=2)
     if groups:
         document["iris"]["role_topology"] = "nvlink.domain"
-        document["iris"]["allocation"].update(num_nodes=24, gpus_per_node=4, gpu_variant="GB200")
+        document["iris"]["allocation"].update(num_nodes=sum(groups), gpus_per_node=4, gpu_variant="GB200")
         document["skyrl"]["trainer"].update(train_batch_size=64, policy_mini_batch_size=64)
+        policy_nodes, inference_gpus = (12, 12) if len(groups) == 1 else (16, 32)
         document["skyrl"]["trainer"]["placement"].update(
-            colocate_all=False, policy_num_nodes=16, policy_num_gpus_per_node=4
+            colocate_all=False, policy_num_nodes=policy_nodes, policy_num_gpus_per_node=4
         )
         document["skyrl"]["generator"].update(
-            num_inference_engines=1, inference_engine_data_parallel_size=32, inference_engine_expert_parallel_size=32
+            num_inference_engines=1,
+            inference_engine_data_parallel_size=inference_gpus,
+            inference_engine_expert_parallel_size=inference_gpus,
         )
     for field in document["artifacts"]:
         document["artifacts"][field] = str(tmp_path / field)
@@ -211,6 +215,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert transport["argv"][:4] == ["--mode", "gate", "--gate-coverage", "all-gpus"]
     assert transport["argv"][4:6] == ["--gate-report-prefix", f"{config.ray.rendezvous_dir}/interconnect-gate"]
     assert ("--pynccl-init" in transport["argv"]) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
+    assert ("--gate-single-nvlink-domain" in transport["argv"]) == (len(groups) == 1)
     flag, config_path, prepared = controller["argv"]
     assert flag == "--config" and prepared == "--environment-prepared"
     payload = base64.b64decode(request.environment.env_vars[RL_CONFIG_PAYLOAD_ENV])
