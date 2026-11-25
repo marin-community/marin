@@ -39,6 +39,7 @@ variable alone, the exact production overlay that also pins
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
 import hashlib
 import json
@@ -83,6 +84,7 @@ NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
 IB_DEVICE_SELECTION_RE = re.compile(r"\bNET/IB\s*:\s*Using\b")
 NVLS_RANKS_RE = re.compile(r"\bNCCL INFO NVLS comm \S+ headRank -?\d+ nHeads \d+ nvlsRanks (\d+)\b")
+MNNVL_CHANNEL_RE = re.compile(r"\bChannel \S+\s*:\s*(\d+)\[\d+\]\s*->\s*(\d+)\[\d+\]\s+via P2P/MNNVL\b")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
@@ -106,6 +108,7 @@ class NcclCensus:
     transports: list[str]
     ib_device_lines: list[str] = field(default_factory=list)
     nvls_rank_counts: list[int] = field(default_factory=list)
+    mnnvl_channels: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -172,6 +175,7 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
     transports: list[str] = []
     ib_device_lines: list[str] = []
     nvls_rank_counts = set()
+    mnnvl_channels = set()
     for line in lines:
         if not version:
             match = NCCL_VERSION_RE.search(line)
@@ -184,7 +188,9 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
             ib_device_lines.append(line)
         if match := NVLS_RANKS_RE.search(line):
             nvls_rank_counts.add(int(match.group(1)))
-    return NcclCensus(version, transports, ib_device_lines, sorted(nvls_rank_counts))
+        if match := MNNVL_CHANNEL_RE.search(line):
+            mnnvl_channels.add((int(match.group(1)), int(match.group(2))))
+    return NcclCensus(version, transports, ib_device_lines, sorted(nvls_rank_counts), sorted(mnnvl_channels))
 
 
 def allocate_port_block(count: int) -> int:
@@ -356,7 +362,13 @@ def read_worker_census(streams: tuple[list[str], ...]) -> NcclCensus:
     ]
     census = parse_nccl_census(all_lines)
     benchmark = parse_nccl_census(benchmark_lines)
-    return NcclCensus(census.nccl_version, census.transports, census.ib_device_lines, benchmark.nvls_rank_counts)
+    return NcclCensus(
+        census.nccl_version,
+        census.transports,
+        census.ib_device_lines,
+        benchmark.nvls_rank_counts,
+        benchmark.mnnvl_channels,
+    )
 
 
 def collect_worker(handle: WorkerProcess) -> RankResult:
@@ -411,7 +423,7 @@ def run_variant(
     log_dir: Path,
     *,
     pynccl_init: bool,
-    allow_full_world_nvls: bool = False,
+    allow_interhost_nvlink: bool = False,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     handles = [
@@ -419,10 +431,17 @@ def run_variant(
         for local in range(local_gpus)
     ]
     ranks = [collect_worker(handle) for handle in handles]
-    full_world_nvls = (
-        allow_full_world_nvls
+    interhost_nvlink = (
+        allow_interhost_nvlink
         and 0 < local_gpus < world_size
-        and all(world_size in rank.census.nvls_rank_counts for rank in ranks)
+        and all(
+            world_size in rank.census.nvls_rank_counts
+            or any(
+                source == rank.rank and 0 <= peer < world_size and source // local_gpus != peer // local_gpus
+                for source, peer in rank.census.mnnvl_channels
+            )
+            for rank in ranks
+        )
     )
     passed = all(rank.passed for rank in ranks)
     return {
@@ -433,7 +452,7 @@ def run_variant(
         "ranks": [asdict_without_worker_noise(rank) for rank in ranks],
         "transports": sorted({transport for rank in ranks for transport in rank.census.transports}),
         "interconnect_verdict": gate_verdict(
-            passed, [rank.census.transports for rank in ranks], full_world_nvls=full_world_nvls
+            passed, [rank.census.transports for rank in ranks], interhost_nvlink=interhost_nvlink
         ),
     }
 
@@ -452,6 +471,7 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
         "transports": rank.census.transports,
         "ib_device_lines": rank.census.ib_device_lines,
         "nvls_rank_counts": rank.census.nvls_rank_counts,
+        "mnnvl_channels": rank.census.mnnvl_channels,
     }
 
 
@@ -570,8 +590,8 @@ def run_gate(args: argparse.Namespace) -> None:
     With ``--gate-coverage all-gpus``, every task joins with all of its local
     GPUs, so communicator init exercises every GPU-to-NIC pairing (a 64-rank
     data-parallel engine can fail on one GPU's HCA even when the first pair is
-    healthy). A full-world NVLS communicator spans hosts when its size exceeds
-    the local GPU count, as in one GB200 NVLink domain.
+    healthy). In a single NVLink domain, the gate also accepts a full-world
+    NVLS communicator or a peer channel to another task for each local rank.
     """
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
@@ -625,7 +645,7 @@ def run_gate(args: argparse.Namespace) -> None:
                 base_port + offset,
                 log_dir,
                 pynccl_init=args.pynccl_init,
-                allow_full_world_nvls=args.gate_single_nvlink_domain,
+                allow_interhost_nvlink=args.gate_single_nvlink_domain,
             )
         )
     if task_index == 0:
@@ -703,14 +723,14 @@ def collect_ib_port_inventory() -> list[dict[str, str]]:
     return inventory
 
 
-def gate_verdict(passed: bool, rank_transports: list[list[str]], *, full_world_nvls: bool = False) -> str:
+def gate_verdict(passed: bool, rank_transports: list[list[str]], *, interhost_nvlink: bool = False) -> str:
     """Require positive interconnect evidence and reject sockets and unexpected network transports."""
     if not passed:
         return "collective_failed"
     flat = {transport for transports in rank_transports for transport in transports}
     if any(transport.startswith("NET/Socket") for transport in flat):
         return "socket_transport"
-    if not flat and not full_world_nvls:
+    if not flat and not interhost_nvlink:
         return "missing_transport_evidence"
     if any(not transport.startswith("NET/IB/") for transport in flat):
         return "unexpected_transport"
@@ -855,6 +875,8 @@ def run_worker_mode(args: argparse.Namespace) -> None:
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
     all_to_all_bandwidth = a2a_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
     # PyNccl creates a separate communicator after both measured collectives.
+    # Flush native NCCL output before placing a boundary on either stream.
+    ctypes.CDLL(None).fflush(None)
     print(BENCHMARK_COMPLETE, flush=True)
     print(BENCHMARK_COMPLETE, file=sys.stderr, flush=True)
 
@@ -912,7 +934,7 @@ def main() -> None:
     parser.add_argument(
         "--gate-single-nvlink-domain",
         action="store_true",
-        help="Require NVLS evidence across the full communicator when a single NVLink domain replaces IB channels",
+        help="Accept cross-host NVLink evidence for jobs confined to one NVLink domain",
     )
     parser.add_argument(
         "--env",
