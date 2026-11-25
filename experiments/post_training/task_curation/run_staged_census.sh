@@ -58,4 +58,3 @@ uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline
 
 uv run --no-sync fsutil cp -r "$CENSUS_OUT" "$CENSUS_ROOT/$SLUG/"
 uv run --no-sync fsutil cp -r "$CENSUS_OUT-receipts" "$CENSUS_ROOT/$SLUG-receipts/"
-cat "$CENSUS_OUT/census-result.json"
