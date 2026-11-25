@@ -29,7 +29,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
-from marin.inference import iris_vllm
+from marin.inference import iris_vllm, vllm_server
 from marin.inference.backend import ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -531,7 +531,7 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
-def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc_and_flashinfer_kernels(tmp_path, monkeypatch):
     site_packages = tmp_path / "site-packages"
     nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
@@ -547,6 +547,14 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
     (dist_info / "RECORD").write_text("nvidia/cu13/bin/nvcc,,\n")
+    flashinfer_info = site_packages / "flashinfer_python-0.7.3.dist-info"
+    flashinfer_info.mkdir()
+    (flashinfer_info / "METADATA").write_text("Metadata-Version: 2.4\nName: flashinfer-python\nVersion: 0.7.3\n")
+    # A node cache that already holds this FlashInfer version's kernel wheel.
+    node_cache = tmp_path / "node-cache"
+    flashinfer_kernels = node_cache / "flashinfer-cubin" / "0.7.3"
+    flashinfer_kernels.mkdir(parents=True)
+    monkeypatch.setattr(vllm_server, "SCRATCH_CACHE_PATH", str(node_cache))
 
     tool_bin = tmp_path / "tool-bin"
     tool_bin.mkdir()
@@ -556,7 +564,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
-        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH'], "
+        "'pythonpath': os.environ['PYTHONPATH']}))\n"
     )
     vllm.chmod(0o755)
 
@@ -588,6 +597,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
     assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
+    assert observed["pythonpath"].split(os.pathsep)[0] == str(flashinfer_kernels)
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
