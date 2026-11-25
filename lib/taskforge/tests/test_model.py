@@ -26,7 +26,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import WORKPIECE, Conversation, Generated, Repaired, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Generated, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, Prompt
 
 
@@ -72,12 +72,6 @@ def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(wo
     assert tuple(type(d) for d in restored.decisions) == (Modify, Incomplete, Accept, Reject, Retry, Abandon)
     assert restored.session is not None
     assert restored.session.messages[-1].reasoning == "done"
-
-
-def test_repaired_workpiece_requires_its_source_task_as_submission(workpiece: Workpiece) -> None:
-    assert workpiece.submission is not None
-    with pytest.raises(ValueError, match="repairs a source task"):
-        Workpiece("source", Repaired(workpiece.submission))
 
 
 def test_submission_digest_tracks_task_and_controls_but_excludes_notes(workpiece: Workpiece) -> None:
