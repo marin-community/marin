@@ -41,6 +41,7 @@ def native_data(workdir):
         "file_metadata": {
             name: {"mode": "0755" if name.endswith(".sh") else "0644", "mtime_ns": 1700000000123456789} for name in files
         },
+        "directory_metadata": {},
         "endless_image": {
             "image": "ghcr.io/example/endless@sha256:" + "b" * 64,
             "preserved_image": {
