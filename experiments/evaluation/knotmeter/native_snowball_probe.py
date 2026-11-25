@@ -4,6 +4,7 @@
 """Run the frozen 64K AgentX replay against native Snowball on one v5p-8."""
 
 import argparse
+import base64
 import dataclasses
 import json
 import logging
@@ -18,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.inference import inference_pb2
 from levanter.inference.engine import Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -78,7 +80,7 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
         "return_route_captures": capture_routes,
     }
     completed = False
-    route_frame = False
+    captured_routes = False
     with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=180.0) as response:
         response.raise_for_status()
         for line in response.iter_lines():
@@ -88,8 +90,11 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
             if payload == "[DONE]":
                 completed = True
                 break
-            route_frame |= "levanter_route_frame" in json.loads(payload)
-    if not completed or (capture_routes and not route_frame):
+            encoded = json.loads(payload).get("levanter_generation")
+            if encoded is not None:
+                generation = inference_pb2.GenerateResponse.FromString(base64.b64decode(encoded, validate=True))
+                captured_routes = any(choice.HasField("router_replay") for choice in generation.choices)
+    if not completed or (capture_routes and not captured_routes):
         raise RuntimeError("Native chat preflight did not complete its requested stream")
     logger.info("Native chat stream completed with route capture %s", capture_routes)
 

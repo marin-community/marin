@@ -1,17 +1,18 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import base64
 import dataclasses
 import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from contextlib import asynccontextmanager
 from threading import Event
 
 import equinox as eqx
+import grpc
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -37,14 +38,7 @@ try:
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
-    from levanter.inference.binary import (
-        GENERATE_PATH,
-        MEDIA_TYPE,
-        PROMPT_TOKEN_IDS,
-        choice_expert_routes,
-        decode_frame,
-        encode_frame,
-    )
+    from levanter.inference import inference_pb2, inference_pb2_grpc
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -58,7 +52,8 @@ try:
     )
     from levanter.inference.snowball_publication import publish_snowball_checkpoint
     from levanter.inference.openai_protocol import ChatMessage
-    from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
+    from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
+    from levanter.inference.router_replay import read_router_replay
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -89,6 +84,8 @@ def inference_server_config():
             hbm_utilization=0.1,
         ),
         model_name=TEST_MODEL_NAME,
+        host="127.0.0.1",
+        grpc_port=0,
         temperature=0.7,
         seed=42,
     )
@@ -826,28 +823,56 @@ def test_tokens_endpoint(test_client):
     print(f"Tokenization results: {result['results']}")
 
 
-def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
-    client, _ = test_client
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    body = encode_frame({"max_tokens": 2, "temperature": 0, "seed": 17}, {PROMPT_TOKEN_IDS: prompt})
-    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-    assert response.status_code == 200, response.text
-    metadata, tensors = decode_frame(response.content)
+def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
+    _, server = test_client
+    prompt = [18, 7, 3, 18]
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        stub = inference_pb2_grpc.InferenceStub(channel)
+        result = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt, max_new_tokens=2, temperature=0, seed=17, num_choices=2
+            ),
+            timeout=30,
+        )
+        assert list(result.prompt_token_ids) == prompt
+        assert len(result.choices) == 2
+        for choice in result.choices:
+            assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
+            assert np.isfinite(choice.behavior_logprobs).all()
 
-    np.testing.assert_array_equal(tensors[PROMPT_TOKEN_IDS], prompt)
-    assert metadata["choices"][0]["completion_tokens"] == 2
-    assert metadata["choices"][0]["finish_reason"] == "length"
-    assert tensors["choice.0.token_ids"].shape == (2,)
-    assert tensors["choice.0.token_ids"].dtype == np.int32
-    assert tensors["choice.0.behavior_logprobs"].shape == (2,)
-    assert np.isfinite(tensors["choice.0.behavior_logprobs"]).all()
+        stop = result.choices[0].token_ids[0]
+        other = (stop + 1) % server.inference_context.model.Vocab.size
+        stopped = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt,
+                max_new_tokens=2,
+                temperature=0,
+                seed=17,
+                num_choices=2,
+                stop_sequences=[
+                    inference_pb2.TokenSequence(token_ids=[other, other]),
+                    inference_pb2.TokenSequence(token_ids=[stop]),
+                ],
+            ),
+            timeout=30,
+        )
+        assert [list(choice.token_ids) for choice in stopped.choices] == [[stop], [stop]]
 
-    wrong_dtype = encode_frame({"max_tokens": 2}, {PROMPT_TOKEN_IDS: prompt.astype(np.float32)})
-    response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
-    assert response.status_code == 400
+        with pytest.raises(grpc.RpcError) as invalid:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=TEST_MAX_SEQ_LEN),
+                timeout=30,
+            )
+        assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(grpc.RpcError) as unsupported:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=2, capture_router_replay=True),
+                timeout=30,
+            )
+        assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
 
-def test_binary_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
+def test_grpc_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
     model, tokenizer = generated_model_and_tokenizer
     config = dataclasses.replace(
         inference_server_config,
@@ -855,53 +880,57 @@ def test_binary_generation_returns_unwarped_policy_logprobs(inference_server_con
     )
     model = jax.tree.map(jnp.zeros_like, model)
     server = InferenceServer.create(config, model, tokenizer)
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    fields = {"max_tokens": 1, "temperature": 0.7, "top_p": 0.05, "seed": 17}
+    request = inference_pb2.GenerateRequest(
+        prompt_token_ids=[18, 7, 3, 18],
+        max_new_tokens=1,
+        temperature=0.7,
+        top_p=0.05,
+        seed=17,
+        expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+    )
     try:
-        with TestClient(server.app) as client:
-            response = client.post(
-                GENERATE_PATH,
-                content=encode_frame(fields | {"expected_logprob_mode": "policy"}, {"prompt_token_ids": prompt}),
-                headers={"content-type": MEDIA_TYPE},
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+        ):
+            stub = inference_pb2_grpc.InferenceStub(channel)
+            response = stub.Generate(request, timeout=30)
+            assert response.logprob_mode == inference_pb2.LOGPROB_MODE_POLICY
+            assert not response.choices[0].behavior_logprobs
+            np.testing.assert_allclose(
+                response.choices[0].policy_logprobs, [-np.log(model.Vocab.size)], atol=1e-5, rtol=0
             )
-            assert response.status_code == 200, response.text
-            metadata, tensors = decode_frame(response.content)
-            assert metadata["logprob_mode"] == "policy"
-            assert "choice.0.behavior_logprobs" not in tensors
-            expected = -np.log(model.Vocab.size)
-            np.testing.assert_allclose(tensors["choice.0.policy_logprobs"], [expected], atol=1e-5, rtol=0)
 
-            mismatch = client.post(
-                GENERATE_PATH,
-                content=encode_frame(fields | {"expected_logprob_mode": "behavior"}, {"prompt_token_ids": prompt}),
-                headers={"content-type": MEDIA_TYPE},
-            )
-            assert mismatch.status_code == 400
+            request.expected_logprob_mode = inference_pb2.LOGPROB_MODE_BEHAVIOR
+            with pytest.raises(grpc.RpcError) as mismatch:
+                stub.Generate(request, timeout=30)
+            assert mismatch.value.code() == grpc.StatusCode.FAILED_PRECONDITION
     finally:
         server.shutdown()
 
 
-def test_binary_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
+def test_grpc_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
     model, tokenizer = generated_model_and_tokenizer
     server = InferenceServer.create(inference_server_config, model, tokenizer)
     try:
-        with TestClient(server.app) as client:
-            _assert_binary_policy_fence(client, server)
+        with TestClient(server.app), _grpc_stub(server) as stub:
+            _assert_grpc_policy_fence(stub, server)
     finally:
         server.shutdown()
 
 
-def _assert_binary_policy_fence(client, server):
-    prompt = np.array([18, 7, 3], dtype=np.int32)
+@contextmanager
+def _grpc_stub(server):
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        yield inference_pb2_grpc.InferenceStub(channel)
 
+
+def _assert_grpc_policy_fence(stub, server):
     def generate(policy):
-        return client.post(
-            GENERATE_PATH,
-            content=encode_frame(
-                {"max_tokens": 2, "temperature": 0, "expected_policy_id": policy}, {"prompt_token_ids": prompt}
-            ),
-            headers={"content-type": MEDIA_TYPE},
+        request = inference_pb2.GenerateRequest(
+            prompt_token_ids=[18, 7, 3], max_new_tokens=2, temperature=0, expected_policy_id=policy
         )
+        return stub.Generate(request, timeout=30).choices[0]
 
     engine = server.inference_context.engine
     page_buffers = jax.tree.leaves(engine.gen_state.cache)
@@ -909,39 +938,31 @@ def _assert_binary_policy_fence(client, server):
     assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
     new_buffers = jax.tree.leaves(server.inference_context.engine.gen_state.cache)
     assert [buffer.addressable_data(0).unsafe_buffer_pointer() for buffer in new_buffers] == previous_storage
-    first_metadata, first_tensors = decode_frame(generate("policy-a").content)
-    assert first_metadata["choices"][0] == {
-        "completion_tokens": 2,
-        "finish_reason": "length",
-        "model_version": 1,
-        "policy_id": "policy-a",
-    }
+    first = generate("policy-a")
+    assert (first.policy_id, first.model_version) == ("policy-a", 1)
+    assert first.finish_reason == inference_pb2.FINISH_REASON_LENGTH
 
     def fail_load(model):
         raise RuntimeError("invalid replacement")
 
-    with pytest.raises(RuntimeError, match="invalid replacement"):
+    with pytest.raises(RuntimeError):
         server.reload(fail_load, expected_version=1, policy_id="policy-b")
-    still_first, still_first_tensors = decode_frame(generate("policy-a").content)
-    assert still_first == first_metadata
-    np.testing.assert_array_equal(still_first_tensors["choice.0.token_ids"], first_tensors["choice.0.token_ids"])
+    assert generate("policy-a") == first
 
     assert server.reload(lambda model: model, expected_version=1, policy_id="policy-b") == 2
     with pytest.raises(ValueError):
         server.reload(lambda model: model, expected_version=1, policy_id="policy-c")
     with pytest.raises(ValueError):
         server.reload(lambda model: model, expected_version=2, policy_id="policy-a")
-    assert generate("policy-a").status_code == 409
-    second_metadata, _ = decode_frame(generate("policy-b").content)
-    assert second_metadata["choices"][0] == {
-        "completion_tokens": 2,
-        "finish_reason": "length",
-        "model_version": 2,
-        "policy_id": "policy-b",
-    }
+    with pytest.raises(grpc.RpcError) as stale:
+        generate("policy-a")
+    assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    second = generate("policy-b")
+    assert (second.policy_id, second.model_version) == ("policy-b", 2)
+    assert second.finish_reason == inference_pb2.FINISH_REASON_LENGTH
 
 
-def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
     tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     cfg = SnowballConfig(
         vocab_size=len(tokenizer),
@@ -959,6 +980,8 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         attention_implementation="reference",
     )
     server_config = InferenceServerConfig(
+        host="127.0.0.1",
+        grpc_port=0,
         initial_policy_id="test-snowball-policy",
         service=InferenceEngineConfig(
             max_seq_len=32,
@@ -980,15 +1003,19 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
             model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
             server = InferenceServer.create(server_config, model, tokenizer, mesh=mesh)
             try:
-                with TestClient(server.app) as client:
-                    body = encode_frame(
-                        {"max_tokens": 4, "temperature": 0, "return_route_captures": True},
-                        {"prompt_token_ids": prompt},
+                with TestClient(server.app) as client, _grpc_stub(server) as stub:
+                    response = stub.Generate(
+                        inference_pb2.GenerateRequest(
+                            prompt_token_ids=prompt.tolist(),
+                            max_new_tokens=4,
+                            temperature=0,
+                            capture_router_replay=True,
+                            expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+                        ),
+                        timeout=30,
                     )
-                    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-                    assert response.status_code == 200, response.text
-                    _, tensors = decode_frame(response.content)
-                    rollout = BinaryRolloutChoice(response.content, 0)
+                    choice = response.choices[0]
+                    rollout = RolloutChoice(response, 0)
                     messages = [{"role": "user", "content": "hi"}]
                     chat = client.post(
                         "/v1/chat/completions",
@@ -1003,23 +1030,24 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
                     )
                     assert chat.status_code == 200
                     events = [json.loads(line[6:]) for line in chat.text.splitlines() if line.startswith("data: {")]
-                    (final,) = [event for event in events if "levanter_route_frame" in event]
-                    frame = base64.b64decode(final["levanter_route_frame"], validate=True)
-                    metadata, stream_tensors = decode_frame(frame)
+                    (final,) = [event for event in events if "levanter_generation" in event]
+                    capture = inference_pb2.GenerateResponse.FromString(
+                        base64.b64decode(final["levanter_generation"], validate=True)
+                    )
                     expected_prompt = _compute_tokens([ChatMessage(**messages[0])], tokenizer, None, None)
-                    np.testing.assert_array_equal(stream_tensors["prompt_token_ids"], expected_prompt)
-                    streamed_ids = stream_tensors["choice.0.token_ids"]
-                    assert streamed_ids.size == metadata["choices"][0]["completion_tokens"] == 2
-                    _, stream_valid = choice_expert_routes(
-                        stream_tensors, 0, np.concatenate((expected_prompt, streamed_ids))
+                    np.testing.assert_array_equal(capture.prompt_token_ids, expected_prompt)
+                    streamed_ids = capture.choices[0].token_ids
+                    assert len(streamed_ids) == 2
+                    _, stream_valid = read_router_replay(
+                        capture, 0, np.concatenate((expected_prompt, streamed_ids)).astype(np.int32)
                     )
                     assert stream_valid[:-1].all() and not stream_valid[-1]
 
             finally:
                 server.inference_context.shutdown()
 
-            inputs = np.concatenate((prompt, tensors["choice.0.token_ids"]))
-            experts, valid = choice_expert_routes(tensors, 0, inputs)
+            inputs = np.concatenate((prompt, choice.token_ids)).astype(np.int32)
+            experts, valid = read_router_replay(response, 0, inputs)
             tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
             replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
             learner_loss, _ = model.next_token_loss_and_metrics(
@@ -1041,24 +1069,22 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
                 old_logprobs=hax.zeros(response_axes),
                 reference_logprobs=None,
             )
-            prepared = prepare_binary_policy_batch(model, batch, [rollout], policy_id="test-snowball-policy")
-            np.testing.assert_array_equal(prepared.old_logprobs.array[0, :-1], tensors["choice.0.policy_logprobs"])
+            prepared = prepare_rollout_policy_batch(model, batch, [rollout], policy_id="test-snowball-policy")
+            np.testing.assert_array_equal(prepared.old_logprobs.array[0, :-1], choice.policy_logprobs)
             np.testing.assert_allclose(
                 response_logprobs(model, prepared, block_size=8).array[0, :-1],
-                tensors["choice.0.policy_logprobs"],
+                choice.policy_logprobs,
                 atol=1e-5,
                 rtol=0,
             )
             with pytest.raises(ValueError):
-                prepare_binary_policy_batch(model, batch, [rollout], policy_id="stale-policy")
+                prepare_rollout_policy_batch(model, batch, [rollout], policy_id="stale-policy")
 
-    np.testing.assert_allclose(
-        tensors["choice.0.policy_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
-    )
+    np.testing.assert_allclose(choice.policy_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
     wrong_inputs = inputs.copy()
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
-        choice_expert_routes(tensors, 0, wrong_inputs)
+        read_router_replay(response, 0, wrong_inputs)
 
 
 def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_path, local_gpt2_tokenizer):
@@ -1078,6 +1104,8 @@ def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_pa
         attention_implementation="reference",
     )
     options = InferenceServerConfig(
+        host="127.0.0.1",
+        grpc_port=0,
         service=InferenceEngineConfig(
             max_seq_len=16,
             max_pages=16,
@@ -1110,26 +1138,30 @@ def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_pa
         server = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
         peer = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
         try:
-            with TestClient(server.app) as client, TestClient(peer.app) as peer_client:
+            with (
+                TestClient(server.app) as client,
+                TestClient(peer.app) as peer_client,
+                _grpc_stub(server) as stub,
+                _grpc_stub(peer) as peer_stub,
+            ):
                 prompt = np.array([2, 5, 7], dtype=np.int32)
 
-                def generate(policy_id, target=client):
-                    request = encode_frame(
-                        {
-                            "max_tokens": 3,
-                            "temperature": 0,
-                            "return_route_captures": True,
-                            "expected_policy_id": policy_id,
-                        },
-                        {"prompt_token_ids": prompt},
+                def generate(policy_id, target=stub):
+                    return target.Generate(
+                        inference_pb2.GenerateRequest(
+                            prompt_token_ids=prompt.tolist(),
+                            max_new_tokens=3,
+                            temperature=0,
+                            capture_router_replay=True,
+                            expected_policy_id=policy_id,
+                        ),
+                        timeout=30,
                     )
-                    return target.post(GENERATE_PATH, content=request, headers={"content-type": MEDIA_TYPE})
 
-                before = generate("starting")
-                assert before.status_code == 200
+                before = generate("starting").choices[0]
                 with pytest.raises(ValueError):
                     publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
-                assert generate("starting", peer_client).status_code == 200
+                assert generate("starting", peer_stub).choices[0] == before
 
                 for target in (client, peer_client):
                     paused = target.post("/pause_generation", json={"mode": "abort", "clear_cache": True})
@@ -1138,35 +1170,28 @@ def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_pa
                 assert publish_snowball_checkpoint(server, path, policy_version=2, expected_serving_version=0) == 1
                 with pytest.raises(FileNotFoundError):
                     publish_snowball_checkpoint(peer, incomplete, policy_version=2, expected_serving_version=0)
-                assert generate("starting").status_code == 409
-                assert generate("learned:2", peer_client).status_code == 409
-                for target, policy_id in ((client, "learned:2"), (peer_client, "starting")):
-                    reply = generate(policy_id, target)
-                    assert reply.status_code == 200, reply.text
-                    receipt, arrays = decode_frame(reply.content)
-                    assert receipt["choices"][0]["policy_id"] == policy_id
-                    assert receipt["choices"][0]["finish_reason"] == "abort"
-                    assert not arrays["choice.0.token_ids"].size
+                for target, stale_id, active_id in (
+                    (stub, "starting", "learned:2"),
+                    (peer_stub, "learned:2", "starting"),
+                ):
+                    with pytest.raises(grpc.RpcError) as stale:
+                        generate(stale_id, target)
+                    assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+                    stopped = generate(active_id, target).choices[0]
+                    assert stopped.policy_id == active_id
+                    assert stopped.finish_reason == inference_pb2.FINISH_REASON_ABORT
+                    assert not stopped.token_ids
 
                 assert publish_snowball_checkpoint(peer, path, policy_version=2, expected_serving_version=0) == 1
                 for target in (client, peer_client):
                     assert target.post("/resume_generation").status_code == 200
                 result = generate("learned:2")
-                assert result.status_code == 200
-                metadata, tensors = decode_frame(result.content)
-                assert metadata["choices"][0]["policy_id"] == "learned:2"
-                reply = generate("learned:2", peer_client)
-                assert reply.status_code == 200, reply.text
-                peer_metadata, peer_tensors = decode_frame(reply.content)
-                assert peer_metadata["choices"] == metadata["choices"]
-                np.testing.assert_array_equal(peer_tensors["choice.0.token_ids"], tensors["choice.0.token_ids"])
-                np.testing.assert_array_equal(
-                    peer_tensors["choice.0.policy_logprobs"], tensors["choice.0.policy_logprobs"]
-                )
-                _, previous = decode_frame(before.content)
-                assert not np.array_equal(tensors["choice.0.policy_logprobs"], previous["choice.0.policy_logprobs"])
-                tokens = np.r_[prompt, tensors["choice.0.token_ids"]]
-                experts, valid = choice_expert_routes(tensors, 0, tokens)
+                choice = result.choices[0]
+                assert choice.policy_id == "learned:2"
+                assert generate("learned:2", peer_stub) == result
+                assert choice.policy_logprobs != before.policy_logprobs
+                tokens = np.r_[prompt, choice.token_ids].astype(np.int32)
+                experts, valid = read_router_replay(result, 0, tokens)
                 inputs = hax.named(jnp.asarray(tokens[None]), ("batch", "position"))
                 replay = learned.prepare_route_replay(
                     jnp.asarray(experts[:, None]), hax.named(valid[None], inputs.axes)
@@ -1175,7 +1200,7 @@ def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_pa
                     LmExample(inputs, hax.ones(inputs.axes)), route_replay=replay, reduction=None
                 )
                 np.testing.assert_allclose(
-                    tensors["choice.0.policy_logprobs"], -loss.array[0, prompt.size - 1 : -1], rtol=0, atol=1e-5
+                    choice.policy_logprobs, -loss.array[0, prompt.size - 1 : -1], rtol=0, atol=1e-5
                 )
         finally:
             peer.shutdown()
@@ -1224,31 +1249,24 @@ def test_openai_generation_reports_stop_at_the_token_limit(greedy_client, chat):
     assert [choice["finish_reason"] for choice in stopped.json()["choices"]] == ["stop", "stop"]
 
 
-def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(greedy_client):
-    client = greedy_client
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    options = {"max_tokens": 1, "temperature": 0, "seed": 17, "n": 2}
+def test_grpc_multi_choice_generation_reports_stop_at_the_token_limit(inference_server, test_client):
+    request = inference_pb2.GenerateRequest(
+        prompt_token_ids=[18, 7, 3, 18], max_new_tokens=1, temperature=0, seed=17, num_choices=2
+    )
+    with _grpc_stub(inference_server) as stub:
+        limited = stub.Generate(request, timeout=30)
+        token = limited.choices[0].token_ids[0]
+        assert token == limited.choices[1].token_ids[0]
+        other = (token + 1) % inference_server.inference_context.model.Vocab.size
+        request.stop_sequences.add(token_ids=[other, other])
+        request.stop_sequences.add(token_ids=[token])
+        stopped = stub.Generate(request, timeout=30)
 
-    def generate(metadata):
-        response = client.post(
-            GENERATE_PATH,
-            content=encode_frame(metadata, {PROMPT_TOKEN_IDS: prompt}),
-            headers={"content-type": MEDIA_TYPE},
-        )
-        assert response.status_code == 200, response.text
-        return decode_frame(response.content)
-
-    limited, limited_tensors = generate(options)
-    token = int(limited_tensors["choice.0.token_ids"][0])
-    other = (token + 1) % 19
-    stopped, stopped_tensors = generate({**options, "stop_tokens": [[other, other], [token]]})
-
-    assert [choice["finish_reason"] for choice in limited["choices"]] == ["length", "length"]
-    assert [choice["finish_reason"] for choice in stopped["choices"]] == ["stop", "stop"]
-    for i in range(2):
-        for name in ("token_ids", "behavior_logprobs"):
-            key = f"choice.{i}.{name}"
-            np.testing.assert_array_equal(stopped_tensors[key], limited_tensors[key])
+    for limited_choice, stopped_choice in zip(limited.choices, stopped.choices, strict=True):
+        assert limited_choice.finish_reason == inference_pb2.FINISH_REASON_LENGTH
+        assert stopped_choice.finish_reason == inference_pb2.FINISH_REASON_STOP
+        assert stopped_choice.token_ids == limited_choice.token_ids
+        assert stopped_choice.behavior_logprobs == limited_choice.behavior_logprobs
 
 
 PREFILL_GATE_TIMEOUT = 30
@@ -1256,12 +1274,11 @@ ADMISSION_TIMEOUT = 5
 
 
 @pytest.fixture
-def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
+def gated_server(inference_server_config, local_gpt2_tokenizer, fixed_token_model, monkeypatch):
     started = Event()
     release = Event()
     registered = {request_id: Event() for request_id in ("running", "queued", "disconnecting")}
-    disconnect = Event()
-    disconnect_observed = Event()
+    disconnected = Event()
 
     def gate(_positions):
         if not started.is_set():
@@ -1283,124 +1300,97 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
     )
     server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
 
-    async def observe_registration(scope, receive, send):
-        headers = dict(scope.get("headers", []))
-        request_id = headers.get(b"x-request-id", b"").decode()
-        read_body = False
+    ctx = server.inference_context
+    register = ctx._register_request
+    abort = ctx.abort
 
-        async def receive_request():
-            nonlocal read_body
-            if read_body and request_id in registered:
-                registered[request_id].set()
-            if read_body and request_id == "disconnecting" and await asyncio.to_thread(disconnect.wait, 30):
-                asyncio.get_running_loop().call_soon(disconnect_observed.set)
-                return {"type": "http.disconnect"}
-            message = await receive()
-            if message["type"] == "http.request" and not message.get("more_body", False):
-                read_body = True
-            return message
+    def observe_registration(request_id):
+        event = register(request_id)
+        if request_id in registered:
+            registered[request_id].set()
+        return event
 
-        await server.app(scope, receive_request, send)
+    def observe_abort(request_ids):
+        abort(request_ids)
+        if "disconnecting" in request_ids:
+            disconnected.set()
 
+    monkeypatch.setattr(ctx, "_register_request", observe_registration)
+    monkeypatch.setattr(ctx, "abort", observe_abort)
     try:
-        with TestClient(observe_registration) as client:
-            yield client, started, release, registered, disconnect, disconnect_observed
+        with TestClient(server.app) as client, _grpc_stub(server) as stub:
+            yield client, stub, started, release, registered, disconnected
     finally:
         release.set()
-        disconnect.set()
         server.shutdown()
 
 
-def _generate_policy_zero(client, ids, request_id, max_tokens=4):
-    response = client.post(
-        GENERATE_PATH,
-        content=encode_frame(
-            {"max_tokens": max_tokens, "temperature": 0, "expected_policy_id": "policy-0"},
-            {PROMPT_TOKEN_IDS: ids},
+def _generate_policy_zero(stub, ids, request_id, max_tokens=4):
+    return stub.Generate(
+        inference_pb2.GenerateRequest(
+            prompt_token_ids=list(ids), max_new_tokens=max_tokens, temperature=0, expected_policy_id="policy-0"
         ),
-        headers={"content-type": MEDIA_TYPE, "x-request-id": request_id},
-    )
-    assert response.status_code == 200, response.text
-    return decode_frame(response.content)
+        metadata=(("x-request-id", request_id),),
+        timeout=PREFILL_GATE_TIMEOUT,
+    ).choices[0]
 
 
-def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gated_binary_server):
-    client, started, release, registered, _, _ = gated_binary_server
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+def _assert_partial_rollout_resumes(stub, prompt, partial):
+    assert partial.finish_reason == inference_pb2.FINISH_REASON_ABORT
+    assert partial.policy_id == "policy-0"
+    assert list(partial.token_ids) == [3]
+    resumed = _generate_policy_zero(stub, [*prompt, *partial.token_ids], "resumed", max_tokens=3)
+    whole = _generate_policy_zero(stub, prompt, "uninterrupted")
+    assert whole.finish_reason == inference_pb2.FINISH_REASON_LENGTH
+    assert [*partial.token_ids, *resumed.token_ids] == list(whole.token_ids)
+    np.testing.assert_array_equal([*partial.behavior_logprobs, *resumed.behavior_logprobs], whole.behavior_logprobs)
 
+
+def test_grpc_abort_preserves_exact_running_output_and_cancels_queued_work(gated_server):
+    client, stub, started, release, registered, _ = gated_server
+    prompt = [18, 7, 3, 18]
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
-            running = pool.submit(_generate_policy_zero, client, prompt, "running")
+            running = pool.submit(_generate_policy_zero, stub, prompt, "running")
             assert started.wait(PREFILL_GATE_TIMEOUT)
-            queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
+            queued = pool.submit(_generate_policy_zero, stub, prompt, "queued")
             assert registered["queued"].wait(ADMISSION_TIMEOUT)
-            abort = client.post("/abort", json={"request_ids": ["running", "queued"]})
-            assert abort.status_code == 200
-            empty_metadata, empty_tensors = queued.result(timeout=ADMISSION_TIMEOUT)
-            assert empty_metadata["choices"] == [
-                {"finish_reason": "abort", "completion_tokens": 0, "policy_id": "policy-0", "model_version": 0}
-            ]
-            assert not empty_tensors["choice.0.token_ids"].size
-            assert not empty_tensors["choice.0.behavior_logprobs"].size
+            assert client.post("/abort", json={"request_ids": ["running", "queued"]}).status_code == 200
+            empty = queued.result(timeout=ADMISSION_TIMEOUT)
+            assert empty.finish_reason == inference_pb2.FINISH_REASON_ABORT
+            assert (empty.policy_id, empty.model_version) == ("policy-0", 0)
+            assert not empty.token_ids and not empty.behavior_logprobs
         finally:
             release.set()
-        partial_metadata, partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
-
-    assert partial_metadata["choices"] == [
-        {"finish_reason": "abort", "completion_tokens": 1, "policy_id": "policy-0", "model_version": 0}
-    ]
-    ids_key, score_key = "choice.0.token_ids", "choice.0.behavior_logprobs"
-    _, resumed = _generate_policy_zero(client, np.concatenate((prompt, partial[ids_key])), "resumed", max_tokens=3)
-    _, uninterrupted = _generate_policy_zero(client, prompt, "uninterrupted")
-    for key in (ids_key, score_key):
-        np.testing.assert_array_equal(np.concatenate((partial[key], resumed[key])), uninterrupted[key])
+        partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
+    _assert_partial_rollout_resumes(stub, prompt, partial)
 
 
-def test_binary_disconnect_releases_running_generation(gated_binary_server):
-    client, started, release, registered, disconnect, disconnect_observed = gated_binary_server
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-    body = encode_frame({"max_tokens": 4, "temperature": 0}, {PROMPT_TOKEN_IDS: prompt})
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        try:
-            running = pool.submit(
-                client.post,
-                GENERATE_PATH,
-                content=body,
-                headers={"content-type": MEDIA_TYPE, "x-request-id": "disconnecting"},
-            )
-            assert started.wait(PREFILL_GATE_TIMEOUT)
-            assert registered["disconnecting"].wait(ADMISSION_TIMEOUT)
-            disconnect.set()
-            assert disconnect_observed.wait(ADMISSION_TIMEOUT)
-        finally:
-            disconnect.set()
-            release.set()
-        response = running.result(timeout=PREFILL_GATE_TIMEOUT)
-
-    assert response.status_code == 200, response.text
-    metadata, tensors = decode_frame(response.content)
-    assert metadata["choices"][0]["finish_reason"] == "abort"
-    assert tensors["choice.0.token_ids"].tolist() == [3]
-
-    next_response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-    assert next_response.status_code == 200, next_response.text
-    metadata, tensors = decode_frame(next_response.content)
-    assert metadata["choices"][0]["finish_reason"] == "length"
-    assert tensors["choice.0.token_ids"].tolist() == [3] * 4
+def test_grpc_disconnect_releases_running_generation(gated_server):
+    _, stub, started, release, registered, disconnected = gated_server
+    request = inference_pb2.GenerateRequest(prompt_token_ids=[18, 7, 3, 18], max_new_tokens=4, temperature=0)
+    call = stub.Generate.future(request, metadata=(("x-request-id", "disconnecting"),), timeout=PREFILL_GATE_TIMEOUT)
+    try:
+        assert started.wait(PREFILL_GATE_TIMEOUT)
+        assert registered["disconnecting"].wait(ADMISSION_TIMEOUT)
+        assert call.cancel()
+        assert disconnected.wait(ADMISSION_TIMEOUT)
+    finally:
+        release.set()
+    response = stub.Generate(
+        request, metadata=(("x-request-id", "disconnecting"),), timeout=PREFILL_GATE_TIMEOUT
+    ).choices[0]
+    assert response.finish_reason == inference_pb2.FINISH_REASON_LENGTH
+    assert list(response.token_ids) == [3] * 4
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_server, stream):
-    client, started, release, registered, _, _ = gated_binary_server
-    body = encode_frame(
-        {"max_tokens": 4, "temperature": 0},
-        {PROMPT_TOKEN_IDS: np.array([18, 7, 3, 18], dtype=np.int32)},
-    )
+def test_http_abort_reason_is_serialized_for_queued_completions(gated_server, stream):
+    client, stub, started, release, registered, _ = gated_server
     completion = {"model": TEST_MODEL_NAME, "prompt": "A B", "temperature": 0, "max_tokens": 2, "stream": stream}
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
-            running = pool.submit(client.post, GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
+            running = pool.submit(_generate_policy_zero, stub, [18, 7, 3, 18], "running")
             assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(client.post, "/v1/completions", json=completion, headers={"x-request-id": "queued"})
             assert registered["queued"].wait(ADMISSION_TIMEOUT)
@@ -1418,44 +1408,33 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
             assert payload["choices"][0]["text"] == ""
         finally:
             release.set()
-        assert running.result(timeout=30).status_code == 200
+        assert running.result(timeout=30).finish_reason == inference_pb2.FINISH_REASON_LENGTH
 
 
-def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_binary_server):
-    client, started, release, registered, _, _ = gated_binary_server
-    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
-
+def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_server):
+    client, stub, started, release, registered, _ = gated_server
+    prompt = [18, 7, 3, 18]
     with ThreadPoolExecutor(max_workers=4) as pool:
         try:
-            running = pool.submit(_generate_policy_zero, client, prompt, "running")
+            running = pool.submit(_generate_policy_zero, stub, prompt, "running")
             assert started.wait(PREFILL_GATE_TIMEOUT)
-            queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
+            queued = pool.submit(_generate_policy_zero, stub, prompt, "queued")
             assert registered["queued"].wait(ADMISSION_TIMEOUT)
             pause = pool.submit(client.post, "/pause_generation", json={"mode": "abort", "clear_cache": True})
-            queued_metadata, queued_tensors = queued.result(timeout=ADMISSION_TIMEOUT)
-            assert queued_metadata["choices"][0]["finish_reason"] == "abort"
-            assert not queued_tensors["choice.0.token_ids"].size
-            assert not queued_tensors["choice.0.behavior_logprobs"].size
-            during_pause, _ = _generate_policy_zero(client, prompt, "during-pause")
-            assert during_pause["choices"][0]["finish_reason"] == "abort"
-            assert during_pause["choices"][0]["completion_tokens"] == 0
+            empty = queued.result(timeout=ADMISSION_TIMEOUT)
+            assert empty.finish_reason == inference_pb2.FINISH_REASON_ABORT
+            assert not empty.token_ids and not empty.behavior_logprobs
+            during_pause = _generate_policy_zero(stub, prompt, "during-pause")
+            assert during_pause.finish_reason == inference_pb2.FINISH_REASON_ABORT
+            assert not during_pause.token_ids
             assert not pause.done()
             resume = pool.submit(client.post, "/resume_generation")
         finally:
             release.set()
         assert pause.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
         assert resume.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
-        partial_metadata, partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
-
-    assert partial_metadata["choices"][0]["finish_reason"] == "abort"
-    assert partial_metadata["choices"][0]["policy_id"] == "policy-0"
-    ids_key, score_key = "choice.0.token_ids", "choice.0.behavior_logprobs"
-    assert partial[ids_key].tolist() == [3]
-    _, resumed = _generate_policy_zero(client, np.concatenate((prompt, partial[ids_key])), "resumed", max_tokens=3)
-    uninterrupted_metadata, uninterrupted = _generate_policy_zero(client, prompt, "uninterrupted")
-    assert uninterrupted_metadata["choices"][0]["finish_reason"] == "length"
-    for key in (ids_key, score_key):
-        np.testing.assert_array_equal(np.concatenate((partial[key], resumed[key])), uninterrupted[key])
+        partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
+    _assert_partial_rollout_resumes(stub, prompt, partial)
 
 
 @pytest.mark.parametrize(
@@ -1493,26 +1472,21 @@ def test_staged_weights_leave_admission_open_and_recheck_version(
             raise TimeoutError("Test did not release checkpoint staging")
         return jax.tree.map(jnp.zeros_like, model)
 
-    def generate(client, policy_id):
-        response = client.post(
-            GENERATE_PATH,
-            content=encode_frame(
-                {"max_tokens": 2, "temperature": 0, "expected_policy_id": policy_id},
-                {"prompt_token_ids": prompt},
+    def generate(stub, policy_id):
+        return stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt.tolist(), max_new_tokens=2, temperature=0, expected_policy_id=policy_id
             ),
-            headers={"content-type": MEDIA_TYPE},
-        )
-        return response
+            timeout=30,
+        ).choices[0]
 
     try:
-        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        with TestClient(server.app), _grpc_stub(server) as stub, ThreadPoolExecutor(max_workers=2) as pool:
             try:
                 staging = pool.submit(server.publish, restore, expected_version=0, policy_id="staged")
                 assert entered.wait(5)
-                during_stage = pool.submit(generate, client, "initial").result(timeout=30)
-                assert during_stage.status_code == 200, during_stage.text
-                during_metadata, _ = decode_frame(during_stage.content)
-                assert during_metadata["choices"][0]["model_version"] == 0
+                during_stage = pool.submit(generate, stub, "initial").result(timeout=30)
+                assert during_stage.model_version == 0
                 assert server.reload(lambda model: model, expected_version=0, policy_id="next") == 1
             finally:
                 release.set()
@@ -1520,12 +1494,11 @@ def test_staged_weights_leave_admission_open_and_recheck_version(
                 staging.result(timeout=30)
             with pytest.raises(ValueError, match="new, nonempty policy ID"):
                 server.publish(lambda model: model, expected_version=1, policy_id="next")
-            assert generate(client, "staged").status_code == 409
-            response = generate(client, "next")
-            assert response.status_code == 200
-            metadata, _ = decode_frame(response.content)
-            assert metadata["choices"][0]["model_version"] == 1
-            assert metadata["choices"][0]["policy_id"] == "next"
+            with pytest.raises(grpc.RpcError) as stale:
+                generate(stub, "staged")
+            assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+            choice = generate(stub, "next")
+            assert (choice.policy_id, choice.model_version) == ("next", 1)
     finally:
         server.shutdown()
 
@@ -1558,8 +1531,8 @@ def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inferenc
         server.shutdown()
 
 
-def test_live_chat_abort_returns_terminal_sse_event(gated_binary_server):
-    client, started, release, registered, _, _ = gated_binary_server
+def test_live_chat_abort_returns_terminal_sse_event(gated_server):
+    client, _, started, release, registered, _ = gated_server
     payload = {
         "model": TEST_MODEL_NAME,
         "temperature": 0,

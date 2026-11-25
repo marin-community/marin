@@ -253,6 +253,8 @@ class LevanterBackend:
                 trainer=loaded.trainer,
                 tokenizer=tokenizer_ref,
                 model_name=spec.api_model,
+                host=self.host,
+                grpc_port=self.config.grpc_port,
                 service=InferenceEngineConfig(
                     max_seq_len=loaded.max_seq_len,
                     max_seqs=self.config.max_seqs,

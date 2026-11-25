@@ -5,7 +5,8 @@ import asyncio
 import dataclasses
 
 import haliax as hax
-import httpx
+import grpc
+from fastapi.testclient import TestClient
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -14,21 +15,10 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.binary import (
-    GENERATE_PATH,
-    LOGPROB_MODE,
-    MEDIA_TYPE,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    choice_tensor_key,
-    decode_frame,
-    encode_frame,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
@@ -68,6 +58,8 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path):
         server = InferenceServer.create(
             InferenceServerConfig(
                 initial_policy_id=snapshot,
+                host="127.0.0.1",
+                grpc_port=0,
                 service=InferenceEngineConfig(
                     max_seq_len=256,
                     max_seqs=4,
@@ -89,31 +81,29 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path):
         try:
 
             async def generate():
-                async with httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=server.app), base_url="http://inference"
-                ) as client:
+                async with grpc.aio.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+                    stub = inference_pb2_grpc.InferenceStub(channel)
                     return await asyncio.gather(
                         *(
-                            client.post(
-                                GENERATE_PATH,
-                                headers={"content-type": MEDIA_TYPE},
-                                content=encode_frame(
-                                    {
-                                        "max_tokens": n_generated,
-                                        "temperature": 0.7,
-                                        "top_p": 0.8,
-                                        "seed": row,
-                                        "return_route_captures": True,
-                                        "expected_policy_id": snapshot,
-                                    },
-                                    {PROMPT_TOKEN_IDS: np.asarray(prompt, np.int32)},
+                            stub.Generate(
+                                inference_pb2.GenerateRequest(
+                                    prompt_token_ids=prompt,
+                                    max_new_tokens=n_generated,
+                                    temperature=0.7,
+                                    top_p=0.8,
+                                    seed=row,
+                                    capture_router_replay=True,
+                                    expected_policy_id=snapshot,
+                                    expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
                                 ),
+                                timeout=120,
                             )
                             for row, prompt in enumerate(prompts)
                         )
                     )
 
-            generations = asyncio.run(generate())
+            with TestClient(server.app):
+                generations = asyncio.run(generate())
         finally:
             server.shutdown()
 
@@ -123,18 +113,16 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path):
         rollouts = []
         served_scores = []
         for row, (prompt, generation) in enumerate(zip(prompts, generations, strict=True)):
-            assert generation.status_code == 200, generation.text
-            metadata, fields = decode_frame(generation.content)
-            assert metadata[LOGPROB_MODE] == LogprobMode.POLICY
-            assert metadata["choices"][0][POLICY_ID] == snapshot
-            generated = fields[choice_tensor_key(0, TOKEN_IDS)]
-            assert len(generated) == n_generated
-            full = prompt + generated.tolist()
+            choice = generation.choices[0]
+            assert generation.logprob_mode == inference_pb2.LOGPROB_MODE_POLICY
+            assert choice.policy_id == snapshot
+            assert len(choice.token_ids) == n_generated
+            full = prompt + list(choice.token_ids)
             tokens[row, : len(full)] = full
             attended[row, : len(full)] = 1
             response[row, len(prompt) - 1 : len(full) - 1] = True
-            rollouts.append(BinaryRolloutChoice(generation.content, 0))
-            served_scores.append(fields[choice_tensor_key(0, POLICY_LOGPROBS)])
+            rollouts.append(RolloutChoice(generation, 0))
+            served_scores.append(np.asarray(choice.policy_logprobs, dtype=np.float32))
 
         def named(values, axis):
             return hax.named(jnp.asarray(values), ("batch", axis))
@@ -152,7 +140,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path):
             old_logprobs=hax.zeros(mask.axes),
             reference_logprobs=None,
         )
-        batch = prepare_binary_policy_batch(model, batch, rollouts, policy_id=snapshot)
+        batch = prepare_rollout_policy_batch(model, batch, rollouts, policy_id=snapshot)
         batch = dataclasses.replace(batch, reference_logprobs=batch.old_logprobs)
         scores = jax.jit(response_logprobs)(model, batch).array
 
