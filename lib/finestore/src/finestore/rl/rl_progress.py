@@ -56,6 +56,14 @@ class Invariant(BaseModel):
     replicate: int = 0
 
 
+class EvaluationScore(BaseModel):
+    profile: str
+    step: int
+    statistic: str
+    final: bool
+    comparability: str | None = None
+
+
 class Comparison(BaseModel):
     metric: str
     role: ComparisonRole
@@ -75,6 +83,7 @@ class Comparison(BaseModel):
     tasks: int | None = None
     control_min: float | None = None
     control_max: float | None = None
+    evaluation_score: EvaluationScore | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 Count = Annotated[StrictInt, Field(ge=0)]
@@ -150,13 +159,15 @@ class AttemptSummary(BaseModel):
     series: str | None = None
     model: Identity | None = None
     preset_version: Identity | None = None
+    base_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     control: ControlReplicate | None = None
     control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_task_set: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    is_control: bool = False
+    is_control: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaldash_run_ids: tuple[Identity, ...] | None = Field(default=None, exclude=True)
     user: Identity | None = None
     branch: str | None = None
     commit: Identity | None = None

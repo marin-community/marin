@@ -296,6 +296,7 @@ def build_experiment(
         resume=resume,
         options=options,
         sft_preset=sft_preset,
+        preset=preset,
     )
     runs = []
     for replicate in range(replicates):
@@ -548,17 +549,17 @@ def run_index_identity(
     )
 
 
-def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
+def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str | None]:
     """Fingerprint the nominal preset at the source commit's main merge base."""
-    if index.is_control and index.branch == "main":
-        return index.preset_version
     root = recipe.REPO_ROOT
     preset = index.preset
     try:
         base = git_output(["merge-base", index.source_revision, "origin/main"], cwd=root, timeout=4)
     except (OSError, RuntimeError):
         logger.debug("Git could not resolve the main merge base for preset %s", preset)
-        return None
+        return None, None
+    if index.is_control and index.branch == "main" and index.source_revision == base and not index.dirty:
+        return base, index.preset_version
     try:
         snapshot = subprocess.run(
             [
@@ -589,8 +590,11 @@ def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
             # The launcher owns the JSON protocol, including for bases that predate it.
-            cli = Path(__file__).with_name("rl_preset_cli.py")
-            shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
+            for name in ("rl_preset_cli.py", "rl_preset_plan.py"):
+                source = Path(__file__).with_name(name)
+                destination = path / "experiments/post_training" / name
+                if not destination.is_file():
+                    shutil.copyfile(source, destination)
             native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
             if not (path / native_cli).is_file():
                 shutil.copyfile(root / native_cli, path / native_cli)
@@ -617,10 +621,10 @@ def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
                 timeout=180,
             )
             launch = json.loads(result.stdout)
-            return rl_gate.config_version(launch) if isinstance(launch, dict) else None
+            return base, rl_gate.config_version(launch) if isinstance(launch, dict) else None
     except (OSError, subprocess.SubprocessError, tarfile.TarError, ValueError, InvalidComparison) as error:
         logger.debug("Could not load preset %s from main commit %s (%s)", preset, base, type(error).__name__)
-        return None
+        return base, None
 
 
 class _PublicationWatch(BaseModel):
@@ -773,8 +777,9 @@ def _submit_from_launcher(
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
     index: RunIndexIdentity = context.meta["rl_index"]
+    base_commit, base_version = _base_preset(module, index)
     index = index.model_copy(
-        update={"submitted_at": submitted_at, "base_preset_version": _base_preset_version(module, index)}
+        update={"submitted_at": submitted_at, "base_commit": base_commit, "base_preset_version": base_version}
     )
     runs = _from_handles(rl_handles).runs
     indexed_runs = {

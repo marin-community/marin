@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { RL_PROGRESS_URL } from '@/constants'
+import { RL_PROGRESS_APPLET_ID } from '@/constants'
 import {
   formatDuration,
   formatInterval,
@@ -28,7 +28,7 @@ const props = defineProps<{ runId: string }>()
 const { data, loading, error, refresh } = useApi<EvalRecord>(() => `api/runs/${props.runId}`)
 const rlAttemptUrl = computed(() => {
   const attempt = data.value?.rl_attempt
-  return attempt ? `${RL_PROGRESS_URL}#${new URLSearchParams({ run: attempt.run_id, attempt: attempt.attempt_id })}` : null
+  return attempt ? `/a/${RL_PROGRESS_APPLET_ID}/#${new URLSearchParams({ run: attempt.run_id, attempt: attempt.attempt_id })}` : null
 })
 
 onMounted(refresh)

@@ -127,7 +127,12 @@ class _TerminalMeasurements:
 
 
 def _terminal_measurements(
-    run_output: str, preset: presets.Preset, attempt: AttemptRecord, launch: RecordedLaunch, evidence: list[str]
+    run_output: str,
+    preset: presets.Preset,
+    attempt: AttemptRecord,
+    launch: RecordedLaunch,
+    evidence: list[str],
+    inputs: RunInputs,
 ) -> _TerminalMeasurements:
     attempt_id = launch.attempt_id
     result = attempt.native.result
@@ -146,7 +151,7 @@ def _terminal_measurements(
         callback.type == "evaluation" for callback in launch.callbacks or ()
     )
     if has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
-        status = evaluation_status(run_output, preset, attempt, launch)
+        status = evaluation_status(run_output, preset, attempt, launch, inputs=inputs)
         evaluations = list(status.evaluations)
         evaluation_task_set = status.evaluation_task_set
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
@@ -263,7 +268,9 @@ def build_record(
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
-        _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
+        _terminal_measurements(run_output, preset, attempt, launch, evidence, inputs)
+        if terminal
+        else _TerminalMeasurements()
     )
     failed = list(measured.failed_facts)
     if interrupted:
@@ -284,7 +291,8 @@ def build_record(
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=bool(control or inputs.control or (index and index.is_control)),
+        is_control=True if control or inputs.control else index.is_control if index is not None else None,
+        base_commit=index.base_commit if index is not None else None,
         base_preset_version=index.base_preset_version if index is not None else None,
         control=control or inputs.control,
         control_preset=preset.control_preset if preset.gated else None,
@@ -312,7 +320,9 @@ def build_record(
         source_revision=(
             f"base={index.source_revision} tree={index.tree_hash or 'Unknown'}"
             if index is not None
-            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
+            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}"
+            if provenance
+            else "Unknown"
         ),
         data_identity="; ".join(source.identity for source in launch.train_data) or None,
         initializer_identity=launch.model_identity,

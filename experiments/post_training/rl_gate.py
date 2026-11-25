@@ -9,7 +9,6 @@ import json
 import math
 import re
 import statistics
-import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -32,8 +31,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     read_skyrl_attempt,
-    skyrl_cpu_command,
-    skyrl_cpu_environment,
     skyrl_execution,
     skyrl_step,
 )
@@ -50,12 +47,17 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_measurements import (
-    InvalidComparison,
     RunInputs,
     RunMeasurements,
     read_measurements,
     read_recorded_launch,
     read_run_inputs,
+)
+from experiments.post_training.rl_preset_plan import (
+    InvalidComparison,
+    compose_configs,
+    preset_launch_yaml,
+    run_native_json,
 )
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
@@ -272,7 +274,11 @@ def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison])
     effect = (
         Effect.TRADE_OFF
         if better and worse
-        else Effect.IMPROVES if better else Effect.REGRESSION if worse else Effect.NO_CHANGE
+        else Effect.IMPROVES
+        if better
+        else Effect.REGRESSION
+        if worse
+        else Effect.NO_CHANGE
     )
     return verdict, effect
 
@@ -635,60 +641,22 @@ def _compose_plans(
         paths = []
         for index, candidate in enumerate(inputs):
             try:
-                spec = recipe.run_spec(
-                    preset,
-                    name=f"current-config-{index}",
-                    tasks=recipe.selection_artifact(candidate.tasks) if candidate.tasks else None,
-                    init=(recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None),
-                    resume=candidate.resume,
-                    settings=candidate.settings,
-                )
-                if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
-                    spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
-                step = recipe.run_step(preset, spec)
                 path = root / f"config-{index}.yaml"
-                path.write_text(materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml)
+                path.write_text(
+                    preset_launch_yaml(
+                        preset,
+                        name=f"current-config-{index}",
+                        tasks=recipe.selection_artifact(candidate.tasks) if candidate.tasks else None,
+                        init=recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None,
+                        resume=candidate.resume,
+                        settings=candidate.settings,
+                    )
+                )
                 paths.append(str(path))
             except (ValueError, click.BadParameter) as error:
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
 
         return compose_configs(paths)
-
-
-def run_native_json(*command: str, timeout: int = 120):
-    """Run a SkyRL CPU command that returns JSON on stdout."""
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            env=skyrl_cpu_environment(),
-            text=True,
-            timeout=timeout,
-        )
-        result.check_returncode()
-        return json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
-
-
-def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
-    """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    options = ("--validate-driver",) if validate_driver else ()
-    return run_native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        "compose",
-        *options,
-        "--",
-        *paths,
-    )
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:

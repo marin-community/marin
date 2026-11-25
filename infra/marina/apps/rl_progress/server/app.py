@@ -20,25 +20,27 @@ _RETAINED_FIELDS = (
     "model",
     "grader_report",
     "control",
+    "is_control",
     "evaluation_data_identity",
     "evaluation_task_set",
     "evaluation_protocol_identity",
     "native_run_id",
+    "base_commit",
     "base_preset_version",
     "launch_config",
 )
-_RETAINED_VALUES = ", ".join(
-    f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
-    for key in _RETAINED_FIELDS
-)
 _UPSERT = text(
-    f"""INSERT INTO rl_runs (run_id, attempt_id, record)
+    """INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
     ON CONFLICT (run_id, attempt_id) DO UPDATE
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
-        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+        ELSE EXCLUDED.record || (
+            SELECT jsonb_object_agg(key, COALESCE(NULLIF(EXCLUDED.record -> key, 'null'::jsonb),
+                                                  rl_runs.record -> key, 'null'::jsonb))
+            FROM unnest(CAST(:retained_fields AS text[])) AS retained(key)
+        )
       END
     RETURNING record"""
 )
@@ -105,7 +107,12 @@ def create_api(services):
                 incoming = summary.model_dump(mode="json")
                 stored = connection.execute(
                     _UPSERT,
-                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
+                    {
+                        "run_id": summary.run_id,
+                        "attempt_id": summary.attempt_id,
+                        "record": summary.model_dump_json(),
+                        "retained_fields": list(_RETAINED_FIELDS),
+                    },
                 ).scalar_one()
                 repaired = dict(stored)
                 for field in _RETAINED_FIELDS:
@@ -185,8 +192,7 @@ def create_api(services):
         with engine.connect() as connection:
             config = connection.execute(
                 text(
-                    "SELECT record -> 'launch_config' FROM rl_runs "
-                    "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                    "SELECT record -> 'launch_config' FROM rl_runs WHERE run_id = :run_id AND attempt_id = :attempt_id"
                 ),
                 {"run_id": run_id, "attempt_id": attempt_id},
             ).scalar_one_or_none()

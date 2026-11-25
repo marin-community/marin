@@ -133,6 +133,21 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
     return dict(groups)
 
 
+def score_membership(session: pa.Table, statistic: str) -> dict:
+    """Describe the stored task assignments consumed by an evaluation mean."""
+    columns = {
+        "family_mean": ("task_id", "family"),
+        "aai_weighted_mean": ("task_id", "aai_category"),
+    }.get(statistic, ("task_id",))
+    if statistic.startswith("family/"):
+        columns = ("task_id", "family")
+    members = {tuple(row[column] for column in columns) for row in session.select(columns).to_pylist()}
+    return {
+        "members": sorted(members, key=lambda values: (values[0], tuple(value or "" for value in values[1:]))),
+        "weights": AAII_WEIGHTS if statistic == "aai_weighted_mean" else None,
+    }
+
+
 def score_answers(scores: pa.Table) -> dict[str, float]:
     sessions = defaultdict(list)
     for row in scores.to_pylist():

@@ -70,8 +70,8 @@ Check cold-loaded run and attempt hash links, refresh after repeat publication,
 and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
-The `Marin - Release RL Progress` workflow runs on main pushes that change the
-app. Its manual dispatch defaults to inspection. The `rl-progress` CI job runs
+The `Marin - Release RL Progress` workflow runs when dispatched on main and defaults to
+inspection. The `rl-progress` CI job runs
 the packaged API and `marina journey rl_progress` browser owner.
 
 Release the shared runtime and history app together. The applet identity
