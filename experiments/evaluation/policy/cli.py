@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import click
 from evalrecords.records import PromptFormat
+from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 
 from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policies import POLICIES
@@ -35,9 +36,10 @@ class _Row:
 
 
 def _thinking(kwargs: Mapping[str, object]) -> str:
-    if "enable_thinking" not in kwargs:
-        return "default"
-    return "on" if kwargs["enable_thinking"] else "off"
+    """``on`` or ``off`` for the standard switch, else the template arguments the request sends, else ``default``."""
+    if "enable_thinking" in kwargs:
+        return "on" if kwargs["enable_thinking"] else "off"
+    return ",".join(f"{key}={value}" for key, value in kwargs.items()) or "default"
 
 
 def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
@@ -52,6 +54,7 @@ def _row(item: ResolvedPolicyEvaluation) -> _Row:
     config = selection_dataset(selection, model_format)
     protocol = config.protocol
     sampling = protocol.sampling
+    generation = item.candidate.model.generation
     judge = selection.run.judge
     return _Row(
         evaluation=item.evaluation.name,
@@ -60,7 +63,17 @@ def _row(item: ResolvedPolicyEvaluation) -> _Row:
         seed=_seed(item.seed, protocol.trials.seed),
         runs_as=f"{selection.benchmark}/{config.protocol_name} {protocol.operation.value}"
         + (f" {config.agent.harness.kind}" if config.agent is not None else ""),
-        think=_thinking(sampling.chat_template_kwargs) if sampling is not None else "-",
+        think=(
+            _thinking(
+                served_chat_template_kwargs(
+                    sampling.chat_template_kwargs,
+                    generation.chat_template_kwargs,
+                    generation.thinking_off_template_kwargs,
+                )
+            )
+            if sampling is not None and protocol.operation in CHAT_OPERATIONS
+            else "-"
+        ),
         trials=str(protocol.trials.count),
         cap=str(sampling.max_tokens) if sampling is not None and sampling.max_tokens is not None else "-",
         judge=f"{judge.deployment}:{judge.default_model}" if judge is not None else "-",
