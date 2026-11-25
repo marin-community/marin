@@ -132,3 +132,8 @@ class HistoryStagingReceipt(Artifact):
     item_batch_rows: int
     receipt_uri: str
     completed_at: str
+
+
+def sealed_contract_rows(document: dict) -> list[dict]:
+    """The derived-contract rows of a sealed ``fresh-contracts.json`` (``{"contracts": [...]}``)."""
+    return document["contracts"]

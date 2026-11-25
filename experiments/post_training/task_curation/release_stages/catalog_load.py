@@ -48,7 +48,7 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
     Query,
     history_staging_sizing,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
@@ -152,8 +152,7 @@ def run_dry_run(inputs: CatalogLoadInputs) -> dict:
     publication = read_ref(inputs.publication)
     if inputs.difficulty_snapshot is not None:
         verify_snapshot(inputs.difficulty_snapshot)
-    contracts_document = read_ref(inputs.staging["contracts"])
-    contract_rows = contracts_document if isinstance(contracts_document, list) else [contracts_document]
+    contract_rows = sealed_contract_rows(read_ref(inputs.staging["contracts"]))
     if len(contract_rows) != inputs.expected_contract_count:
         raise ValueError(f"{len(contract_rows)} derived contracts, expected {inputs.expected_contract_count}")
     measured = sum(row["input"]["measured_tasks"] for row in contract_rows)
@@ -275,8 +274,7 @@ def _run_write(
             raise ValueError(f"migration is not part of the in-repo schema: {migration!r}")
         query(migration, {})
 
-    contracts_document = read_ref(inputs.staging["contracts"])
-    contract_rows = contracts_document if isinstance(contracts_document, list) else [contracts_document]
+    contract_rows = sealed_contract_rows(read_ref(inputs.staging["contracts"]))
     contracts = [DerivedContractReceipt.model_validate(row) for row in contract_rows]
     if len(contracts) != inputs.expected_contract_count:
         raise ValueError(f"{len(contracts)} derived contracts, expected {inputs.expected_contract_count}")

@@ -12,7 +12,7 @@ import pytest
 
 from experiments.post_training.task_curation.release_stages import guard
 from experiments.post_training.task_curation.release_stages import snapshot_publication as sp
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, sealed_contract_rows
 
 
 def _write_json(tmp_path, name, document) -> ArtifactRef:
@@ -158,7 +158,8 @@ def test_seal_contracts_verifies_actor_binding_and_seals(tmp_path, monkeypatch):
     )
     binding_ref = sp.seal_contracts(inputs)
     sealed = json.loads((tmp_path / "releases/rtest/fresh-contracts.json").read_text())
-    assert [row["input"]["x"] for row in sealed["contracts"]] == [1, 2]
+    # The catalog stages read the sealed document through the same helper.
+    assert [row["input"]["x"] for row in sealed_contract_rows(sealed)] == [1, 2]
     assert (
         binding_ref.sha256 == hashlib.sha256((tmp_path / "releases/rtest/fresh-contracts.json").read_bytes()).hexdigest()
     )

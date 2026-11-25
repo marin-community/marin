@@ -267,7 +267,7 @@ def _staged_documents(tmp_path: Path) -> dict[str, dict]:
             "source_load_id": "a" * 32,
         },
         "fresh-qc.json": {"load_id": "b" * 32, "snapshot_id": "assembly-test-v1", "receipts": []},
-        "contracts.json": [{"input": {"measured_tasks": 4}}],
+        "contracts.json": {"contracts": [{"input": {"measured_tasks": 4}}]},
         "backend.json": {"sources": [{"source_id": SOURCE_A}, {"source_id": SOURCE_B}]},
         "identity.json": {"fingerprints": {SOURCE_A: {}, SOURCE_B: {}}},
     }
@@ -376,13 +376,13 @@ def test_catalog_stage_refusals(tmp_path, monkeypatch):
         catalog_stage, "CurationCatalog", lambda root: _FakeCatalog("assembly-test-v1", [SOURCE_A, SOURCE_B])
     )
     # Contracts disagree with the planned measured total.
-    contracts = [{"input": {"measured_tasks": 9}}]
+    contracts = {"contracts": [{"input": {"measured_tasks": 9}}]}
     (tmp_path / "contracts.json").write_text(json.dumps(contracts))
     bad_contracts = _sealed_staged_inputs(tmp_path)
     with pytest.raises(ValueError, match="measure 9 tasks"):
         catalog_stage.run_catalog_stage(bad_contracts, dry_run=True, feeds=_feeds(tmp_path))
     # Migration not in the in-repo schema.
-    (tmp_path / "contracts.json").write_text(json.dumps([{"input": {"measured_tasks": 4}}]))
+    (tmp_path / "contracts.json").write_text(json.dumps({"contracts": [{"input": {"measured_tasks": 4}}]}))
     with pytest.raises(ValueError, match="not part of the in-repo schema"):
         catalog_stage.run_catalog_stage(
             _sealed_staged_inputs(tmp_path, migrations=("ALTER TABLE atlas_items ADD COLUMN not_in_schema_v40 TEXT",)),

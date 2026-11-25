@@ -27,7 +27,7 @@ def _write_json(tmp_path, name, document) -> ArtifactRef:
 
 def _inputs(tmp_path, **overrides) -> cl.CatalogLoadInputs:
     contracts = overrides.pop("contract_rows", [])
-    contracts_ref = _write_json(tmp_path, "contracts.json", contracts)
+    contracts_ref = _write_json(tmp_path, "contracts.json", {"contracts": contracts})
     base = dict(
         release_id="rtest",
         prior_load_id=PRIOR,

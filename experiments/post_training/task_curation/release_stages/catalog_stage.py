@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
     DEFAULT_APPLET_ID,
     DEFAULT_SERVICE_URL,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 CATALOG_STAGE_SUFFIX = "catalog-staging"
@@ -134,8 +134,7 @@ def verify_staged_contracts(inputs: CatalogStageInputs, staged: dict[str, dict])
     The typed receipt validation itself belongs to the load stage; this plan stage
     refuses a staged document whose totals already disagree.
     """
-    document = staged["contracts"]
-    rows = document if isinstance(document, list) else [document]
+    rows = sealed_contract_rows(staged["contracts"])
     if len(rows) != inputs.expected_contract_count:
         raise ValueError(f"{len(rows)} derived contracts, expected {inputs.expected_contract_count}")
     measured = sum(row["input"]["measured_tasks"] for row in rows)
