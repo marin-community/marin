@@ -107,6 +107,13 @@ also follows a later quota change.
 
 `CoreWeaveStorageHeadroomLow` warns when a zone and storage class use more
 than 80% of their current quota or are projected to do so within 24 hours.
+Its alert links the [CoreWeave size-over-time viewer](https://cw-s3.oa.dev/?v=time)
+and opens a Loom storage investigation. Compare the viewer's scan timestamp,
+bucket and prefix growth with the live quota samples in the Storage dashboard.
+Trace growing prefixes to jobs or experiment records before attributing writes
+to a person. Mention an owner in the alert thread only after verifying both the
+evidence and their Slack user ID; otherwise report the likely source and the
+uncertainty without a mention.
 Grafana evaluates it every five minutes and delivers notifications to
 `#marin-alerts` between 15:00 and 16:00
 `America/Los_Angeles` each day, leaving at least an hour before a 17:00 finish.

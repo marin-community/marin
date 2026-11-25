@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
-from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
+from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting, TrainerMemoryProfile
 from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
@@ -188,6 +188,8 @@ class PolicyMegatronConfig(Section):
     moe_router_replay: bool = field(False)
     "Replay expert choices captured during rollout."
     check_dp_weight_consistency: bool = field(False)
+    output_projection_chunk_size: PositiveInt | None = unset_field()
+    memory_profile: TrainerMemoryProfile = unset_field()
 
 
 class Policy(Section):

@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, NonNegativeInt, PlainSerializer, PositiveInt
 
-from .model import FrozenMap, NumberMap, Section, SectionMap, thaw, unset_field
+from .model import FrozenMap, NumberMap, Section, SectionMap, field, thaw, unset_field
 from .sampling import EvalSamplingParams
 
 DAYTONA_EVAL_BACKEND = "daytona-eval"
@@ -195,6 +195,13 @@ class InferenceStatsCallback(Section):
     console_log_level: str = unset_field()
     poll_interval_seconds: int | float = unset_field()
     sinks: None = unset_field()
+
+
+class TrainerMemoryProfile(Section):
+    enabled: bool = field(False)
+    max_sequence_length: PositiveInt = unset_field()
+    valid_token_counts: tuple[PositiveInt, ...] = unset_field()
+    minimum_headroom_fraction: float = unset_field()
 
 
 LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
