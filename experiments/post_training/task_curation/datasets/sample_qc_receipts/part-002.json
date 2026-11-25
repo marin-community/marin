@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "5fa00a81cfb2bd9e2b4216902b3c460d4b209375",
-  "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts_workplace_20261125_b_v1/part-002.json",
+  "revision": "a0817555a03ceec14ed248d39b0236372b44919e",
+  "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts_facet_quiesce_20261125_v1/part-002.json",
   "sha256": "f787f2ac72975212f54ccb800a3a5ad8b2e205a9a6440480f0dd9a737d54d0dc"
 }
