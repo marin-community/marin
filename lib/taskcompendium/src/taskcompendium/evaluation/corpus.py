@@ -218,7 +218,7 @@ def evaluation_protocol(root: str) -> tuple[EvaluationProtocol, EvaluationManife
     path = StoragePath(root)
     protocol = EvaluationProtocol.model_validate_json((path / PROTOCOL_FILENAME).read_text())
     manifest = EvaluationManifest.model_validate_json((path / MANIFEST_FILENAME).read_text())
-    if protocol.fingerprint != manifest.protocol_hash or manifest.rows != protocol.expected_population:
+    if protocol.fingerprint != manifest.protocol_hash:
         raise ValueError("Evaluation manifest does not match its protocol")
     conversion_bytes = (path / "manifest.json").read_bytes()
     if hashlib.sha256(conversion_bytes).hexdigest() != manifest.conversion_manifest_sha256:

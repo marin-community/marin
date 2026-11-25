@@ -43,7 +43,6 @@ def python_source(
     name: str,
     suite: str,
     source: HfSource,
-    population: int,
     max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
@@ -84,7 +83,6 @@ def python_source(
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=population,
             ),
             item_builder=partial(python_item, generation=TextGeneration() if completion else ChatGeneration()),
         ),
@@ -103,7 +101,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ("openai_humaneval/test-00000-of-00001.parquet",),
                 SourceFormat.PARQUET,
             ),
-            population=164,
             max_tokens=1024,
         ),
         python_source(
@@ -115,7 +112,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ("test.jsonl",),
                 SourceFormat.JSONL,
             ),
-            population=164,
             max_tokens=None,
         ),
         python_source(
@@ -128,7 +124,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 SourceFormat.PARQUET,
                 read=read_mbpp,
             ),
-            population=378,
             max_tokens=None,
         ),
         python_source(
@@ -141,7 +136,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 SourceFormat.JSONL,
                 read=read_crux,
             ),
-            population=1600,
             max_tokens=2048,
         ),
     ]

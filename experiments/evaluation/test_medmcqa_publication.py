@@ -59,7 +59,7 @@ def test_publication_renders_lm_eval_cot_prompt_with_subject_groups(tmp_path):
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
     )
     recipe = source_recipe(dataset.recipe, {}, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": len(rows)})
+    protocol = dataset.protocol
     output = tmp_path / "output"
     client = LocalClient()
     try:

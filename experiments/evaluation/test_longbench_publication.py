@@ -47,7 +47,7 @@ def test_publication_compiles_middle_truncated_variants_smallest_first(tmp_path)
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
     )
     recipe = source_recipe(dataset.recipe, {}, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": 2})
+    protocol = dataset.protocol
     output = tmp_path / "output"
     client = LocalClient()
     try:

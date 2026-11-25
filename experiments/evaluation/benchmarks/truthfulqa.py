@@ -39,7 +39,6 @@ TRUTHFULQA_SOURCE = UrlSource(
     "TruthfulQA.csv",
     SourceFormat.CSV,
 )
-TRUTHFULQA_BINARY_POPULATION = 790
 VERSION = "2026.11.24.2"
 
 
@@ -48,7 +47,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         name="truthfulqa_binary",
         benchmark="truthfulqa_binary",
         source=TRUTHFULQA_SOURCE,
-        population=TRUTHFULQA_BINARY_POPULATION,
         template=truthfulqa_binary_template(),
         metrics=(LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW),),
     )
@@ -73,7 +71,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             metrics=(Metrics.ACCURACY,),
             primary_metric="accuracy",
             summary=SummaryKind.MEAN,
-            expected_population=TRUTHFULQA_BINARY_POPULATION,
         ),
         item_builder=truthfulqa_binary_item,
         grader=BASIC_GRADER,

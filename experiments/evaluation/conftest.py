@@ -126,7 +126,6 @@ def agent_source() -> RlDataSource[EvaluationCorpusRecipe]:
                 ),
                 primary_metric="reward",
                 summary=SummaryKind.MEAN,
-                expected_population=1,
             ),
             episode_item,
             protocol_name="terminus-2",

@@ -70,7 +70,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     metrics=Metrics.CLASSIFICATION,
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=50,
                 ),
                 chat_item,
             ),

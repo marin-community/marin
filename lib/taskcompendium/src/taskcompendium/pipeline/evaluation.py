@@ -122,14 +122,10 @@ def publish_evaluation_corpus(
         source_overrides=source_overrides,
     )
     assert isinstance(result, ConversionResult)
-    if (
-        result.rejections
-        or result.input_rows != protocol.expected_population
-        or result.converted_rows != result.input_rows
-    ):
+    if result.rejections or result.converted_rows != result.input_rows:
         raise ValueError(
-            f"Evaluation population mismatch: expected {protocol.expected_population}, "
-            f"read {result.input_rows}, converted {result.converted_rows}, rejections={result.rejections}"
+            f"Evaluation conversion is not complete: read {result.input_rows}, "
+            f"converted {result.converted_rows}, rejections={result.rejections}"
         )
     paths = sorted(str(path) for path in (StoragePath(result.normalized_path) / "*.parquet").glob())
     published = context.execute(

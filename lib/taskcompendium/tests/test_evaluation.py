@@ -99,7 +99,6 @@ def corpus(tmp_path):
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=3,
     )
     return source, tmp_path / "output", recipe, protocol
 
@@ -147,13 +146,11 @@ def test_published_context_policy_without_overflow_keeps_its_corpus_identity(cor
     assert protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")}).fingerprint != legacy_hash
 
 
-@pytest.mark.parametrize("change", ["rewrite", "reject", "missing"])
-def test_evaluation_publication_withholds_release_for_changed_population_or_prompts(corpus, tmp_path, change):
+@pytest.mark.parametrize("change", ["rewrite", "reject"])
+def test_evaluation_publication_withholds_release_for_changed_prompts(corpus, tmp_path, change):
     source, output, _, _ = corpus
     original = (source / "rows.jsonl").read_bytes()
     rows = [{"prompt": "Name the color", change: True}, {"prompt": "Name the color"}, {"prompt": "Choose a color"}]
-    if change == "missing":
-        rows.pop()
     (source / "rows.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises((ValueError, ZephyrWorkerError)):
         publish(corpus, tmp_path)
@@ -372,7 +369,7 @@ def publish_cohort(corpus, tmp_path, cohort):
         {"prompt": "second blue", "color": "blue"},
     ]
     (source / "rows.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    protocol = protocol.model_copy(update={"expected_population": len(rows), "cohort": cohort})
+    protocol = protocol.model_copy(update={"cohort": cohort})
     publish((source, output, recipe, protocol), tmp_path)
     return str(output), protocol
 
@@ -498,9 +495,7 @@ def variant_item(task):
 def test_selected_payload_reread_retains_prompt_variant_chosen_before_output_clamping(corpus, tmp_path):
     source, output, recipe, protocol = corpus
     (source / "rows.jsonl").write_text(json.dumps({"prompt": "f" * 30}) + "\n")
-    protocol = protocol.model_copy(
-        update={"expected_population": 1, "sampling": protocol.sampling.model_copy(update={"max_tokens": 80})}
-    )
+    protocol = protocol.model_copy(update={"sampling": protocol.sampling.model_copy(update={"max_tokens": 80})})
     publish((source, output, recipe, protocol), tmp_path, variant_item)
     (decision,) = select_cases(
         str(output),

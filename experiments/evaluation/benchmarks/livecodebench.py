@@ -53,7 +53,6 @@ HARNESS_REVISION = "998c52d394b836f15fff3b9a29866191108ff81b"
 DATASET_REVISION = "0fe84c3912ea0c4d4a78037083943e8f0c4dd505"
 RELEASE_V6_FILES = ("test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl")
 """The files ``code_generation_lite.py`` loads for ``version_tag="release_v6"``."""
-RELEASE_V6_POPULATION = 1055
 
 SYSTEM_MESSAGE = (
     "You are an expert Python programmer. You will be given a question (problem specification) and will "
@@ -208,7 +207,6 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=RELEASE_V6_POPULATION,
             ),
             item_builder=livecodebench_item,
             protocol_name="official",

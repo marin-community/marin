@@ -159,7 +159,6 @@ def test_a_harbor_repository_publishes_one_agent_item_per_package(tmp_path, loca
         title="Fixture",
         source=huggingface_packages("org/fixture", REVISION),
         version="1",
-        count=1,
     )
     source = harbor_source(dataset, TerminusAgent())
 
@@ -202,7 +201,6 @@ def test_job_settings_publish_three_trials_with_replaced_timeouts_and_pi_in_the_
         title="Fixture",
         source=huggingface_packages("org/fixture", REVISION),
         version="1",
-        count=1,
     )
     pi = PiAgent(version="0.87.0")
     job = JobSettings(agent_timeout=1800, verifier_timeout=300, agent_install=pi_install(pi))

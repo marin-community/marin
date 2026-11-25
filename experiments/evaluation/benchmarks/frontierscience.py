@@ -43,9 +43,9 @@ RESEARCH_METRICS = (
 def benchmarks() -> list[EvaluationBenchmark]:
     sources: list[RlDataSource[EvaluationCorpusRecipe]] = []
     version = "2026.11.24.2"
-    for track, count, convert, metrics, scorer_revision, grader in (
-        ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), None, None),
-        ("research", 60, convert_research, RESEARCH_METRICS, RESEARCH_SCORER_REVISION, JUDGE_GRADER),
+    for track, convert, metrics, scorer_revision, grader in (
+        ("olympiad", convert_olympiad, (Metrics.ACCURACY,), None, None),
+        ("research", convert_research, RESEARCH_METRICS, RESEARCH_SCORER_REVISION, JUDGE_GRADER),
     ):
         name = f"frontierscience-{track}"
         sources.append(
@@ -83,7 +83,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                         metrics=metrics,
                         primary_metric=metrics[0].name,
                         summary=SummaryKind.MEAN,
-                        expected_population=count,
                     ),
                     item_builder=frontierscience_item,
                 ),

@@ -32,7 +32,6 @@ from experiments.post_training.task_curation.pipeline import UrlSource
 ARC_AGI_2_REVISION = "f3283f727488ad98fe575ea6a5ac981e4a188e49"
 ARC_AGI_2_URL = f"https://codeload.github.com/arcprize/ARC-AGI-2/tar.gz/{ARC_AGI_2_REVISION}"
 ARC_AGI_2_SHA256 = "179681bc01d55810ee0e90d2717ef04b8d130496541c4853479a8d6fffa4b975"
-ARC_AGI_2_POPULATION = 167
 ARC_AGI_2_ATTEMPTS = 2
 VERSION = "2026.11.19"
 
@@ -54,7 +53,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.WEIGHTED_MEAN,
-        expected_population=ARC_AGI_2_POPULATION,
     )
     source = evaluation_source(
         name="arc-agi-2",
