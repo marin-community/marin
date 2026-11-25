@@ -121,8 +121,6 @@ Tag each root job you submit with what it is for: `--project <effort>`,
 `IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested projects and
 categories are in "Iris Job Tags" in the root `AGENTS.md`. On a child job, each
 tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
-A controller older than job tags accepts a tagged submission and drops the
-tags, so the job runs untagged; the job and its command are otherwise unchanged.
 Iris options go before the command: from its first word on, every argument,
 `--project` included, belongs to the command, with or without `--`.
 
