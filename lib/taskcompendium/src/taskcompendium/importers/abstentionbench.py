@@ -114,6 +114,8 @@ ABSTENTION_JUDGE_TEMPLATE = (
     "Answer:\n"
 )
 
+COCONOT_SPLIT = "coconot"
+KUQ_SPLIT = "known_unknown_questions"
 ABSTAIN_LABEL = "Yes"
 ANSWER_LABEL = "No"
 
@@ -158,20 +160,22 @@ KUQ_SCENARIOS = {
     "counterfactual": "counterfactual",
     "missing_category": "missing category",
 }
+# Every split in the pinned snapshot, in file order.
+SPLITS = tuple(sorted((*SPLIT_SCENARIOS, COCONOT_SPLIT, KUQ_SPLIT)))
 # Slices the reference analysis drops before reporting (``Results.filter_data``).
 PAPER_EXCLUDED = {
-    ("coconot", "safety"),
-    ("coconot", "underspecification"),
-    ("known_unknown_questions", "counterfactual"),
-    ("known_unknown_questions", "missing_category"),
+    (COCONOT_SPLIT, "safety"),
+    (COCONOT_SPLIT, "underspecification"),
+    (KUQ_SPLIT, "counterfactual"),
+    (KUQ_SPLIT, "missing_category"),
 }
 
 
 def _slice(split: str, metadata: dict[str, Any]) -> str | None:
     """The reference's per-row category for CoCoNot and KUQ, normalized like its dataset-name extension."""
-    if split == "coconot":
+    if split == COCONOT_SPLIT:
         category = metadata["CoCoNot_AbstentionBench_category"]
-    elif split == "known_unknown_questions":
+    elif split == KUQ_SPLIT:
         category = metadata["KUQ_category"] or "missing_category"
     else:
         return None
@@ -235,9 +239,9 @@ def abstentionbench_item(task: TaskSpec) -> EvaluationItem:
     """Group by split, scenario, label and the reference analysis filter; judge only the final answer."""
     evidence = source_evidence(task)
     split, slice_ = evidence["split"], evidence["slice"]
-    if split == "coconot":
+    if split == COCONOT_SPLIT:
         scenario = COCONOT_SCENARIOS[slice_]
-    elif split == "known_unknown_questions":
+    elif split == KUQ_SPLIT:
         scenario = KUQ_SCENARIOS[slice_]
     else:
         scenario = SPLIT_SCENARIOS[split]

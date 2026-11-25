@@ -18,7 +18,7 @@ from taskcompendium.evaluation.spec import (
     SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.abstentionbench import abstentionbench_item, convert_abstentionbench
+from taskcompendium.importers.abstentionbench import SPLITS, abstentionbench_item, convert_abstentionbench
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
@@ -27,27 +27,6 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 VERSION = "2026.11.25"
 ABSTENTIONBENCH_REVISION = "693e80c53a7f6aa19db815561b7dc2b3412a02a7"
-ABSTENTIONBENCH_SPLITS = (
-    "alcuna",
-    "bbq",
-    "big_bench_disambiguate",
-    "big_bench_known_unknowns",
-    "coconot",
-    "falseqa",
-    "gsm8k_abstain",
-    "known_unknown_questions",
-    "mediq",
-    "mmlu_history_abstain",
-    "mmlu_math_abstain",
-    "moral_choice",
-    "musique",
-    "qaqa",
-    "qasper",
-    "situated_qa",
-    "squad2",
-    "umwp",
-    "world_sense",
-)
 ABSTENTIONBENCH_POPULATION = 35855
 
 
@@ -76,7 +55,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         source=HfSource(
             "ymerkli/AbstentionBench",
             ABSTENTIONBENCH_REVISION,
-            tuple(f"data/{split}-00000-of-00001.parquet" for split in ABSTENTIONBENCH_SPLITS),
+            tuple(f"data/{split}-00000-of-00001.parquet" for split in SPLITS),
             SourceFormat.PARQUET,
         ),
         convert=convert_abstentionbench,
