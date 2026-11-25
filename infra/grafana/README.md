@@ -884,7 +884,7 @@ off, and bound every query by the dashboard range.
 viewer's load reaches the hub, and what bounds it is the bridge's 20 s cache (shared
 per query and time window), the 20 s query deadline, auto-refresh off, the
 15-minute default range, and node queries that read nothing until a node is
-selected; a test requires the last three and caps the dashboard at six distinct
+selected; a test requires the last three and caps the dashboard at five distinct
 queries. The deployed bridge has no per-source concurrency bound on `/query`.
 
 ## Deploy

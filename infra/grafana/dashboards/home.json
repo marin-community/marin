@@ -111,8 +111,8 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
+      "includeVars": false,
+      "keepTime": false,
       "targetBlank": false,
       "title": "Utilization",
       "type": "link",

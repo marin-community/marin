@@ -1326,9 +1326,9 @@ def test_training_moe_health_queries_show_routing_signals():
 
 
 UTILIZATION = DASHBOARDS / "utilization.json"
-# Three fleet queries and three node queries. The bridge's cache only shares byte-identical SQL,
-# so a later edit to one copy of a shared query would add a hub scan per load.
-UTILIZATION_MAX_DISTINCT_SQL = 6
+# Two fleet queries (GPUs by node, TPU VMs) and three node queries. The bridge's cache only shares
+# byte-identical SQL, so a later edit to one copy of a shared query would add a hub scan per load.
+UTILIZATION_MAX_DISTINCT_SQL = 5
 
 
 def _finelog_sql(panel: dict) -> list[str]:
@@ -1360,6 +1360,8 @@ def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
     queries = [sql for panel in _all_panels(dashboard) for sql in _finelog_sql(panel)]
     assert queries
     assert len(set(queries)) <= UTILIZATION_MAX_DISTINCT_SQL
+    # A hub-backed dropdown would run on every load, outside the bounds below.
+    assert not [v for v in dashboard.get("templating", {}).get("list", []) if v.get("type") == "query"]
     for sql in queries:
         assert "{{from}}" in sql and "{{to}}" in sql, sql
         # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
@@ -1367,3 +1369,14 @@ def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
         # The node section stays open, so a node query must read nothing while no node is selected.
         if "${node" in sql:
             assert "${node:sqlstring} <> ''" in sql, sql
+
+
+def test_home_opens_the_utilization_dashboard_on_its_own_short_range():
+    """Home defaults to a wider range than the utilization dashboard's queries can scan in time,
+    so its link must not carry Home's range or variables across."""
+    home = json.loads((DASHBOARDS / "home.json").read_text())
+    links = [link for link in home["links"] if link.get("url") == "/d/marin-utilization"]
+
+    assert len(links) == 1
+    assert links[0]["keepTime"] is False
+    assert links[0]["includeVars"] is False
