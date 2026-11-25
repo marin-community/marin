@@ -3,8 +3,9 @@
 
 """Main declares every Atlas-admitted source at the Atlas pin.
 
-The fixture pins one Atlas cut (origin/atlas-env-audit revision and the R40 admit
-set); its ``atlas_revision`` and ``r40_plan`` fields record where each value came
+The fixture records the Atlas cut it was generated from (a pinned Atlas
+revision and the pinned release plan); its ``atlas_revision`` and ``r40_plan``
+fields record where each value came
 from. The fixture's bytes live in the pinned public Hugging Face dataset
 ``open-athena/atlas-source-pins``; the repository commits only the immutable
 reference (revision, sha256, byte size), and the Atlas release step on
@@ -32,9 +33,11 @@ import pytest
 from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from finestore.rl.source_identity import canonical_source_id
 
+from experiments.post_training.task_curation.datasets.atlas_retained_pins import (
+    PINS_REPO as ATLAS_SOURCE_PINS_REPO,
+)
 from experiments.post_training.task_curation.sources import all_sources
 
-ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
 ATLAS_SOURCE_PINS_REVISION = "53147ef2354b789879e2b93f7919accdd6a04c84"
 ATLAS_SOURCE_PINS_SHA256 = "f0b0e08bc3e53260142323c3acd29e9da44e5e9ff8f26504d47472fafcec7f26"
 ATLAS_SOURCE_PINS_BYTES = 170943
@@ -81,7 +84,7 @@ def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked(
 
 
 def test_a_declaration_blocker_expires_when_main_declares_the_source():
-    """The ingestion PR that lands the import removes the source's blocker entry."""
+    """A blocker entry whose source main declares is stale and fails the gate."""
     fixture = read_atlas_source_pins()
     blockers = fixture["declaration_blockers"]
     sources = {canonical_source_id(source.info.id): source for source in all_sources().values()}

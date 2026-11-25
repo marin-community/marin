@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import Cohort, DatasetRelease
+from finestore.rl.curation import Cohort, DataRestriction, DatasetRelease
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import (
@@ -32,13 +32,18 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 import experiments.post_training.task_curation.retained_release as retained_release
-from experiments.post_training.task_curation.campaign import CampaignArtifact
+from experiments.post_training.task_curation.datasets import atlas_retained_pins as arp
 from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     RetainedImport,
     run_retained_import,
 )
-from experiments.post_training.task_curation.source import SourceReference
+from experiments.post_training.task_curation.source import (
+    RlDataSource,
+    SourceInfo,
+    SourceOrigin,
+    SourceReference,
+)
 
 FIXTURE_IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -141,7 +146,7 @@ def test_full_retained_import_prepares_an_admitted_assessment(
     assert [(row.task_id, row.cohort) for row in assessment.sample] == [("retained-task", Cohort.ADMITTED)]
     packets = [row for path in assessment.packet_paths for row in load_parquet(path)]
     assert json.loads(packets[0]["packet_json"])["task"]["id"] == "retained-task"
-    quick = run_retained_import(
+    run_retained_import(
         RetainedImport(
             _cohort(published_tasks, expected_rows=1),
             str(tmp_path / "imported-quick"),
@@ -155,7 +160,6 @@ def test_full_retained_import_prepares_an_admitted_assessment(
     assert quick_manifest["source"] == "fixture-retained"
     assert quick_manifest["admitted_rows"] == 0
     assert pq.read_table(Path(quick_manifest["datasets"]["final"]) / "part-000000.parquet").num_rows == 0
-    assert isinstance(quick, CampaignArtifact)
 
 
 def test_row_count_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:
@@ -164,3 +168,25 @@ def test_row_count_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> 
     invocation = RetainedImport(cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None)
     with pytest.raises(ValueError):
         run_retained_import(invocation)
+
+
+def test_a_lineage_drift_keeps_the_raw_pin_with_a_recorded_note() -> None:
+    """A declaration that is not the sealed conversion binds nothing and says why."""
+    wrong = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            origin=SourceOrigin.BYTEDTSINGHUA_SIA,
+            upstream_dataset="dapo_math",
+            upstream_name="dapo_math",
+            build_path="fixture",
+            tags=("rlvr",),
+            dataset=SourceReference(
+                "BytedTsinghua-SIA/DAPO-Math-17k",
+                "0" * 40,
+                "https://huggingface.co/datasets/BytedTsinghua-SIA/DAPO-Math-17k/tree/" + "0" * 40,
+            ),
+        )
+    )
+    bound = arp.bind_retained_pins([wrong])
+    assert bound[0].dataset.name == "BytedTsinghua-SIA/DAPO-Math-17k"
+    assert "Retained pin drift: retention belongs to another conversion input" in (bound[0].info.notes or "")
