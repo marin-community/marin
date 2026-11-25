@@ -17,7 +17,6 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.strata import MembershipState, SelectionDefinition, TaskStrata
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import Source, TaskSpec, TextMessage
@@ -92,14 +91,13 @@ def prompt_tokens(task: TaskSpec, tokenizer: PreTrainedTokenizerBase) -> list[in
 
 
 def read_parquet(url: str, columns: list[str] | None = None) -> Iterable[dict[str, Any]]:
-    fs, path = filesystem_for(url)
-    with fs.open(path, "rb") as stream:
+    with StoragePath(url).open("rb") as stream:
         for batch in pq.ParquetFile(stream).iter_batches(batch_size=128, columns=columns):
             yield from batch.to_pylist()
 
 
 def dapo_tasks(filename: str) -> Iterable[TaskSpec]:
-    for row in read_parquet(f"{DAPO_ROOT}/{filename}"):
+    for row in read_parquet(str(StoragePath(DAPO_ROOT) / filename)):
         uid = row["uid"]
         source = Source(
             dataset="BytedTsinghua-SIA/DAPO-Math-17k",
@@ -139,13 +137,6 @@ def freeze(candidates: list[Candidate]) -> tuple[dict[str, list[Candidate]], lis
     held_ids = {row.task.id for values in cohorts.values() for row in values}
     training = [row for row in candidates if row.prompt_hash not in held_hashes and row.task.id not in held_ids]
     return cohorts, training
-
-
-def target_status(confirmed: int, count: int) -> str:
-    """Extend a sparse 128-row domain before demoting it from the target set."""
-    if confirmed >= 10:
-        return "target"
-    return "extend" if count < 256 else "non-target"
 
 
 def _record(item: Candidate) -> dict:
@@ -226,7 +217,7 @@ def main() -> None:
         raise ValueError("Requested sources are missing from the completed corpus")
     excluded_ids = set()
     excluded_hashes = set()
-    exclusion_sources = [f"{SELECTION_ROOT}/eval-lite/2026.11.17.1/full_validation.parquet"]
+    exclusion_sources = [entry["uri"] for entry in selection_recipe["exclusions"]]
     protocol = read_micro210_policy(POLICY_REFERENCE)
     exclusion_sources.append(
         f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}/" + protocol["evaluation"]["data_relative_path"]
@@ -284,10 +275,10 @@ def main() -> None:
         "heldout": [],
         "drops": dict(counts),
     }
-    _publish(f"{SELECTION_ROOT}/{SELECTION_NAME}/{VERSION}", cohorts, training, provenance)
+    _publish(str(StoragePath(SELECTION_ROOT) / SELECTION_NAME / VERSION), cohorts, training, provenance)
     _publish(args.output, cohorts, training, provenance)
     _publish(
-        f"{SELECTION_ROOT}/{SELECTION_NAME}-math/{VERSION}",
+        str(StoragePath(SELECTION_ROOT) / f"{SELECTION_NAME}-math" / VERSION),
         cohorts,
         [row for row in training if row.domain == "math"],
         provenance,
@@ -305,7 +296,7 @@ def main() -> None:
             "max_period_tokens": budget // 8,
             "cohort_hash": hashlib.sha256("".join(sorted(row["prompt_hash"] for row in rows)).encode()).hexdigest(),
         }
-    StoragePath(f"{args.output}/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (StoragePath(args.output) / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     logger.info(
         "Published cohorts: %s; train=%d; drops=%s", {k: len(v) for k, v in cohorts.items()}, len(training), counts
     )

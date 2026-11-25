@@ -7,25 +7,7 @@
       "version": "2026.11.17.1"
     }
   ],
-  "family_limits": {
-    "calendar": 512,
-    "closure": 4000,
-    "code32k": 4000,
-    "if32k": 4000,
-    "math": 15000,
-    "mcq32k": 1000,
-    "rgym32k": 4000
-  },
-  "heldout": [
-    {
-      "format": "historical",
-      "rows": 910,
-      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
-      "version": "2026.10.23.1"
-    }
-  ],
   "name": "mochi-doom-ftpo",
-  "seed": 20261124,
   "sources": {
     "MarinSkyRL:dapo_math": "math",
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
@@ -36,6 +18,5 @@
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar",
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "if32k"
   },
-  "validation_per_family": 16,
   "version": "2026.11.24.1"
 }

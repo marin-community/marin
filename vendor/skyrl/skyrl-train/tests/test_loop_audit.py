@@ -5,7 +5,7 @@ import pytest
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.config.reward_shaping import LoopCreditConfig
 from skyrl_train.ftpo import ftpo_evaluation_metrics
-from vendor.skyrl.scripts.loop_audit import audit_cohort, prompt_hash
+from vendor.skyrl.scripts.loop_audit import audit_candidate, audit_cohort, audit_domain, prompt_hash
 
 
 def cohort_and_row(tokens):
@@ -37,6 +37,33 @@ def test_audit_missing_generation_is_unassessed():
     cohort, _ = cohort_and_row([7] * 8)
     result = audit_cohort(cohort, [])
     assert (result.N, result.unassessed, result.unavailable, result.UB) == (1, 1, 1, 1)
+
+
+@pytest.mark.parametrize("reserve_loops,expected_status", [(0, "non-target"), (1, "target")])
+def test_sparse_domain_is_decided_on_the_complete_fixed_reserve(reserve_loops, expected_status):
+    cohort, example = cohort_and_row([7] * 8)
+    expected = [{"task_id": str(index), "prompt_hash": prompt_hash([index])} for index in range(256)]
+    cohort.update(rows=expected[:128], reserve=expected[128:])
+    rows = [dict(example, task_id=str(index), prompt_token_ids=[index],
+                 response_token_ids=[7] * 8 if index < 9 or 128 <= index < 128 + reserve_loops else [1, 2, 3])
+            for index in range(256)]
+    initial = audit_domain("if32k", cohort, rows[:128])
+    extended = audit_domain("if32k", cohort, rows[:128], rows[128:])
+    assert initial.target_status == "extend"
+    assert (extended.incidence.N, extended.incidence.confirmed, extended.target_status) == (
+        256, 9 + reserve_loops, expected_status,
+    )
+    assert extended.cohort_hash != initial.cohort_hash
+    candidate = audit_candidate(cohort, [dict(row, response_token_ids=[1, 2, 3]) for row in rows], extended)
+    assert (candidate.incidence.N, candidate.incidence.UB, candidate.target_status) == (256, 0, expected_status)
+    with pytest.raises(ValueError, match="sealed baseline"):
+        audit_candidate(cohort, rows, initial)
+    rows[9]["response_token_ids"] = [7] * 8
+    unextended = audit_domain("if32k", cohort, rows[:128])
+    candidate = audit_candidate(cohort, [dict(row, response_token_ids=[1, 2, 3]) for row in rows], unextended)
+    assert (candidate.incidence.N, candidate.incidence.UB, candidate.target_status) == (128, 0, "target")
+    with pytest.raises(ValueError, match="does not qualify"):
+        audit_domain("if32k", cohort, rows[:128], rows[128:])
 
 
 @pytest.mark.parametrize("response,expected", [("still reasoning", 1), ("<|end_think|>answer", 0)])

@@ -3,13 +3,12 @@
 
 from dataclasses import replace
 
-import pytest
 from finestore.rl.strata import read_selection_manifest
 from taskcompendium.models import Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
-from experiments.post_training.mochi_doom_ftpo.cohorts import Candidate, _publish, freeze, target_status
+from experiments.post_training.mochi_doom_ftpo.cohorts import Candidate, _publish, freeze
 from experiments.post_training.task_curation.datasets.skyrl.math import convert_dapo_math
 
 
@@ -65,8 +64,3 @@ def test_freeze_excludes_entire_reserve_and_aliases_from_training(tmp_path):
     assert [row.prompt_hash for row in cohorts["math32k"]] == [row.prompt_hash for row in cohorts["math16k"][:256]]
     assert sum(row.domain == "calendar" for row in cohorts["struct32k"][:128]) == 64
     assert all(row.source_priority == 0 for row in cohorts["struct32k"][:128])
-
-
-@pytest.mark.parametrize("confirmed,count,decision", [(9, 128, "extend"), (9, 256, "non-target"), (10, 128, "target")])
-def test_sparse_domain_requires_extension_before_demotion(confirmed, count, decision):
-    assert target_status(confirmed, count) == decision

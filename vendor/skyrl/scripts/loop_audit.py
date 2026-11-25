@@ -8,17 +8,25 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
+from itertools import chain
 from typing import Any
 
 import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from skyrl_train.config.reward_shaping import LoopCreditConfig
+from skyrl_train.json_serialization import canonical_json_bytes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import tail_loop
+from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN
+
+INITIAL_PANEL_ROWS = 128
+EXTENDED_PANEL_ROWS = 256
+MINIMUM_TARGET_LOOPS = 10
 
 
 @dataclass(frozen=True)
 class Incidence:
+    """Exact loop counts, including UB, the confirmed-plus-unassessed upper bound."""
     N: int
     confirmed: int
     unassessed: int
@@ -34,7 +42,7 @@ class Incidence:
 
 
 def prompt_hash(token_ids: list[int]) -> str:
-    return hashlib.sha256(json.dumps(token_ids, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(canonical_json_bytes(token_ids)).hexdigest()
 
 
 def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> Incidence:
@@ -90,12 +98,54 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
         )
         length_stop += int(at_cap)
         response = (row.get("input_prompt") or "") + (row.get("output_response") or "")
-        open_think += int(at_cap and response.rfind("<|start_think|>") > response.rfind("<|end_think|>"))
+        open_think += int(at_cap and response.rfind(THINK_OPEN) > response.rfind(THINK_CLOSE))
     quantiles = np.percentile(lengths, [50, 90, 99]).tolist() if lengths else [None] * 3
     return Incidence(
         len(expected), confirmed, unassessed, confirmed + unassessed, passes, unavailable, errors,
         length_stop, open_think, *quantiles,
     )
+
+
+@dataclass(frozen=True)
+class DomainAudit:
+    incidence: Incidence
+    cohort_hash: str
+    target_status: str
+
+
+def audit_domain(
+    name: str, cohort: Mapping[str, Any], initial_rows: list[dict[str, Any]],
+    reserve_rows: Iterable[dict[str, Any]] | None = None,
+) -> DomainAudit:
+    """Apply the fixed-reserve rule before deciding whether a 32K domain is a target."""
+    selected = cohort
+    result = audit_cohort(selected, initial_rows)
+    status = "target"
+    if name != "math16k" and result.confirmed < MINIMUM_TARGET_LOOPS:
+        if result.N != INITIAL_PANEL_ROWS or len(cohort["reserve"]) != EXTENDED_PANEL_ROWS - INITIAL_PANEL_ROWS:
+            raise ValueError(f"{name} must have the fixed initial panel and complete reserve")
+        status = "extend"
+        if reserve_rows is not None:
+            selected = {**cohort, "rows": [*cohort["rows"], *cohort["reserve"]]}
+            result = audit_cohort(selected, chain(initial_rows, reserve_rows))
+            status = "target" if result.confirmed >= MINIMUM_TARGET_LOOPS else "non-target"
+    elif reserve_rows is not None:
+        raise ValueError(f"{name} does not qualify for extension")
+    digest = hashlib.sha256("".join(sorted(row["prompt_hash"] for row in selected["rows"])).encode()).hexdigest()
+    return DomainAudit(result, digest, status)
+
+
+def audit_candidate(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]], baseline: DomainAudit) -> DomainAudit:
+    """Keep the sealed baseline's prompt set and target decision for every candidate."""
+    if baseline.target_status == "extend":
+        raise ValueError("candidate evaluation requires a sealed baseline")
+    selected = cohort
+    if baseline.incidence.N == len(cohort["rows"]) + len(cohort["reserve"]):
+        selected = {**cohort, "rows": [*cohort["rows"], *cohort["reserve"]]}
+    digest = hashlib.sha256("".join(sorted(row["prompt_hash"] for row in selected["rows"])).encode()).hexdigest()
+    if digest != baseline.cohort_hash:
+        raise ValueError("candidate prompt hashes differ from the sealed baseline")
+    return DomainAudit(audit_cohort(selected, rows), digest, baseline.target_status)
 
 
 def read_rows(pattern: str) -> Iterable[dict[str, Any]]:
@@ -112,24 +162,49 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--input", action="append", required=True, help="COHORT=JSONL_GLOB; one saved session per cohort")
+    parser.add_argument("--reserve-input", action="append", default=[], help="COHORT=JSONL_GLOB; fixed reserve session")
+    parser.add_argument("--baseline", help="Sealed baseline audit JSON; fixes each candidate's cohort and target status")
     parser.add_argument("--output", required=True, help="JSON output URI; Markdown is written beside it")
     args = parser.parse_args()
     configure_coreweave_s3()
     manifest = json.loads(StoragePath(args.manifest).read_text())
+    baseline = json.loads(StoragePath(args.baseline).read_text()) if args.baseline else None
     results = {}
+    hashes = {}
+    statuses = {}
+    reserves = dict(item.split("=", 1) for item in args.reserve_input)
+    cached_rows = {}
     for item in args.input:
         name, pattern = item.split("=", 1)
         if name in results:
             raise ValueError(f"duplicate input for {name}")
-        results[name] = asdict(audit_cohort(manifest["cohorts"][name], read_rows(pattern)))
-    document = {"manifest": args.manifest, "cohort_hashes": {
-        name: manifest["cohorts"][name]["cohort_hash"] for name in results
-    }, "domains": results}
+        if pattern not in cached_rows:
+            cached_rows[pattern] = list(read_rows(pattern))
+        reserve_rows = read_rows(reserves.pop(name)) if name in reserves else None
+        if baseline is None:
+            audited = audit_domain(name, manifest["cohorts"][name], cached_rows[pattern], reserve_rows)
+        else:
+            reference = DomainAudit(
+                Incidence(**baseline["domains"][name]), baseline["cohort_hashes"][name], baseline["target_status"][name]
+            )
+            audited = audit_candidate(
+                manifest["cohorts"][name], chain(cached_rows[pattern], reserve_rows or ()), reference
+            )
+        results[name] = asdict(audited.incidence)
+        hashes[name] = audited.cohort_hash
+        statuses[name] = audited.target_status
+    if reserves:
+        raise ValueError(f"reserve inputs without initial inputs: {sorted(reserves)}")
+    document = {
+        "manifest": args.manifest, "baseline": args.baseline,
+        "cohort_hashes": hashes, "domains": results, "target_status": statuses,
+    }
     StoragePath(args.output).write_text(json.dumps(document, indent=2) + "\n")
     columns = ("N", "confirmed", "unassessed", "UB", "passes", "unavailable", "errors", "length_stop", "open_think")
     lines = ["| Cohort | " + " | ".join(columns) + " |", "| --- | " + " | ".join(["---:"] * len(columns)) + " |"]
     lines.extend("| " + name + " | " + " | ".join(str(row[key]) for key in columns) + " |" for name, row in results.items())
-    markdown = "\n".join(lines) + "\n"
+    markdown = "UB is the loop upper bound: confirmed + unassessed.\n\n" + "\n".join(lines) + "\n\n"
+    markdown += "Target status: " + ", ".join(f"{name}={status}" for name, status in statuses.items()) + ".\n"
     StoragePath(args.output.removesuffix(".json") + ".md").write_text(markdown)
     print(markdown)
 

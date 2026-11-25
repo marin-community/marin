@@ -167,11 +167,7 @@ class SkyRLRolePlan(_InferenceGeometry):
         """Count the nodes used by training and inference roles."""
         if self.colocate_all:
             return self.policy_num_nodes
-        if self.uses_expert_parallel_placement:
-            rollout_gpus = self.num_inference_engines * self.engine_gpus
-            rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
-        else:
-            rollout_nodes = _inference_nodes(self)
+        rollout_nodes = _inference_nodes(self)
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
     def config_values(self) -> dict[str, object]:
@@ -325,8 +321,6 @@ class SkyRLGenerationPlan(_InferenceGeometry):
 
     @property
     def num_nodes(self) -> int:
-        if _uses_cross_host_expert_parallel(self, self.gpus_per_node):
-            return -(-(self.num_inference_engines * self.engine_gpus) // self.gpus_per_node)
         return _inference_nodes(self)
 
     def config_values(self) -> dict[str, object]:
@@ -372,6 +366,9 @@ def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topolo
 
 def _inference_nodes(plan: SkyRLRolePlan | SkyRLGenerationPlan) -> int:
     engine_gpus = plan.engine_gpus
+    if _uses_cross_host_expert_parallel(plan, plan.gpus_per_node):
+        rollout_gpus = plan.num_inference_engines * engine_gpus
+        return (rollout_gpus + plan.gpus_per_node - 1) // plan.gpus_per_node
     engines_per_node = plan.gpus_per_node // engine_gpus
     if not engines_per_node:
         raise ValueError("each SkyRL inference engine must fit on one node")

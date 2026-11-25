@@ -322,7 +322,7 @@ def _harbor_telemetry_config() -> dict[str, str] | None:
 
 @register_callback("ftpo_pilot")
 class FtpoPilotCallback(TrainerCallback):
-    """Stop a stage on a pilot correctness breach or two unchanged loop upper bounds."""
+    """Stop on a correctness breach or the configured number of non-improving pilots."""
 
     def __init__(self, *, patience_evaluations: int, max_pass_rate_drop: float):
         self.patience_evaluations = patience_evaluations
