@@ -26,7 +26,7 @@ class PinnedHfFile:
 
 
 def read_pinned_hf_file(reference: PinnedHfFile) -> bytes:
-    """Download the pinned revision through the cached Hugging Face login and verify it."""
+    """Download the pinned revision and verify its exact bytes."""
     local = Path(
         hf_hub_download(
             repo_id=reference.repo, repo_type="dataset", revision=reference.revision, filename=reference.filename

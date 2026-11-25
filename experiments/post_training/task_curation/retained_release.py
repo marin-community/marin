@@ -18,13 +18,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import (
-    DatasetRelease,
-    LexicalContaminationEvidence,
-    OversightEvidence,
-    SourceUse,
-    require_lexical_qualification,
-)
+from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence, SourceUse
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -38,8 +32,13 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
+from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
+RETAINED_TASKS_FILE = "tasks.parquet"
+"""The published cohort file the reader downloads and every view derives from."""
+RETAINED_PART_FILE = "part-000000.parquet"
+"""The single-shard output basename shared by the retained views."""
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
@@ -70,7 +69,7 @@ class RetainedCohort:
 
     @property
     def files(self) -> tuple[str, ...]:
-        return ("tasks.parquet",)
+        return (RETAINED_TASKS_FILE,)
 
 
 @dataclass(frozen=True)
@@ -81,6 +80,73 @@ class RetainedImport:
     oversight: OversightEvidence | None
     inherited_admission: DatasetRelease | None
     lexical_contamination: LexicalContaminationEvidence | None
+
+
+def _write_evidence_views(
+    output: StoragePath, *, normalized: StoragePath, admitted: bool
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Write the final, review and verify views; return the outputs and datasets entries.
+
+    The frozen retained population is all-admitted: the review and verify views
+    carry no rows, so the assessment contract still holds and its excluded cohort
+    samples zero. QUICK writes an empty final view, matching its admitted count.
+    """
+    final_view = output / "final"
+    final_view.mkdirs(exist_ok=True)
+    outputs: dict[str, str] = {}
+    if admitted:
+        final = final_view / RETAINED_PART_FILE
+        with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
+            shutil.copyfileobj(source, destination)
+        outputs["final"] = str(final.parent)
+    else:
+        with (final_view / RETAINED_PART_FILE).open("wb") as stream:
+            pq.write_table(RETAINED_SCHEMA.empty_table(), stream)
+    views = {}
+    for view in ("review", "verify"):
+        view_dir = output / view
+        view_dir.mkdirs(exist_ok=True)
+        with (view_dir / RETAINED_PART_FILE).open("wb") as stream:
+            pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
+        views[view] = str(view_dir)
+    return outputs, {"normalize": str(normalized.parent), **views, "final": str(final_view)}
+
+
+def _retained_manifest(
+    invocation: RetainedImport, *, seen: int, views: dict[str, str], outputs: dict[str, str]
+) -> dict[str, object]:
+    """The import manifest: the assessment contract plus the retention provenance."""
+    cohort = invocation.cohort
+    return {
+        "mode": invocation.mode.value,
+        "status": SourceStatus.COMPLETED.value,
+        "intended_use": cohort.intended_use.value,
+        "source": cohort.name,
+        "datasets": views,
+        "input_rows": seen,
+        "converted_rows": seen,
+        "admitted_rows": seen if invocation.mode is not SourceProcessingMode.QUICK else 0,
+        "processed_rows": seen,
+        "unprocessed_rows": 0,
+        "qualification_newly_executed": False,
+        "inherited_oversight": invocation.oversight.model_dump(mode="json") if invocation.oversight else None,
+        "inherited_admission": (
+            invocation.inherited_admission.model_dump(mode="json") if invocation.inherited_admission else None
+        ),
+        "original_dataset": {
+            "repo": cohort.original_dataset.name,
+            "revision": cohort.original_dataset.revision,
+            "url": cohort.original_dataset.url,
+        },
+        "lexical_contamination": (
+            invocation.lexical_contamination.model_dump(mode="json") if invocation.lexical_contamination else None
+        ),
+        "rejections": {},
+        "repo": cohort.release.repo,
+        "revision": cohort.release.revision,
+        "tasks_parquet_sha256": cohort.tasks_parquet_sha256,
+        "retention_evidence": cohort.evidence_url,
+    }
 
 
 def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
@@ -97,7 +163,12 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             SourceUse(cohort.intended_use.value),
         )
     local = Path(
-        hf_hub_download(cohort.release.repo, "tasks.parquet", repo_type="dataset", revision=cohort.release.revision)
+        hf_hub_download(
+            cohort.release.repo,
+            cohort.files[0] if cohort.files else RETAINED_TASKS_FILE,
+            repo_type="dataset",
+            revision=cohort.release.revision,
+        )
     )
     if file_sha256(StoragePath(str(local))) != cohort.tasks_parquet_sha256:
         raise ValueError("Retained release differs from its publication readback receipt")
@@ -125,64 +196,12 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             writer.write_table(pa.Table.from_pylist(records, schema=RETAINED_SCHEMA))
     if len(seen) != cohort.expected_rows:
         raise ValueError("Retained release count differs from its frozen plan")
-    with local.open("rb") as source, (output / "tasks.parquet").open("wb") as destination:
+    with local.open("rb") as source, (output / RETAINED_TASKS_FILE).open("wb") as destination:
         shutil.copyfileobj(source, destination)
-    outputs = {"tasks": str(output / "tasks.parquet"), "normalize": str(normalized.parent)}
-    final_view = output / "final"
-    final_view.mkdirs(exist_ok=True)
-    if admitted:
-        final = final_view / "part-000000.parquet"
-        with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
-            shutil.copyfileobj(source, destination)
-        outputs["final"] = str(final.parent)
-    else:
-        with (final_view / "part-000000.parquet").open("wb") as stream:
-            pq.write_table(RETAINED_SCHEMA.empty_table(), stream)
-    # The frozen retained population is all-admitted: the review and verify views
-    # carry no rows, so the assessment contract still holds and its excluded
-    # cohort samples zero.
-    empty_views = {}
-    for view in ("review", "verify"):
-        view_dir = output / view
-        view_dir.mkdirs(exist_ok=True)
-        with (view_dir / "part-000000.parquet").open("wb") as stream:
-            pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
-        empty_views[view] = str(view_dir)
-    manifest = {
-        "mode": invocation.mode.value,
-        "status": SourceStatus.COMPLETED.value,
-        "intended_use": cohort.intended_use.value,
-        "source": cohort.name,
-        "datasets": {
-            "normalize": str(normalized.parent),
-            "review": empty_views["review"],
-            "verify": empty_views["verify"],
-            "final": str(final_view),
-        },
-        "input_rows": len(seen),
-        "converted_rows": len(seen),
-        "admitted_rows": len(seen) if admitted else 0,
-        "processed_rows": len(seen),
-        "unprocessed_rows": 0,
-        "qualification_newly_executed": False,
-        "inherited_oversight": invocation.oversight.model_dump(mode="json") if invocation.oversight else None,
-        "inherited_admission": (
-            invocation.inherited_admission.model_dump(mode="json") if invocation.inherited_admission else None
-        ),
-        "original_dataset": {
-            "repo": cohort.original_dataset.name,
-            "revision": cohort.original_dataset.revision,
-            "url": cohort.original_dataset.url,
-        },
-        "lexical_contamination": (
-            invocation.lexical_contamination.model_dump(mode="json") if invocation.lexical_contamination else None
-        ),
-        "rejections": {},
-        "repo": cohort.release.repo,
-        "revision": cohort.release.revision,
-        "tasks_parquet_sha256": cohort.tasks_parquet_sha256,
-        "retention_evidence": cohort.evidence_url,
-    }
+    outputs = {"tasks": str(output / RETAINED_TASKS_FILE), "normalize": str(normalized.parent)}
+    view_outputs, views = _write_evidence_views(output, normalized=normalized, admitted=admitted)
+    outputs.update(view_outputs)
+    manifest = _retained_manifest(invocation, seen=len(seen), views=views, outputs=outputs)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return CampaignArtifact(
         status="completed",
@@ -196,15 +215,10 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    """Admit a sealed retained subset through its existing qualification.
-
-    The stage-0 license gate runs on the declaration's receipt. The consumer and
-    oracle admission checks were sealed upstream, and the binding validates the
-    lineage before this source becomes selectable.
-    """
+    """Import one retained cohort for selection, after the declaration's license gate."""
     source.require_license()
     if options.mode is not SourceProcessingMode.QUICK:
-        if "excluded" in source.info.tags:
+        if EXCLUDED_TAG in source.info.tags:
             raise ValueError(f"Retained cohort is excluded pending qualification: {source.name}")
     config = source.config
     assert config is not None
