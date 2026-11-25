@@ -343,6 +343,10 @@ or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
+Read SkyRL actor output in the Iris task logs. The runtime also snapshots Ray
+session logs to the run's attempt storage during training and flushes them on
+failure or termination. Successful tasks skip the final Ray log upload.
+
 Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
 Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
 pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.

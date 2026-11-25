@@ -1392,14 +1392,10 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
 
 
 # --- Ray session-log -> object-store sync -----------------------------------------
-# The per-actor Ray WORKER logs (/tmp/ray/session_*/logs/worker-*.{out,err},
-# raylet.out, ...) are the only place the policy / rollout actor stdout+tracebacks
-# land — the iris finelog aggregates only what reaches the head, and a pod GC / eviction
-# DELETES these node-local logs with the pod. This periodically (+ on SIGTERM) uploads
-# THIS node's session logs to the job's durable Ray-log root, keyed by node id, reusing
-# the SAME fsspec/boto3 + AWS_ENDPOINT_URL credentials as the rendezvous / spill /
-# term-artifact writers. Per-node: each pod writes its own logs under
-# <ray_log_dir>/<node_id>/. Gate:
+# Ray forwards actor output through the driver into Iris. The node-local
+# session also contains Ray daemon logs and per-worker crash diagnostics.
+# Snapshot those files periodically and flush them on failure or termination.
+# Each task writes under <ray_log_dir>/<node_id>/.
 # OT_AGENT_RAY_LOG_SYNC (default "1"); interval OT_AGENT_RAY_LOG_SYNC_INTERVAL_S (300s).
 RAY_LOG_SYNC_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024  # skip a single >2 GiB log (pathological)
 # Ray emits many small log files, so upload time is dominated by per-object latency.
@@ -1939,7 +1935,7 @@ def run_head(
     ray_log_sync_stop: threading.Event | None = None
     ray_log_sync = RayLogSyncSession(args.ray_log_dir, node_id)
 
-    def persist_runtime_artifacts(reason: str) -> None:
+    def flush_failure_artifacts(reason: str) -> None:
         if ray_log_sync_stop is not None:
             ray_log_sync_stop.set()
         ray_log_sync.sync_bounded(reason)
@@ -1957,10 +1953,7 @@ def run_head(
         # Capture FIRST (before teardown mutates disk/GPU state) — a SIGTERM here is
         # often a k8s eviction / OOM whose cause survives nowhere else.
         capture_termination_artifacts(args.rendezvous_dir, f"signal {signum} (head rank 0)")
-        # Flush this node's Ray session logs (per-actor worker stdout/tracebacks) before
-        # the pod is reaped — Ray's node-local logs are deleted with the pod.
-        ray_log_sync.sync_bounded(f"signal {signum} (head)")
-        sync_debug_artifacts(args.rendezvous_dir, node_id, f"signal {signum} (head)")
+        flush_failure_artifacts(f"signal {signum} (head)")
         if process is not None:
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)
@@ -2037,7 +2030,7 @@ def run_head(
 
             def persist_stall_artifacts() -> None:
                 capture_termination_artifacts(args.rendezvous_dir, reason)
-                persist_runtime_artifacts(reason)
+                flush_failure_artifacts(reason)
 
             _persist_failure_artifacts_bounded(persist_stall_artifacts, timeout=FAILURE_ARTIFACT_TIMEOUT)
             kill_driver_process_group(process)
@@ -2062,7 +2055,7 @@ def run_head(
             def persist_failure_artifacts() -> None:
                 reason = f"driver exit_code={exit_code} (head rank 0)"
                 capture_termination_artifacts(args.rendezvous_dir, reason)
-                persist_runtime_artifacts(reason)
+                flush_failure_artifacts(reason)
 
             _persist_failure_artifacts_bounded(
                 persist_failure_artifacts,
@@ -2075,8 +2068,8 @@ def run_head(
                 write_json(trainer_timing_uri, {"elapsed_excluding_eval_seconds": driver_activity.elapsed_excluding_eval})
             except Exception as error:
                 _log(f"Could not persist the trainer completion time: {error}")
-        # Final flush of this node's Ray session logs before teardown reaps them.
-        persist_runtime_artifacts(f"driver exit_code={exit_code} (head)")
+        ray_log_sync_stop.set()
+        sync_debug_artifacts(args.rendezvous_dir, node_id, "driver exit_code=0 (head)")
     # Signal workers to unpark, then tear down.
     if args.rendezvous_dir and num_tasks > 1:
         write_head_result(args.rendezvous_dir, gang_epoch)
@@ -2130,7 +2123,10 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
 
     def _shutdown(signum, _frame) -> None:
         nonlocal termination_signal
-        termination_signal = termination_signal or signum
+        if termination_signal is not None:
+            return
+        termination_signal = signum
+        ray_log_sync_stop.set()
         _log(f"Worker rank {rank} received signal {signum}; stopping Ray.")
         # A SIGTERM on a worker node is often a k8s eviction/OOM of that node (it
         # hosts the training actors' GPUs); capture its disk/GPU state before reap.
@@ -2156,10 +2152,9 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
             if stop.is_set():
                 break
             time.sleep(POLL_INTERVAL)
-        # Final flush of this worker node's Ray session logs before Ray teardown.
         ray_log_sync_stop.set()
-        ray_log_sync.sync_bounded(f"worker rank {rank} teardown")
-        sync_debug_artifacts(args.rendezvous_dir, node_id, f"worker rank {rank} teardown")
+        if termination_signal is None:
+            sync_debug_artifacts(args.rendezvous_dir, node_id, f"worker rank {rank} teardown")
     ray_stop()
     if head_completed:
         return 0
