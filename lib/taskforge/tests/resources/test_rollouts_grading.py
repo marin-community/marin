@@ -9,6 +9,7 @@ import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine, twelve
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.machines import MachineSetupError
 from rolloutengine.models import (
     GradedRollout,
     Rollout,
@@ -19,10 +20,12 @@ from rolloutengine.models import (
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits, rollout_spec
 from shellbox.machine import (
     ExecSetupFailed,
+    ExitReason,
     MachineCancelled,
     MachineOutputLimitExceeded,
     MachineTerminated,
     MachineUnavailable,
+    Result,
 )
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -43,7 +46,7 @@ from verifyit.spec import NumericSpec
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Retrying
-from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
+from taskforge.effects.issues import EnvironmentSetupFailed, OutputBudgetExhausted, Restart, Transient
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import ToolResult as ToolReply
 from taskforge.harness.tools.grade import GradeTool
@@ -207,6 +210,15 @@ def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeErr
     )
     decision = interruption(error)
     assert type(decision) is expected and str(failure) in str(decision)
+
+
+def test_a_failing_setup_command_is_the_tasks_evidence_not_a_retry() -> None:
+    error = RolloutInterrupted(Rollout("setup", (), "interrupted"), RolloutOperation.START)
+    error.__cause__ = MachineSetupError(
+        "git clone", Result(128, b"", b"fatal: could not read from remote", False, False, ExitReason.EXITED)
+    )
+    decision = interruption(error)
+    assert type(decision) is EnvironmentSetupFailed and "git clone" in str(decision)
 
 
 @pytest.mark.parametrize("path", ["answer.py", "/workspace/answer.py", "/elsewhere/answer.py"])
