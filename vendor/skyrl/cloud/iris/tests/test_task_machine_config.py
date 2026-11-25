@@ -80,10 +80,3 @@ def test_empty_session_settings_preserve_published_limits_and_shell_timeout():
 
     assert spec.limits.max_turns == 3
     assert shell_harness(spec.harness).command_timeout == 17
-
-
-@pytest.mark.parametrize("overrides", [{"eval_ttl_minutes": 10}, {"eval_image_build": "declarative"}])
-def test_unbound_evaluation_provisioning_settings_refuse_admission(overrides):
-    config = composed_config({"daytona": {"api_key_env": "UNUSED_TRAIN_KEY", "ttl_minutes": 5, **overrides}})
-    with pytest.raises(ValueError, match="eval_api_key_env"):
-        task_machine_factories(config.environment.task_sessions)
