@@ -29,9 +29,11 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.harbor.runtime import read_source_runtime
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
@@ -126,20 +128,7 @@ def test_regional_stage_creates_separate_campaign_and_valid_frozen_queue(tmp_pat
     (sealed / "manifest.json").write_text(json.dumps(manifest))
     root = "gs://marin-us-central2/fixture"
     qualification = tmp_path / "qualified.json"
-    qualification.write_text(
-        json.dumps(
-            {
-                "judge_identity": campaign.identity_bundle()["judge"],
-                "fixtures": [
-                    {"expected": verdict, "reward": float(verdict == "CORRECT"), "detail": {"verdict": verdict}}
-                    for verdict in ("CORRECT", "INCORRECT", "NOT_ATTEMPTED", "INCORRECT")
-                ],
-                "tokenization": {
-                    "tools_thinking_probe": {"completion": {"usage": {"prompt_tokens": 3}}, "pinned_prompt_tokens": 3}
-                },
-            }
-        )
-    )
+    qualification.write_text(json.dumps(judge_qualification_record()))
 
     def mapped(uri):
         return (
@@ -605,3 +594,188 @@ def test_full_solver_rollout_replaces_only_its_qualified_pilot(monkeypatch):
     ]
     assert commands[1][commands[1].index("--solver") + 1] == "small"
     assert commands[1][commands[1].index("--replicas") + 1] == "2"
+
+
+def judge_qualification_record():
+    return {
+        "judge_identity": campaign.identity_bundle()["judge"],
+        "fixtures": [
+            {
+                "expected": verdict,
+                "reward": float(verdict == "CORRECT"),
+                "class": "reasoning-budget-stress" if index == 0 else "basic",
+                "source_max_completion_tokens": 64 if index == 0 else 8192,
+                "detail": {
+                    "verdict": verdict,
+                    "judge_request": {"max_completion_tokens": 8192},
+                },
+            }
+            for index, verdict in enumerate(("CORRECT", "INCORRECT", "NOT_ATTEMPTED", "INCORRECT"))
+        ],
+        "tokenization": {
+            "tools_thinking_probe": {"completion": {"usage": {"prompt_tokens": 3}}, "pinned_prompt_tokens": 3}
+        },
+    }
+
+
+def test_campaign_judge_recovers_truncated_verdict_without_changing_frozen_task(
+    tmp_path, monkeypatch, difficulty_source, review_server
+):
+    task = judged_task().model_copy(
+        update={
+            "grader": (
+                verifyit_package(
+                    JudgeSpec(
+                        model="original",
+                        references=("Four",),
+                        max_completion_tokens=64,
+                        exact_gate=False,
+                        parse_attempts=1,
+                    )
+                ).grader
+            )
+        }
+    )
+    frozen = task.model_dump(mode="json")
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preparation, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    prepared = difficulty_preparation.prepare_source(source, tmp_path / "prepared", judge_version=campaign.JUDGE_VERSION)
+    path = Path(prepared.tasks[0].path)
+    derived = TaskSpec.model_validate_json((path / "task-spec.json").read_text())
+    review_server.judge_replies.extend([JudgeReply("SCORE: 1", "length"), JudgeReply("SCORE: 1")])
+    reward = grade_judge_candidate(
+        judge_spec(derived.grader),
+        "Four.",
+        connection=JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture"),
+        runtime=None,
+    )
+    assert reward.reward == 1
+    assert [(r["max_completion_tokens"], r.get("reasoning_effort")) for r in review_server.requests] == [
+        (8192, None),
+        (16384, None),
+    ]
+    assert task.model_dump(mode="json") == frozen
+    assert derived.environment_requirements == task.environment_requirements
+    declaration = json.loads((path / "judge-redeclaration.json").read_text())
+    assert declaration["original_judge"]["max_completion_tokens"] == 64
+    assert declaration["effective_judge"]["max_completion_tokens"] == 8192
+    assert declaration["original_task_sha256"] == digest(frozen)
+
+
+def test_campaign_judge_preserves_larger_script_budget_and_rubric(review_server):
+    task = judged_task()
+    task = task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("python", "/tests/grade.py"),
+                environment=EnvironmentRequirements(
+                    docker_image="ubuntu@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+                ),
+                judge=JudgeSpec(
+                    model="original",
+                    references=("Four",),
+                    exact_gate=False,
+                    max_completion_tokens=32768,
+                    incomplete_retry_tokens=65536,
+                ),
+            )
+        }
+    )
+    frozen = task.model_dump(mode="json")
+    derived = campaign.redeclare_judge(task)
+    review_server.judge_replies.append(JudgeReply("SCORE: 1"))
+    result = grade_judge_candidate(
+        judge_spec(derived.grader),
+        "Four.",
+        connection=JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture"),
+        runtime=None,
+    )
+    assert result.reward == 1
+    assert review_server.requests[0]["max_completion_tokens"] == 32768
+    assert judge_spec(derived.grader).incomplete_retry_tokens == 65536
+    assert task.model_dump(mode="json") == frozen
+    assert judge_spec(derived.grader).references == judge_spec(task.grader).references
+
+
+@pytest.mark.parametrize(
+    "defect", ["source-sized-budget", "reasoning-override", "no-stress-fixture", "unstressed-source-budget"]
+)
+def test_judge_qualification_rejects_profile_that_did_not_exercise_substitute_budget(tmp_path, defect):
+    record = judge_qualification_record()
+    if defect == "source-sized-budget":
+        record["fixtures"][0]["detail"]["judge_request"]["max_completion_tokens"] = 64
+    elif defect == "reasoning-override":
+        record["fixtures"][0]["detail"]["judge_request"]["reasoning_effort"] = "none"
+    elif defect == "no-stress-fixture":
+        record["fixtures"][0]["class"] = "basic"
+    else:
+        record["fixtures"][0]["source_max_completion_tokens"] = 8192
+    path = tmp_path / "qualification.json"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="qualification"):
+        campaign.qualified_judge(str(path))
+
+
+@pytest.mark.parametrize("solver_drift", [False, True])
+def test_regional_judge_rebind_reuses_inputs_and_preserves_old_ledger(tmp_path, monkeypatch, solver_drift):
+    prefix = "gs://marin-us-central2/rebind-fixture"
+
+    def mapped(uri):
+        return StoragePath(str(tmp_path / str(uri).removeprefix(prefix).lstrip("/")))
+
+    monkeypatch.setattr(campaign, "StoragePath", mapped)
+    monkeypatch.setattr(campaign, "regional_worker", lambda: None)
+    queue_uri = prefix + "/old/sources.json"
+    queue = [{"panel": {key: prefix + "/old/" + key for key in ("panel_path", "input_artifact", "evidence_url")}}]
+    mapped(queue_uri).parent.mkdirs()
+    mapped(queue_uri).write_text(json.dumps(queue))
+    queue_sha = hashlib.sha256(mapped(queue_uri).read_bytes()).hexdigest()
+    seal_uri = prefix + "/seal.json"
+    mapped(seal_uri).write_text(json.dumps({"sealed_at": "2026-11-24T23:00:00+00:00"}))
+    previous_identity = json.loads(json.dumps(campaign.identity_bundle()))
+    previous_identity["judge"] = {"version": "previous-judge-policy"}
+    if solver_drift:
+        previous_identity["solvers"]["small"]["pin"]["revision"] = "different-weights"
+    previous = {
+        "campaign_id": digest(previous_identity),
+        "identity": previous_identity,
+        "cell_key": ["campaign_id", "source_id", "solver", "registry_revision"],
+        "queues": [[queue_uri, queue_sha]],
+        "parent_seal": {"uri": seal_uri, "sha256": hashlib.sha256(mapped(seal_uri).read_bytes()).hexdigest()},
+        "holds": [
+            {"source_id": "held-source", "registry_revision": "frozen", "reason": "EXECUTABILITY_ADMISSION_PENDING"}
+        ],
+    }
+    previous_uri = prefix + "/old/ledger/v1/campaign.json"
+    mapped(previous_uri).parent.mkdirs()
+    mapped(previous_uri).write_text(json.dumps(previous))
+    raw = mapped(previous_uri).read_bytes()
+    old_rows = mapped(prefix + "/old/ledger/v1/rows/historical.jsonl")
+    old_rows.parent.mkdirs()
+    old_rows.write_text('{"historical-score": 1}\n')
+    qualification_uri = prefix + "/qualification.json"
+    mapped(qualification_uri).write_text(json.dumps(judge_qualification_record()))
+    for solver in (Solver.SMALL, Solver.LARGE, Solver.SNOWBALL):
+        path = mapped(prefix + "/old/staging/" + solver.value + ".json")
+        path.parent.mkdirs()
+        path.write_text(json.dumps({"revision": PINS[solver].revision, "weights": prefix + "/weights/" + solver.value}))
+    if solver_drift:
+        with pytest.raises(ValueError, match="identical frozen solvers"):
+            campaign.rebind_regional_campaign(
+                prefix + "/new", previous_uri, hashlib.sha256(raw).hexdigest(), qualification_uri
+            )
+        assert not (tmp_path / "new").exists()
+    else:
+        campaign.rebind_regional_campaign(
+            prefix + "/new", previous_uri, hashlib.sha256(raw).hexdigest(), qualification_uri
+        )
+        rebound = campaign.campaign_record(prefix + "/new/ledger")
+        assert rebound["campaign_id"] != previous["campaign_id"]
+        assert rebound["queues"] == previous["queues"]
+        assert mapped(queue_uri).read_text() == json.dumps(queue)
+        assert rebound["holds"] == previous["holds"]
+        rows = read_rows(str(tmp_path / "new/ledger"))
+        assert len(rows) == 4 and all(row.outcome.value == "observation" for row in rows)
+        assert all(row.source_id == "held-source" for row in rows)
+    assert mapped(previous_uri).read_bytes() == raw
+    assert old_rows.read_text() == '{"historical-score": 1}\n'

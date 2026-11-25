@@ -38,7 +38,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.difficulty.campaign import stage_campaign
+from experiments.post_training.task_curation.difficulty.campaign import rebind_regional_campaign, stage_campaign
 from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.pool_receipts import publish_pool_receipt, warm_throughput
 from experiments.post_training.task_curation.difficulty.regional import immutable_json, regional_worker
@@ -386,18 +386,26 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int, *, excluded_tpu_names
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("stage-solver", "stage-inputs"))
+    parser.add_argument("operation", choices=("stage-solver", "stage-inputs", "rebind-inputs"))
     parser.add_argument("--root", required=True)
     parser.add_argument("--solver", type=Solver)
     parser.add_argument("--sealed-manifest")
     parser.add_argument("--sealed-sha256")
     parser.add_argument("--judge-qualification")
+    parser.add_argument("--previous-campaign")
+    parser.add_argument("--previous-campaign-sha256")
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.operation == "stage-solver":
         if args.solver is None:
             parser.error("stage-solver requires --solver")
         stage_solver(args.solver, args.root)
+    elif args.operation == "rebind-inputs":
+        if not all((args.previous_campaign, args.previous_campaign_sha256, args.judge_qualification)):
+            parser.error("rebind-inputs requires the previous campaign, hash and judge qualification")
+        rebind_regional_campaign(
+            args.root, args.previous_campaign, args.previous_campaign_sha256, args.judge_qualification
+        )
     else:
         if not all((args.sealed_manifest, args.sealed_sha256, args.judge_qualification)):
             parser.error("stage-inputs requires the sealed manifest, hash and judge qualification")

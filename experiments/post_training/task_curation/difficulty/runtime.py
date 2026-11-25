@@ -33,7 +33,12 @@ from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_MODEL
-from experiments.post_training.task_curation.difficulty.campaign import JUDGE_VERSION, TPU_SERVING_ID, campaign_record
+from experiments.post_training.task_curation.difficulty.campaign import (
+    JUDGE_VERSION,
+    TPU_SERVING_ID,
+    campaign_record,
+    identity_bundle,
+)
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty.ledger import record_action_failure
 from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
@@ -746,6 +751,13 @@ def run_batch(args: argparse.Namespace) -> None:
                         "basis": "Pinned judge tier; original TaskSpec and requested judge parameters are retained.",
                         "serving_probe": judge_probe,
                     }
+            if campaign is not None and judge_metadata is not None:
+                judge_metadata["judge_version"] = JUDGE_VERSION
+                judge_metadata["completion_policy"] = identity_bundle()["judge"]["completion_policy"]
+                judge_metadata["token_budget"] = (
+                    "Versioned TaskSpec JudgeSpec completion/retry floors; larger source budgets preserved. "
+                    "Native verifier request policies remain source-declared."
+                )
             completion = probe["tools_thinking_probe"]["completion"]
             revision = (
                 f"unexposed:{completion['system_fingerprint']}"

@@ -12,6 +12,7 @@ from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, Solver
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, judge_spec
+from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, append_rows, digest
 from experiments.post_training.task_curation.difficulty.regional import immutable_json, regional_worker
@@ -20,7 +21,10 @@ from experiments.post_training.task_curation.difficulty_config import SUBSTITUTE
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
 
-JUDGE_VERSION = "together-glm-5.3-flash-20261124-v1"
+JUDGE_VERSION = "together-glm-5.3-flash-20261125-v2"
+JUDGE_COMPLETION_FLOOR = 8192
+JUDGE_RETRY_FLOOR = 16384
+JUDGE_REASONING_EFFORT = ""
 CAMPAIGN_VERSION = "atlas-difficulty-tpu-v4-20261124-v1"
 TPU_SERVING_ID = "marin-vllm-tpu-" + digest([VLLM_FORK_REQUIREMENT, TPU_INFERENCE_FORK_REQUIREMENT])[:16]
 
@@ -45,6 +49,13 @@ def identity_bundle() -> dict:
             "tokenizer": asdict(SUBSTITUTE_JUDGE_PIN),
             "temperature": 0.7,
             "preserve_source_rubric": True,
+            "completion_policy": {
+                "scope": "TaskSpec JudgeSpec; native verifier request policies remain source-declared",
+                "reasoning_effort": JUDGE_REASONING_EFFORT or None,
+                "minimum_completion_tokens": JUDGE_COMPLETION_FLOOR,
+                "minimum_retry_tokens_if_larger_than_initial": JUDGE_RETRY_FLOOR,
+                "preserve_larger_source_budgets": True,
+            },
         },
     }
 
@@ -59,17 +70,41 @@ def campaign_record(ledger: str) -> dict | None:
     return record
 
 
+def campaign_judge(judge: JudgeSpec) -> JudgeSpec:
+    """Bind the versioned substitute's completion policy without changing its rubric."""
+    initial = max(judge.max_completion_tokens, JUDGE_COMPLETION_FLOOR)
+    retry = max(judge.incomplete_retry_tokens, JUDGE_RETRY_FLOOR)
+    return replace(
+        judge,
+        model=SUBSTITUTE_JUDGE_MODEL,
+        temperature=0.7,
+        reasoning_effort=JUDGE_REASONING_EFFORT,
+        max_completion_tokens=initial,
+        incomplete_retry_tokens=retry if retry > initial else 0,
+    )
+
+
 def redeclare_judge(task: TaskSpec) -> TaskSpec:
-    """Change only the judge route, after original frozen task validation."""
+    """Derive the campaign judge after validating the original frozen task."""
     judge = judge_spec(task.grader)
     if judge is None:
         return task
+    served = campaign_judge(judge)
     if isinstance(task.grader, VerifyitGrader):
         grader = task.grader.model_copy(
-            update={"parameters": {**task.grader.parameters, "model": SUBSTITUTE_JUDGE_MODEL, "temperature": 0.7}}
+            update={
+                "parameters": {
+                    **task.grader.parameters,
+                    "model": served.model,
+                    "temperature": served.temperature,
+                    "reasoning_effort": served.reasoning_effort,
+                    "max_completion_tokens": served.max_completion_tokens,
+                    "incomplete_retry_tokens": served.incomplete_retry_tokens,
+                }
+            }
         )
     elif isinstance(task.grader, ScriptGrader):
-        grader = task.grader.model_copy(update={"judge": replace(judge, model=SUBSTITUTE_JUDGE_MODEL, temperature=0.7)})
+        grader = task.grader.model_copy(update={"judge": served})
     else:
         raise ValueError("Unknown judged grader contract")
     # Validate the changed contract without changing its question, rubric, gates or score mapping.
@@ -79,13 +114,17 @@ def redeclare_judge(task: TaskSpec) -> TaskSpec:
 def record_judge_redeclaration(directory: Path, task: TaskSpec) -> None:
     """Keep the source judge and original task contract beside the versioned derivative."""
     original = task.model_dump(mode="json")
+    judge = judge_spec(task.grader)
+    if judge is None:
+        raise ValueError("Judge redeclaration requires a judged task")
     (directory / "judge-redeclaration.json").write_text(
         json.dumps(
             {
                 "judge_version": JUDGE_VERSION,
                 "original_task_sha256": digest(original),
-                "original_judge": asdict(judge_spec(task.grader)),
+                "original_judge": asdict(judge),
                 "served_judge": identity_bundle()["judge"],
+                "effective_judge": asdict(campaign_judge(judge)),
             },
             sort_keys=True,
         )
@@ -133,6 +172,19 @@ def qualified_judge(uri: str) -> dict:
         for fixture in fixtures
     ):
         raise ValueError("Judge qualification has a failed fixture")
+    if not any(
+        fixture.get("class") == "reasoning-budget-stress"
+        and 0 < fixture.get("source_max_completion_tokens", JUDGE_COMPLETION_FLOOR) < JUDGE_COMPLETION_FLOOR
+        for fixture in fixtures
+    ):
+        raise ValueError("Judge qualification is missing a reasoning-budget stress fixture")
+    for fixture in fixtures:
+        request = fixture["detail"].get("judge_request", {})
+        if (
+            request.get("reasoning_effort") != (JUDGE_REASONING_EFFORT or None)
+            or request.get("max_completion_tokens", 0) < JUDGE_COMPLETION_FLOOR
+        ):
+            raise ValueError("Judge qualification did not exercise the versioned completion policy")
     probe = record["tokenization"]["tools_thinking_probe"]
     if probe["completion"]["usage"]["prompt_tokens"] != probe["pinned_prompt_tokens"]:
         raise ValueError("Judge tokenizer qualification failed")
@@ -233,6 +285,65 @@ def stage_campaign(root: str, sealed_manifest: str, sealed_sha256: str, qualific
         "holds": holds,
         "carry_forward": "none: old judged and unqualified legacy identities remain historical in the parent seal",
     }
+    publish_campaign(destination, record, manifest["sealed_at"])
+
+
+def rebind_regional_campaign(root: str, previous_uri: str, previous_sha256: str, qualification: str) -> None:
+    """Initialize a new judge campaign using already staged regional inputs and weights."""
+    regional_worker()
+    prefix = "gs://marin-us-central2/"
+    if not root.startswith(prefix) or not previous_uri.startswith(prefix):
+        raise ValueError("Campaign rebinding must stay in us-central2")
+    raw = StoragePath(previous_uri).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != previous_sha256:
+        raise ValueError("Previous campaign receipt changed")
+    previous = json.loads(raw)
+    bundle = identity_bundle()
+    if (
+        previous["campaign_id"] != digest(previous["identity"])
+        or previous["identity"]["solvers"] != bundle["solvers"]
+        or previous["identity"]["solver_protocol"] != bundle["solver_protocol"]
+        or previous["campaign_id"] == digest(bundle)
+    ):
+        raise ValueError("Judge rebinding requires a distinct campaign with identical frozen solvers")
+    for uri, sha in previous["queues"]:
+        if not uri.startswith(prefix):
+            raise ValueError("Rebound queue is not regional")
+        payload = StoragePath(uri).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != sha:
+            raise ValueError("Previous regional queue changed")
+        for source in json.loads(payload):
+            if any(
+                not source["panel"][key].startswith(prefix) for key in ("panel_path", "input_artifact", "evidence_url")
+            ):
+                raise ValueError("Rebound panel has inputs outside us-central2")
+    parent = previous["parent_seal"]
+    seal = StoragePath(parent["uri"]).read_bytes()
+    if hashlib.sha256(seal).hexdigest() != parent["sha256"]:
+        raise ValueError("Sealed parent manifest changed")
+    qualification_ref = qualified_judge(qualification)
+    destination = StoragePath(root)
+    previous_root = StoragePath(previous_uri).parent.parent.parent
+    for solver in Solver:
+        if solver == Solver.HOSTED:
+            continue
+        staged = json.loads((previous_root / "staging" / f"{solver.value}.json").read_text())
+        if staged["revision"] != PINS[solver].revision or not staged["weights"].startswith(prefix):
+            raise ValueError("Rebound weights differ from the regional frozen solver")
+        immutable_json(destination / "staging" / f"{solver.value}.json", staged)
+    record = {
+        **previous,
+        "campaign_id": digest(bundle),
+        "identity": bundle,
+        "judge_qualification": qualification_ref,
+        "parent_campaign": {"uri": previous_uri, "sha256": previous_sha256},
+        "carry_forward": "none: previous judge scores remain historical; regional inputs and weights are reused",
+    }
+    publish_campaign(destination, record, json.loads(seal)["sealed_at"])
+
+
+def publish_campaign(destination: StoragePath, record: dict, sealed_at: str) -> None:
+    """Persist an empty campaign and its sealed source holds without importing scores."""
     immutable_json(destination / "ledger" / LEDGER_VERSION / "campaign.json", record)
     immutable_json(destination / "ledger" / LEDGER_VERSION / "imports" / "campaign-start.json", record)
     append_rows(
@@ -246,13 +357,13 @@ def stage_campaign(root: str, sealed_manifest: str, sealed_sha256: str, qualific
                 digest([record["campaign_id"], hold, solver]),
                 Outcome.OBSERVATION,
                 GapReason.EXECUTABILITY_ADMISSION_PENDING,
-                sealed_manifest,
+                record["parent_seal"]["uri"],
                 0.0,
-                manifest["sealed_at"],
-                evidence_uri=sealed_manifest,
+                sealed_at,
+                evidence_uri=record["parent_seal"]["uri"],
                 error_identity="preserved_source_hold",
             )
-            for hold in holds
+            for hold in record["holds"]
             for solver in Solver
         ],
     )
