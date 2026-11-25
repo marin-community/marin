@@ -133,10 +133,12 @@ UV_EXTRAS: dict[str, list[str]] = {
 }
 
 PYTHON_VERSION = "3.12"
+# `-n auto` counts physical cores, so it starts 2 workers on a 4-vCPU hosted runner.
+# `logical` starts one per vCPU.
 PYTEST_ARGS: tuple[str, ...] = (
     "--durations=5",
     "-n",
-    "auto",
+    "logical",
     "--dist=worksteal",
     "--tb=short",
 )
@@ -171,7 +173,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
 # every other scope finishes in a few minutes on one. A sharded scope splits its selected
 # files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 4}
+SHARD_COUNT: dict[str, int] = {"levanter": 5, "marin": 6}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -217,7 +219,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
         "lib/skyrlrecipe/",
         "vendor/skyrl/",
-        "vendor/harbor/",
         "lib/finelog/",
         "lib/finestore/",
         "lib/iris/",
@@ -241,11 +242,9 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "experiments/post_training/task_curation/calibforge_fixtures.py",
         "experiments/post_training/task_curation/daytona_identity.py",
         "experiments/post_training/task_curation/task_tars.py",
-        "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
         "experiments/post_training/task_curation/tests/test_daytona_identity.py",
         "experiments/post_training/task_curation/tests/task_tar_fixtures.py",
-        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
         "infra/ci/run_harbor_tests.py",
         "infra/ci/run_tests.py",
@@ -269,6 +268,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "rolloutengine-unit": (
         "lib/rolloutengine/",
+        "lib/finelog/",
         "lib/taskcompendium/",
         "lib/verifyit/",
         "lib/rigging/",

@@ -15,7 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from evalrecords.records import CuratedAgentRef, RunStatus, TaskEvidence, TaskMachineBackend, TaskMachineSettings
+from evalrecords.records import (
+    CuratedAgentRef,
+    EvaluationSelection,
+    RunStatus,
+    TaskEvidence,
+    TaskMachineBackend,
+    TaskMachineSettings,
+)
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
@@ -38,16 +45,16 @@ from experiments.evaluation.benchmark import fixed_benchmarks
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
+from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
 
 
 @pytest.fixture
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -158,6 +165,39 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert batch.judge.api_model == "qwen3-0.6b"
 
 
+def test_judge_deadline_change_preserves_launch_identity_and_saved_results(tmp_path, harbor_task_workspace):
+    policy = harbor_task_workspace / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    judge = models()["qwen3-0.6b"]
+    spec = replace(
+        _pipeline_spec(tmp_path),
+        evals=(HarborDefinition(policy.stem, policy),),
+        judge_model=judge,
+        judge_accelerator="H100x1",
+        cache_key=None,
+        run_id="judge-resume",
+    )
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "interrupted", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["judge"]["model"]["config"].pop("evaluation_request_timeout", None)
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(replace(spec, judge_model=replace(judge, evaluation_request_timeout=21600)))
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
+
+
 @pytest.mark.parametrize("dry_run", [True, False])
 def test_coreweave_launch_without_storage_credentials_fails_before_submission(
     tmp_path, submitted_batches, monkeypatch, dry_run
@@ -264,7 +304,6 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
 def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
     monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     submitted_env = []
 
@@ -376,7 +415,7 @@ def test_relaunch_changed_request_concurrency_and_task_evidence_preserves_identi
     StepRunner().run(build_evaluation_steps(before, execute))
     executed.clear()
 
-    model = replace(model, evaluation_num_concurrent=64)
+    model = replace(model, evaluation_num_concurrent=64, evaluation_request_timeout=21600)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
     config.write_text("evaluations:\n  custom:\n    benchmark: gsm8k\n    run:\n      concurrency: 16\n")
     bounded = load_evaluations(config)[0]
@@ -431,6 +470,39 @@ def test_run_seed_defaults_only_where_the_backend_accepts_request_seeds(tmp_path
     assert seeds == expected
 
 
+@pytest.mark.parametrize(
+    "launch_choice, expected",
+    [
+        (None, {"code": TaskEvidence.REFERENCE, "math": TaskEvidence.EMBEDDED}),
+        (TaskEvidence.EMBEDDED, {"code": TaskEvidence.EMBEDDED, "math": TaskEvidence.EMBEDDED}),
+    ],
+)
+def test_task_evidence_follows_the_benchmark_unless_the_launch_chooses(tmp_path, launch_choice, expected):
+    config = tmp_path / "custom.yaml"
+    config.write_text("evaluations:\n  code:\n    benchmark: livecodebench\n  math:\n    benchmark: gsm8k\n")
+    spec = LaunchSpec(
+        evals=load_evaluations(config),
+        model=models()["qwen3-8b"],
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        task_evidence=launch_choice,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=0,
+        run_id="task-evidence",
+    )
+
+    batch = prepare_evaluation_batch(spec)
+
+    modes = {
+        evaluation.identity.eval_ref.name: evaluation.identity.eval_ref.curated.settings.task_evidence
+        for evaluation in batch.evaluations
+    }
+    assert modes == expected
+
+
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
         evals=resolve_evaluations("gsm8k-smoke,arc-easy"),
@@ -447,7 +519,38 @@ def _pipeline_spec(tmp_path):
     )
 
 
-def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):
+@pytest.mark.parametrize("request_timeout", [1800, 21600])
+def test_relaunch_matches_records_without_a_request_deadline(tmp_path, request_timeout):
+    spec = replace(_pipeline_spec(tmp_path), cache_key=None, run_id="legacy-record")
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "timed out", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["model"]["config"].pop("evaluation_request_timeout")
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(
+        replace(spec, model=replace(spec.model, evaluation_request_timeout=request_timeout))
+    )
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
+
+
+@pytest.mark.parametrize(
+    ("agent_selection", "expected_hosts"),
+    [
+        (None, set()),
+        (EvaluationSelection(benchmark="terminal-bench-2.1"), {REGISTRY_HOST}),
+        (
+            EvaluationSelection(benchmark="ot-tblite", protocol="campaign-2026-09-25"),
+            {"codeload.github.com"},
+        ),
+    ],
+)
+def test_curated_group_submission_declares_resources_and_source_egress(
+    tmp_path, monkeypatch, agent_selection, expected_hosts
+):
     requests = []
 
     def submit(request, **_kwargs):
@@ -459,13 +562,22 @@ def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, mon
         "ControllerServiceClientSync",
         lambda **_kwargs: SimpleNamespace(launch_job=submit, close=lambda: None),
     )
-    batch = prepare_evaluation_batch(_pipeline_spec(tmp_path))
+    spec = _pipeline_spec(tmp_path)
+    if agent_selection is not None:
+        spec = replace(
+            spec,
+            evals=(agent_selection,),
+            model=_agent_model(),
+            task_machine_backend=TaskMachineBackend.DOCKER,
+        )
+    batch = prepare_evaluation_batch(spec)
     with IrisClient.remote("http://controller.invalid") as client:
         launch_module.launch_group(batch, client)
 
     (request,) = requests
     assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
     assert request.constraints[0].value.string_value == "cw-rno2a"
+    assert {rule.domain for rule in request.egress_allow} == expected_hosts
 
 
 @pytest.mark.parametrize("cache_key", [None, "caller-owned-immutable-artifact"])
@@ -638,7 +750,6 @@ def agent_selection(tmp_path, agent_source, monkeypatch) -> Path:
         **{benchmark.name: benchmark for benchmark in fixed_benchmarks([agent_source])},
     }
     monkeypatch.setattr("experiments.evaluation.curated.evaluation_benchmarks", lambda: catalog)
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     path = tmp_path / "agent.yaml"
     path.write_text("evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n")
     return path
@@ -703,16 +814,6 @@ def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(ag
     assert (batch.secret_env.get(DAYTONA_API_KEY) == DAYTONA_SECRET_ENV[DAYTONA_API_KEY]) is daytona
     assert (DAYTONA_API_KEY in evaluation.secret_env_keys) is daytona
     assert set(DAYTONA_EGRESS).issubset(batch.egress_allow) is daytona
-
-
-def test_a_daytona_launch_without_a_target_fails_before_submission(agent_command, submitted_batches, monkeypatch):
-    monkeypatch.delenv("DAYTONA_TARGET")
-
-    result = CliRunner().invoke(cli, agent_command)
-
-    assert result.exit_code != 0
-    assert "Daytona task machines, which require DAYTONA_TARGET" in result.output
-    assert submitted_batches == []
 
 
 def test_agent_launch_budgets_the_window_the_server_runs(agent_command, submitted_batches, monkeypatch):

@@ -131,10 +131,8 @@ class PromptLoader:
 
     After ``max_unusable_groups`` unusable groups in a row, a prompt can enter quarantine for 10 completed batches.
     The cooldown doubles on each repeat quarantine up to 40 batches and resets to 10 after a usable group.
-    Quarantine keeps enough eligible prompts for one batch, or enough in each family for every open batch when
-    batches specify groups per family. When that minimum keeps a failing prompt in rotation, its rejection can
-    trigger an early retry for a non-live quarantined prompt in the same pool.
-    A usable group ends quarantine early. Retry counts and quarantine restart empty when a run resumes.
+    Quarantine keeps enough eligible prompts to fill the open batches and one spare in each pool.
+    Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -145,6 +143,7 @@ class PromptLoader:
         order: PromptOrder,
         *,
         batch_size: int,
+        minimum_pool_size: int,
         max_stale_retries: int,
         max_unusable_groups: int,
         families: Mapping[str, str] | None = None,
@@ -156,10 +155,10 @@ class PromptLoader:
             raise ValueError(f"max_unusable_groups must be positive, got {max_unusable_groups}")
         self._uid_rows = {dataset.uid(index): index for index in reversed(range(len(dataset)))}
         self._uid_count = len(self._uid_rows)
-        if self._uid_count < batch_size:
+        if self._uid_count < minimum_pool_size:
             raise ValueError(
-                f"the training dataset has {self._uid_count} distinct prompt uids, fewer than one batch of "
-                f"{batch_size}; a batch trains each uid at most once"
+                f"the training dataset has {self._uid_count} distinct prompts and needs {minimum_pool_size} "
+                "to fill the open batches and keep one spare"
             )
         self._dataset = dataset
         self._families = dict(families or {})
@@ -173,7 +172,7 @@ class PromptLoader:
             if not isinstance(order, SeededPasses):
                 raise ValueError("family prompt pools require seeded passes")
             self._family_orders = {family: order.for_pool(len(rows)) for family, rows in self._family_rows.items()}
-        self._batch_size = batch_size
+        self._minimum_pool_size = minimum_pool_size
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
         self._max_unusable_groups = max_unusable_groups
@@ -181,19 +180,17 @@ class PromptLoader:
         # Quarantined uid to the training step that releases it.
         self._quarantined: dict[str, int] = {}
         self._next_quarantine_steps: dict[str, int] = {}
-        self._early_retry_pools: set[str | None] = set()
         self._step = 0
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], family: str | None = None, *, batches_ahead: int = 0) -> dict | None:
-        """Offer a non-live prompt in the requested family.
+    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
+        """Offer a prompt in the requested family whose uid is neither live nor quarantined.
 
-        Prompts awaiting regeneration come first. A pending quarantine retry can fill the current batch. For a lease
-        reserved for a later full batch, pass its offset from the current batch as ``batches_ahead``. A family lease
-        advances only its family's seeded pass. Rows with zero sampling weight can be offered.
+        Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
+        a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
         """
 
         def eligible(uid: str) -> bool:
@@ -203,15 +200,10 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
-        if batches_ahead == 0 and (early_retry := self._next_early_retry(live, family)) is not None:
-            return early_retry
         if family is not None:
             return self._next_family_prompt(live, family)
-        # An early retry can be both live and quarantined. Check the sum before allocating a union.
-        if (
-            len(live) + len(self._quarantined) >= self._uid_count
-            and len(self._quarantined.keys() | live) >= self._uid_count
-        ):
+        # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
+        if len(live) + len(self._quarantined) >= self._uid_count:
             return None
         for _ in range(self._draw_limit):
             index = self._order.next_index()
@@ -224,24 +216,6 @@ class PromptLoader:
                 self._scan_start = index + 1
                 return self._offer(index)
         return None
-
-    def _next_early_retry(self, live: Collection[str], family: str | None) -> dict | None:
-        if family not in self._early_retry_pools:
-            return None
-        uid = next(
-            (
-                uid
-                for uid in self._quarantined
-                if uid not in live and (family is None or self._families.get(uid) == family)
-            ),
-            None,
-        )
-        if uid is None:
-            return None
-        self._early_retry_pools.remove(family)
-        # Rotate candidates so each quarantined prompt gets a turn.
-        self._quarantined[uid] = self._quarantined.pop(uid)
-        return self._offer(self._uid_rows[uid])
 
     def _next_family_prompt(self, live: Collection[str], family: str) -> dict | None:
         rows = self._family_rows.get(family)
@@ -260,10 +234,8 @@ class PromptLoader:
         return None
 
     def retry(self, prompt: dict) -> None:
-        """Queue a stale prompt when it has retries left and is outside quarantine."""
+        """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
         uid = prompt["uid"]
-        if uid in self._quarantined:
-            return
         count = self._stale_retries.pop(uid, 0)
         if count >= self._max_stale_retries:
             self._retries_exhausted += 1
@@ -277,10 +249,7 @@ class PromptLoader:
             return
         if disposition not in UNUSABLE_GROUP_REJECTIONS:
             self._unusable_groups.pop(uid, None)
-            self._quarantined.pop(uid, None)
             self._next_quarantine_steps.pop(uid, None)
-            return
-        if uid in self._quarantined:
             return
         count = self._unusable_groups.get(uid, 0) + 1
         if count < self._max_unusable_groups:
@@ -290,21 +259,18 @@ class PromptLoader:
         family = self._families.get(uid)
         if family is not None and family in self._family_minimums:
             minimum = self._family_minimums[family]
-            quarantined = sum(self._families.get(candidate) == family for candidate in self._quarantined)
-            usable = len(self._family_rows[family]) - quarantined
+            eligible = len(self._family_rows[family]) - sum(
+                self._families.get(uid) == family for uid in self._quarantined
+            )
             scope = f" in family {family!r}"
         else:
-            family = None
-            minimum = self._batch_size
-            quarantined = len(self._quarantined)
-            usable = self._uid_count - quarantined
+            minimum = self._minimum_pool_size
+            eligible = self._uid_count - len(self._quarantined)
             scope = ""
-        if usable <= minimum:
-            if quarantined:
-                self._early_retry_pools.add(family)
+        if eligible <= minimum:
             logger.warning(
                 "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
-                "requires {} usable prompts{}",
+                "requires {} eligible prompts{}",
                 self._log_name(uid),
                 count,
                 disposition,
@@ -316,13 +282,13 @@ class PromptLoader:
         self._quarantined[uid] = self._step + cooldown
         self._next_quarantine_steps[uid] = min(2 * cooldown, MAX_QUARANTINE_STEPS)
         logger.warning(
-            "Quarantined prompt {} for {} batches after {} unusable groups in a row (last: {}); "
-            "{} usable prompts remain{}",
+            "Quarantined prompt {} for {} batches after {} unusable groups in a row (last: {}). "
+            "{} eligible prompts remain{}",
             self._log_name(uid),
             cooldown,
             count,
             disposition,
-            usable - 1,
+            eligible - 1,
             scope,
         )
 
@@ -335,7 +301,6 @@ class PromptLoader:
         """
         self._step += 1
         self._quarantined = {uid: release for uid, release in self._quarantined.items() if release > self._step}
-        self._early_retry_pools.clear()
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
         return {
             **self._order.observe(groups),

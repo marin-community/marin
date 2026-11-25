@@ -9,6 +9,7 @@ import pytest
 
 pytest.importorskip("math_verify", reason="math mode needs the `math` extra")
 
+import latex2sympy2_extended
 import math_verify
 import sympy
 from math_verify.errors import TimeoutException
@@ -166,6 +167,181 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
     assert dispatch(MathSpec(expected=expected), tmp_path, tmp_path).status == Status.INVALID_TASK
 
 
+@pytest.mark.parametrize(
+    "expected, math_type",
+    [
+        (r"67.\overline{3}", MathType.SCALAR),
+        (r"\begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix}.", MathType.SCALAR),
+        (r"2007 + \frac\pi 2", MathType.SCALAR),
+        (r"\{x \mid 2 < x < 3\}", MathType.SET),
+        (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"32 \text{white}, 16 \text{black}", MathType.SCALAR),
+        (r"30 \text{m}/\text{s}+5", MathType.SCALAR),
+        (r"\mathrm{x}+32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"[1, 67.\overline{3}]", MathType.LIST),
+        (r"x = \frac\pi 2 = 2", MathType.EQUATION),
+        (r"1$ + $2", MathType.SCALAR),
+        (r"1$ + ", MathType.SCALAR),
+        (r"[1, x = \frac\pi 2 = 2]", MathType.LIST),
+        (r"[1, 1$ + $2]", MathType.LIST),
+    ],
+)
+def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}",
+        r"\text{one two three four five}",
+    ],
+)
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
+def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(prose, math_type):
+    expected = prose if math_type is MathType.SCALAR else f"[1, {prose}]"
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "No")
+
+
+def test_math_escaped_dollar_reference_stays_parseable():
+    reference = r"\$32,\!348"
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), "32,348").reward == 1.0
+
+
+@pytest.mark.parametrize("answer", ["B", "Evelyn", "Friday", "New York City Hall"])
+def test_math_short_text_reference_stays_parseable(answer):
+    assert grade_math.grade_math_candidate(MathSpec(expected=rf"\text{{{answer}}}"), answer).reward == 1.0
+
+
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
+@pytest.mark.parametrize("connector", ["and", "or"])
+def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector, math_type):
+    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4", math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"15\mbox{ cm}^2", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{2}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", r"15\mbox{ cm}^{3}", MathType.SCALAR),
+        (r"15\text{ cm}^3", "15", MathType.SCALAR),
+        (r"15\text{ cm}^{4}", "15", MathType.SCALAR),
+        (r"[1, 15\mbox{ cm}^{2}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", r"[1, 15\mbox{ cm}^{3}]", MathType.LIST),
+        (r"[1, 15\text{ cm}^3]", "[1, 15]", MathType.LIST),
+    ],
+)
+def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate",
+    [
+        (r"\frac{4}{3} \mathrm{~m} / \mathrm{s}", "4/3", "7/3"),
+        (r"215 \, \text{kJ}/\text{mol}", "215", "216"),
+        (r"30 \mathrm{m}/\mathrm{s}", "30", "31"),
+        (r"1.8^{\circ} \mathrm{C} / \mathrm{h}", "1.8", "2.8"),
+        (r"1000 \, \text{kg} \cdot \text{m}^2/\text{s}", "1000", "1001"),
+        (r"11^{\text{th}}", "11", "12"),
+        (r"25^{\text{th}}", "25", "26"),
+        (r"4^{\text{th}} \text{ minute}", "4", "5"),
+        (r"9.9 \, \text{s}^{-1}", "9.9", "10.9"),
+        (r"15\mbox{ cm}^{ 2 }", "15", "16"),
+        (r"0.33 \, \text{m/s}^2", "0.33", "1.33"),
+        (r"1200 \, \text{kg/m}^3", "1200", "1201"),
+        (r"\frac{39}{5}\mathrm{~}^{2}", "39/5", "40/5"),
+    ],
+)
+def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(reference, candidate, wrong_candidate):
+    spec = MathSpec(expected=reference)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+def test_math_ordinal_after_option_label_preserves_reference_value():
+    reference = r"\textbf{(C)}\ 11^{\text{th}}"
+    spec = MathSpec(expected=reference)
+    assert grade_math.grade_math_candidate(spec, reference).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, r"\textbf{(C)}\ 11").reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"\mathrm{x}+1", r"\mathrm{x}+1", MathType.SCALAR),
+        (r"2\mathrm{x}+1", r"2\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{1}{2}\mathrm{x}+1", r"\frac{1}{2}\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{\mathrm{x}}{2}", r"\frac{\mathrm{x}}{2}", MathType.SCALAR),
+        (r"[1, \frac{\mathrm{x}}{2}]", r"[1, \frac{\mathrm{x}}{2}]", MathType.LIST),
+    ],
+)
+def test_math_upright_symbols_parse_with_following_math(reference, candidate, math_type):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference, math_type=math_type), candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"2\mathrm{xy}+1", r"2\mathrm{xy}+1", "2", MathType.SCALAR),
+        (r"2\text{x}+1", r"2\text{x}+1", "2", MathType.SCALAR),
+        (r"[1, 2\mathrm{xy}+1]", r"[1, 2\mathrm{xy}+1]", "[1, 2]", MathType.LIST),
+        (r"[1, 2\text{x}+1]", r"[1, 2\text{x}+1]", "[1, 2]", MathType.LIST),
+    ],
+)
+def test_math_adjacent_text_symbols_keep_following_math(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"1+\mathrm{x}", r"1+\mathrm{x}", "1", MathType.SCALAR),
+        (r"1+\text{x}", r"1+\text{x}", "1", MathType.SCALAR),
+        (r"[2, 1+\mathrm{x}]", r"[2, 1+\mathrm{x}]", "[2, 1]", MathType.LIST),
+    ],
+)
+def test_math_terminal_text_symbols_after_operators_stay_symbolic(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "reference,candidate",
+    [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35"), (r"\dfrac{1}{2}", r"0.5\text{ m}")],
+)
+def test_math_candidate_units_match_reference_policy(reference, candidate):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), candidate).reward == 1.0
+
+
+def test_math_symbolic_reference_preserves_unit_like_candidate_factor():
+    spec = MathSpec(expected="2 s")
+    assert grade_math.grade_math_candidate(spec, "2 s").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "2").reward == 0.0
+
+
+def test_math_list_uses_each_references_unit_policy_for_candidates():
+    spec = MathSpec(expected=r"[2 s, 5 \text{ m}]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, "[2 s, 5]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "[2, 5]").reward == 0.0
+
+
+def test_math_list_candidate_units_ignore_unrelated_reference_normalization():
+    spec = MathSpec(expected=r"[\dfrac{1}{2}, 2 s]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2 s]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2]").reward == 0.0
+
+
 def test_math_grades_from_a_worker_thread(tmp_path):
     """Pipelines grade in worker threads, where math-verify's signal-based timeout cannot be armed."""
     _answer(tmp_path, "\\boxed{\\frac{1}{2}}")
@@ -239,15 +415,17 @@ def test_math_deadline_verdicts_carry_their_phase(monkeypatch):
     deadlines follow the reply. The verdict tags which step ran out."""
 
     spec = MathSpec(expected="y=x+1", math_type=MathType.EQUATION)
+    original_reference_parse = latex2sympy2_extended.latex2sympy
     original_parse = math_verify.parse
 
     def deadline(*args, **kwargs):
         raise TimeoutException("backend deadline exhausted")
 
-    monkeypatch.setattr(math_verify, "parse", deadline)
+    monkeypatch.setattr(latex2sympy2_extended, "latex2sympy", deadline)
     with pytest.raises(GradingInfraError) as reference:
         grade_math.grade_math_candidate(spec, "y=x+2")
     assert reference.value.detail["phase"] == grade_math.MATH_DEADLINE_REFERENCE_PARSE
+    monkeypatch.setattr(latex2sympy2_extended, "latex2sympy", original_reference_parse)
 
     def candidate_deadline(text, **kwargs):
         if "y=x+2" in text:

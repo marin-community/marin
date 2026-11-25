@@ -33,6 +33,7 @@ from rolloutengine.agents.pi.agent import (
 )
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy, ReplyMatch
 from rolloutengine.models import (
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     ContextWindowExceeded,
     ModelRequest,
     ModelTurn,
@@ -388,6 +389,40 @@ async def test_pi_harness_serves_pi_through_the_relay_and_grades_its_failures(ex
     assert chat.headers["content-type"] == "text/event-stream"
     assert '"content": "Done."' in chat.text
     assert all(process.returncode is not None for process in machine.processes)
+
+
+async def test_pi_agent_deadline_includes_time_before_its_first_model_request():
+    class WaitingPi(SimulatedPiMachine):
+        async def run(self, command: Command) -> Result:
+            if "pi --print" in command.argv[4]:
+                await asyncio.Future()
+            return await super().run(command)
+
+    async def unexpected_model(_request):
+        raise AssertionError("Pi never reached the model")
+
+    machine = WaitingPi(available_port(), 0)
+    options = PiOptions(
+        model=MODEL,
+        thinking_format=PiThinkingFormat.CHAT_TEMPLATE,
+        max_input_tokens=32768,
+        max_output_tokens=8192,
+        version="0.87.0",
+        relay_port=machine.port,
+        setup_timeout=5,
+    )
+    async with asyncio.timeout(5):
+        rollout = await harness_rollout(
+            pi_harness(options, unavailable_tokenizer),
+            task(),
+            unexpected_model,
+            limits=rollout_limits(total_turn_timeout=0.1),
+            machine=machine,
+        )
+
+    assert rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
+    assert not rollout.conversations
+    assert machine.processes and all(process.returncode is not None for process in machine.processes)
 
 
 async def test_pi_harness_fails_the_attempt_when_a_signal_kills_pi():

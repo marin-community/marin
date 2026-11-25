@@ -6,6 +6,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
-from skyrlrecipe.documents import set_path
+from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
@@ -54,9 +55,9 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.skyrl_test_support import native_json
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
@@ -73,8 +74,8 @@ def test_preset_table_rejects_duplicate_names():
         replace(table, presets=(*table.presets, table.by_name["eval-short"]))
 
 
-def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monkeypatch):
-    launch_paths = []
+def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
+    launch_paths = {}
 
     def collect_plan(paths, **_):
         # A CLI plan discards the composed config. Validate the emitted documents in one native process.
@@ -93,7 +94,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
         if preset.name == "eval-short":
             arguments += ["--init", initializer]
         launch_path = tmp_path / f"{preset.name}.yaml"
-        launch_paths.append(str(launch_path))
+        launch_paths[preset.name] = str(launch_path)
         with monkeypatch.context() as capture:
             capture.setattr(gate, "compose_configs", collect_plan)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
@@ -107,7 +108,44 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
-    gate.compose_configs(launch_paths, validate_driver=True)
+    composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
+    configs = dict(zip(launch_paths, composed, strict=True))
+    for name in ("speed-short", "data-short", "eval-short"):
+        assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+
+    # Published train-long controls still contain defaults removed by the TaskSpec migration.
+    planned = configs["train-long"]
+    recorded = deepcopy(planned)
+    recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
+    del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
+    del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
+    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
+
+
+def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    speed = table.by_name["speed-short"]
+    learning = table.by_name["learning-medium"]
+    paths = []
+    for preset in (speed, learning):
+        (step,) = snowball.build_experiment(preset, table=table).runs
+        path = tmp_path / f"{preset.name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    speed_config, learning_config = gate.compose_configs(paths)
+    for preset, sources in (
+        (speed, speed_config["inputs"]["evaluation_data"]["eval_lite"]),
+        (learning, learning_config["inputs"]["validation_data"]),
+    ):
+        (source,) = sources
+        held_out = recipe.selection_artifact(preset.held_out_tasks)
+        assert (source["uri"], source["relative_path"]) == (held_out.path(), FULL_VALIDATION_FILENAME)
+
+    # Best-checkpoint selection consumes evaluation metrics before the export callback runs.
+    callbacks = [row["type"] for row in learning_config["skyrl"]["trainer"]["callbacks"]]
+    evaluation = callbacks.index("evaluation")
+    assert evaluation < callbacks.index("best_checkpoint") < callbacks.index("hf_model_save")
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):
@@ -137,14 +175,8 @@ def test_plan_rejects_gated_preset_without_control_pin(selection):
             "trainer.train_batch_size=2",
             "lcm_dp_size=16",
         ),
-        (
-            "--plan",
-            ('terminal_bench={"harbor":{}}',),
-            "terminal_bench.harbor.eval_override_timeout_sec=180",
-            "Unknown Harbor task settings: ['eval_override_timeout_sec']",
-        ),
     ],
-    ids=["plan-batch-size", "run-batch-size", "plan-harbor-setting"],
+    ids=["plan-batch-size", "run-batch-size"],
 )
 def test_launcher_refuses_invalid_driver_settings(
     selection, preset_table, monkeypatch, capsys, mode, recipe_settings, override, reason
@@ -170,6 +202,45 @@ def test_launcher_refuses_invalid_driver_settings(
     result = json.loads(output)
     assert result["verdict"] == "invalid"
     assert reason in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("num_workers", "static_preferences", "exit_code"),
+    [(5, False, 4), (4, False, 0), (5, True, 0)],
+    ids=["overbooked", "fits", "static-preferences"],
+)
+def test_plan_checks_pinned_workers_against_driver_cpu_request(
+    selection, preset_table, monkeypatch, num_workers, static_preferences, exit_code
+):
+    client, _ = fake_iris(monkeypatch, "rollout-worker-capacity")
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    settings = (
+        f"trajectory_runner.rollout_workers.num_workers={num_workers}",
+        "trajectory_runner.rollout_workers.cpus_per_worker=8",
+    )
+    if static_preferences:
+        settings += (
+            "environment.env_class=preference_pair",
+            "trainer.evaluation_runner=training",
+            "generator.weight_sync_transport=broadcast",
+            "trainer.rollout_buffer.max_staleness_steps=0",
+        )
+    layout = replace(preset.recipe.layout, host_cpu=32)
+    if static_preferences:
+        layout = replace(
+            layout,
+            workload=replace(
+                layout.workload, plan=replace(layout.workload.plan, colocate_all=True, num_inference_engines=4)
+            ),
+        )
+    config = preset.recipe.config.with_settings(settings)
+    table = preset_table(replace(preset, recipe=replace(preset.recipe, layout=layout, config=config)))
+
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    client.submit.assert_not_called()
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
@@ -319,166 +390,60 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
-def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
     table = snowball_model.SNOWBALL
-    preset = table.by_name["train-long-harbor"]
-    with pytest.raises(click.BadParameter, match=r"Harbor evaluation requires generator\.enable_http_endpoint"):
-        snowball.build_experiment(preset, table=table, settings=("generator.enable_http_endpoint=false",))
-
-    wider_window = ("context_budget.serving_window_tokens=28672",)
-    paths = []
-    for index, (settings, output_cap) in enumerate((((), None), (wider_window, 4096), (wider_window, 28672))):
-        step = snowball.build_experiment(preset, table=table, settings=settings).runs[0]
-        path = tmp_path / f"harbor-{index}.yaml"
-        document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
-        if output_cap is not None:
-            callback = next(
-                row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
-            )
-            for cohort in callback["cohorts"]:
-                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = output_cap
-            if index == 1:
-                del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
-        path.write_text(yaml.safe_dump(document))
-        paths.append(str(path))
-    selected = native_json("--isolated", "--group", "harbor-test")(
+    preset = table.by_name["train-long-checkpoint-eval"]
+    spec = recipe.run_spec(preset, name="checkpoint-evaluation-coverage", model_name=table.model)
+    step = recipe.run_step(preset, spec)
+    path = tmp_path / "checkpoint-evaluation.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+    results = native_json()(
         """
-import asyncio, json, os, sys
+import asyncio, json, sys
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
-from harbor.models.job.config import JobConfig
-from omegaconf import OmegaConf
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
-from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.callbacks.builtin import create_callbacks_from_config
 
-config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:3]))
-try:
-    load_launch_config(Path(sys.argv[3]))
-except ValueError as error:
-    assert "Harbor output tokens must leave room for input" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted a reply cap equal to the serving window")
-
-windows = []
-for launch in (config, changed):
-    window = launch.skyrl.generator.engine_init_kwargs.max_model_len
-    windows.append(window)
-    harbor = next(row for row in launch.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort in harbor.cohorts:
-        job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
-        model_info = job.agents[0].kwargs["model_info"]
-        assert model_info["max_input_tokens"] == window, model_info
-        assert model_info.get("max_output_tokens", 0) < window, (model_info, window)
-        agent = job.agents[0]
-        verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
-        assert verifier_budget is not None
-        agent_budget = agent.override_setup_timeout_sec + agent.override_timeout_sec
-        assert agent_budget + verifier_budget < job.trial_attempt_timeout_sec
-        attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
-        assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
-assert windows[0] != windows[1]
-
-changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
-try:
-    create_callbacks_from_config(changed.skyrl)
-except ValueError as error:
-    assert "unrecognized-build" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted an unknown Daytona image build")
-
-selected = []
-for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
-    directory = Path(sys.argv[1]).parent / f"coverage-{index}"
+path = Path(sys.argv[1])
+config = load_launch_config(path)
+assert not config.skyrl.generator.enable_http_endpoint
+state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
+scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26),
+             (100, 100, 29, 29), (99, 99, 31, 30))
+results = []
+for index, (primary_attempted, primary_scored, bfcl_attempted, bfcl_scored) in enumerate(scenarios):
+    directory = path.parent / f"coverage-{index}"
     config.skyrl.trainer.ckpt_path = str(directory)
-    metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
-    harbor = next(row for row in config.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
-        prefix = f"eval/harbor/{cohort.name}/"
-        metrics.update({prefix + "num_attempted": 30, prefix + "num_scored": scored, prefix + "reward_sum": scored / 2})
+    config.skyrl.trainer.export_path = str(directory / "exports")
+    metrics = {
+        "eval/all/num_attempted": primary_attempted,
+        "eval/all/num_scored": primary_scored,
+        "eval/all/avg_verifier_score": 0.25,
+    }
+    for name, attempted, scored, average in (
+        ("bfcl_parity", bfcl_attempted, bfcl_scored, 1.0),
+        ("swebench_verified", 30, 28, 0.5),
+        ("openthoughts_tblite", 30, 30, 0.0),
+    ):
+        prefix = f"eval/{name}/all/"
+        metrics.update({prefix + "num_attempted": attempted, prefix + "num_scored": scored,
+                        prefix + "avg_verifier_score": average})
     handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
-    state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
     asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
-                                       trainer=SimpleNamespace(cfg=config.skyrl)))
-    selected.append((directory / "best_checkpoint.json").exists())
-
-worker = r'''
-import json, socket, sys, traceback
-from harbor.models.job.config import JobConfig
-expected = json.loads(sys.argv[2])
-connection = socket.socket(fileno=int(sys.argv[1]))
-with connection.makefile("rwb") as stream:
-    for line in stream:
-        message = json.loads(line)
-        try:
-            job = JobConfig.model_validate(message["cohort"]["job"])
-            if expected is None:
-                assert job.telemetry is None
-            else:
-                assert job.telemetry is not None
-                actual = {
-                    "endpoint": job.telemetry.endpoint.get_secret_value(),
-                    "root_run_uid": job.telemetry.root_run_uid,
-                    "execution_uid": job.telemetry.execution_uid,
-                    "serving_job_id": job.telemetry.serving_job_id,
-                }
-                assert actual == expected, (actual, expected)
-            response = {"id": message["id"], "metrics": {"num_attempted": 1, "num_scored": 1, "reward_sum": 1}}
-        except Exception:
-            response = {"id": message["id"], "error": traceback.format_exc()}
-        stream.write((json.dumps(response) + "\\n").encode())
-        stream.flush()
-'''
-
-async def check_runtime_handoff():
-    callback = next(item for item in create_callbacks_from_config(config.skyrl)
-                    if isinstance(item, HarborEvaluationCallback))
-    trainer = SimpleNamespace(
-        cfg=config.skyrl,
-        inference_engine_client=SimpleNamespace(
-            enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
-        ),
-    )
-    original_exec = asyncio.create_subprocess_exec
-    expected = None
-
-    async def start_worker(*args, **kwargs):
-        return await original_exec(sys.executable, "-c", worker, args[-1], json.dumps(expected), **kwargs)
-
-    asyncio.create_subprocess_exec = start_worker
-    try:
-        endpoint = "http://127.0.0.1:4318/iris-capability/v1/telemetry"
-        os.environ.update(
-            SKYRL_RUN_ID=str(config.run.id),
-            SKYRL_EXECUTION_UID="iris:uid-native",
-            IRIS_TASK_ID="/test/native/0:1",
-        )
-        for enabled in (True, False):
-            if enabled:
-                os.environ["SKYRL_TELEMETRY_ENDPOINT"] = endpoint
-            else:
-                os.environ.pop("SKYRL_TELEMETRY_ENDPOINT", None)
-            expected = {
-                "endpoint": endpoint,
-                "root_run_uid": str(config.run.id),
-                "execution_uid": "iris:uid-native",
-                "serving_job_id": "/test/native",
-            } if enabled else None
-            async with EvaluationPool(3) as pool:
-                metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
-            assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
-                       for cohort in callback.cohorts), metrics
-    finally:
-        asyncio.create_subprocess_exec = original_exec
-os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
-asyncio.run(check_runtime_handoff())
-print(json.dumps(selected))
+                                         trainer=SimpleNamespace(cfg=config.skyrl)))
+    record = directory / "best_checkpoint.json"
+    results.append(json.loads(record.read_text()) if record.exists() else None)
+print(json.dumps(results))
 """,
-        paths,
+        [str(path)],
     )
-    assert selected == [True, False, False]
+    chosen, *rejected = results
+    assert chosen["attempted"] == 190
+    assert chosen["scored"] == 184
+    assert chosen["accuracy"] == pytest.approx(65.75 / 184)
+    assert rejected == [None] * 4
 
 
 @pytest.mark.parametrize(
@@ -522,185 +487,58 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-@pytest.mark.parametrize("model", ("snowball", "mochi"))
-def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
-    if model == "mochi":
-        revisions = {
-            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "08ba7390"},
-            "train-long": {"2026.11.20.4": "e105d46c"},
-            "train-long-3rack": {"2026.11.20.4": "9734d621"},
-            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
-        }
-        with monkeypatch.context() as local:
-            local.delenv("MARIN_PREFIX", raising=False)
-            local.delenv("MARIN_TEMP_PREFIX", raising=False)
-            local.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-us-east-08a/marin")
-            for preset in MOCHI.presets:
-                assert recipe.run_prefix(preset).rstrip("/") == "s3://marin-us-east-08a/tmp/ttl=3d"
-        produced = request.getfixturevalue("mochi_sft_presets")["periodic"].model()
-        for preset in MOCHI.presets:
-            model, prefix = preset.model, recipe.artifact_prefix(preset.recipe.layout.cluster)
-            assert (model.step.name, model.step.version, model.step.path(prefix)) == (
-                produced.step.name,
-                produced.step.version,
-                produced.step.path(prefix),
-            )
-            assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
-        configs = assert_revisioned_native_configs(
-            MOCHI,
-            revisions,
-            tmp_path=tmp_path,
-            monkeypatch=monkeypatch,
-            mixed_tasks=request.getfixturevalue("selection"),
-        )
-        _assert_mochi_preset_documents(revisions, configs)
-        return
-    revisions = {
-        "speed-short": {
-            "2026.11.13.1": "96e0d088",
-            "2026.11.17.1": "363225a9",
-            "2026.11.19.1": "371233d9",
-            "2026.11.20.1": "8f532da2",
-            "2026.11.20.3": "dc52613e",
-        },
-        "data-short": {
-            "2026.11.13.1": "7d9a590f",
-            "2026.11.17.1": "772467a8",
-            "2026.11.19.1": "cb07d91c",
-            "2026.11.20.1": "a379319d",
-            "2026.11.20.3": "d4749482",
-        },
-        "speed-medium": {
-            "2026.11.12.1": "e75349ff",
-            "2026.11.17.1": "5cd852f4",
-            "2026.11.19.1": "f8281b9d",
-            "2026.11.20.1": "8b7e47c8",
-            "2026.11.20.3": "dbc38bdf",
-        },
-        "learning-medium": {
-            "2026.11.12.1": "ba638a12",
-            "2026.11.17.1": "2be6e5e2",
-            "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "67306e75",
-            "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
-        },
-        "data-medium": {
-            "2026.11.12.1": "ba638a12",
-            "2026.11.17.1": "2be6e5e2",
-            "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "67306e75",
-            "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
-        },
-        "speed-long": {
-            "2026.11.11.1": "cd0a5f4e",
-            "2026.11.17.1": "f29155cc",
-            "2026.11.19.1": "9edc7b70",
-            "2026.11.20.1": "3d1fe22d",
-            "2026.11.20.3": "87feb546",
-        },
-        "train-long": {
-            "2026.11.11.1": "4945b701",
-            "2026.11.17.1": "b411c765",
-            "2026.11.19.1": "e56a62fa",
-            "2026.11.20.1": "22473465",
-            "2026.11.20.2": "412d0576",
-            "2026.11.20.3": "40c0256e",
-            "2026.11.20.4": "7826cc5a",
-        },
-        "train-long-harbor": {
-            "2026.11.20.5": "e1f1635a",
-            "2026.11.20.6": "76baa3fb",
-            "2026.11.20.7": "9ceb90cb",
-        },
-        "train-medium-agentic": {
-            "2026.11.19.1": "756f58ef",
-            "2026.11.20.1": "b557a4f0",
-            "2026.11.20.4": "f76d6b51",
-            "2026.11.20.5": "aa36f9de",
-        },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
-        "train-medium-tools": {"2026.11.20.1": "45b0a101"},
-        "eval-short": {
-            "2026.11.19.1": "8144570a",
-            "2026.11.20.1": "fad362ca",
-            "2026.11.20.3": "85b0359d",
-        },
-    }
-    configs = assert_revisioned_native_configs(
-        snowball_model.SNOWBALL,
-        revisions,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        mixed_tasks=request.getfixturevalue("selection"),
-    )
-    for name, config in zip(revisions, configs, strict=True):
-        trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
-        if snowball_model.SNOWBALL.by_name[name].batch_mix is not None:
-            continue
-        assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
-        generating = name in ("speed-short", "data-short", "eval-short")
-        assert (
-            config["runtime"]["training_type"],
-            trainer["rollout_buffer"]["max_staleness_steps"],
-            trainer["algorithm"]["off_policy_correction"],
-            trainer["rollout_buffer"]["batch_policy"],
-        ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
-        if generating:
-            assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
-        if name in ("speed-short", "learning-medium", "data-medium", "train-long"):
-            profile = next(
-                (
-                    row["additional_evaluations"]["eval_lite"]
-                    for row in trainer["callbacks"]
-                    if "eval_lite" in row.get("additional_evaluations", {})
-                ),
-                None,
-            )
-            for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
-                assert (
-                    source["identity"].partition(":")[0]
-                    == f"{SELECTION_PREFIX}/{snowball_model.SNOWBALL.by_name[name].held_out_tasks}"
-                )
-                assert source["relative_path"] == "full_validation.parquet"
-            sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
-            assert (
-                sampling["temperature"],
-                sampling["ignore_eos"],
-                sampling["max_generate_length"],
-                profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
-            ) == (0, False, 8192, 1)
-        if name in ("learning-medium", "data-medium", "train-long", "train-long-harbor"):
-            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
-            kinds = [row["type"] for row in trainer["callbacks"]]
-            assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
-        if name == "train-long":
-            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
+def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
+    preset = MOCHI.by_name["train-long-3rack"]
+    (step,) = snowball.build_experiment(preset, table=MOCHI).runs
+    path = tmp_path / "mochi.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
+    (config,) = gate.compose_configs([str(path)], validate_driver=True)
+    producer = mochi_sft_presets["periodic"].model()
+    assert producer.relative_path is not None
+    export = StoragePath(producer.step.path("s3://marin-us-east-02a/marin")) / producer.relative_path
+    assert config["inputs"]["model"]["uri"] == str(export)
 
-def _assert_mochi_preset_documents(revisions, configs):
-    documents = dict(zip(revisions, configs, strict=True))
-    for preset in MOCHI.presets:
-        document = documents[preset.name]
-        assert not document["run"]["export_hf"]
-        assert not any(
-            callback["type"] in {"checkpoint", "best_checkpoint", "hf_model_save"}
-            for callback in document["skyrl"]["trainer"]["callbacks"]
-        )
-        if preset.evaluations:
-            (validation,) = document["inputs"]["validation_data"]
-            assert validation["relative_path"] == "validation.parquet"
+    (source,) = config["inputs"]["validation_data"]
+    held_out = recipe.selection_artifact(preset.held_out_tasks)
+    assert (source["uri"], source["relative_path"]) == (held_out.path(), VALIDATION_FILENAME)
+    assert not config["run"]["export_hf"]
+    callbacks = {row["type"] for row in config["skyrl"]["trainer"]["callbacks"]}
+    assert "evaluation" in callbacks
+    assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
 
     docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
-    fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
-    served = gate._config_values(documents["train-long-3rack"]["skyrl"])
-    for path, value in gate._config_values(yaml.safe_load(fragment)).items():
-        assert served[path] == value, path
+    section = docs.split("`mochi-inference.yaml`", 1)[1]
+    fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
+    assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
+
+
+def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    [default_run] = snowball.build_experiment(preset, table=table).runs
+    [plain_run] = snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding=null",)).runs
+    default = yaml.safe_load(materialized_config(default_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    assert default_run.name != plain_run.name
+    assert default["skyrl"]["generator"].pop("speculative_decoding")["method"] == "dspark"
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
+    assert default["inputs"] == plain["inputs"]
+
+
+def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    initializer = ArtifactHfModel(
+        ArtifactStep.adopt("tests/alternate-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint),
+        relative_path="",
+    )
+    [alternate] = snowball.build_experiment(preset, table=table, init=initializer).runs
+    config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
+
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -1328,6 +1166,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
+        # Same-size rewrites within one timestamp tick must load the new module.
+        Path(importlib.util.cache_from_source(str(path))).unlink(missing_ok=True)
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
         monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))

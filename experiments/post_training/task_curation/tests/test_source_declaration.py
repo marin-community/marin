@@ -13,20 +13,37 @@ from finestore.rl.curation import (
     CurationSummary,
     DaytonaSafety,
 )
+from finestore.rl.status_taxonomy import DataRestriction
 
-from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceInfo, SourceOrigin
 
 MEASURED = {"daytona_snapshot_count": 5, "daytona_count_basis": "shellbox-identity over pinned payloads"}
 
 
 def test_non_agentic_sources_are_daytona_safe_without_an_authored_value():
-    source = RlDataSource(info=SourceInfo(id="trove:math", title="Math", origin="fixture", tags=("rlvr", "single-turn")))
+    source = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="math",
+            upstream_name="math",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("rlvr", "single-turn"),
+        )
+    )
     assert source.declaration.daytona_safety is DaytonaSafety.SAFE
 
 
 def test_an_agentic_verdict_comes_from_the_measured_count():
     """The verdict is derived from the count, so no field on the source can set it."""
-    agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
+    agent = SourceInfo(
+        data_restriction=DataRestriction.OPEN,
+        upstream_dataset="agent",
+        upstream_name="agent",
+        build_path="test",
+        origin=SourceOrigin.MARIN,
+        tags=("agentic",),
+    )
     inferred = RlDataSource(info=replace(agent, **MEASURED))
     assert inferred.declaration.daytona_safety is DaytonaSafety.SAFE
     assert inferred.declaration.daytona_snapshot_count == 5
@@ -40,7 +57,14 @@ def test_an_agentic_verdict_comes_from_the_measured_count():
 
 
 def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
-    agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
+    agent = SourceInfo(
+        data_restriction=DataRestriction.OPEN,
+        upstream_dataset="agent",
+        upstream_name="agent",
+        build_path="test",
+        origin=SourceOrigin.MARIN,
+        tags=("agentic",),
+    )
     assert RlDataSource(info=agent).declaration.daytona_safety is DaytonaSafety.UNASSESSED
     assert (
         RlDataSource(info=replace(agent, daytona_count_basis="x")).declaration.daytona_safety is DaytonaSafety.UNASSESSED
@@ -48,16 +72,48 @@ def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
 
 
 def test_status_prefers_deprecated_then_excluded_then_inventory():
-    deprecated = RlDataSource(info=SourceInfo(id="trove:old", title="Old", origin="fixture", tags=("deprecated",)))
-    excluded = RlDataSource(
-        info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", EXCLUDED_TAG))
+    deprecated = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="old",
+            upstream_name="old",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("deprecated",),
+        )
     )
-    pointer = RlDataSource(info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)))
+    excluded = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="gone",
+            upstream_name="gone",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("deprecated", EXCLUDED_TAG),
+        )
+    )
+    pointer = RlDataSource(
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="new",
+            upstream_name="new",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("rlvr",),
+        )
+    )
     assert deprecated.declaration.status == "Deprecated"
     assert excluded.declaration.status == "Deprecated"
     assert pointer.declaration.status == "Inventory"  # no pipeline: visible, never admitted
     runnable = RlDataSource(
-        info=SourceInfo(id="trove:run", title="Run", origin="fixture", tags=("rlvr",)),
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="run",
+            upstream_name="run",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("rlvr",),
+        ),
         pipeline=lambda source, options: None,
     )
     assert runnable.declaration.status == "Available"

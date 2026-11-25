@@ -3,9 +3,9 @@
 
 """Move new CoreWeave shim and gVisor logs onto the host's NVMe disk.
 
-CoreWeave provides /etc/containerd/runsc.toml with log paths under /var/log/runsc.
-Abandoned runtime logs can fill the small RAM-backed root filesystem and prevent
-container startup and exec. The node-agent DaemonSet runs this module in an init
+Older CoreWeave node images provide /etc/containerd/runsc.toml with log paths
+under /var/log/runsc. Abandoned runtime logs can fill the small RAM-backed root
+filesystem and prevent container startup and exec. The node-agent DaemonSet runs this module in an init
 container with the host config directory mounted at /host-containerd and the NVMe
 disk at /mnt/local, so replacement nodes receive the same log-path correction.
 
@@ -13,7 +13,8 @@ Only the shim log_path and runsc debug-log destinations change. Setup preserves
 the provider's runtime options, backs up the original file on NVMe, and replaces
 it atomically. New shims read the updated config without a runtime restart;
 existing shims keep their previous log paths. Historical logs require separate
-cleanup.
+cleanup. Newer CoreWeave images ship the file with both log settings commented
+out, so shims log through containerd instead; setup leaves that file untouched.
 """
 
 import hashlib
@@ -56,11 +57,18 @@ def configure(config_path: Path, nvme: Path) -> None:
         return
     if config_path.is_symlink() or not stat.S_ISREG(config_path.stat().st_mode):
         raise ValueError("runsc config must be a regular file")
+    source = config_path.read_text()
+    settings = tomllib.loads(source)
+    runsc_settings = settings.get("runsc_config", {})
+    if not isinstance(runsc_settings, dict):
+        raise ValueError("runsc_config in runsc config must be a table")
+    if "log_path" not in settings and "debug-log" not in runsc_settings:
+        logger.info("No runsc log paths configured in %s; skipping runtime log setup", config_path)
+        return
     # Both paths are host mounts; the init container's root is an overlay filesystem.
     if nvme.stat().st_dev == config_path.parent.stat().st_dev:
         raise ValueError("NVMe must be backed by a different filesystem from the host config directory")
     log_root = nvme / "iris-runtime/runsc"
-    source = config_path.read_text()
     updated = redirected_config(source, log_root)
     log_root.mkdir(parents=True, exist_ok=True)
     if log_root.resolve().stat().st_dev != nvme.stat().st_dev:

@@ -131,6 +131,23 @@ def test_a_repository_archive_with_another_digest_stages_nothing(tmp_path):
     assert not output.exists()
 
 
+def test_nested_huggingface_repository_stages_packages_under_root(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    for name in ("tasks/task_001", "tasks/task_002", "other/task_003"):
+        directory = repository / name
+        directory.mkdir(parents=True)
+        (directory / "task.toml").write_text(name)
+    monkeypatch.setattr(packages_module, "snapshot_download", lambda *_args, **_kwargs: str(repository))
+    output = tmp_path / "staged"
+    stage_repository_packages(
+        "org/fixture",
+        REVISION,
+        StoragePath(str(output)),
+        root="tasks",
+    )
+    assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]
+
+
 def test_a_harbor_repository_publishes_one_agent_item_per_package(tmp_path, local_graph, monkeypatch):
     repository = tmp_path / "repository"
     write_package(

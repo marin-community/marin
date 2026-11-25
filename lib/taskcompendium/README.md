@@ -122,7 +122,7 @@ for publication, execution, and retry/resume contracts.
 | `schema_version` | Version of the serialized spec: `0.31`. Readers upgrade `0.30` and reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
-| `labels` | String-valued annotations for queries and cohort selection. Tags and labels are also projected into normalized Parquet. |
+| `labels` | String-valued annotations for queries and cohort selection. The optional `subset_id` label names a reporting subset for training or evaluation. Tags and labels are also projected into normalized Parquet. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
