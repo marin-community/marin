@@ -215,8 +215,11 @@ def main() -> None:
     parser.add_argument("--sealed-sha256", required=True)
     parser.add_argument("--judge-qualification", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--handover-from", help="Existing controller parent to drain without canceling its children")
     parser.add_argument("--solver", type=Solver, choices=tuple(SHAPES))
     args = parser.parse_args()
+    if args.handover_from is not None and args.phase != "controller":
+        parser.error("--handover-from applies only to controller rollout")
     if args.solver is not None and args.phase not in {"pilot", "full"}:
         parser.error("--solver selects a staged pilot or a qualified solver's full rollout")
     root = REGIONAL_ROOT + "/" + digest(identity_bundle())
@@ -239,6 +242,7 @@ def main() -> None:
             args.secrets_env,
             root + "/pools",
             excluded_sources=frozenset(),
+            handover_from=args.handover_from,
         )
         return
     commands = commands_for_phase(

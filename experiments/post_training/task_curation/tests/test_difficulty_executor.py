@@ -5,8 +5,10 @@
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from threading import Event
 
 import pytest
 from finestore.rl.difficulty import Solver
@@ -307,3 +309,54 @@ def test_successful_child_without_campaign_result_does_not_repair_or_crash(tmp_p
     assert failure.reason == GapReason.CONTROLLER_ACTION_FAILED
     assert failure.error_identity == "completed_job_missing_campaign_result"
     assert collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger)) == []
+
+
+def test_tpu_batches_fill_shared_pools_without_exceeding_attempt_or_repair_slots(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    version = tmp_path / "ledger/v1"
+    version.mkdir(parents=True)
+    identity = identity_bundle()
+    (version / "campaign.json").write_text(json.dumps({"identity": identity, "campaign_id": digest(identity)}))
+    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(5)]
+    actions = plan([cell_state([], source, solver, CoveragePolicy()) for source in sources for solver in Solver], [])
+    backend = JobStore(str(tmp_path / "jobs"))
+    result = execute_plan(actions, [], sources, ledger, backend, EscalationLog(ledger))
+    accepted = [json.loads(path.read_text())["solver"] for path in (tmp_path / "jobs").glob("*.json")]
+    assert {solver: accepted.count(solver) for solver in ("small", "large", "snowball", "hosted")} == {
+        "small": 4,
+        "large": 4,
+        "snowball": 2,
+        "hosted": 4,
+    }
+    assert len(result["submitted"]) == 14
+    assert result["active_job_slots"] == 56
+    assert result["active_job_slots"] + 8 <= CONCURRENT_JOB_CAP
+
+
+def test_rolling_controllers_share_the_lease_without_duplicate_submission(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    imports = tmp_path / "ledger/v1/imports"
+    imports.mkdir(parents=True)
+    (imports / "fixture.json").write_text("{}")
+    entered, release = Event(), Event()
+    backend = JobStore(str(tmp_path / "jobs"))
+    submit = backend.submit
+
+    def delayed_submit(action, manifest):
+        entered.set()
+        assert release.wait(10)
+        return submit(action, manifest)
+
+    backend.submit = delayed_submit
+    args = (ledger, [SOURCE], CoveragePolicy(), backend, EscalationLog(ledger), frozenset(), frozenset(), None)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(reconcile_once, *args)
+        try:
+            assert entered.wait(10)
+            assert reconcile_once(*args) == {"state": "another_reconciler_holds_lease"}
+        finally:
+            release.set()
+        first.result()
+    backend.submit = submit
+    assert reconcile_once(*args)["submitted"] == []
+    assert len(list((tmp_path / "jobs").glob("*.json"))) == 4

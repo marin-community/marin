@@ -289,3 +289,30 @@ def test_tpu_controller_admits_ready_pools_then_large_after_its_full_receipt(tmp
             str(tmp_path), "fixture", False, frozenset(), None, str(pools), excluded_sources=frozenset()
         )
     assert reconciled == [frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED}), frozenset(Solver)]
+
+
+def test_explicit_controller_handover_preserves_live_children_and_refuses_third_parent(tmp_path, monkeypatch):
+    old = "/fixture/atlas-difficulty-reconciler-controller-old"
+    new = "/fixture/atlas-difficulty-reconciler-controller-new"
+    active = [SimpleNamespace(job_id=old, state="running", active=True)]
+    submitted = []
+    monkeypatch.setattr(controller, "list_iris_jobs", lambda: active)
+    monkeypatch.setattr(controller, "campaign_record", lambda ledger: {"holds": []})
+    monkeypatch.setattr(controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture"))
+    monkeypatch.setattr(controller.subprocess, "run", lambda command, **kwargs: submitted.append(command))
+    args = (str(tmp_path), "applet", False, frozenset(), "new", None)
+    controller.launch_controller(*args, excluded_sources=frozenset())
+    assert submitted == []
+    controller.launch_controller(*args, excluded_sources=frozenset(), handover_from=old)
+    assert len(submitted) == 1
+    assert submitted[0][submitted[0].index("--job-name") + 1] == new.rsplit("/", 1)[-1]
+    assert not any("cancel" in word for command in submitted for word in command)
+    active.append(SimpleNamespace(job_id=new, state="running", active=True))
+    controller.launch_controller(*args, excluded_sources=frozenset(), handover_from=old)
+    assert len(submitted) == 1
+    active.append(
+        SimpleNamespace(job_id="/fixture/atlas-difficulty-reconciler-controller-unrelated", state="running", active=True)
+    )
+    with pytest.raises(ValueError, match="unrelated active controller"):
+        controller.launch_controller(*args, excluded_sources=frozenset(), handover_from=old)
+    assert len(submitted) == 1

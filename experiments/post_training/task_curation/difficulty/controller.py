@@ -211,18 +211,35 @@ def launch_controller(
     serving_pool: str | None = None,
     *,
     excluded_sources: frozenset[str],
+    handover_from: str | None = None,
 ) -> None:
-    """Submit one CPU parent; its inherited client owns every remediation child."""
-    for job in list_iris_jobs():
-        if job.job_id.rsplit("/", 1)[-1].startswith(CONTROLLER_JOB_PREFIX) and job.active:
-            print(json.dumps({"controller_job": job.job_id, "state": job.state}))
-            return
+    """Submit a controller, optionally handing over without canceling existing children."""
+    name = CONTROLLER_JOB_PREFIX + generation[:16]
+    active = [
+        job for job in list_iris_jobs() if job.job_id.rsplit("/", 1)[-1].startswith(CONTROLLER_JOB_PREFIX) and job.active
+    ]
+    if handover_from is not None:
+        if not handover_from.rsplit("/", 1)[-1].startswith(CONTROLLER_JOB_PREFIX):
+            raise ValueError("Handover requires a controller parent job ID")
+        if any(job.job_id != handover_from and job.job_id.rsplit("/", 1)[-1] != name for job in active):
+            raise ValueError("Handover refuses an unrelated active controller")
+    same = next((job for job in active if job.job_id.rsplit("/", 1)[-1] == name), None)
+    if same is not None:
+        print(json.dumps({"controller_job": same.job_id, "state": same.state}))
+        return
+    if handover_from is not None:
+        LOGGER.info(
+            "DIFFICULTY_CONTROLLER_HANDOVER %s", json.dumps({"from": handover_from, "to": name, "ledger": ledger})
+        )
+    elif active:
+        print(json.dumps({"controller_job": active[0].job_id, "state": active[0].state}))
+        return
     record = load_credentials("marin")
     if record is None or not record.edge_refresh_token:
         raise ValueError("Controller needs a refreshable Marina login; run iris login")
     environment = controller_environment(secrets_env)
     environment[REFRESH_TOKEN_ENV] = record.edge_refresh_token
-    command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
+    command = cpu_job_command(name)
     if campaign_record(ledger) is not None:
         command[command.index("--timeout") + 1] = "0"
         command.remove("--target-cluster=cw-rno2a")

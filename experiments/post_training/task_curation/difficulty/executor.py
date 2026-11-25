@@ -70,6 +70,7 @@ ATTEMPT_JOBS_PER_SOLVER = MappingProxyType(
         Solver.HOSTED: 2,
     }
 )
+TPU_ATTEMPT_JOBS_PER_SOLVER = MappingProxyType({Solver.SMALL: 4, Solver.LARGE: 4, Solver.SNOWBALL: 2, Solver.HOSTED: 4})
 LOGGER = logging.getLogger(__name__)
 
 
@@ -188,11 +189,7 @@ def execute_plan(
             deferred.append(key)
             continue
         if isinstance(action, AttemptBatch):
-            solver_cap = (
-                {Solver.SMALL: 2, Solver.LARGE: 2, Solver.SNOWBALL: 1, Solver.HOSTED: 1}[action.solver]
-                if tpu_campaign
-                else ATTEMPT_JOBS_PER_SOLVER[action.solver]
-            )
+            solver_cap = (TPU_ATTEMPT_JOBS_PER_SOLVER if tpu_campaign else ATTEMPT_JOBS_PER_SOLVER)[action.solver]
             if sum(job.active and job.solver == action.solver for job in jobs) >= solver_cap:
                 deferred.append(key)
                 continue
