@@ -40,12 +40,13 @@
         "name": "bin",
         "type": "custom",
         "label": "Bin",
-        "query": "1 minute,5 minutes,15 minutes",
+        "query": "2 minutes,5 minutes,15 minutes",
         "current": {
-          "text": "1 minute",
-          "value": "1 minute"
+          "text": "5 minutes",
+          "value": "5 minutes"
         },
-        "options": []
+        "options": [],
+        "description": "At least 2 minutes: node agent samples arrive about every 60.7 s, so a 1-minute bin can miss one."
       },
       {
         "name": "node",
@@ -68,7 +69,7 @@
       "id": 101,
       "type": "timeseries",
       "title": "GPUs held and busy per cluster",
-      "description": "Average GPUs the node agent sees (held) and SM-active GPUs (busy) per ${bin}, per CoreWeave cluster. This panel's query also feeds the nodes table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT cluster, node_name, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_tensor_active, max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3\n```",
+      "description": "Average GPUs the node agent sees (held) and SM-active GPUs (busy) per ${bin}, per CoreWeave cluster. This panel's query also feeds the nodes table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH gpu AS ( SELECT cluster, node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT cluster, node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2\n```",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -86,7 +87,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT cluster, node_name, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL ${bin:sqlstring}) AS gpus_tensor_active, max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3"
+                "value": "WITH gpu AS ( SELECT cluster, node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT cluster, node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2"
               },
               {
                 "key": "from",
@@ -163,6 +164,16 @@
                 "operation": "aggregate"
               }
             }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "bin"
+              }
+            ]
           }
         },
         {
@@ -546,7 +557,7 @@
       "id": 105,
       "type": "timeseries",
       "title": "TPU VMs held",
-      "description": "TPU VMs the node agent sees per ${bin}, per cluster and TPU type. TPUs have no use signal; chips held is VMs times chips per VM of the type.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(*) * 60.0 / date_part('epoch', INTERVAL ${bin:sqlstring}) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(cluster, ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3\n```",
+      "description": "TPU VMs the node agent sees per ${bin}, per cluster and TPU type. TPUs have no use signal; chips held is VMs times chips per VM of the type.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(DISTINCT node_name) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(cluster, ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3\n```",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -564,7 +575,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(*) * 60.0 / date_part('epoch', INTERVAL ${bin:sqlstring}) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(cluster, ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3"
+                "value": "SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(DISTINCT node_name) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(cluster, ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3"
               },
               {
                 "key": "from",
