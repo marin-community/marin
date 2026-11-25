@@ -14,7 +14,7 @@ from taskcompendium.models import ConversationInput
 
 EVALUATION_SCHEMA_VERSION = 3
 type ResponseSelection = Literal[
-    "combine", "final_only", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"
+    "combine", "final_only", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning", "provider_response"
 ]
 
 
@@ -244,6 +244,7 @@ class ContextPolicy(EvaluationModel):
     """Resolve a generation budget and admit prompts using the run's tokenizer."""
 
     output_fit: OutputFit = OutputFit.SHRINK
+    overflow: Literal["exclude", "error"] = Field(default="exclude", exclude_if=lambda value: value == "exclude")
     context_reserve: int = Field(default=64, ge=0)
     output_budget: OutputBudget | None = None
     prefix_probe: PrefixProbe | None = None

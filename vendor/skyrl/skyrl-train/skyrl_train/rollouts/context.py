@@ -267,7 +267,11 @@ class TrainingContext:
     async def _write_grader_report(self) -> None:
         if self._grader_report_path is None:
             return
-        summary = await self._buffer.grader_summary.remote()
+        try:
+            summary = await self._buffer.grader_summary.remote()
+        except ray.exceptions.RayError:
+            logger.exception("Failed to collect grader stats for {}", self._grader_report_path)
+            return
         if summary["subsets"]:
             write_grader_report(
                 self._grader_report_path,

@@ -361,6 +361,7 @@ def test_subset_label_does_not_hide_duplicates(staged):
     task = task_for("ultra_sft_step3200_comp_coding", staged)
     archived = task.model_copy(update={"labels": {}})
 
+    assert task.labels == {"subset_id": "ultra_sft_step3200_comp_coding"}
     assert deduplication_key(task) == deduplication_key(archived)
 
 

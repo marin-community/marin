@@ -10,8 +10,12 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from datasets import Dataset
+from loguru import logger
+from marinskyrl.task_sources import PreparedTaskCacheSource
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
@@ -28,11 +32,18 @@ from taskcompendium.models import (
     TextMessage,
     grader_environment,
     grades_with_judge,
+    task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
+from skyrl_train.dataset.prepared_tasks import (
+    PROMPT_LENGTH_COLUMN,
+    load_prepared_tasks,
+    prepared_task_cache_key,
+    write_prepared_tasks,
+)
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
@@ -59,7 +70,8 @@ def task_evaluation_identity(task: dict, selection: SelectionManifest | None) ->
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
     return dataset.add_column(
-        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+        TASK_EVALUATION_IDENTITY,
+        [identity.model_dump_json() if identity is not None else None for identity in identities],
     )
 
 
@@ -121,7 +133,7 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            subset_id=lowered.task.labels.get("subset_id") or lowered.task.source.dataset,
+                            subset_id=task_subset(lowered.task),
                             evaluation_identity=(
                                 TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
                                 if extras.get(TASK_EVALUATION_IDENTITY) is not None
@@ -290,8 +302,10 @@ class SourceTaskDataset(TaskDataset):
         environment_configs: Mapping[str, dict],
         num_workers: int = 8,
         chat_template_kwargs: dict | None = None,
+        prepared_cache: PreparedTaskCacheSource | None = None,
     ):
         self.environment_configs = environment_configs
+        self.prepared_cache = prepared_cache
         identities: dict[str, TaskEvaluationIdentity | None] = {}
 
         def prepare_source(source: str, dataset: Dataset) -> Dataset:
@@ -326,6 +340,72 @@ class SourceTaskDataset(TaskDataset):
             chat_template_kwargs=chat_template_kwargs,
             prepare_source=prepare_source,
         )
+
+    def _read_files_and_tokenize(self):
+        cached = self._prepared_rows_with_lengths()
+        if cached is None:
+            return super()._read_files_and_tokenize()
+        prepared, lengths = cached
+        logger.info("Total dataset size: {}", len(prepared))
+        eligible = pc.indices_nonzero(pc.less_equal(lengths, self.max_prompt_length))
+        self.prompts_dropped_too_long = len(prepared) - len(eligible)
+        self.dataframe = prepared.select(eligible.to_numpy()) if self.prompts_dropped_too_long else prepared
+        logger.info("Filtered dataset size: {}", len(self.dataframe))
+
+    def _prepared_rows_with_lengths(self) -> tuple[Dataset, pa.ChunkedArray] | None:
+        cache = self.prepared_cache
+        task_settings = self.environment_configs.get("task_spec")
+        if cache is None or self.datasets != [cache.path] or task_settings is None:
+            return None
+        key = prepared_task_cache_key(cache, self.tokenizer, task_settings, self.chat_template_kwargs)
+        if key is None:
+            return None
+        with pq.ParquetFile(cache.path) as source:
+            source_columns = source.schema_arrow.names
+            source_rows = source.metadata.num_rows
+        if not source_rows or TASK_SPEC_COLUMN not in source_columns or TASK_ROLLOUT_COLUMN in source_columns:
+            return None
+
+        path = StoragePath(cache.cache_dir) / f"{key}.parquet"
+        required_columns = {
+            TASK_ROLLOUT_COLUMN,
+            TASK_EVALUATION_IDENTITY,
+            FAMILY_COLUMN,
+            PROMPT_LENGTH_COLUMN,
+            self.prompt_key,
+            self.env_class_key,
+        }
+        table = load_prepared_tasks(path, key, required_columns, source_rows)
+        if table is None:
+            logger.info("Prepared task cache miss: {}", path)
+            prepared = self._read_and_prepare_rows()
+            lengths = self._prompt_lengths(prepared)
+            table = prepared.data.table.append_column(PROMPT_LENGTH_COLUMN, lengths)
+            write_prepared_tasks(path, key, table)
+        else:
+            logger.info("Prepared task cache hit: {}", path)
+
+        lengths = table.column(PROMPT_LENGTH_COLUMN)
+        prepared = Dataset(table.drop([PROMPT_LENGTH_COLUMN]), fingerprint=key).with_transform(_restore_task_prompts)
+        return prepared, lengths
+
+    def _prompt_lengths(self, prepared: Dataset) -> pa.ChunkedArray:
+        tokenizer = self.tokenizer
+        prompt_key = self.prompt_key
+        template_kwargs = self.chat_template_kwargs
+        projected = prepared.select_columns([prompt_key, TASK_ROLLOUT_COLUMN])
+        lengths = projected.map(
+            lambda row: {
+                PROMPT_LENGTH_COLUMN: task_prompt_token_count(
+                    tokenizer, row, prompt_key, chat_template_kwargs=template_kwargs
+                )
+            },
+            remove_columns=projected.column_names,
+            num_proc=dataset_num_proc(len(projected), self.num_workers),
+            keep_in_memory=True,
+            desc="Measuring task prompt lengths",
+        )
+        return lengths.data.column(PROMPT_LENGTH_COLUMN)
 
     def prepare_dataset(self, dataset: Dataset) -> Dataset:
         if TASK_ROLLOUT_COLUMN in dataset.column_names:
