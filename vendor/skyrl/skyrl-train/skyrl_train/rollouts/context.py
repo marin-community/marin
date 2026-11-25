@@ -6,12 +6,14 @@ import asyncio
 import collections
 import dataclasses
 import os
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from uuid import uuid4
 
+import numpy as np
 import ray
 from loguru import logger
 from omegaconf import DictConfig
@@ -47,6 +49,7 @@ from skyrl_train.rollouts.buffer import (
     AdmittedRollout,
     BufferSnapshot,
     DiscardedCandidate,
+    GroupDisposition,
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
@@ -61,7 +64,7 @@ from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, P
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_event, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
@@ -126,9 +129,10 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
         raise ValueError(f"data.sampling.kind requires a prompt dataset, got {type(dataset).__name__}")
     seed = sampling.seed if sampling.seed is not None else config.trainer.seed
     batch_size = config.trainer.train_batch_size
-    if SamplingKind(sampling.kind) is SamplingKind.DOMAIN_WEIGHTED:
+    kind = SamplingKind(sampling.kind)
+    if kind is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
-    if SamplingKind(sampling.kind) is SamplingKind.ADAPTIVE_SOURCE:
+    if kind in (SamplingKind.ADAPTIVE_SOURCE, SamplingKind.ADAPTIVE_SOURCE_THOMPSON):
         if config.generator.n_samples_per_prompt < 2:
             raise ValueError("adaptive-source requires at least two samples per prompt")
         return AdaptiveSourceOrder(
@@ -140,6 +144,7 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
             epsilon=sampling.epsilon,
             prior_alpha=sampling.prior_alpha,
             prior_beta=sampling.prior_beta,
+            posterior_rng=np.random.default_rng(seed) if kind is SamplingKind.ADAPTIVE_SOURCE_THOMPSON else None,
         )
     curriculum = CurriculumConfig.from_dict_config(sampling, group_size=config.generator.n_samples_per_prompt)
     return CurriculumOrder(dataset, curriculum, seed=seed, window_size=batch_size)
@@ -149,6 +154,32 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     """Start the rollout buffer actor on this node, beside the trainer that reads every payload through it."""
     node = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
+
+
+def record_sampling_result(outcome: GroupDisposition) -> None:
+    """Export score and cost summaries from the trainer's buffered telemetry process."""
+    result = outcome.sampling_result
+    if result is None:
+        return
+    scores = [score for score in result.verified_scores or () if score is not None]
+    record_event(
+        "sampling_group_result",
+        {
+            "lease_id": result.lease_id,
+            "committed_unix_ns": result.committed_unix_ns,
+            "feedback_batch": result.feedback_batch,
+            "disposition": outcome.disposition,
+            "generated_tokens": outcome.tokens,
+            "sample_count": result.sample_count,
+            "verified_zero": scores.count(0.0),
+            "verified_one": scores.count(1.0),
+            "verified_partial": sum(0 < score < 1 for score in scores),
+            "verified_missing": result.sample_count - len(scores),
+            "verified_sum": sum(scores),
+            "verified_min": min(scores, default=None),
+            "verified_max": max(scores, default=None),
+        },
+    )
 
 
 class TrainingContext:
@@ -360,6 +391,8 @@ class TrainingContext:
             timeout = max(deadline - loop.time(), 0.0)
             admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
+            for outcome in admission.dispositions:
+                record_sampling_result(outcome)
             for policy_step, work in admission.generated:
                 record_generated_work(work, policy_step)
             if self._rollout_spans:
@@ -383,10 +416,16 @@ class TrainingContext:
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
                 await self._write_grader_report()
+                sampling_metrics = self.loader.observe(admission.selection.judged)
+                if self._adaptive_order is not None:
+                    record_event(
+                        "sampling_feedback_observed",
+                        {"feedback_batch": admission.batch_id, "observed_unix_ns": time.time_ns()},
+                    )
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                    {**admission.selection.metrics, **sampling_metrics},
                 )
 
     async def state_dict(self) -> TrainingContextState:
@@ -481,6 +520,21 @@ class TrainingContext:
                 request = self._request_spec.request(prompt, lease.policy_step)
                 if self._adaptive_order is not None:
                     prompt = {**prompt, SAMPLING_SOURCE: self._adaptive_order.assign(prompt["uid"])}
+                    metadata = prompt["input"].metadata
+                    identity = metadata.evaluation_identity
+                    record_event(
+                        "sampling_group_assigned",
+                        {
+                            "lease_id": lease.lease_id,
+                            "assigned_unix_ns": time.time_ns(),
+                            "policy_step": lease.policy_step,
+                            "target_batch": lease.batch_id,
+                            "task_id": metadata.task_id,
+                            "task_digest": identity.task_digest if identity is not None else None,
+                            "source": prompt[SAMPLING_SOURCE],
+                            "family": identity.strata.family if identity is not None else lease.family,
+                        },
+                    )
                 task = RolloutTask(lease, prompt, request)
                 self._in_flight[lease.lease_id] = task
                 running = asyncio.create_task(self._run(task))

@@ -38,6 +38,7 @@ GRADE_KEY = "grade"
 class SamplingKind(StrEnum):
     DOMAIN_WEIGHTED = "domain-weighted"
     ADAPTIVE_SOURCE = "adaptive-source"
+    ADAPTIVE_SOURCE_THOMPSON = "adaptive-source-thompson"
     NAIVE = "naive"
     THOMPSON = "thompson"
     LEARNABILITY = "learnability"
@@ -364,7 +365,10 @@ class ThompsonInformative(WeightPolicy):
         self.epsilon = epsilon
 
     def weights(self, stats: BinStats, rng: np.random.Generator) -> np.ndarray:
-        draws = rng.beta(self.prior_alpha + stats.informative, self.prior_beta + (stats.total - stats.informative))
+        return self.draw(stats.informative, stats.total, rng)
+
+    def draw(self, informative: np.ndarray, total: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+        draws = rng.beta(self.prior_alpha + informative, self.prior_beta + (total - informative))
         return floored_normalized(draws, self.epsilon)
 
 

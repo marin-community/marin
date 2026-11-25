@@ -5,6 +5,7 @@ from dataclasses import replace
 from importlib.util import spec_from_file_location
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -32,7 +33,8 @@ class _StubTokenizer:
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
 
 
-def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume(tmp_path):
+@pytest.mark.parametrize("kind,epsilon", [("adaptive-source", 0.2), ("adaptive-source-thompson", 0.05)])
+def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume(tmp_path, kind, epsilon):
     tasks = [
         text_task("too-long", prompt="x" * 300, source="excluded"),
         *(text_task(f"math-{i}", source="math") for i in range(5)),
@@ -43,8 +45,9 @@ def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume
     config = get_default_config()
     config.trainer.train_batch_size = 4
     config.generator.n_samples_per_prompt = 2
-    config.data.sampling.kind = "adaptive-source"
-    config.data.sampling.epsilon = 0.2
+    config.data.sampling.kind = kind
+    config.data.sampling.epsilon = epsilon
+    config.data.sampling.seed = 61
     OmegaConf.update(config, "data.sampling.domain_weights", {"math": 1, "logic": 1}, force_add=True)
     dataset = SourceTaskDataset(
         [str(path)], _StubTokenizer(), 100, environment_configs=OmegaConf.to_container(config.environment.task_sessions)
@@ -57,8 +60,15 @@ def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume
         JudgedGroup("6", (0.0, 0.5), (None, 0.5)),
     ]
     metrics = order.observe(groups)
-    # Beta(1,1) plus one observation yields means of 1/3 and 2/3.
-    assert metrics["curriculum/math/weight"] == pytest.approx(0.1 + 0.8 / 3)
+    if kind == "adaptive-source":
+        # Beta(1,1) plus one observation yields means of 1/3 and 2/3.
+        assert metrics["curriculum/math/weight"] == pytest.approx(0.1 + 0.8 / 3)
+    else:
+        rng = np.random.default_rng(61)
+        rng.beta([1, 1], [1, 1])  # Cold-start draw, before either source has evidence.
+        logic, math = rng.beta([2, 1], [1, 2])
+        # The math draw falls below the historical per-bin floor for this seed.
+        assert metrics["curriculum/math/weight"] == pytest.approx(0.025 / (logic / (logic + math) + 0.025))
     assert metrics["curriculum/logic/graded_groups"] == 1
     assert metrics["curriculum/logic/groups"] == 2
     first = order.next_index()
@@ -67,7 +77,13 @@ def test_adaptive_source_tracks_verified_group_spread_after_filtering_and_resume
     tail = [order.next_index() for _ in range(3)]
     assert tail == [resumed.next_index() for _ in range(3)]
     assert len({first, *tail}) == 4
-    assert resumed.observe(groups) == order.observe(groups)
+    # Cross window boundaries with the checkpointed weights, then refresh both samplers.
+    assert [order.next_index() for _ in range(40)] == [resumed.next_index() for _ in range(40)]
+    refreshed = order.observe(groups)
+    assert resumed.observe(groups) == refreshed
+    if kind == "adaptive-source-thompson":
+        logic, math = rng.beta([2.95, 1], [1, 2.95])
+        assert refreshed["curriculum/math/weight"] == pytest.approx(math / (logic + math))
     draws = [order.next_index() for _ in range(400)]
     assert draws == [resumed.next_index() for _ in range(400)]
     assert sum(index >= 5 for index in draws) > 225

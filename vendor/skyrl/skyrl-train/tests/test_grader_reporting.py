@@ -22,13 +22,14 @@ from skyrl_train.rollouts.buffer import (
     RolloutGroup,
 )
 from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts import context as rollout_context
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resume", [False, True])
-async def test_judged_feedback_includes_prefetched_discards_across_resume(resume):
+async def test_judged_feedback_includes_prefetched_discards_across_resume(resume, monkeypatch):
     policy = RolloutContentPolicy(
         GroupAdmissionPolicy(
             GroupAdvantageInvariant.exact_physical(physical_group_size=2), rollout_logprobs_required=False
@@ -65,7 +66,7 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
         await buffer.acquire_lease(), "3", [0.0, 0.0], [VerificationResult.error("crash")] * 2, loss_masks=[[0], [0]]
     )
     await commit(current, "2", [0.0, 0.9], [VerificationResult.verified(0.5)] * 2)
-    await buffer.admit(timeout=1)
+    initial = await buffer.admit(timeout=1)
     if resume:
         snapshot = buffer.snapshot()
         buffer = RolloutBuffer(config)
@@ -84,6 +85,20 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
     ]
     assert admission.selection.metrics["async/dynamic_sampling/candidate_count"] == 2
     assert admission.selection.metrics["curriculum/math/rejected/fully_masked"] == 1
+    events = []
+    monkeypatch.setattr(rollout_context, "record_event", lambda name, fields: events.append((name, fields)))
+    for outcome in (*initial.dispositions, *admission.dispositions):
+        rollout_context.record_sampling_result(outcome)
+    receipts = {fields["lease_id"]: fields for name, fields in events if name == "sampling_group_result"}
+    assert len(receipts) == 4
+    # The discarded future group commits before the first admission but can teach the sampler only in batch two.
+    assert receipts[future.lease_id]["feedback_batch"] == 2
+    assert receipts[future.lease_id]["verified_one"] == 2
+    assert receipts[current.lease_id]["feedback_batch"] == 1
+    assert receipts[current.lease_id]["verified_min"] == receipts[current.lease_id]["verified_max"] == 0.5
+    rejected = next(row for row in receipts.values() if row["disposition"] == "fully_masked")
+    assert rejected["feedback_batch"] is None and rejected["verified_missing"] == 2
+    assert all(row["generated_tokens"] == row["sample_count"] == 2 for row in receipts.values())
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):

@@ -311,6 +311,13 @@ group judged for the batch, including groups discarded by dynamic sampling. It w
 source's reference share by its estimated mixed-group rate under a Beta prior
 (`prior_alpha`, `prior_beta`), then reserves `epsilon` of the total mass for the reference
 mix. Set `epsilon=1` for a fixed-share control with the same draw and checkpoint behavior.
+For the Thompson comparison, set `kind=adaptive-source-thompson`. It uses the same
+verified groups and draws one rate per source from its Beta posterior at initialization
+and after each feedback batch. It normalizes those draws, floors each source at
+`epsilon / number_of_sources`, and renormalizes. All subsequent draw windows use these
+weights until the next feedback batch. Checkpoints preserve the current weights and the
+posterior random-number state. Source reference shares apply to the posterior-mean arm.
+
 Source draws are stochastic, and rows are unique within a draw window. In-flight prompts,
 source sizes and admission can change the realized mix. The `curriculum/<source>/` metrics
 use these denominators:

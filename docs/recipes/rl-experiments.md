@@ -208,11 +208,14 @@ uv run python -m experiments.post_training.snowball_sampler --preset smoke-adapt
   --version 2026.11.25.1 --priority interactive --issue 12201 --plan
 ```
 
-Both arms use 40 H100s at interactive priority, 128 groups of four per optimizer update, up to
+All arms use 40 H100s at interactive priority, 128 groups of four per optimizer update, up to
 32 simultaneous rollout groups and at most 384 untrained groups with two updates of staleness.
-Both use the same family-aware sampler and equal reference shares. The fixed arm puts all its
+The fixed and adaptive arms use the same family-aware sampler and equal reference shares. The fixed arm puts all its
 draw probability on those reference shares. The adaptive arm uses 20% reference exploration,
-decay 0.95 and a Beta(1, 1) prior. In both arms, EvalLite's 100 active tasks are greedy and frozen.
+decay 0.95 and a Beta(1, 1) prior. The optional `pilot-thompson` uses the same verified
+groups, decay, prior, and draw windows. Each feedback batch redraws the family weights
+from their Beta posteriors with the existing Thompson policy’s 0.05 floor parameter.
+All arms evaluate EvalLite’s same 100 frozen active tasks with greedy decoding.
 
 Run the four-update smokes first. Inspect scored coverage at steps 0, 2 and 4, the committed
 checkpoint and export, and the family weights and observations after the first dispatch window.

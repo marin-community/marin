@@ -270,6 +270,7 @@ class RolloutVerdict:
     work: GeneratedWork
     row_facts: RowFacts | None = None
     grader_stats: GraderStats | None = None
+    rejected_verifier_scores: tuple[float | None, ...] | None = None
 
     @property
     def trainable(self) -> bool:
@@ -299,7 +300,16 @@ class RolloutContentPolicy:
             grader_stats = GraderStats()
             grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
+            scores = normalized_verifier_scores(batch) if SAMPLING_SOURCE in group.prompt else None
+            return RolloutVerdict(
+                group.uid,
+                decision.rejections,
+                None,
+                None,
+                work,
+                grader_stats=grader_stats,
+                rejected_verifier_scores=tuple(scores) if scores is not None else None,
+            )
         facts = RowFacts.from_batch(batch)
         return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, grader_stats)
 
@@ -341,6 +351,18 @@ class ReadyRollout:
     verdict: RolloutVerdict
     payload: object | None
     committed_at: float | None
+    committed_unix_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class SamplingGroupResult:
+    """Replay evidence for a dispatched lease. Only judged groups have a feedback batch."""
+
+    lease_id: str
+    committed_unix_ns: int
+    feedback_batch: int | None
+    sample_count: int
+    verified_scores: tuple[float | None, ...] | None
 
 
 @dataclass(frozen=True)
@@ -351,6 +373,7 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
+    sampling_result: SamplingGroupResult | None = None
 
 
 @dataclass(frozen=True)
@@ -649,7 +672,14 @@ class RolloutBuffer:
                 verdict = replace(verdict, grader_stats=None)
             self._ready.append(
                 ReadyRollout(
-                    lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
+                    lease_id,
+                    lease.policy_step,
+                    lease.batch_id,
+                    prompt,
+                    verdict,
+                    payload.value,
+                    time.monotonic(),
+                    time.time_ns() if SAMPLING_SOURCE in prompt else None,
                 )
             )
             self._select()
@@ -719,7 +749,7 @@ class RolloutBuffer:
             selection = None
             if self._batch_complete():
                 for rollout in self._admitted[self._policy_step]:
-                    self._dispose(rollout, "consumed")
+                    self._dispose(rollout, "consumed", feedback_batch=self._policy_step)
                 stats = self._stats.pop(self._policy_step)
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.groups_per_family:
@@ -811,10 +841,20 @@ class RolloutBuffer:
         stats.reject(rejection, rollout.prompt.get(SAMPLING_SOURCE))
         self._dispose(rollout, rejection.value)
 
-    def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
+    def _dispose(self, rollout: ReadyRollout, disposition: str, *, feedback_batch: int | None = None) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
+        verdict = rollout.verdict
+        result = None
+        if rollout.committed_unix_ns is not None:
+            result = SamplingGroupResult(
+                rollout.lease_id,
+                rollout.committed_unix_ns,
+                feedback_batch,
+                verdict.work.sample_count,
+                verdict.rewards.verified_scores if verdict.rewards is not None else verdict.rejected_verifier_scores,
+            )
         self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
+            GroupDisposition(verdict.uid, disposition, verdict.work.generated_token_count, dwell, result)
         )
 
     def _batch_complete(self) -> bool:
@@ -852,7 +892,7 @@ class RolloutBuffer:
             else:
                 if verdict.selection is not GroupSelectionResult.KEEP:
                     stats.discard(DiscardedCandidate(batch_id, verdict.uid, verdict.rewards))
-                    self._dispose(rollout, verdict.selection.value)
+                    self._dispose(rollout, verdict.selection.value, feedback_batch=batch_id)
                     continue
                 stats.observe_judged(verdict.uid, verdict.rewards)
                 if self.config.dynamic_sampling is DynamicSamplingType.FILTER:

@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.snowball_sampler_selection import E
 def sampler_preset(stage: str, updates: int, arm: str, exploration: float) -> Preset:
     base = SNOWBALL.by_name["train-long"].with_updates(updates)
     sampling = sections.Sampling(
-        kind="adaptive-source",
+        kind="adaptive-source-thompson" if arm == "thompson" else "adaptive-source",
         source_column="family",
         domain_weights=dict.fromkeys(PILOT.family_limits, 1.0),
         decay=0.95,
@@ -30,7 +30,7 @@ def sampler_preset(stage: str, updates: int, arm: str, exploration: float) -> Pr
         trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_in_flight=32)),
     )
     recipe = replace(base.recipe, config=base.recipe.config.merge(settings))
-    # Both arms score identical prompts at fixed optimizer steps, including the initializer.
+    # All arms score identical prompts at fixed optimizer steps, including the initializer.
     cadence = updates // 2
     return replace(
         base,
@@ -52,10 +52,12 @@ def sampler_preset(stage: str, updates: int, arm: str, exploration: float) -> Pr
 SAMPLER = ModelPresets(
     model=SNOWBALL.model,
     namespace="snowball-sampler",
-    presets=tuple(
-        sampler_preset(stage, steps, arm, exploration)
-        for stage, steps in (("smoke", 4), ("pilot", 20))
-        for arm, exploration in (("fixed", 1.0), ("adaptive", 0.2))
+    presets=(
+        sampler_preset("smoke", 4, "fixed", 1.0),
+        sampler_preset("smoke", 4, "adaptive", 0.2),
+        sampler_preset("pilot", 20, "fixed", 1.0),
+        sampler_preset("pilot", 20, "adaptive", 0.2),
+        sampler_preset("pilot", 20, "thompson", 0.05),
     ),
     control_pins={},
 )
