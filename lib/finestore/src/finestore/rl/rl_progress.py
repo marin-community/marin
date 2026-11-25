@@ -129,7 +129,6 @@ class GraderReport(BaseModel):
 
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
-    format_version: Literal[1] = 1
     run_id: Identity
     attempt_id: Identity
     label: Identity

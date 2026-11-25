@@ -178,7 +178,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         control_roots.append(root)
     candidates = []
     for index, value in enumerate((0, 0.01)):
-        name = f"users/test/requirements-{index}"
+        name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
 
@@ -186,7 +186,6 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         return gate.gate_step(
             preset,
             tuple(candidates),
-            group_name="users/test/requirements",
             inputs=RunInputs(
                 preset_name=preset.name,
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),

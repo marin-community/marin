@@ -151,22 +151,20 @@ def _run_name(
     preset: presets.Preset,
     provenance: Provenance,
     inputs_hash: str,
-    replicate: int | None,
+    replicate: int,
     *,
     table: presets.ModelPresets,
     control: bool,
     resume_step: int | None,
 ) -> str:
     if control:
-        if replicate is None:
-            raise ValueError("a control output requires a replicate")
         if provenance.base_commit is None:
             raise click.BadParameter("controls require a recorded source commit")
         return rl_gate.control_name(preset.name, provenance.base_commit, replicate, table=table)
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
-    return user_owned_name(name + (f"-r{replicate}" if preset.gated and replicate is not None else ""))
+    return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
 
 def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
@@ -306,21 +304,7 @@ def build_experiment(
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
         runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
     gate = (
-        rl_gate.gate_step(
-            preset,
-            tuple(runs),
-            group_name=_run_name(
-                preset,
-                provenance,
-                inputs_hash,
-                None,
-                table=table,
-                control=False,
-                resume_step=resume.step if resume is not None else None,
-            ),
-            inputs=inputs,
-            table=table,
-        )
+        rl_gate.gate_step(preset, tuple(runs), inputs=inputs, table=table)
         if preset.gated and not control and (not plan_only or preset.control_preset in table.control_pins)
         else None
     )

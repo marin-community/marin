@@ -632,12 +632,6 @@ def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
     return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
 
 
-def compose_preset(preset: presets.Preset) -> dict:
-    """Compose the preset with its published inputs and defaults."""
-    (config,) = _compose_plans(preset, (RunInputs(preset_name=preset.name),))
-    return config
-
-
 def _compose_plans(
     preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
@@ -983,13 +977,20 @@ def _stored_attempt(path: str) -> AttemptRecord | None:
 def _gate_with_evidence(
     step: ArtifactStep[GateReport], run_attempts: tuple[AttemptRecord | None, ...] | None = None
 ) -> ArtifactStep[GateReport]:
-    target = gate_target(step)
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    paths = step.runtime_args["paths"]
     if run_attempts is None:
-        run_attempts = tuple(map(_stored_attempt, target.outputs))
-    control_attempts = tuple(map(_stored_attempt, target.control_outputs))
+        run_attempts = tuple(map(_stored_attempt, paths["run_paths"]))
+    control_attempts = tuple(map(_stored_attempt, paths["control_paths"]))
+    evidence = [
+        (identity, receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt else None)
+        for key, receipts in (("run_paths", run_attempts), ("control_paths", control_attempts))
+        for identity, receipt in zip(config[key], receipts, strict=True)
+    ]
+    name = step.runtime_args["name"] + "-evidence-" + fingerprint_hash(canonical_json(evidence))
     return replace(
         step,
-        name=target.evidence_name(run_attempts, control_attempts),
+        name=name,
         runtime_args={
             **step.runtime_args,
             "evidence": {"run_attempts": run_attempts, "control_attempts": control_attempts},
@@ -997,57 +998,15 @@ def _gate_with_evidence(
     )
 
 
-class GateTarget(BaseModel):
-    """The gate and ordered input addresses fixed at submission."""
-
-    name: str
-    version: str
-    candidates: tuple[str, ...]
-    outputs: tuple[str, ...]
-    controls: tuple[str, ...]
-    control_outputs: tuple[str, ...]
-
-    def evidence_name(
-        self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
-    ) -> str:
-        evidence = [
-            (
-                identity,
-                (
-                    receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"})
-                    if receipt is not None
-                    else None
-                ),
-            )
-            for identities, receipts in ((self.candidates, candidates), (self.controls, controls))
-            for identity, receipt in zip(identities, receipts, strict=True)
-        ]
-        return self.name + "-evidence-" + fingerprint_hash(canonical_json(evidence))
-
-
-def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    paths = step.runtime_args["paths"]
-    return GateTarget(
-        name=step.runtime_args["name"],
-        version=step.version,
-        candidates=tuple(config["run_paths"]),
-        outputs=tuple(paths["run_paths"]),
-        controls=tuple(config["control_paths"]),
-        control_outputs=tuple(paths["control_paths"]),
-    )
-
-
 def gate_step(
     preset: presets.Preset,
     runs: tuple[ArtifactStep[SkyRLRun], ...],
     *,
-    group_name: str,
     table: ModelPresets,
     inputs: RunInputs,
 ) -> ArtifactStep[GateReport]:
     pin = control_pin(preset, table=table)
-    name = f"{group_name}/gate-n{len(runs)}-{pin.commit}"
+    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
     return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)

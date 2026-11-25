@@ -45,31 +45,6 @@ def migrate(connection: Connection) -> None:
     """
         )
     )
-    connection.execute(
-        text(
-            """CREATE TABLE IF NOT EXISTS rl_legacy_runs (
-            run_id text NOT NULL,
-            attempt_id text NOT NULL,
-            record jsonb NOT NULL,
-            imported_at timestamptz NOT NULL
-        )"""
-        )
-    )
-    connection.execute(
-        text(
-            """WITH legacy AS (
-            DELETE FROM rl_runs
-            WHERE NOT record ? 'format_version' AND record ?& ARRAY['evaluation', 'baseline', 'final']
-            RETURNING run_id, attempt_id, record, imported_at
-        ) INSERT INTO rl_legacy_runs SELECT * FROM legacy"""
-        )
-    )
-    connection.execute(
-        text(
-            """UPDATE rl_runs SET record = record || jsonb_build_object('format_version', 1)
-            WHERE jsonb_typeof(record) = 'object' AND NOT record ? 'format_version'"""
-        )
-    )
 
 
 def create_api(services):
