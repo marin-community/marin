@@ -198,12 +198,7 @@ class AttemptSummary(BaseModel):
                 dict.fromkeys(
                     [
                         *self.failed_facts,
-                        *(
-                            fact.name
-                            for fact in gate.invariants
-                            if not fact.holds
-                            and fact.replicate == replicate
-                        ),
+                        *(fact.name for fact in gate.invariants if not fact.holds and fact.replicate == replicate),
                     ]
                 )
             )

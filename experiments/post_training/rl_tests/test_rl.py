@@ -50,7 +50,6 @@ from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
-    cache_native_compositions,
     cohort_from_fixtures,
     controls,
     copy_evaluations,
@@ -726,9 +725,7 @@ def test_submission_exit_codes_and_publication_retries(
     if source is not None and preset.gated and not control:
         cohort = cohort_from_fixtures(source)
         monkeypatch.setattr(snowball, "_base_preset_version", lambda *_: cohort.version)
-        built = replace(
-            built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort)
-        )
+        built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort))
     for index, root in enumerate(sources):
         native = read_attempt(str(root / "exports"), f"native-{index}")
         write_attempt(str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73))

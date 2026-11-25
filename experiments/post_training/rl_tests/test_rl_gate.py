@@ -182,7 +182,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     key = "policy/raw_grad_norm"
     control_roots = controls(recorded_runs, preset.name)
     for index, root in enumerate(control_roots):
-        edit_metrics(root, lambda row: row.update({key: 100 + index}))
+        edit_metrics(root, lambda row, i=index: row.update({key: 100 + i}))
     candidates = []
     roots = []
     for index, value in enumerate((0, 0.01)):

@@ -967,7 +967,7 @@ def command(
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
         if control is not None and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", control):
-            raise click.BadParameter("use a 1–48 character control batch identifier", param_hint="--control")
+            raise click.BadParameter("use a 1-48 character control batch identifier", param_hint="--control")
         if control and any(value is not None for value in (checkpoints, checkpoint_every, export, priority)):
             raise click.BadParameter("controls use only the preset's default run options")
         preset = _with_run_options(
