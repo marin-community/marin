@@ -257,7 +257,6 @@ class ReleasePlan(BaseModel):
     removed_sources: tuple[str, ...] = ()
     strict_audit_local: bool = False
     slice_output_root: str = ""
-    validation_target: str
     validation_grading_environments: dict[str, dict]
     validation_integrity_contracts: dict[str, dict]
     validation_runtime_defaults: dict[str, dict]
@@ -1286,7 +1285,7 @@ def _backend_validation_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> 
         "source_revision",
         "snapshot_id",
         "catalog_root",
-        "validation_target",
+        "targets",
         "validation_grading_environments",
         "validation_integrity_contracts",
         "validation_runtime_defaults",
@@ -1300,7 +1299,7 @@ def _backend_validation_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> 
             "snapshot_id": plan.snapshot_id,
             "catalog_root": plan.catalog_root,
             "output_root": stage_output_root(plan, "backend-validation"),
-            "target": plan.validation_target,
+            "targets": plan.targets,
             "census_inputs": {"uri": census_document.uri, "sha256": census_document.sha256},
             "grading_environments": plan.validation_grading_environments,
             "integrity_contracts": plan.validation_integrity_contracts,
@@ -1329,6 +1328,7 @@ def _identity_backend_compose_step(plan: ReleasePlan, backend_validation: Artifa
             "source_revision": plan.source_revision,
             "output_root": stage_output_root(plan, "identity-backend"),
             "targets": plan.targets,
+            "removed_sources": plan.removed_sources,
             "prior_identity": _ref_dict(plan.pins.prior_identity),
             "prior_backend": _ref_dict(plan.pins.prior_backend),
             "fresh_backend_receipt": _resolved_receipt(ctx, backend_validation),

@@ -138,6 +138,24 @@ R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS | {
     # binding (13,969 vs 13,968) — the delta needs its owner's reconciliation, so it
     # holds here rather than refusing the release census.
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+    # The seven campaign-release rebuilds whose declared census bindings disagree
+    # with every reachable population record by a census-generation delta
+    # (ruling 2026-11-25: timebox expired, freeze to pending for R41).
+    "TaskTrove:tasktrove-code-contests-built-image",
+    "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+    "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+    "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+    "TaskTrove:tasktrove-taco-built-image",
+    "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+    # The five Nemotron lean/rdkit renames: their fresh SAMPLE panels are drawn at
+    # the current pins but await the judge review, so their declarations still
+    # carry the archived-lineage marker (ruling 2026-11-25: timebox expired).
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
 }
 
 PENDING_MEASUREMENT_SOURCES = (
@@ -156,6 +174,32 @@ PENDING_MEASUREMENT_SOURCES = (
         source
         for source in campaign_releases.sources()
         if source.info.id == "TaskTrove:tasktrove-competitive-coding-rebuilt-v1"
+    ),
+    *(
+        source
+        for source in campaign_releases.sources()
+        if source.info.id
+        in {
+            "TaskTrove:tasktrove-code-contests-built-image",
+            "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+            "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+            "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+            "TaskTrove:tasktrove-taco-built-image",
+            "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+            "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+        }
+    ),
+    *(
+        source
+        for source in nemotron_ultra.sources()
+        if source.info.id
+        in {
+            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+            "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+            "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+            "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+        }
     ),
 )
 

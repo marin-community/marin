@@ -64,6 +64,7 @@ class IdentityBackendComposeInputs:
     fresh_backend_receipt: ArtifactRef
     registry_index: ArtifactRef
     expected_target_count: int
+    removed_sources: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -100,7 +101,7 @@ def seal(path: str, value: dict[str, Any]) -> ArtifactRef:
 
 
 def verify_backend_alignment(
-    prior: BackendSurvey, fresh: BackendSurvey, targets: tuple[str, ...]
+    prior: BackendSurvey, fresh: BackendSurvey, targets: tuple[str, ...], removed: tuple[str, ...] = ()
 ) -> list[BackendSourceMap]:
     """The fresh survey must cover exactly the targets and agree with the retained map."""
     fresh_ids = {row.source_id for row in fresh.sources}
@@ -122,8 +123,9 @@ def verify_backend_alignment(
     overlap = sorted(prior_ids & set(targets))
     if overlap:
         raise ValueError(f"prior map already holds {overlap[:4]}; additions mode never re-pins")
-    composed = sorted([*prior.sources, *fresh.sources], key=lambda row: row.source_id)
-    if len(composed) != len(prior.sources) + len(targets):
+    retained = [row for row in prior.sources if row.source_id not in removed]
+    composed = sorted([*retained, *fresh.sources], key=lambda row: row.source_id)
+    if len(composed) != len(retained) + len(targets):
         raise ValueError("composed backend rows do not equal the retained rows plus the targets")
     return composed
 
@@ -261,7 +263,7 @@ def _compose(
         raise ValueError("fresh backend receipt carries no survey reference")
     fresh = canonical_backend_survey(read_ref(ArtifactRef(**survey_ref)))
     prior_backend = canonical_backend_survey(read_ref(inputs.prior_backend))
-    composed_sources = verify_backend_alignment(prior_backend, fresh, targets)
+    composed_sources = verify_backend_alignment(prior_backend, fresh, targets, inputs.removed_sources)
     backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources)
 
     index = read_ref(inputs.registry_index)

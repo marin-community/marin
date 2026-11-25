@@ -256,7 +256,7 @@ def slice_inputs(node: str, plan: ReleasePlan, selection: SliceSelection) -> dic
         inputs["snapshot_id"] = plan.snapshot_id
         inputs["catalog_root"] = plan.catalog_root
     if node == "backend_validation":
-        inputs["target"] = plan.validation_target
+        inputs["targets"] = list(plan.targets)
         inputs["grading_environments"] = plan.validation_grading_environments
         inputs["integrity_contracts"] = plan.validation_integrity_contracts
         inputs["runtime_defaults"] = plan.validation_runtime_defaults
@@ -422,7 +422,26 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
     if node == "backend_validation":
 
         def run() -> dict:
-            uri, sha = _census_inputs_document(plan, plan.validation_target)
+            from experiments.post_training.task_curation.release_stages import (  # noqa: PLC0415 — the slice root
+                census as census_stage,
+            )
+
+            rows = []
+            digests = {}
+            for target in plan.targets:
+                uri, sha = _census_inputs_document(plan, target)
+                document = json.loads(StoragePath(uri).read_text())
+                rows.extend(document["rows"])
+                digests.setdefault("sha", sha)
+            sealed = _seal_slice_document(
+                f"{slice_root(plan)}/backend-validation-census-inputs.json",
+                {
+                    "kind": census_stage.INPUTS_KIND,
+                    "release_id": plan.release_id,
+                    "source_revision": plan.source_revision,
+                    "rows": rows,
+                },
+            )
             proof = backend_validation_stage.run_backend_validation(
                 backend_validation_stage.BackendValidationInputs(
                     release_id=plan.release_id,
@@ -430,15 +449,15 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     snapshot_id=plan.snapshot_id,
                     catalog_root=plan.catalog_root,
                     output_root=f"{root}/backend-validation",
-                    target=plan.validation_target,
-                    census_inputs=ArtifactRef(uri=uri, sha256=sha),
+                    targets=tuple(plan.targets),
+                    census_inputs=ArtifactRef(uri=sealed["uri"], sha256=sealed["sha256"]),
                     grading_environments=plan.validation_grading_environments,
                     integrity_contracts=plan.validation_integrity_contracts,
                     runtime_defaults=plan.validation_runtime_defaults,
                 ),
                 dry_run=True,
             )
-            return {"target": proof["target"], "task_count": proof["task_count"], "mode": "dry-run"}
+            return {"targets": len(proof["targets"]), "task_count": proof["task_count"], "mode": "dry-run"}
 
         return run
 

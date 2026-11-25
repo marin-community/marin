@@ -17,13 +17,14 @@ from experiments.post_training.task_curation.release_stages.manifest import Arti
 REVISION = "a" * 40
 
 
-def _census_inputs(tmp_path: Path, target: str, population: str) -> ArtifactRef:
+def _census_inputs(tmp_path: Path, populations: dict[str, str]) -> ArtifactRef:
     document = {
         "kind": "atlas-population-census-inputs",
         "release_id": "testrelease",
         "source_revision": REVISION,
         "rows": [
-            {"source_id": target, "declaration": {"id": target}, "population_path": population},
+            {"source_id": target, "declaration": {"id": target}, "population_path": population}
+            for target, population in sorted(populations.items())
         ],
     }
     raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
@@ -57,22 +58,27 @@ def _population(tmp_path: Path, target: str, *, task_count: int = 10) -> str:
     return population
 
 
-def _inputs(tmp_path: Path, *, target: str = "Marin:fixture", task_count: int = 10) -> stage.BackendValidationInputs:
-    population = _population(tmp_path, target, task_count=task_count)
+def _inputs(
+    tmp_path: Path, *, targets: tuple[str, ...] = ("Marin:fixture",), task_count: int = 10
+) -> stage.BackendValidationInputs:
+    populations = {target: _population(tmp_path, target, task_count=task_count) for target in targets}
     return stage.BackendValidationInputs(
         release_id="testrelease",
         source_revision=REVISION,
         snapshot_id="assembly-test-v1",
         catalog_root="s3://bucket/catalog",
         output_root=str(tmp_path / "release"),
-        target=target,
-        census_inputs=_census_inputs(tmp_path, target, population),
-        grading_environments={target: {"assessed_tasks": task_count, "evidence_url": "s3://bucket/evidence"}},
+        targets=targets,
+        census_inputs=_census_inputs(tmp_path, populations),
+        grading_environments={
+            target: {"assessed_tasks": task_count, "evidence_url": "s3://bucket/evidence"} for target in targets
+        },
         integrity_contracts={
             target: {
                 "task_specs_sha256": "e" * 64,
                 "groups": [{"id": "root-delivery", "count": task_count, "present": True}],
             }
+            for target in targets
         },
         runtime_defaults={"agent": {"network": "allow"}, "grader": {"network": "deny"}},
     )
@@ -122,21 +128,23 @@ def test_dry_run_refuses_specs_that_disagree_with_the_census(tmp_path):
         stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)
 
 
-def test_manifest_binds_the_release_and_the_frozen_population(tmp_path):
-    inputs = _inputs(tmp_path)
+def test_manifest_binds_the_release_and_the_frozen_populations(tmp_path):
+    inputs = _inputs(tmp_path, targets=("Marin:fixture", "Marin:other2"))
     manifest = stage.build_census_manifest(
-        inputs, task_count=10, specs_paths=[str(tmp_path / "specs" / "part-000000.parquet")]
+        inputs,
+        task_counts={"Marin:fixture": 10, "Marin:other2": 4},
+        specs_paths={t: [str(tmp_path / "specs" / f"{t}.parquet")] for t in ("Marin:fixture", "Marin:other2")},
     )
     assert manifest["kind"] == "atlas-backend-census-inputs"
     assert manifest["snapshot_id"] == "assembly-test-v1"
     assert manifest["source_revision"] == REVISION
-    assert manifest["source_ids"] == ["Marin:fixture"]
-    assert manifest["inputs"][0]["expected_tasks"] == 10
+    assert manifest["source_ids"] == ["Marin:fixture", "Marin:other2"]
+    assert [row["expected_tasks"] for row in manifest["inputs"]] == [10, 4]
     assert manifest["integrity_contracts"]["Marin:fixture"] == inputs.integrity_contracts["Marin:fixture"]
 
 
 def test_missing_census_row_refuses(tmp_path):
     inputs = _inputs(tmp_path)
-    broken = dataclasses.replace(inputs, target="Marin:other")
-    with pytest.raises(ValueError, match="grading-environment record for 'Marin:other'"):
+    broken = dataclasses.replace(inputs, targets=("Marin:other",))
+    with pytest.raises(ValueError, match="targets carry no census row"):
         stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)

@@ -1,6 +1,6 @@
 {
+  "path": "experiments/post_training/task_curation/datasets/grading_census_receipts_nemotron_r41_pending_v1/part-000.json",
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "d78ae86e6697cd224f1f25f75f324bb37d536e33",
-  "path": "experiments/post_training/task_curation/datasets/grading_census_receipts_ingest_a_20261124_original_v1/part-001.json",
-  "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  "revision": "6a0eca4b29c274d645cd567fd51f46f7fea3f7f0",
+  "sha256": "2dba15a93a65ea8a0e74828b5c144f7ed99673e9077ead7dc46c4eb4337d1850"
 }

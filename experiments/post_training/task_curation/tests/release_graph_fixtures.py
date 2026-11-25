@@ -56,7 +56,6 @@ def fixture_plan(**overrides) -> ReleasePlan:
         expected_prior_sources=2,
         expected_panels=3,
         expected_population_tasks=1000,
-        validation_target="Marin:fixture",
         validation_grading_environments={
             "Marin:fixture": {"assessed_tasks": 10, "evidence_url": "s3://bucket/evidence/fixture.json"}
         },
