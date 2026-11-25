@@ -3,6 +3,7 @@
 
 import dataclasses
 from enum import IntEnum, auto
+from typing import Literal
 
 import equinox as eqx
 import haliax as hax
@@ -31,6 +32,17 @@ class FinishReason(IntEnum):
     STOP = auto()
     LENGTH = auto()
     ABORT = auto()
+
+
+def format_finish_reason(reason: FinishReason) -> Literal["stop", "length", "abort"]:
+    """Format a terminal reason for generation responses."""
+    if reason == FinishReason.STOP:
+        return "stop"
+    if reason == FinishReason.LENGTH:
+        return "length"
+    if reason == FinishReason.ABORT:
+        return "abort"
+    raise ValueError(f"Expected a terminal finish reason, got {reason.name}")
 
 
 class PackedSequence(eqx.Module):

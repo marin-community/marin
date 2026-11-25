@@ -367,6 +367,7 @@ class _FakeCompletionContext:
         *,
         abort_event: Event | None = None,
     ) -> str:
+        del abort_event
         if (
             prompt_tokens != [0, 1]
             or max_tokens != 1
@@ -878,6 +879,10 @@ def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_cli
             np.testing.assert_array_equal(stopped_tensors[key], limited_tensors[key])
 
 
+PREFILL_GATE_TIMEOUT = 30
+ADMISSION_TIMEOUT = 5
+
+
 @pytest.fixture
 def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
     started = Event()
@@ -889,7 +894,7 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
     def gate(_positions):
         if not started.is_set():
             started.set()
-            if not release.wait(30):
+            if not release.wait(PREFILL_GATE_TIMEOUT):
                 raise TimeoutError("Test did not release the blocked prefill")
 
     class GatedModel(fixed_token_model):
@@ -925,11 +930,13 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
 
         await server.app(scope, receive_request, send)
 
-    with TestClient(observe_registration) as client:
-        try:
+    try:
+        with TestClient(observe_registration) as client:
             yield client, started, release, registered, disconnect, disconnect_observed
-        finally:
-            release.set()
+    finally:
+        release.set()
+        disconnect.set()
+        server.shutdown()
 
 
 def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gated_binary_server):
@@ -951,12 +958,12 @@ def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gat
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
             running = pool.submit(generate, "running")
-            assert started.wait(30)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(generate, "queued")
-            assert registered["queued"].wait(5)
+            assert registered["queued"].wait(ADMISSION_TIMEOUT)
             abort = client.post("/abort", json={"request_ids": ["running", "queued"]})
             assert abort.status_code == 200
-            empty_metadata, empty_tensors = queued.result(timeout=5)
+            empty_metadata, empty_tensors = queued.result(timeout=ADMISSION_TIMEOUT)
             assert empty_metadata["choices"] == [
                 {"finish_reason": "abort", "completion_tokens": 0, "policy_id": "policy-0", "model_version": 0}
             ]
@@ -964,7 +971,7 @@ def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gat
             assert not empty_tensors["choice.0.behavior_logprobs"].size
         finally:
             release.set()
-        partial_metadata, partial = running.result(timeout=30)
+        partial_metadata, partial = running.result(timeout=PREFILL_GATE_TIMEOUT)
 
     assert partial_metadata["choices"] == [
         {"finish_reason": "abort", "completion_tokens": 1, "policy_id": "policy-0", "model_version": 0}
@@ -989,14 +996,14 @@ def test_binary_disconnect_releases_running_generation(gated_binary_server):
                 content=body,
                 headers={"content-type": MEDIA_TYPE, "x-request-id": "disconnecting"},
             )
-            assert started.wait(30)
-            assert registered["disconnecting"].wait(5)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
+            assert registered["disconnecting"].wait(ADMISSION_TIMEOUT)
             disconnect.set()
-            assert disconnect_observed.wait(5)
+            assert disconnect_observed.wait(ADMISSION_TIMEOUT)
         finally:
             disconnect.set()
             release.set()
-        response = running.result(timeout=30)
+        response = running.result(timeout=PREFILL_GATE_TIMEOUT)
 
     assert response.status_code == 200, response.text
     metadata, tensors = decode_frame(response.content)
@@ -1021,11 +1028,11 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
             running = pool.submit(client.post, GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
-            assert started.wait(30)
+            assert started.wait(PREFILL_GATE_TIMEOUT)
             queued = pool.submit(client.post, "/v1/completions", json=completion, headers={"x-request-id": "queued"})
-            assert registered["queued"].wait(5)
+            assert registered["queued"].wait(ADMISSION_TIMEOUT)
             assert client.post("/abort", json={"request_ids": ["queued"]}).status_code == 200
-            response = queued.result(timeout=5)
+            response = queued.result(timeout=ADMISSION_TIMEOUT)
             assert response.status_code == 200, response.text
             if stream:
                 data = next(
@@ -1038,4 +1045,4 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
             assert payload["choices"][0]["text"] == ""
         finally:
             release.set()
-        assert running.result(timeout=30).status_code == 200
+        assert running.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
