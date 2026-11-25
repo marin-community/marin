@@ -4,6 +4,7 @@
 """Behavior tests for the atlas-release entry point (DESIGN.md §1, M2c)."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -450,3 +451,65 @@ def test_preflight_mode_reports_a_failed_witness_and_exits_nonzero(tmp_path, pla
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "FAIL snapshot_publication:" in output and "prior drift found" in output
+
+
+def test_bare_stage_selection_runs_that_stage(plan_document, monkeypatch, capsys):
+    """`atlas-release census --plan … --version …` IS the run dispatch for one stage."""
+    seen: dict = {}
+
+    def fake_run(args, *, force_run_failed):
+        seen["stage"] = args.stage
+        seen["mode"] = args.mode
+        seen["force"] = force_run_failed
+        return 0
+
+    monkeypatch.setattr(entry_point, "mode_run", fake_run)
+    exit_code = entry_point.main(_argv(plan_document, "census"))
+    assert exit_code == 0
+    assert seen == {"stage": ["census"], "mode": "run", "force": False}
+
+
+def test_bare_all_selection_runs_the_whole_release(plan_document, monkeypatch):
+    seen: dict = {}
+
+    def fake_run(args, *, force_run_failed):
+        seen["stage"] = args.stage
+        return 0
+
+    monkeypatch.setattr(entry_point, "mode_run", fake_run)
+    exit_code = entry_point.main(_argv(plan_document, "all"))
+    assert exit_code == 0
+    assert seen == {"stage": None}
+
+
+def test_selection_refuses_unknown_stage_names(plan_document, monkeypatch, capsys):
+    """An unknown selection is refused (the guard fires first on an unlanded tip)."""
+    monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda root: None)
+    exit_code = entry_point.main(_argv(plan_document, "not-a-stage"))
+    assert exit_code == 2
+    assert "unknown graph nodes" in capsys.readouterr().err
+
+
+def test_bare_selection_with_no_mode_or_stage_refuses(plan_document):
+    """No mode and no selection is a usage error, not a whole-release run."""
+    with pytest.raises(SystemExit) as raised:
+        entry_point.main(["--version", "testrelease", "--plan", str(plan_document)])
+    assert raised.value.code == 2
+
+
+def test_watchdog_feed_flag_repoints_the_stage_default(plan_document, tmp_path):
+    feed = tmp_path / "feed.jsonl"
+    exit_code = entry_point.main(_argv(plan_document, "plan", "--watchdog-feed", str(feed)))
+    assert exit_code == 0
+    assert os.environ["ATLAS_WATCHDOG_FEED"] == str(feed)
+    assert entry_point.alerts_module.WATCHDOG_FEED == feed
+    del os.environ["ATLAS_WATCHDOG_FEED"]
+
+
+def test_landing_log_flag_points_the_guard_default(plan_document, tmp_path):
+    log = tmp_path / "landings.jsonl"
+    log.write_text("")
+    exit_code = entry_point.main(_argv(plan_document, "plan", "--landing-log", str(log)))
+    assert exit_code == 0
+    assert entry_point.guard.landing_log_path() == log
+    del os.environ["ATLAS_PUSH_LOG"]

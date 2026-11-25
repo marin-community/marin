@@ -61,6 +61,9 @@ from rigging.filesystem.step_status import read_step_status
 from rigging.timing import Duration
 
 from experiments.post_training.task_curation.atlas_deployment import ATLAS_SERVICE
+from experiments.post_training.task_curation.release_stages import (
+    alerts as alerts_module,
+)
 from experiments.post_training.task_curation.release_stages import guard, preflight_slices
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages.graph import (
@@ -525,6 +528,61 @@ def _submit_root(args, *, verb: str) -> int:
         shutil.rmtree(snapshot, ignore_errors=True)
 
 
+MODES = ("plan", "release", "preflight", "run", "status", "resume", "submit")
+# Flags that consume the following token (so the selection scan does not read a
+# flag's value as the stage selection).
+_VALUE_FLAGS = ("--version", "--plan", "--source-revision", "--watchdog-feed", "--landing-log")
+
+
+def _extract_selection(argv: list[str]) -> list[str]:
+    """Translate the brief's bare `<stage|all>` positional into the run dispatch.
+
+    Argparse rejects a first positional that is not one of the subparser choices,
+    so a leading selection token is rewritten before parsing: `<stage|all>` becomes
+    `run --stage <stage>` (or plain `run` for all). Anything from the first mode
+    name onward belongs to that mode's subparser and passes through untouched;
+    with neither a mode nor a selection the parse errors out as before.
+    """
+    translated: list[str] = []
+    expecting_value = False
+    for index, token in enumerate(argv):
+        if expecting_value:
+            expecting_value = False
+        elif token in _VALUE_FLAGS:
+            expecting_value = True
+        elif token.startswith("-"):
+            pass
+        elif token in MODES:
+            # Top-level flags stay top-level: hoist any that appear after the
+            # mode name in front of it (argparse ends the top level at the mode).
+            front: list[str] = []
+            rest: list[str] = []
+            skipping = False
+            for tail_token in argv[index + 1 :]:
+                if skipping:
+                    skipping = False
+                    front.append(tail_token)
+                elif tail_token in _VALUE_FLAGS:
+                    skipping = True
+                    front.append(tail_token)
+                else:
+                    rest.append(tail_token)
+            translated.extend(front)
+            translated.append(token)
+            translated.extend(rest)
+            return translated
+        else:
+            # The brief's bare `<stage|all>`: the run dispatch at this version.
+            if token != "all":
+                translated.extend(["run", "--stage", token])
+            else:
+                translated.append("run")
+            translated.extend(argv[index + 1 :])
+            return translated
+        translated.append(token)
+    return translated
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="atlas-release",
@@ -538,6 +596,14 @@ def main(argv: list[str] | None = None) -> int:
             "The landed revision the run's workspace was bundled at (required for run/resume"
             " from a copied workspace, where the checkout revision cannot be read from git)"
         ),
+    )
+    parser.add_argument(
+        "--watchdog-feed",
+        help="The alerts feed the stages write (overrides ATLAS_WATCHDOG_FEED in this process)",
+    )
+    parser.add_argument(
+        "--landing-log",
+        help="The atlas-push landing log the guard reads (overrides ATLAS_PUSH_LOG in this process)",
     )
     modes = parser.add_subparsers(dest="mode", required=True)
     modes.add_parser("plan", help="Print the lowered graph; I/O-free")
@@ -584,7 +650,16 @@ def main(argv: list[str] | None = None) -> int:
     submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
     submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
 
-    args = parser.parse_args(argv)
+    tokens = _extract_selection(list(sys.argv[1:] if argv is None else argv))
+    args = parser.parse_args(tokens)
+    if args.watchdog_feed:
+        os.environ[guard.ATLAS_WATCHDOG_FEED_ENV] = args.watchdog_feed
+        # The stage modules resolve their default feed at stage-entry time, so
+        # repointing the module constant (the same seam the test conftest uses)
+        # serves every stage this process runs.
+        alerts_module.WATCHDOG_FEED = Path(args.watchdog_feed)
+    if args.landing_log:
+        os.environ[guard.ATLAS_PUSH_LOG_ENV] = args.landing_log
     handlers = {
         "plan": mode_plan,
         "preflight": mode_preflight,

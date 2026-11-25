@@ -26,6 +26,9 @@ from pathlib import Path
 
 ATLAS_ENV_AUDIT_BRANCH = "atlas-env-audit"
 PACKAGE_DIR = Path(__file__).resolve().parent
+# The job-wiring environment variables the entrypoint can set as explicit flags.
+ATLAS_PUSH_LOG_ENV = "ATLAS_PUSH_LOG"
+ATLAS_WATCHDOG_FEED_ENV = "ATLAS_WATCHDOG_FEED"
 
 # A 32-hex load ID anywhere in a string literal, bounded by non-hex characters.
 _HEX_LOAD_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
@@ -44,7 +47,7 @@ class LiteralViolation:
 
 def landing_log_path() -> Path:
     """The atlas-push landing log (``ATLAS_PUSH_LOG`` overrides the default)."""
-    return Path(os.environ.get("ATLAS_PUSH_LOG", Path.home() / ".local/share/atlas-push/landings.jsonl"))
+    return Path(os.environ.get(ATLAS_PUSH_LOG_ENV, Path.home() / ".local/share/atlas-push/landings.jsonl"))
 
 
 def scan_release_literals(paths: Iterable[Path]) -> list[LiteralViolation]:

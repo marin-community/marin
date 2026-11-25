@@ -20,7 +20,11 @@ Every stage emits its alerts directly to the watchdog feed, which defaults to
 the operator's `~/Documents/experiments/active/job-watchdog/alerts.jsonl` and
 is overridden with `ATLAS_WATCHDOG_FEED` — a sandboxed environment points it at
 a writable path (that variable changes where alerts are WRITTEN; it never makes
-anything under `~/Documents/experiments` an input).
+anything under `~/Documents/experiments` an input). Both job-wiring variables
+have first-class flags on every mode: `--watchdog-feed <path>` sets the alert
+feed and `--landing-log <path>` sets the atlas-push landing log the guard reads
+(`ATLAS_PUSH_LOG`), so a sandboxed run states its wiring on the command line
+instead of exporting environment variables.
 Credentials are infrastructure access, not pipeline configuration — nothing
 outside the repository supplies any pipeline input.
 
@@ -169,6 +173,12 @@ fail the mode; a failed slice does (exit 1).
 uv run atlas-release --version <release-id> --plan <plan.json> run [--stage <node>]...
 ```
 
+The brief's one-command shape also works: a leading `<stage|all>` token is the run
+dispatch for that selection — `python -m experiments.post_training.task_curation.release_stages
+census --plan <plan.json> --version <release-id>` runs the census stage, and `all`
+(or no selection with an explicit mode) runs the whole release. A bare invocation
+with neither a mode nor a selection is a usage error, never a whole-release run.
+
 The submission guard (`guard.py`) refuses — with no bypass — unless the checkout
 HEAD is landed on `atlas-env-audit` and no stage source carries release-identifying
 literals. Then every stage gates on its own fresh preflight receipt immediately
@@ -178,6 +188,30 @@ graph builds the release: driver-local stages run in the entry-point process,
 cluster stages submit through `marin.execution.remote` with resources from the
 measured sizing curves. A failed stage stops its downstream stages; fix and use
 `resume`.
+
+### Per-source parallelism and sizing
+
+The heavy stages fan out across sources inside one job; the worker counts ride the
+typed stage inputs and derive from the measured sizing curves (`sizing.py`), never
+from silent defaults:
+
+- **census** — `measure_source` runs across a spawn `ProcessPoolExecutor`, one
+  source per dispatch, with the worker count from `census_sizing(...).cpu`. Each
+  worker builds the source registry once (the run's revision is frozen) and pins
+  pyarrow to one core. The results reassemble in the declared row order and every
+  per-source seal stays write-once at its source-keyed path, so a parallel run
+  seals exactly the rows a serial run seals.
+- **corpus_assembly** — `prepare_sources` runs the per-source preparation across
+  workers sized by `corpus_sizing(...).workers`.
+- **qc_browse** — the panel copy fans out across paced SQL clients (one client per
+  copy thread, the shared retry budget halting peers on a failure), with the worker
+  count from `qc_browse_sizing(...).workers`; panels are disjoint (one pipeline key
+  each) and the results collect in the plan's declared order.
+- **history_staging** — already parallel (see `history_staging_sizing`).
+
+Per-stage receipts are byte-identical between a serial and a parallel run modulo
+the output root; the census's identical-rows property is pinned by tests and was
+verified in-region against the sealed R40 cut-v22 census.
 
 ### `status` — what has run
 
