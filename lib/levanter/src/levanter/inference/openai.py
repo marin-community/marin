@@ -13,21 +13,25 @@ import asyncio
 import base64
 import collections
 import collections.abc
+import json
 import logging
+import math
 import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
+import grpc
 import haliax as hax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -39,23 +43,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from levanter.inference.binary import (
-    BEHAVIOR_LOGPROBS,
-    EXPERT_IDS,
-    EXPERT_VALID,
-    GENERATE_PATH,
-    LOGPROB_MODE,
-    MEDIA_TYPE,
-    MAX_POLICY_ID_LENGTH,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    GenerateOptions,
-    choice_tensor_key,
-    decode_frame,
-    encode_frame,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
     GenerationResult,
     GeneratedExpertRoutes,
@@ -83,7 +71,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+MAX_POLICY_ID_LENGTH = 256
 _EVENT_STREAM = "text/event-stream"
 _CHAT_CHUNK = "chat.completion.chunk"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
@@ -112,6 +100,8 @@ class InferenceServerConfig:
 
     host: str = "localhost"
     port: int = 0  # auto-assign port
+    grpc_port: int | None = None
+    """Optional exact-token gRPC listener on the same host. Use 0 for an ephemeral port."""
 
 
 @dataclass
@@ -438,7 +428,7 @@ class InferenceContext:
         stop_ids = None
         if request.stop_tokens:
             width = max(map(len, request.stop_tokens))
-            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            padded = [[INVALID] * (width - len(seq)) + seq for seq in request.stop_tokens]
             stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
         seed = request.seed
         if seed is None:
@@ -597,7 +587,7 @@ def _chat_completion_events(
             )
             payload = chunk.model_dump_json()
             if route_frame is not None and choice.index == final_choice and chunk_choice.finish_reason is not None:
-                payload = payload[:-1] + ',"levanter_route_frame":"' + route_frame + '"}'
+                payload = json.dumps(chunk.model_dump(mode="json") | {"levanter_generation": route_frame})
             yield _sse_event(payload)
     if include_usage:
         usage = ChatCompletionChunk(
@@ -679,6 +669,20 @@ def _completion_logprobs(
     )
 
 
+def _generation_options_error(
+    config: InferenceEngineConfig, num_choices: int, stops: list[list[int]] | None, vocab_size: int
+) -> str | None:
+    if not 1 <= num_choices <= config.max_seqs:
+        return "Requested choices exceed the configured capacity"
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+        or any(not 0 <= token < vocab_size for sequence in stops for token in sequence)
+    ):
+        return "Stop tokens exceed the configured capacity or vocabulary"
+    return None
+
+
 async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
@@ -688,6 +692,9 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             prompts = request.prompt
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create futures for all prompts
         futures = []
@@ -726,7 +733,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=num_choices,
                 echo_logprobs_top_k=echo_logprobs_top_k,
             )
 
@@ -1057,106 +1064,116 @@ async def _stream_chat_completion(
 
 
 def _encode_chat_route_frame(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
-    frame = _encode_binary_outputs(np.asarray(prompt, dtype=np.int32), results, score_mode)
-    return base64.b64encode(frame).decode("ascii")
-
-
-async def _read_generate_request(request: HttpRequest) -> tuple[np.ndarray, GenerateOptions]:
-    """Read a bounded generation frame with exactly one int32 token vector."""
-    if request.headers.get("content-type", "").split(";")[0].strip().lower() != MEDIA_TYPE:
-        raise HTTPException(status_code=415, detail=f"Expected {MEDIA_TYPE}")
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > _MAX_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Generation frame exceeds the request size limit")
-        body.extend(chunk)
-
-    try:
-        metadata, tensors = decode_frame(bytes(body))
-        options = GenerateOptions.model_validate(metadata)
-        if tensors.keys() != {PROMPT_TOKEN_IDS}:
-            raise ValueError("Generation requires exactly one prompt_token_ids tensor")
-        prompt = tensors[PROMPT_TOKEN_IDS]
-        if prompt.ndim != 1 or prompt.dtype != np.int32 or prompt.size == 0:
-            raise ValueError("prompt_token_ids must be a nonempty one-dimensional int32 tensor")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return prompt, options
-
-
-def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not ctx.engine.supports_route_capture:
-        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
-    config = ctx.engine.config
-    if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
-        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
-    max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
-        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
-    if options.n > config.max_seqs:
-        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
-    vocab_size = ctx.model.Vocab.size
-    if np.any((prompt < 0) | (prompt >= vocab_size)):
-        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
-    stops = options.stop_tokens
-    if stops and (
-        len(stops) > config.max_stop_seqs
-        or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
-        or any(not 0 <= token < vocab_size for seq in stops for token in seq)
-    ):
-        raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
-
-
-async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
-    prompt, options = await _read_generate_request(request)
-    _validate_binary_options(ctx, prompt, options)
-    future = asyncio.get_running_loop().create_future()
-    ctx.submit_request(
-        prompt.tolist(),
-        options.max_tokens,
-        options.temperature,
-        options.top_p,
-        options.stop_tokens,
-        options.seed,
-        future,
-        n_generations=options.n,
-        return_route_captures=options.return_route_captures,
-        expected_policy_id=options.expected_policy_id,
+    wire_mode = (
+        inference_pb2.LOGPROB_MODE_POLICY if score_mode == LogprobMode.POLICY else inference_pb2.LOGPROB_MODE_BEHAVIOR
     )
-    try:
-        outputs = await future
-    except PolicyMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    score_mode = LogprobMode(ctx.config.service.logprob_mode)
-    if options.return_route_captures:
-        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs, score_mode)
-    else:
-        content = _encode_binary_outputs(prompt, outputs, score_mode)
-    return Response(content=content, media_type=MEDIA_TYPE)
+    response = _grpc_generate_response(prompt, results, wire_mode)
+    return base64.b64encode(response.SerializeToString()).decode("ascii")
 
 
-def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse], score_mode: LogprobMode) -> bytes:
-    score_field = POLICY_LOGPROBS if score_mode == LogprobMode.POLICY else BEHAVIOR_LOGPROBS
-    tensors = {PROMPT_TOKEN_IDS: prompt}
-    choices = []
-    for choice, output in enumerate(outputs):
-        metadata: dict[str, int | str] = {
-            "completion_tokens": output.completion_tokens,
-            "model_version": output.model_version,
-        }
-        if output.policy_id is not None:
-            metadata[POLICY_ID] = output.policy_id
-        choices.append(metadata)
-        tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
+class _GrpcInference:
+    def __init__(self, inference_context: InferenceContext):
+        self._inference_context = inference_context
+
+    async def Generate(
+        self, request: inference_pb2.GenerateRequest, context: grpc.aio.ServicerContext
+    ) -> inference_pb2.GenerateResponse:
+        ctx = self._inference_context
+        prompt = list(request.prompt_token_ids)
+        max_tokens = request.max_new_tokens
+        temperature = request.temperature if request.HasField("temperature") else 1.0
+        top_p = request.top_p if request.HasField("top_p") else 1.0
+        seed = request.seed if request.HasField("seed") else None
+        num_choices = request.num_choices if request.HasField("num_choices") else 1
+        stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
+
+        policy_id = request.expected_policy_id if request.HasField("expected_policy_id") else None
+        if policy_id is not None and not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid expected policy ID")
+
+        capture_routes = request.capture_router_replay
+        if capture_routes and not ctx.engine.supports_route_capture:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
+
+        config = ctx.engine.config
+        score_mode = (
+            inference_pb2.LOGPROB_MODE_POLICY
+            if config.logprob_mode == LogprobMode.POLICY
+            else inference_pb2.LOGPROB_MODE_BEHAVIOR
+        )
+        if request.expected_logprob_mode not in (inference_pb2.LOGPROB_MODE_UNSPECIFIED, score_mode):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "The server uses a different logprob mode")
+        max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
+        if (
+            not prompt
+            or not max_tokens
+            or len(prompt) + max_tokens > config.max_seq_len
+            or len(prompt) > max_prefill_size
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Prompt and generation must fit the configured context"
+            )
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid temperature or top_p")
+        vocab_size = ctx.model.Vocab.size
+        if any(token >= vocab_size for token in prompt):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
+        if error := _generation_options_error(config, num_choices, stops, vocab_size):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, error)
+
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt,
+            max_tokens,
+            temperature,
+            top_p,
+            stops or None,
+            seed,
+            future,
+            n_generations=num_choices,
+            return_route_captures=capture_routes,
+            expected_policy_id=policy_id,
+        )
+        try:
+            # The inference thread completes the queue's future even when the caller disconnects.
+            outputs = await asyncio.shield(future)
+        except PolicyMismatchError as exc:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
+        if capture_routes:
+            if any(output.expert_routes is None for output in outputs):
+                await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs, score_mode)
+        return _grpc_generate_response(prompt, outputs, score_mode)
+
+
+def _grpc_generate_response(
+    prompt: list[int], outputs: list[InferenceResponse], score_mode: inference_pb2.LogprobMode
+) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt, logprob_mode=score_mode)
+    for output in outputs:
+        choice = response.choices.add(
+            token_ids=output.tokens,
+            model_version=output.model_version,
+            policy_id=output.policy_id,
+        )
         if output.logprobs is not None:
-            tensors[choice_tensor_key(choice, score_field)] = np.asarray(output.logprobs, dtype=np.float32)
+            scores = (
+                choice.policy_logprobs if score_mode == inference_pb2.LOGPROB_MODE_POLICY else choice.behavior_logprobs
+            )
+            scores.extend(output.logprobs)
         if output.expert_routes is not None:
-            tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
-            tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices, LOGPROB_MODE: score_mode}, tensors)
+            experts = output.expert_routes.expert_ids
+            layers, positions, experts_per_token = experts.shape
+            replay = choice.router_replay
+            replay.num_layers = layers
+            replay.num_positions = positions
+            replay.experts_per_token = experts_per_token
+            replay.expert_ids.extend(experts.ravel().tolist())
+            replay.valid.extend(output.expert_routes.valid.tolist())
+    return response
 
 
 class InferenceServer:
@@ -1213,8 +1230,25 @@ class InferenceServer:
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
-        app = FastAPI(title="Levanter Inference Service", version="1.0.0")
-        model_name = inference_context.config.model_name
+        config = inference_context.config
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if config.grpc_port is None:
+                yield
+                return
+            server = grpc.aio.server()
+            inference_pb2_grpc.add_InferenceServicer_to_server(_GrpcInference(inference_context), server)
+            host = f"[{config.host}]" if ":" in config.host and not config.host.startswith("[") else config.host
+            app.state.grpc_port = server.add_insecure_port(f"{host}:{config.grpc_port}")
+            await server.start()
+            try:
+                yield
+            finally:
+                await server.stop(grace=0)
+
+        app = FastAPI(title="Levanter Inference Service", version="1.0.0", lifespan=lifespan)
+        model_name = config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
@@ -1265,10 +1299,6 @@ class InferenceServer:
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
             return await _fetch_tokens(inference_context, request)
 
-        @app.post(GENERATE_PATH)
-        async def generate_binary(request: HttpRequest) -> Response:
-            return await _generate_binary(inference_context, request)
-
         return app
 
     def unload(self):
@@ -1278,7 +1308,7 @@ class InferenceServer:
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
-        """Install the weights and immutable policy identity in one serving version."""
+        """Install weights and set or clear the immutable policy ID in one serving version."""
         return self.inference_context.reload(weight_callback, expected_version=expected_version, policy_id=policy_id)
 
     def address(self):
