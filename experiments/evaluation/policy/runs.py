@@ -159,12 +159,13 @@ def run_warnings(evidence: RunEvidence) -> tuple[str, ...]:
 
 
 def run_problems(
-    record: EvalRunRecord, evidence: RunEvidence | None, expected: ExpectedRun
+    record: EvalRunRecord, evidence: RunEvidence | None, expected: ExpectedRun, *, release_commit: str | None = None
 ) -> tuple[RunState, tuple[str, ...]]:
     """Compare an unscored record and its archive's evidence with the run this checkout would launch.
 
     Input differences on a record from another commit make it stale rather than invalid: any later
-    change to a model config, corpus or harness changes a run's inputs.
+    change to a model config, corpus or harness changes a run's inputs. A released policy's runs must
+    come from ``release_commit``, its tag's commit.
     """
     batch, evaluation = expected.batch, expected.evaluation
     drift = [
@@ -175,6 +176,8 @@ def run_problems(
     faults = []
     if record.version != batch.version:
         faults.append(f"version {record.version!r}, not {batch.version!r}")
+    if release_commit is not None and record.provenance.git_sha != release_commit:
+        faults.append(f"ran at commit {record.provenance.git_sha[:10]}, not the release's {release_commit[:10]}")
     if record.status is not RunStatus.SUCCEEDED:
         faults.append(f"{record.status.value}: {record.error}")
     elif evidence is None:
@@ -199,14 +202,14 @@ def run_problems(
     return (RunState.STALE if drift else RunState.VALID), tuple(drift)
 
 
-def check_run(record: EvalRunRecord, expected: ExpectedRun) -> RunCheck:
+def check_run(record: EvalRunRecord, expected: ExpectedRun, *, release_commit: str | None = None) -> RunCheck:
     """Score a record from its archive and compare it with the run this checkout would launch."""
     if record.status is not RunStatus.SUCCEEDED:
-        state, problems = run_problems(record, None, expected)
+        state, problems = run_problems(record, None, expected, release_commit=release_commit)
         return RunCheck(record=record, state=state, problems=problems, warnings=())
     scored = score_curated_record(record)
     evidence = run_evidence(record, scored.coverage)
-    state, problems = run_problems(record, evidence, expected)
+    state, problems = run_problems(record, evidence, expected, release_commit=release_commit)
     warnings = () if evidence is None else run_warnings(evidence)
     return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 

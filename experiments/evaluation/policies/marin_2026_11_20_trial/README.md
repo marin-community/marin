@@ -28,6 +28,10 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
   whose replies often hit their output cap or whose attempts often went unscored.
 - `verify` checks any run against the policy and names each field that differs.
 
+A released policy sets `release_tag`: it launches only from a clean checkout of that tag, and
+`status` and `verify` mark its runs from any other commit invalid. This trial policy sets none, so it
+launches from any commit.
+
 All three need CoreWeave credentials.
 
 ## Candidates

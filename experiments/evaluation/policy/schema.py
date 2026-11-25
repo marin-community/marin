@@ -95,6 +95,8 @@ class EvalPolicy:
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()
     overrides: tuple[PolicyOverride, ...] = ()
+    release_tag: str | None = None
+    """The git tag a released version launches from; every run of it must name that tag's commit."""
 
     def __post_init__(self) -> None:
         exceptions = (*self.exclusions, *self.overrides)

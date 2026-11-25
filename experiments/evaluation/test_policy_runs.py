@@ -109,6 +109,20 @@ def test_different_inputs_name_the_fields_and_are_stale_only_from_another_commit
     assert any(problem.startswith("eval.curated.settings.source_limit:") for problem in problems)
 
 
+def test_a_released_policys_runs_must_come_from_its_tagged_commit(tmp_path):
+    run = _expected(None)["aime24"]
+    record = _write(tmp_path, run)
+    release = record.provenance.git_sha
+    assert run_problems(record, _evidence(run), run, release_commit=release) == (RunState.VALID, ())
+
+    # The same inputs at another commit are valid for a trial policy but not for a release.
+    elsewhere = _write(tmp_path / "old", run, git_sha="0" * 40)
+    assert run_problems(elsewhere, _evidence(run), run)[0] is RunState.VALID
+    state, problems = run_problems(elsewhere, _evidence(run), run, release_commit=release)
+    assert state is RunState.INVALID
+    assert any("relaunch skips" in problem for problem in problems)
+
+
 @pytest.mark.parametrize(
     ("evidence", "flagged"),
     [

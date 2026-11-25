@@ -128,9 +128,19 @@ def _run_summary(check: RunCheck) -> str:
     return " ".join(parts)
 
 
-def _expected_summary(run: ExpectedRun) -> str:
+def _expected_summary(run: ExpectedRun, release_commit: str | None) -> str:
     record = expected_record(run)
-    return "not run" if record is None else _run_summary(check_run(record, run))
+    return "not run" if record is None else _run_summary(check_run(record, run, release_commit=release_commit))
+
+
+def _release_commit(policy: EvalPolicy) -> str | None:
+    """The commit a released policy's tag names, or None for a trial policy."""
+    if policy.release_tag is None:
+        return None
+    try:
+        return git_output(["rev-parse", f"{policy.release_tag}^{{commit}}"], find_project_root())
+    except RuntimeError as error:
+        raise click.ClickException(f"{policy.version} is released as {policy.release_tag}; fetch its tag") from error
 
 
 @click.group()
@@ -225,12 +235,14 @@ def launch(
 ) -> None:
     """Submit one candidate's policy evaluations, one job per server, without waiting for results.
 
-    A full run (no --limit) must launch from a clean checkout so its records name the code that ran.
+    A full run (no --limit), and any run of a released policy, must launch from a clean checkout so its
+    records name the code that ran; a released policy launches only from its tag.
     """
     policy = POLICIES[version]
     candidate = _candidate(policy, candidate_name)
+    release = _release_commit(policy)
     if not dry_run and (changes := git_output(["status", "--porcelain"], find_project_root())):
-        if limit is None:
+        if limit is None or release is not None:
             raise click.ClickException(f"commit or remove uncommitted changes before a full launch:\n{changes}")
         logger.warning("smoke run from a checkout with uncommitted changes; its records name only HEAD")
     names = None if evaluations is None else {name.strip() for name in evaluations.split(",") if name.strip()}
@@ -247,10 +259,12 @@ def launch(
     except ValueError as error:
         raise click.ClickException(str(error)) from error
     recorded, head = batches[0].provenance.git_sha, git_output(["rev-parse", "HEAD"], find_project_root())
-    if not dry_run and limit is None and recorded != head:
+    if not dry_run and (limit is None or release is not None) and recorded != head:
         raise click.ClickException(
             f"records would name commit {recorded}, not HEAD {head}; unset MARIN_GIT_SHA and GIT_COMMIT"
         )
+    if not dry_run and release is not None and head != release:
+        raise click.ClickException(f"{version} launches from its tag: git checkout {policy.release_tag}")
     for batch in batches:
         require_coreweave_credentials(batch)
     _print_launch(policy, candidate, batches)
@@ -273,11 +287,12 @@ def status(version: str, candidate_name: str | None, limit: int) -> None:
     """
     policy = POLICIES[version]
     candidates = policy.candidates if candidate_name is None else (_candidate(policy, candidate_name),)
+    release = _release_commit(policy)
     configure_coreweave_s3()
     for candidate in candidates:
         smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit)}
         rows = tuple(
-            (run.name, _expected_summary(run), _expected_summary(smoke[run.name]))
+            (run.name, _expected_summary(run, release), _expected_summary(smoke[run.name], release))
             for run in expected_runs(policy, candidate, limit=None)
         )
         click.echo(f"\n{policy.version}  candidate {candidate.name}")
@@ -293,6 +308,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
     Warnings flag results far outside expectations without making a run invalid.
     """
     policy = POLICIES[version]
+    release = _release_commit(policy)
     configure_coreweave_s3()
     invalid = False
     for run_id in run_ids:
@@ -316,7 +332,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
             )
         except ValueError as error:
             raise click.ClickException(f"{run_id}: {error}") from error
-        check = check_run(record, expected)
+        check = check_run(record, expected, release_commit=release)
         click.echo(f"{run_id}  {_run_summary(check)}")
         for problem in check.problems:
             click.echo(f"  {problem}")
