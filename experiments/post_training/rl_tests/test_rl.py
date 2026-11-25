@@ -799,10 +799,8 @@ def test_submission_exit_codes_and_publication_retries(
             (source / "terminal.json").unlink()
             (source / "resolved-launch.yaml").unlink()
             return SimpleNamespace(state=JobState.FAILED)
-        selected = {}
         for path in sources:
             native = snowball.read_stored_skyrl_attempt(str(path))
-            selected[str(path)] = native.attempt_id if native is not None else None
             if native is not None:
                 launch = native.native.config
                 launch["run"]["coordinator_iris_job_id"] = str(job)
@@ -810,15 +808,8 @@ def test_submission_exit_codes_and_publication_retries(
                     str(path / "exports"),
                     AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, config=launch),
                 )
-        gate_path = None
         if not mixed_failure and case not in {"missing", "native-failed"} and built.gate is not None:
-            gate_path = run(gate.completed_gate(built.gate))[0].path
-        if sources:
-            snowball.rl_publication.store_coordinator_evidence(
-                str(sources[0]),
-                str(job),
-                snowball.rl_publication.CoordinatorEvidence(attempts=selected, gate_path=gate_path),
-            )
+            run(gate.completed_gate(built.gate))
         if case == "changed-source":
             monkeypatch.setattr(
                 Provenance,

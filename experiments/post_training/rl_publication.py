@@ -10,7 +10,6 @@ import logging
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -337,55 +336,18 @@ class _OutputAttempts:
     records: dict[str, AttemptRecord]
 
 
-class CoordinatorEvidence(BaseModel):
-    """The successful native artifacts and gate selected by one coordinator."""
-
-    attempts: dict[str, str | None]
-    gate_path: str | None
-
-
-def _coordinator_evidence_path(path: str, coordinator: str) -> StoragePath:
-    key = sha256(coordinator.encode()).hexdigest()
-    return StoragePath(path) / "coordinators" / f"{key}.json"
-
-
-def store_coordinator_evidence(path: str, coordinator: str, evidence: CoordinatorEvidence) -> None:
-    target = _coordinator_evidence_path(path, coordinator)
-    target.parent.mkdirs()
-    target.write_text(evidence.model_dump_json())
-
-
-def read_coordinator_evidence(path: str, coordinator: str) -> CoordinatorEvidence | None:
-    target = _coordinator_evidence_path(path, coordinator)
-    try:
-        return CoordinatorEvidence.model_validate_json(target.read_text())
-    except FileNotFoundError:
-        return None
-
-
-def completed_artifact_attempt(path: str, attempt_id: str | None) -> AttemptRecord | None:
-    """Read the exact native receipt, with a fallback for artifacts without an attempt ID."""
-    current, records = read_stored_skyrl_attempts(path)
-    receipt = records.get(attempt_id or current)
-    return receipt if receipt is not None and receipt.native.result.state == "succeeded" else None
-
-
 def _prepare_publication_attempts(
     path: str,
     coordinator: str | None,
-    evidence: CoordinatorEvidence | None,
     interrupted: bool,
 ) -> _OutputAttempts:
+    current, stored = read_stored_skyrl_attempts(path)
     if coordinator is None:
-        current, attempts = read_stored_skyrl_attempts(path)
-        return _OutputAttempts(current, attempts)
+        return _OutputAttempts(current, stored)
     attempts = _coordinator_attempts(path, coordinator)
-    current = evidence.attempts[path] if evidence is not None else None
-    if current is not None and current not in attempts:
-        _, stored = read_stored_skyrl_attempts(path)
-        if current in stored:
-            attempts[current] = stored[current]
-    elif evidence is None and len(attempts) == 1:
+    if current in stored:
+        attempts[current] = stored[current]
+    elif len(attempts) == 1:
         current = next(iter(attempts))
     if interrupted:
         for key, record in attempts.items():
@@ -422,7 +384,6 @@ def publish_runs(
     evaldash_run_ids: tuple[str, ...] | None = None,
     issue: int | None = None,
     coordinator: str | None = None,
-    evidence: CoordinatorEvidence | None = None,
     interrupted: bool = False,
     gate_required: bool = False,
 ) -> PublicationOutcome:
@@ -433,7 +394,7 @@ def publish_runs(
     snapshots = {}
     for path in outputs:
         try:
-            snapshots[path] = _prepare_publication_attempts(path, coordinator, evidence, interrupted)
+            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
