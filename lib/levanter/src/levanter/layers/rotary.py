@@ -32,23 +32,21 @@ class DefaultRotaryEmbeddings(RotaryEmbeddings):
     config: "DefaultRotaryEmbeddingsConfig" = eqx.field(static=True)
 
     def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
-        with jax.ensure_compile_time_eval():
-            HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size))
-            inv_freq = inv_freq / self.config.factor
-
-        freqs = inv_freq.broadcast_axis(position_ids.axes) * position_ids
-        emb = hax.concatenate(self.HeadDim, (freqs, freqs))
-        cos = hax.cos(emb).astype(q.dtype)
-        sin = hax.sin(emb).astype(q.dtype)
-
-        q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
-        return q_embed
+        return _apply_named_rotary(q, position_ids, self.HeadDim, self.config)
 
 
 @dataclass(frozen=True)
 class RotaryEmbeddingsConfig(abc.ABC, draccus.ChoiceRegistry):
     theta: float = 10000.0
+
+    def inverse_frequencies(self, head_dim: int) -> jax.Array:
+        """Return one inverse frequency per rotated pair."""
+        channels = 2 * jnp.arange(head_dim // 2, dtype=jnp.float32)
+        return 1.0 / (self.theta ** (channels / head_dim))
+
+    def scale_coefficients(self, cos, sin):
+        """Apply variant-specific scaling after rounding coefficients to the activation dtype."""
+        return cos, sin
 
     @abc.abstractmethod
     def build(self, HeadSize: Axis) -> RotaryEmbeddings:
@@ -77,6 +75,9 @@ class DefaultRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     theta: float = 10000
     factor: float = 1.0  # this should have been called scale_factor, but for hf compat
 
+    def inverse_frequencies(self, head_dim: int) -> jax.Array:
+        return super().inverse_frequencies(head_dim) / self.factor
+
     def build(self, HeadSize: Axis) -> RotaryEmbeddings:
         return DefaultRotaryEmbeddings(HeadSize, self)
 
@@ -99,41 +100,11 @@ class Llama3RotaryEmbeddings(RotaryEmbeddings):
     config: "Llama3RotaryEmbeddingsConfig" = eqx.field(static=True)
 
     def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
-        inv_freq_llama = self._compute_inv_freq_llama()
-        freqs = position_ids * inv_freq_llama.broadcast_axis(position_ids.axes)
-        emb = hax.concatenate(self.HeadDim, (freqs, freqs))
-        cos = hax.cos(emb).astype(q.dtype)
-        sin = hax.sin(emb).astype(q.dtype)
-
-        q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
-        return q_embed
+        return _apply_named_rotary(q, position_ids, self.HeadDim, self.config)
 
     @staticmethod
     def init(HeadDim, config):
         return Llama3RotaryEmbeddings(HeadDim, config)
-
-    def _compute_inv_freq_llama(self):
-        with jax.ensure_compile_time_eval():
-            # This is the Llama3 implementation of rotary embeddings.
-            # It uses a different scaling factor and frequency calculation.
-            HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size))
-
-            old_context_len = self.config.original_max_position_embeddings
-            low_freq_wavelen = old_context_len / self.config.low_freq_factor
-            high_freq_wavelen = old_context_len / self.config.high_freq_factor
-
-            wavelen = 2 * jnp.pi / inv_freq
-            inv_freq_llama = hax.where(wavelen > low_freq_wavelen, inv_freq / self.config.factor, inv_freq)
-            smooth_factor = (old_context_len / wavelen - self.config.low_freq_factor) / (
-                self.config.high_freq_factor - self.config.low_freq_factor
-            )
-            smoothed_inv_freq = (
-                1 - smooth_factor
-            ) * inv_freq_llama / self.config.factor + smooth_factor * inv_freq_llama
-            is_medium_freq = ~(wavelen < high_freq_wavelen) * ~(wavelen > low_freq_wavelen)
-            inv_freq_llama = hax.where(is_medium_freq, smoothed_inv_freq, inv_freq_llama)
-        return inv_freq_llama
 
 
 @dataclass(frozen=True)
@@ -154,6 +125,19 @@ class Llama3RotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     low_freq_factor: float = 1.0
     high_freq_factor: float = 4.0
     original_max_position_embeddings: int = 8192
+
+    def inverse_frequencies(self, head_dim: int) -> jax.Array:
+        inv_freq = super().inverse_frequencies(head_dim)
+        low_wavelength = self.original_max_position_embeddings / self.low_freq_factor
+        high_wavelength = self.original_max_position_embeddings / self.high_freq_factor
+        wavelength = 2 * jnp.pi / inv_freq
+        inv_freq = jnp.where(wavelength > low_wavelength, inv_freq / self.factor, inv_freq)
+        smooth = (self.original_max_position_embeddings / wavelength - self.low_freq_factor) / (
+            self.high_freq_factor - self.low_freq_factor
+        )
+        interpolated = (1 - smooth) * inv_freq / self.factor + smooth * inv_freq
+        medium = ~(wavelength < high_wavelength) * ~(wavelength > low_wavelength)
+        return jnp.where(medium, interpolated, inv_freq)
 
     def build(self, HeadSize: Axis) -> RotaryEmbeddings:
         # https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_rope_utils.py#L307
@@ -188,46 +172,7 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
     config: "YarnRotaryEmbeddingsConfig" = eqx.field(static=True)
 
     def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
-        with jax.ensure_compile_time_eval():
-            half_dim = self.HeadDim.size // 2
-            head_dim = self.HeadDim.size
-            HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (
-                self.config.theta ** (hax.arange(HeadHalfSize, step=2, dtype=jnp.float32) / head_dim)
-            )
-
-            # YaRN β-ramp: find correction dimension based on number of rotations
-            # Uses full head_dim (not half_dim) to match HuggingFace implementation
-            def _find_dim(n_rot: float):
-                return (head_dim * math.log(self.config.original_max_position_embeddings / (n_rot * 2 * math.pi))) / (
-                    2 * math.log(self.config.theta)
-                )
-
-            low = int(math.floor(_find_dim(self.config.beta_fast)))
-            high = int(math.ceil(_find_dim(self.config.beta_slow)))
-            low, high = max(low, 0), min(high, half_dim - 1)
-            ramp = hax.clip((hax.arange(HeadHalfSize, dtype=jnp.float32) - low) / max(high - low, 1), 0.0, 1.0)
-            inv_extrap = inv_freq
-            inv_interp = inv_freq / self.config.factor
-            inv_freq = inv_interp * ramp + inv_extrap * (1 - ramp)
-
-        # Note: position_ids are NOT scaled in YARN - scaling is baked into inv_freq
-        freqs = position_ids * inv_freq.broadcast_axis(position_ids.axes)
-        emb = hax.concatenate(self.HeadDim, (freqs, freqs))
-
-        # attention_factor scaling (called "temperature" here for historical reasons)
-        # Formula from YARN paper (arXiv:2309.00071): 0.1 * mscale * log(factor) + 1.0
-        # HF's get_mscale() uses this formula directly without sqrt
-        if self.config.factor <= 1.0:
-            temperature = 1.0
-        else:
-            temperature = 0.1 * self.config.mscale * math.log(self.config.factor) + 1.0
-
-        cos = hax.cos(emb).astype(q.dtype) * temperature
-        sin = hax.sin(emb).astype(q.dtype) * temperature
-
-        q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
-        return q_embed
+        return _apply_named_rotary(q, position_ids, self.HeadDim, self.config)
 
     @staticmethod
     def init(HeadDim, config):
@@ -242,6 +187,30 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     beta_slow: float = 1.0
     original_max_position_embeddings: int = 2048
     mscale: float = 1.0
+
+    def inverse_frequencies(self, head_dim: int) -> jax.Array:
+        inv_freq = super().inverse_frequencies(head_dim)
+
+        def correction_dimension(rotations: float) -> float:
+            return (
+                head_dim
+                * math.log(self.original_max_position_embeddings / (rotations * 2 * math.pi))
+                / (2 * math.log(self.theta))
+            )
+
+        half_dim = head_dim // 2
+        low = max(math.floor(correction_dimension(self.beta_fast)), 0)
+        high = min(math.ceil(correction_dimension(self.beta_slow)), half_dim - 1)
+        ramp = jnp.clip((jnp.arange(half_dim, dtype=jnp.float32) - low) / max(high - low, 1), 0.0, 1.0)
+        return (inv_freq / self.factor) * ramp + inv_freq * (1 - ramp)
+
+    @property
+    def attention_factor(self) -> float:
+        """Multiplier applied to the rounded sine and cosine coefficients."""
+        return 1.0 if self.factor <= 1.0 else 0.1 * self.mscale * math.log(self.factor) + 1.0
+
+    def scale_coefficients(self, cos, sin):
+        return cos * self.attention_factor, sin * self.attention_factor
 
     def build(self, HeadSize: Axis) -> RotaryEmbeddings:
         return YarnRotaryEmbeddings.init(HeadSize, self)
@@ -269,3 +238,14 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 
 
 RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
+
+
+def _apply_named_rotary(
+    q: NamedArray, position_ids: NamedArray, head: Axis, config: RotaryEmbeddingsConfig
+) -> NamedArray:
+    with jax.ensure_compile_time_eval():
+        inv_freq = hax.named(config.inverse_frequencies(head.size), head.resize(head.size // 2))
+    frequencies = inv_freq.broadcast_axis(position_ids.axes) * position_ids
+    angles = hax.concatenate(head, (frequencies, frequencies))
+    cos, sin = config.scale_coefficients(hax.cos(angles).astype(q.dtype), hax.sin(angles).astype(q.dtype))
+    return q * cos + _rotate_half(q, head) * sin
