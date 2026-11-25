@@ -384,7 +384,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
         verification = row.get("verification") or {}
         status = verification.get("status")
         graded_agent_error = row.get("exception_type") in GRADED_AGENT_EXCEPTIONS and status == "verified"
-        infrastructure_error = (
+        infrastructure_error = not graded_agent_error and (
             bool(row.get("server_error"))
             or (bool(row.get("exception_type")) and not graded_agent_error)
             or (row.get("error_treatment") not in (None, "none") and not graded_agent_error)

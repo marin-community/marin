@@ -123,6 +123,8 @@ def test_trial_multiplicity_preserves_missing_attempts_in_upper_bound():
 def test_graded_agent_limit_keeps_verifier_result(exception):
     cohort, row = cohort_and_row([1, 2, 3])
     row.update(exception_type=exception, error_treatment="zero")
+    if exception == "ContextLengthExceededError":
+        row["server_error"] = {"category": "context_overflow"}
     row["verification"] = {"status": "verified", "score": 1.0, "passed": True}
     incidence, agent = audit_cohort(cohort, [row])
     assert (incidence.passes, incidence.errors, incidence.unassessed) == (1, 0, 0)
