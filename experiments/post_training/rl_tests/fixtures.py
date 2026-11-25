@@ -104,8 +104,9 @@ def native_compositions():
             ((yaml.safe_load(document)["run"]["attempt_id"], "<fixture-attempt>"), *replacements)
             for document, replacements in zip(documents, substitutions, strict=True)
         ]
-        key = validate_driver, tuple(
-            substitute(document, patch) for document, patch in zip(documents, patches, strict=True)
+        key = (
+            validate_driver,
+            tuple(substitute(document, patch) for document, patch in zip(documents, patches, strict=True)),
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
@@ -508,6 +509,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         missing_steps=(),
         attempt_id="recorded-attempt",
         control=False,
+        cohort_run_id=None,
+        completed_at="2026-11-06T19:40:00+00:00",
         table=None,
     ):
         table = table or snowball_model.SNOWBALL
@@ -536,7 +539,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
-            finished_at="2026-11-06T19:40:00+00:00",
+            finished_at=completed_at,
         )
         result["provenance"].update(
             base_commit="commit-one",
@@ -548,7 +551,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         if control:
             base_versions[preset_name] = version
         identity = RunIndexIdentity(
-            run_id=run_id,
+            run_id=cohort_run_id or run_id,
             model=table.model,
             preset=preset_name,
             preset_version=version,
@@ -562,7 +565,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
         if control:
             indexed_controls[run_id, attempt] = AttemptSummary(
-                run_id=run_id,
+                run_id=identity.run_id,
                 native_run_id=run_id,
                 attempt_id=attempt,
                 label=preset_name,

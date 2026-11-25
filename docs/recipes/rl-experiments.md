@@ -239,7 +239,7 @@ requires a report for exactly the current native attempts.
 
 Publish a single stored native attempt with `publish --preset PRESET --run-output PATH --attempt ID`.
 The attempt's run index identity carries its control flag. The same command republishes controls and
-candidates. See the [dashboard and record contract](../../infra/marina/apps/rl_progress/README.md).
+candidates. See the [dashboard and record contract](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_progress/README.md).
 
 ## Change one input
 

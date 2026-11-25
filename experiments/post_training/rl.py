@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 import click
 import yaml
@@ -577,9 +577,12 @@ def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
                 archive.extractall(path, filter="data")
             # The launcher owns the JSON protocol, including for bases that predate it.
             cli = Path(__file__).with_name("rl_preset_cli.py")
-            shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
+            archived_cli = path / "experiments/post_training" / cli.name
+            if not archived_cli.is_file():
+                shutil.copyfile(cli, archived_cli)
             native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            shutil.copyfile(root / native_cli, path / native_cli)
+            if not (path / native_cli).is_file():
+                shutil.copyfile(root / native_cli, path / native_cli)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
                 [
@@ -735,8 +738,11 @@ def _wait_for_run(
     elif "verdict" not in snapshot and (coordinator_error is not None or gate_required):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
-    if click.get_current_context().params.get("control") and publication.unserved_records:
-        raise click.ClickException("Control publication is incomplete. Republish the stored attempts.")
+    if click.get_current_context().params.get("control"):
+        if publication.unserved_records:
+            raise click.ClickException("Control publication is incomplete. Republish the stored attempts.")
+        if publication.errors:
+            raise click.ClickException("Stored control attempts failed the eligibility checks.")
     if _evaluation_failed(snapshot, preset):
         raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")

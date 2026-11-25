@@ -75,7 +75,7 @@ function plot(metric, controls, branches, route) {
 }
 
 export function showProgress(container, runs, showBranches, route) {
-  const controls = runs.filter(isMainControl).sort((a, b) => time(a) - time(b));
+  const controls = runs.filter((run) => isMainControl(run) && Number.isFinite(time(run))).sort((a, b) => time(a) - time(b));
   const branches = showBranches ? runs.filter((run) => run.branch !== 'main' && Number.isFinite(time(run))) : [];
   const scores = new Map([...controls, ...branches].map((run) => [run, metrics(run)]));
   const selected = [...new Set([...scores.values()].flatMap((values) => [...values.keys()]))]

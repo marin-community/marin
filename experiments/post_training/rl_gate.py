@@ -58,6 +58,7 @@ from experiments.post_training.rl_measurements import (
     RunInputs,
     RunMeasurements,
     read_measurements,
+    read_recorded_launch,
     read_run_inputs,
 )
 from experiments.post_training.rl_presets import ModelPresets
@@ -174,6 +175,27 @@ def select_controls(index: RunIndexIdentity, *, service_url: str | None = None, 
     return ControlCohort(model=index.model, preset=index.preset, version=version, branch=branch, attempts=tuple(members))
 
 
+def read_control_measurements(path: str, preset: presets.Preset, attempt: AttemptRecord) -> RunMeasurements:
+    """Measure a stored control against the preset's evaluation and workload contract."""
+    launch = read_recorded_launch(attempt)
+    if isinstance(preset.recipe.layout.workload, presets.Training) and launch.max_steps != preset.updates:
+        raise InvalidComparison(
+            f"control update budget {launch.max_steps} differs from preset budget {preset.updates}: {path}"
+        )
+    actual_version = config_version(attempt.native.config, launch)
+    if attempt.index is None or actual_version != attempt.index.preset_version:
+        raise InvalidComparison(f"stored control config version {actual_version} disagrees with the run index: {path}")
+    data = with_objectives(read_measurements(path, preset, attempt=attempt), preset)
+    missing = [
+        metric.key
+        for metric in (*preset.objectives, *preset.guards)
+        if not math.isfinite(data.values.get(metric.key, math.nan))
+    ]
+    if missing:
+        raise InvalidComparison(f"control metrics unavailable: {', '.join(missing)}: {path}")
+    return data
+
+
 def _control_measurements(preset: presets.Preset, cohort: ControlCohort, member: ControlAttempt) -> RunMeasurements:
     _, attempts = read_stored_skyrl_attempts(member.path)
     attempt = attempts.get(member.attempt_id)
@@ -189,7 +211,7 @@ def _control_measurements(preset: presets.Preset, cohort: ControlCohort, member:
         or identity.dirty
     ):
         raise InvalidComparison(f"stored control disagrees with the run index: {member.path}/{member.attempt_id}")
-    data = with_objectives(read_measurements(member.path, preset, attempt=attempt), preset)
+    data = read_control_measurements(member.path, preset, attempt)
     if any(not row.holds for row in data.invariants):
         raise InvalidComparison(f"control has failed invariants: {member.path}/{member.attempt_id}")
     return data
@@ -786,7 +808,11 @@ def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> l
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
     configs = _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
-    if not isinstance(configs, list) or len(configs) != len(paths) or any(not isinstance(config, dict) for config in configs):
+    if (
+        not isinstance(configs, list)
+        or len(configs) != len(paths)
+        or any(not isinstance(config, dict) for config in configs)
+    ):
         raise InvalidComparison(f"{_NATIVE_ERROR}: expected {len(paths)} configuration objects")
     return configs
 

@@ -35,7 +35,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
-from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics, read_stored_skyrl_attempts
 from scipy.stats import t
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -45,6 +45,7 @@ from taskcompendium.identity import canonical_sha256
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index
 from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
@@ -95,22 +96,47 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_writes_the_report_for_the_five_newest_base_version_controls(recorded_runs, cache_native_compositions):
+def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
+    recorded_runs, cache_native_compositions, monkeypatch
+):
     cache_native_compositions()
     preset = "speed-medium"
-    controls(recorded_runs, preset)
-    extra = recorded_runs(preset, "controls/extra", control=True, attempt_id="newest", speed=102)
-    recorded_runs(preset, "users/test/baseline", speed=102)
+    for index, minute in enumerate((5, 2, 4, 3, 6, 1)):
+        recorded_runs(
+            preset,
+            f"controls/{preset}/r{index}",
+            control=True,
+            attempt_id=f"control-r{index}",
+            cohort_run_id="nightly-batch",
+            completed_at=f"2026-11-06T19:{minute:02d}:00+00:00",
+            speed=100 + index,
+        )
+    candidate_settings = RunInputs(preset_name=preset, settings=("trainer.policy.optimizer_config.lr=2e-6",))
+    candidate = recorded_runs(preset, "users/test/baseline", speed=102, inputs=candidate_settings)
+    (_, records) = read_stored_skyrl_attempts(str(candidate))
+    index = records["recorded-attempt"].index
+    assert index is not None and index.base_preset_version != index.preset_version
+    indexed = rl_index.list_attempts()
+    different = indexed[0].model_copy(
+        update={
+            "native_run_id": "wrong-version",
+            "attempt_id": "wrong-version",
+            "preset_version": index.preset_version,
+            "completed_at": "2026-11-06T20:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(rl_index, "list_attempts", lambda _service=None: [*indexed, different])
     report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    assert report["control"]["version"] == index.base_preset_version
     assert [attempt["attempt_id"] for attempt in report["control"]["attempts"]] == [
         "control-r4",
-        "control-r3",
-        "control-r2",
-        "control-r1",
         "control-r0",
+        "control-r2",
+        "control-r3",
+        "control-r1",
     ]
-    assert str(extra) not in {attempt["path"] for attempt in report["control"]["attempts"]}
+    assert {attempt["run_id"] for attempt in report["control"]["attempts"]} == {"nightly-batch"}
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}

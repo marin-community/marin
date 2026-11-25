@@ -804,7 +804,7 @@ def test_submission_exit_codes_and_publication_retries(
             (source / "terminal.json").unlink()
             (source / "resolved-launch.yaml").unlink()
             return SimpleNamespace(state=JobState.FAILED)
-        if case not in {"missing", "native-failed"} and built.gate is not None:
+        if case not in {"missing", "native-failed", "child"} and built.gate is not None:
             run(gate.completed_gate(built.gate))
         if case == "changed-source":
             monkeypatch.setattr(
@@ -865,10 +865,22 @@ def test_submission_exit_codes_and_publication_retries(
                     "experiments.post_training.rl_publication.publish_result",
                     lambda *args: pytest.fail("Coordinator contacted Marina"),
                 )
+                child.setattr(
+                    "experiments.post_training.rl_index.list_attempts",
+                    lambda *_args: pytest.fail("Coordinator selected a different cohort"),
+                )
                 info = JobInfo(task_id=JobName.from_wire("/test-user/coordinator/0"))
                 with iris_ctx_scope(IrisContext.from_job_info(info)):
                     completed = CliRunner().invoke(selected, invoked)
                 assert completed.exit_code == 0, (completed.output, completed.exception)
+                completed_step = gate.completed_gate(built.gate)
+                assert completed_step is not None
+                saved = gate.read_gate_report(str(completed_step.path()))
+                assert saved is not None
+                submitted = gate.ControlCohort.model_validate_json(
+                    kwargs["environment"].env_vars[snowball.CONTROL_COHORT_ENV]
+                )
+                assert saved.control.attempts == submitted.attempts
             set_job_info(None)
             return SimpleNamespace(job_id=job)
 

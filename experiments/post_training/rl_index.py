@@ -4,19 +4,16 @@
 """Read and write stored attempt summaries through the RL Progress applet."""
 
 import json
-import logging
 import tomllib
 from pathlib import Path
 from urllib.parse import urlencode
 
 from finestore.rl.rl_progress import AttemptSummary
-from pydantic import ValidationError
 
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
 )["applet_id"]
 _RUNS_PATH = f"/a/{APPLET_ID}/api/runs"
-logger = logging.getLogger(__name__)
 
 
 def _app(service_url: str | None) -> tuple[str, str]:
@@ -34,13 +31,10 @@ def list_attempts(service_url: str | None = None) -> list[AttemptSummary]:
 
     origin, _ = _app(service_url)
     response = client.marina_request(origin, "GET", _RUNS_PATH)
-    attempts = []
-    for row in response["runs"]:
-        try:
-            attempts.append(AttemptSummary.model_validate_json(json.dumps(row)))
-        except (ValidationError, ValueError):
-            logger.warning("Skipping a run index row that cannot be validated")
-    return attempts
+    skipped = response.get("skipped_records", ())
+    if skipped:
+        raise ValueError(f"Marina run index omitted {len(skipped)} invalid record(s)")
+    return [AttemptSummary.model_validate_json(json.dumps(row)) for row in response["runs"]]
 
 
 def publish_result(summary: AttemptSummary, service_url: str | None = None) -> str:

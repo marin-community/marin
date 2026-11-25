@@ -123,7 +123,17 @@ def _terminal_measurements(
     has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
         callback.type == "evaluation" for callback in launch.callbacks or ()
     )
-    if has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
+    if attempt.index is not None and attempt.index.is_control and result.state == "succeeded":
+        try:
+            control = gate.read_control_measurements(run_output, preset, attempt)
+        except (InvalidComparison, FileNotFoundError) as error:
+            failed.append("control_measurements")
+            evidence.append(str(error))
+        else:
+            evaluations = list(control.evaluations)
+            evaluation_task_set = control.evaluation_task_set
+            failed = [fact.name for fact in control.invariants if not fact.holds]
+    elif has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
         status = evaluation_status(run_output, preset, attempt, launch)
         evaluations = list(status.evaluations)
         evaluation_task_set = status.evaluation_task_set
@@ -221,12 +231,15 @@ def build_record(
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
+    index = attempt.index
     evidence = []
     try:
         inputs = read_run_inputs(run_output)
     except FileNotFoundError:
-        inputs = RunInputs(preset_name=preset.name)
-        evidence.append("Stored RL inputs are unavailable; using the supplied preset.")
+        inputs = RunInputs(preset_name=index.preset if index is not None else preset.name)
+        evidence.append("Stored RL inputs are unavailable; using the recorded preset.")
+    if index is not None and (index.model != table.model or index.preset != inputs.preset_name):
+        raise ValueError("Stored preset inputs disagree with the native run index identity")
     preset = table.by_name[inputs.preset_name]
     if launch.max_steps is None:
         raise ValueError("Stored native max_steps is unavailable")
@@ -235,7 +248,6 @@ def build_record(
     provenance = result.provenance or {}
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
-    index = attempt.index
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
@@ -482,6 +494,14 @@ def publish_runs(
                     )
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
+                if (
+                    (selected_id == current_id or attempt_id is not None)
+                    and record.is_control
+                    and record.status != "succeeded"
+                ):
+                    result.errors.append(
+                        f"Control {record.run_id}/{record.attempt_id} is ineligible: {', '.join(record.failed_facts)}"
+                    )
                 if selected_id == current_id:
                     result.urls[path] = url
             except Exception as error:

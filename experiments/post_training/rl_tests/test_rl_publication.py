@@ -38,11 +38,13 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training import rl as runner
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index
 from experiments.post_training import rl_nightly_controls as nightly
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_index import APPLET_ID
+from experiments.post_training.rl_index import list_attempts as read_progress_index
 from experiments.post_training.rl_measurements import RunInputs, lineage_gpu_hours
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
@@ -300,21 +302,36 @@ def test_nightly_fills_only_the_current_main_control_cohort(monkeypatch):
             | {"model": "snowball", "preset_version": "current", "is_control": True, "dirty": False, "branch": "main"}
         )
     )
-    controls = [base.model_copy(update={"run_id": f"control-{i}"}) for i in range(5)]
+    controls = [base.model_copy(update={"native_run_id": f"control-{i}", "attempt_id": f"first-{i}"}) for i in range(5)]
+    retry = controls[0].model_copy(update={"attempt_id": "retry", "completed_at": "2026-11-02T02:00:00Z"})
     records = [
         *controls[:3],
-        base.model_copy(update={"run_id": "control-0", "attempt_id": "retry"}),
+        retry.model_copy(update={"status": "running", "completed_at": None, "elapsed_seconds": None}),
         base.model_copy(update={"run_id": "branch-control", "branch": "pull-branch"}),
         base.model_copy(update={"run_id": "old-control", "preset_version": "old"}),
         base.model_copy(update={"run_id": "failed-control", "status": "failed"}),
     ]
     reads = []
 
-    def read_attempts():
+    def read_attempts(_service_url=None):
         reads.append(True)
         return records
 
     monkeypatch.setattr(nightly.rl_index, "list_attempts", read_attempts)
+    native = SimpleNamespace(result=SimpleNamespace(state=SimpleNamespace(is_terminal=True)))
+    monkeypatch.setattr(
+        nightly, "read_stored_skyrl_attempts", lambda uri: ("retry", {"retry": SimpleNamespace(native=native)})
+    )
+    recovered = []
+
+    def recover(paths, preset, *, table, attempt_id):
+        assert paths == [retry.artifact_uri] and attempt_id == retry.attempt_id
+        assert table.model == retry.model and preset.name == retry.series
+        recovered.append(attempt_id)
+        records[3] = retry
+        return publication.PublicationOutcome(served_records=[(retry.run_id, attempt_id)])
+
+    monkeypatch.setattr(publication, "publish_runs", recover)
     submissions = []
 
     def submit(command, *, check):
@@ -330,7 +347,7 @@ def test_nightly_fills_only_the_current_main_control_cohort(monkeypatch):
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
     assert nightly.main() == 0
 
-    assert len(reads) == 2
+    assert len(reads) == 3 and recovered == ["retry"]
     assert [command[command.index("--replicates") + 1] for command in submissions] == ["2", "1", "5"]
     for command in submissions:
         assert command[1:5] == ["-m", "experiments.post_training.snowball_rl", "--preset", "learning-medium"]
@@ -351,7 +368,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     table = preset_table(preset)
     monkeypatch.setattr(publication, "configure_coreweave_s3", lambda: None)
-    controls = write_controls(recorded_runs, preset.name)
+    controls = write_controls(recorded_runs, preset.name, cohort_run_id="nightly-batch")
     for index, root in enumerate(controls):
         metrics = read_skyrl_metrics(str(root))
         for row in metrics.values():
@@ -714,3 +731,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         row["branch"] == "main" and row["preset_version"] == report.control.version and row["gate_result"] is None
         for row in served_controls
     )
+
+    assert len({row["native_run_id"] for row in served_controls}) == gate.CONTROL_COUNT
+    assert {row["run_id"] for row in served_controls} == {"nightly-batch"}
+    control_index = read_stored_skyrl_attempts(str(controls[0]))[1]["control-r0"].index
+    assert control_index is not None
+    monkeypatch.setattr(rl_index, "list_attempts", read_progress_index)
+    selected = gate.select_controls(control_index, service_url="http://localhost")
+    assert {member.attempt_id for member in selected.attempts} == {row["attempt_id"] for row in served_controls}
