@@ -312,11 +312,16 @@ RESERVE = replace(
 MATH = replace(
     BASELINE,
     name="doom-math",
-    revision=QUALIFIED_VERSION,
+    revision="2026.11.25.3",
     tasks=f"{SELECTION_NAME}-targets-math@{QUALIFIED_VERSION}",
     held_out_tasks=QUALIFIED_TASKS,
     batch_mix=BatchMix({"math": Fraction(1)}),
-    recipe=Recipe(layout=TRAIN_LAYOUT, fixed_reply_tokens=None, config=training_config(16384, 3e-6)),
+    # S1's 32K per-task peak was 630.702 GiB; 720 GiB adds 89.298 GiB (14.2%) headroom.
+    recipe=Recipe(
+        layout=replace(TRAIN_LAYOUT, host_memory="720GB"),
+        fixed_reply_tokens=None,
+        config=training_config(16384, 3e-6),
+    ),
     updates=12,
     measured=range(1, 13),
     checkpoints="best",
@@ -337,6 +342,7 @@ MATH = replace(
 SMOKE = replace(
     MATH,
     name="doom-smoke",
+    revision=QUALIFIED_VERSION,
     updates=2,
     measured=range(1, 3),
     checkpoint_every=1,
@@ -344,11 +350,18 @@ SMOKE = replace(
     checkpoints="latest",
     export="latest",
     additional_callbacks=(),
-    recipe=replace(MATH.recipe, config=training_config(32768, 3e-6)),
+    recipe=replace(MATH.recipe, layout=TRAIN_LAYOUT, config=training_config(32768, 3e-6)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
 MIXED = replace(
-    MATH, name="doom-mixed", tasks=QUALIFIED_TASKS, tasks_input="required", batch_mix=TARGET_BATCH_MIX, keep_every=None
+    MATH,
+    name="doom-mixed",
+    revision=QUALIFIED_VERSION,
+    recipe=replace(MATH.recipe, layout=TRAIN_LAYOUT),
+    tasks=QUALIFIED_TASKS,
+    tasks_input="required",
+    batch_mix=TARGET_BATCH_MIX,
+    keep_every=None,
 )
 LONG = replace(
     SMOKE,
