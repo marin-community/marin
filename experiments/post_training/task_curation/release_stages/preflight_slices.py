@@ -474,7 +474,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     catalog_root=plan.catalog_root,
                     output_root=f"{root}/backend-validation",
                     targets=tuple(plan.targets),
-                    census_inputs=ArtifactRef(uri=sealed["uri"], sha256=sealed["sha256"]),
+                    census_inputs=sealed,
                     grading_environments=plan.validation_grading_environments,
                     integrity_contracts=plan.validation_integrity_contracts,
                     runtime_defaults=plan.validation_runtime_defaults,

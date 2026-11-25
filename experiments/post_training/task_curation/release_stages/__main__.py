@@ -199,6 +199,17 @@ def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, sta
             continue
         try:
             receipt = ensure_node_preflight(node, plan, selection=selection)
+        except ValueError as error:
+            if str(error).startswith("blocked: "):
+                # The slice's real inputs are upstream write-mode receipts: the
+                # stage reports blocked until its upstream stages run, exactly
+                # like the nodes with no slice at all.
+                blocked.append(node)
+                print(f"BLOCKED {node}: {str(error)[len('blocked: ') :][:380]}")
+                continue
+            failed.append(node)
+            print(f"FAIL {node}: {str(error)[:400]}")
+            continue
         except Exception as error:
             failed.append(node)
             print(f"FAIL {node}: {str(error)[:400]}")

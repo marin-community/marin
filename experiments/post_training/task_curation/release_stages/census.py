@@ -29,7 +29,11 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import ActorCensusInput, OracleFiltrationEvidence, SourceDeclaration
+from finestore.rl.curation import (
+    ActorCensusInput,
+    OracleFiltrationEvidence,
+    QualifiedSourceDeclaration,
+)
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -146,7 +150,7 @@ def population_documents(population: SourceTextPopulation):
                     yield json.loads(row["task_spec"])
 
 
-def declared_binding(declaration: SourceDeclaration, source_id: str) -> ActorCensusInput:
+def declared_binding(declaration: QualifiedSourceDeclaration, source_id: str) -> ActorCensusInput:
     """The source's declared census input: its own binding, or the retained lineage's.
 
     A retained release declares through its retained lineage, not a live actor
@@ -157,7 +161,7 @@ def declared_binding(declaration: SourceDeclaration, source_id: str) -> ActorCen
     retained = retained_release_receipts().get(source_id)
     if retained is None or retained.source_id != source_id:
         raise ValueError(f"declared source lacks its exact input census: {source_id}")
-    return retained.actor.input
+    return ActorCensusInput.model_validate(retained.actor.input)
 
 
 def _oracle_empty_evidence(source) -> OracleFiltrationEvidence | None:
