@@ -68,7 +68,7 @@
       "id": 101,
       "type": "timeseries",
       "title": "GPUs held and busy per cluster",
-      "description": "Average GPUs the node agent sees (held) and SM-active GPUs (busy) per ${bin}, per CoreWeave cluster. This panel's query also feeds the nodes table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT cluster, node_name, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL '${bin}' <= {{to}} ORDER BY 1, 2, 3\n```",
+      "description": "Average GPUs the node agent sees (held) and SM-active GPUs (busy) per ${bin}, per CoreWeave cluster. This panel's query also feeds the nodes table.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT cluster, node_name, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_tensor_active, max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL '${bin}' <= {{to}} ORDER BY 1, 2, 3\n```",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -86,7 +86,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT cluster, node_name, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL '${bin}' <= {{to}} ORDER BY 1, 2, 3"
+                "value": "SELECT cluster, node_name, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy, sum(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_tensor_active, max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL '${bin}' <= {{to}} ORDER BY 1, 2, 3"
               },
               {
                 "key": "from",
@@ -128,6 +128,11 @@
               "selector": "gpus_tensor_active",
               "text": "gpus_tensor_active",
               "type": "number"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "gpu_model",
+              "type": "string"
             }
           ]
         }
@@ -200,7 +205,7 @@
       "id": 102,
       "type": "table",
       "title": "Nodes to inspect",
-      "description": "One row per GPU node in the range: average GPUs held and busy, and idle GPUs (held minus busy), sorted by idle GPUs. Click a node to open it in the Node row below. Reuses the GPU panel's query.",
+      "description": "One row per GPU node in the range: its GPU type, average GPUs held and busy, and idle GPUs (held minus busy), sorted by idle GPUs. Click a node to open it in the Node row below. Reuses the GPU panel's query.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Dashboard --"
@@ -231,6 +236,10 @@
                 "operation": "groupby"
               },
               "node_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "gpu_model": {
                 "aggregations": [],
                 "operation": "groupby"
               },
@@ -297,6 +306,7 @@
           "options": {
             "renameByName": {
               "node_name": "node",
+              "gpu_model": "GPU type",
               "gpus_held (mean)": "GPUs held",
               "gpus_busy (mean)": "GPUs busy",
               "gpus_tensor_active (mean)": "GPUs tensor-active"
