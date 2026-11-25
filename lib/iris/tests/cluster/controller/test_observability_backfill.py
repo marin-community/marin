@@ -226,3 +226,7 @@ def test_a_batch_that_does_not_land_stops_the_run():
     with pytest.raises(BackfillRefused, match="batch 1/2 flush dropped after 0 of 3 rows"):
         write_backfill([plan], {JOBS: table}, batch_rows=2, sleep=_no_sleep)
     assert [len(batch) for batch in table.written] == [2]
+
+    with pytest.raises(BackfillRefused, match="batch_rows 10000"):
+        write_backfill([plan], {JOBS: table}, batch_rows=10_000, sleep=_no_sleep)
+    assert len(table.written) == 1

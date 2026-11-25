@@ -78,7 +78,8 @@ SUBMIT_GRACE = timedelta(minutes=5)
 MIN_KEY_WINDOW = timedelta(hours=1)
 KEY_WINDOW = timedelta(days=1)
 MAX_KEY_ROWS = 2_000_000
-# Below the Finelog client's 10,000-row queue, which drops the oldest rows past it.
+# The Finelog client's default queue bound: it drops the oldest rows past it.
+MAX_BATCH_ROWS = 10_000
 DEFAULT_BATCH_ROWS = 5_000
 DEFAULT_PAUSE_SECONDS = 2.0
 QUERY_PAUSE_SECONDS = 1.0
@@ -315,7 +316,11 @@ def write_backfill(
     A batch whose flush is not ``SUCCEEDED`` may be partly written; a rerun
     skips the keys that landed and writes the rest.
     """
-    assert batch_rows < 10_000, "the Finelog client drops the oldest rows past 10,000 queued"
+    if not 0 < batch_rows < MAX_BATCH_ROWS:
+        raise BackfillRefused(
+            f"batch_rows {batch_rows} must be from 1 to {MAX_BATCH_ROWS - 1}: "
+            f"the Finelog client drops the oldest rows past {MAX_BATCH_ROWS} queued"
+        )
     for plan in plans:
         table = tables[plan.target]
         batches = list(batched(plan.to_write, batch_rows))
