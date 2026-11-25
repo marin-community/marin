@@ -240,7 +240,6 @@ _TRAIN_LONG = Preset(
 _TRAIN_LONG_3RACK = replace(
     _TRAIN_LONG,
     name="train-long-3rack",
-    revision="2026.11.20.4",
     recipe=replace(_TRAIN_LONG.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
     default_speculative_decoding=None,
 )
@@ -259,10 +258,7 @@ MOCHI = ModelPresets(
         _TRAIN_LONG_3RACK,
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
-        replace(
-            agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
-            revision="2026.11.20.7",
-        ),
+        agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
     control_pins={},
