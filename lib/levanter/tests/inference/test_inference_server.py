@@ -746,8 +746,6 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
         read_router_replay(response, 0, wrong_inputs)
 
 
-
-
 def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
     client, server = test_client
     stops = ["A"] * (server.config.service.max_stop_seqs + 1)
