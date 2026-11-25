@@ -39,6 +39,10 @@ Add `--run` to submit it:
 uv run python -m experiments.post_training.example --version 2026.09.21 --scale smoke --run
 ```
 
+For `rl.main(ModelPresets(...))` tables, `Preset.revision` pins the RL artifact version.
+Changing `--version` does not replace that pin. Bump the preset revision after runtime changes
+and check the plan's resolved versions before submitting.
+
 Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk. Each
 `IrisSkyRLExecution` sets the coordinator deadline for its workload. CoreWeave coordinators route
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
