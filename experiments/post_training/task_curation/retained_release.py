@@ -18,7 +18,13 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence, SourceUse
+from finestore.rl.curation import (
+    DatasetRelease,
+    LexicalContaminationEvidence,
+    OversightEvidence,
+    SourceUse,
+    require_lexical_qualification,
+)
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -33,7 +39,6 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, P
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""

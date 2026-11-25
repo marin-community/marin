@@ -13,11 +13,13 @@ import pytest
 from finestore.rl.curation import Cohort, DatasetRelease
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
+    ExecutionRequirements,
     GraderMachine,
     PlainText,
     ScriptGrader,
@@ -56,6 +58,13 @@ def published_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             docker_image=FIXTURE_IMAGE,
             working_directory="/app",
             setup_commands=("true",),
+        ),
+        execution_requirements=ExecutionRequirements(
+            cpus=2, memory_mb=2048, storage_mb=4096, agent_timeout_sec=120, verifier_timeout_sec=60
+        ),
+        integrity_contract=RootDeliveryContract(
+            dependency_state=SharedDependencyState.AGENT_MUTABLE,
+            verifier_files=(DeliveredVerifierFile(name="test.sh", mode=0o755, sha256="b" * 64),),
         ),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
@@ -140,7 +149,10 @@ def test_full_retained_import_prepares_an_admitted_assessment(
     assessment = assessment_inputs(str(inputs))
     assert [(row.task_id, row.cohort) for row in assessment.sample] == [("retained-task", Cohort.ADMITTED)]
     packets = [row for path in assessment.packet_paths for row in load_parquet(path)]
-    assert json.loads(packets[0]["packet_json"])["task"]["id"] == "retained-task"
+    task = json.loads(packets[0]["packet_json"])["task"]
+    assert task["id"] == "retained-task"
+    assert task["execution_requirements"]["memory_mb"] == 2048
+    assert task["integrity_contract"]["verifier_files"][0]["mode"] == 0o755
     quick = run_retained_import(
         RetainedImport(
             _cohort(published_tasks, expected_rows=1),

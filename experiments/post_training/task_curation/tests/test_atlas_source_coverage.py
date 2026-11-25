@@ -35,15 +35,9 @@ from finestore.rl.source_identity import canonical_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
-<<<<<<< HEAD
-ATLAS_SOURCE_PINS_REVISION = "53147ef2354b789879e2b93f7919accdd6a04c84"
-ATLAS_SOURCE_PINS_SHA256 = "f0b0e08bc3e53260142323c3acd29e9da44e5e9ff8f26504d47472fafcec7f26"
-ATLAS_SOURCE_PINS_BYTES = 170943
-=======
-ATLAS_SOURCE_PINS_REVISION = "2e7057ec8d1743aa86ac9157b0aa640d0536c181"
-ATLAS_SOURCE_PINS_SHA256 = "e8b7a43643001294670584f6fc4dc2f2b3222d8389d4a5d7b295dfd11668e90f"
-ATLAS_SOURCE_PINS_BYTES = 131639
->>>>>>> origin/benfeuer/atlas-admitted-records-1125
+ATLAS_SOURCE_PINS_REVISION = "6b0e7b75f9b0a202e18fcccc6ae2e1fbfa322c06"
+ATLAS_SOURCE_PINS_SHA256 = "520515f72eff5698e6cb4e7e34a09fa686f2d254f0c1ff105e2ad76059d4aeaf"
+ATLAS_SOURCE_PINS_BYTES = 109199
 
 
 ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
@@ -142,6 +136,14 @@ def test_dapo_math_binds_to_its_retained_release():
     assert source.info.count == 16901
     assert source.declaration.status == "Available"
     source.require_license()
+
+
+def test_excluded_atlas_sources_do_not_enter_the_catalog():
+    fixture = read_atlas_source_pins()
+    sources = all_sources()
+    assert set(fixture["excluded_or_deprecated"]).isdisjoint(sources)
+    for source_id, override in fixture["status_overrides"].items():
+        assert sources[source_id].declaration.status == override["worktree_status"]
 
 
 if __name__ == "__main__":

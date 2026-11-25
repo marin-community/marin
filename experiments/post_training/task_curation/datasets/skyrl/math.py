@@ -22,8 +22,9 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
+from experiments.post_training.task_curation.datasets.skyrl.hardmath_lineage import LICENSE_RECEIPT, LINEAGE_NOTES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import PENDING_TAG, RlDataSource, SourceInfo, SourceOrigin
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -455,7 +456,9 @@ SOURCES = (
             build_path="MarinSkyRL",
             origin=SourceOrigin.PAFITIS,
             family="math-answer",
-            tags=("rlvr", "single-turn", "gym/aime"),
+            tags=("rlvr", "single-turn", "gym/aime", PENDING_TAG),
+            license_receipt=LICENSE_RECEIPT,
+            notes=LINEAGE_NOTES,
         ),
     ),
     MathSource(

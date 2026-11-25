@@ -25,6 +25,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import DataRestriction
+from finestore.rl.status_taxonomy import SourceStatus as CatalogStatus
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -119,6 +120,10 @@ class SourceReference:
     name: str
     revision: str | None
     url: str
+
+
+PENDING_TAG = "pending"
+"""The source tag that holds a licensed source for repair or qualification."""
 
 
 EXCLUDED_TAG = "excluded"
@@ -346,7 +351,15 @@ class RlDataSource[ConfigT: CatalogConfig]:
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
-                (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
+                (
+                    label
+                    for tag, label in (
+                        ("deprecated", "Deprecated"),
+                        (EXCLUDED_TAG, "Excluded"),
+                        (PENDING_TAG, CatalogStatus.PENDING.value),
+                    )
+                    if tag in tags
+                ),
                 "Inventory" if pipeline is None else "Available",
             ),
             pipeline=invocation,
