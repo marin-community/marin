@@ -206,7 +206,7 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
-def test_loom_holistic_review_reuses_a_pr_channel_but_reviews_each_head() -> None:
+def test_loom_holistic_review_keys_runs_by_head_in_a_stable_pr_channel() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())

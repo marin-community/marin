@@ -54,9 +54,10 @@ Run it at the exact head named by the caller, including for agent-generated PRs.
 
 For a change to an interface or its ownership, give a fresh read-only
 reviewer the requested behavior, pinned base and head, scoped repository
-instructions and [design review](design.md). Ask it to return findings to
-you while you check the implementation. Give it the code before giving it
-any proposed verdict or prior review comments. The main reviewer owns all
+instructions and the text of [design review](design.md) from the same rubric
+revision you used. It forms its own judgment from the code and returns
+findings while you check the implementation. Keep proposed verdicts and
+prior review comments out of its inputs. The main reviewer owns all
 posting and telemetry. If independent review is unavailable, work through
 the design review yourself before the implementation audit.
 
