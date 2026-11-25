@@ -27,6 +27,7 @@ import time
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any, NamedTuple, Protocol, runtime_checkable
+from uuid import uuid4
 
 import jinja2
 import jinja2.ext
@@ -132,6 +133,7 @@ class MarinTokenizer(Protocol):
         *,
         tokenize: bool = True,
         add_generation_prompt: bool = False,
+        continue_final_message: bool = False,
         **kwargs,
     ) -> str | list[int]: ...
 
@@ -692,10 +694,20 @@ class HfMarinTokenizer:
         *,
         tokenize: bool = True,
         add_generation_prompt: bool = False,
+        continue_final_message: bool = False,
         **kwargs,
     ) -> str | list[int]:
         if self._chat_template is None:
             raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
+        marker = None
+        if continue_final_message:
+            if add_generation_prompt:
+                raise ValueError("Continuing the final message requires no generation prompt")
+            text = conversation[-1].get("content") if conversation else None
+            if text is None:
+                raise ValueError("Continuing the final message requires its text")
+            marker = uuid4().hex
+            conversation = [*conversation[:-1], {**conversation[-1], "content": text + marker}]
         env = _make_jinja_env([_GenerationStripExtension])
         template = env.from_string(self._chat_template)
         rendered = template.render(
@@ -705,6 +717,11 @@ class HfMarinTokenizer:
             eos_token=self._eos_token or "",
             **kwargs,
         )
+        if marker is not None:
+            # Trim the rendered turn suffix while keeping the template's transformation of the message.
+            rendered, found, _ = rendered.rpartition(marker)
+            if not found:
+                raise ValueError("The chat template omitted the final message text")
         if tokenize:
             return self.encode(rendered, add_special_tokens=False)
         return rendered

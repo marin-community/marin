@@ -22,6 +22,7 @@ BEHAVIOR_LOGPROBS = "behavior_logprobs"
 POLICY_LOGPROBS = "policy_logprobs"
 EXPERT_IDS = "expert_ids"
 EXPERT_VALID = "expert_valid"
+LOGPROB_MODE = "logprob_mode"
 MAX_POLICY_ID_LENGTH = 256
 _MAGIC = b"LEVANTER-GENERATE\x01"
 _HEADER_LENGTH = struct.Struct(">I")

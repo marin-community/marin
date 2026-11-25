@@ -19,7 +19,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, cast
 
 import haliax as hax
 import jax
@@ -46,12 +46,12 @@ from levanter.inference.binary import (
     EXPERT_IDS,
     EXPERT_VALID,
     GENERATE_PATH,
+    LOGPROB_MODE,
     MEDIA_TYPE,
     MAX_POLICY_ID_LENGTH,
     POLICY_LOGPROBS,
     PROMPT_TOKEN_IDS,
     TOKEN_IDS,
-    GenerateOptions,
     choice_tensor_key,
     encode_frame,
     read_generate_request,
@@ -69,6 +69,8 @@ from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
+    ChatTokenizeRequest,
+    ChatTokenizeResponse,
     CompletionRequest,
     TokenList,
     TokensRequest,
@@ -86,7 +88,9 @@ CONTROL_SUCCESS = {"status": "ok"}
 
 
 DEFAULT_MODEL_NAME = "levanter"
-RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
+RESERVED_CHAT_TEMPLATE_KWARGS = frozenset(
+    {"add_generation_prompt", "chat_template", "continue_final_message", "return_dict", "tokenize"}
+)
 
 
 @dataclass
@@ -131,6 +135,7 @@ class InferenceRequest:
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
     expected_policy_id: str | None = None
+    ignore_eos: bool = False
 
 
 @dataclass
@@ -324,6 +329,7 @@ class InferenceContext:
         abort_event: threading.Event | None = None,
         return_route_captures: bool = False,
         expected_policy_id: str | None = None,
+        ignore_eos: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -345,6 +351,7 @@ class InferenceContext:
                 echo_logprobs_top_k=echo_logprobs_top_k,
                 return_route_captures=return_route_captures,
                 expected_policy_id=expected_policy_id,
+                ignore_eos=ignore_eos,
             )
             if self._paused.is_set() or request.abort_event.is_set():
                 self._abort_queued_request(request)
@@ -556,6 +563,7 @@ class InferenceContext:
             temperature=jnp.asarray(request.temperature, dtype=jnp.float32),
             top_p=jnp.asarray(1.0 if request.top_p is None else request.top_p, dtype=jnp.float32),
             key=jrandom.PRNGKey(seed),
+            ignore_eos=request.ignore_eos,
         )
         return Request(request.prompt_tokens, request_id, params, request.n_generations)
 
@@ -756,17 +764,87 @@ def _completion_logprobs(
     )
 
 
+def _format_completion_choice(
+    tokenizer: MarinTokenizer,
+    request: CompletionRequest,
+    prompt: str | list[int],
+    generation: InferenceResponse,
+    index: int,
+    score_mode: LogprobMode,
+) -> CompletionChoice:
+    choice_text = generation.text
+    if request.echo:
+        prefix = prompt if isinstance(prompt, str) else tokenizer.decode(prompt, skip_special_tokens=False)
+        choice_text = prefix + choice_text
+
+    logprobs = None
+    if request.echo and request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
+        if generation.echo_token_ids is None or generation.echo_logprobs is None:
+            raise RuntimeError("Echo logprobs requested but missing from generation result.")
+        echo_logprobs = _completion_logprobs(
+            tokenizer,
+            generation.echo_token_ids,
+            generation.echo_logprobs,
+        )
+        logprobs = Logprobs(
+            tokens=echo_logprobs.tokens,
+            token_logprobs=echo_logprobs.token_logprobs,
+            text_offset=echo_logprobs.text_offset,
+            top_logprobs=echo_logprobs.top_logprobs,
+        )
+    elif not request.echo and request.logprobs is not None:
+        tokens = []
+        token_logprobs = []
+        for token_id, score in zip(generation.tokens, generation.logprobs or [], strict=True):
+            tokens.append(tokenizer.convert_ids_to_tokens(token_id))
+            token_logprobs.append(float(score))
+        logprobs = Logprobs(tokens=tokens, token_logprobs=token_logprobs)
+
+    choice = CompletionChoice.model_construct(
+        text=choice_text,
+        index=index,
+        finish_reason=format_finish_reason(generation.finish_reason),
+        logprobs=logprobs,
+    )
+    if request.return_token_ids:
+        metadata = {
+            "token_ids": generation.tokens,
+            "model_version": generation.model_version,
+            "policy_id": generation.policy_id,
+        }
+        if not request.echo and request.logprobs is not None:
+            metadata[LOGPROB_MODE] = score_mode
+        choice = choice.model_copy(update=metadata)
+    return choice
+
+
+def _completion_prompts(
+    prompt: str | list[str] | list[int] | list[list[int]],
+) -> collections.abc.Sequence[str | list[int]]:
+    if isinstance(prompt, str):
+        return [prompt]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="A completion request needs at least one prompt")
+    if isinstance(prompt[0], int):
+        return [cast(list[int], prompt)]
+    return cast(list[str] | list[list[int]], prompt)
+
+
 async def _create_completion(
     ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
 ) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
-        if isinstance(request.prompt, str):
-            prompts = [request.prompt]
-        else:
-            prompts = request.prompt
+        prompts = _completion_prompts(request.prompt)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        if request.stop_token_ids:
+            stop_tokens = (stop_tokens or []) + [[token] for token in request.stop_token_ids]
+        config = ctx.config.service
+        n = request.n or 1
+        if request.echo and request.expected_logprob_mode is not None:
+            raise HTTPException(status_code=400, detail="expected_logprob_mode applies to sampled scores without echo")
+        _validate_generation_options(ctx, n, stop_tokens, request.expected_logprob_mode)
 
         # Create futures for all prompts
         futures = []
@@ -777,15 +855,18 @@ async def _create_completion(
         echo_logprobs_top_k = int(request.logprobs) if request.echo and request.logprobs else None
 
         for prompt in prompts:
-            # Tokenize prompt
-            prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
+            if isinstance(prompt, str):
+                prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
+            else:
+                prompt_tokens = prompt
+                _validate_generation_prompt(prompt_tokens, request.max_tokens, config, ctx.model.Vocab.size)
             scored_token_budget = len(prompt_tokens) + request.max_tokens
-            if echo_logprobs_top_k is not None and scored_token_budget > ctx.config.service.max_seq_len:
+            if echo_logprobs_top_k is not None and scored_token_budget > config.max_seq_len:
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         "echo logprobs are not supported when prompt tokens plus max_tokens exceeds "
-                        f"max_seq_len={ctx.config.service.max_seq_len}"
+                        f"max_seq_len={config.max_seq_len}"
                     ),
                 )
             prompt_token_lists.append(prompt_tokens)
@@ -805,9 +886,11 @@ async def _create_completion(
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=n,
                 echo_logprobs_top_k=echo_logprobs_top_k,
                 abort_event=abort_event,
+                expected_policy_id=request.expected_policy_id,
+                ignore_eos=request.ignore_eos,
             )
 
         # Wait for all results
@@ -817,54 +900,10 @@ async def _create_completion(
         choice_idx = 0
         for prompt, result in zip(prompts, results, strict=True):
             for generation in result:
-                choice_text = f"{prompt}{generation.text}" if request.echo else generation.text
-
-                # Format logprobs if available
-                logprobs = None
-                if request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
-                    if request.echo:
-                        if generation.echo_token_ids is None or generation.echo_logprobs is None:
-                            raise RuntimeError("Echo logprobs requested but missing from generation result.")
-                        echo_logprobs = _completion_logprobs(
-                            ctx.tokenizer,
-                            generation.echo_token_ids,
-                            generation.echo_logprobs,
-                        )
-                        logprobs = Logprobs(
-                            tokens=echo_logprobs.tokens,
-                            token_logprobs=echo_logprobs.token_logprobs,
-                            text_offset=echo_logprobs.text_offset,
-                            top_logprobs=echo_logprobs.top_logprobs,
-                        )
-                    else:
-                        # Convert logprobs to API format
-                        generated_tokens = generation.tokens
-
-                        # Create token logprobs in OpenAI format
-                        tokens = []
-                        token_logprobs = []
-                        if generation.logprobs:
-                            for token_id, lp in zip(generated_tokens, generation.logprobs):
-                                # Use convert_ids_to_tokens to preserve BPE format
-                                token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
-                                tokens.append(token_str)
-                                token_logprobs.append(float(lp))
-
-                        logprobs = Logprobs(
-                            tokens=tokens,
-                            token_logprobs=token_logprobs,
-                            text_offset=None,
-                            top_logprobs=None,
-                        )
-
-                choices.append(
-                    CompletionChoice.model_construct(
-                        text=choice_text,
-                        index=choice_idx,
-                        finish_reason=format_finish_reason(generation.finish_reason),
-                        logprobs=logprobs,
-                    )
+                choice = _format_completion_choice(
+                    ctx.tokenizer, request, prompt, generation, choice_idx, config.logprob_mode
                 )
+                choices.append(choice)
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -881,6 +920,8 @@ async def _create_completion(
             ),
         )
 
+    except PolicyMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:
@@ -893,6 +934,9 @@ def _compute_tokens(
     tokenizer: MarinTokenizer,
     tools: list[dict[str, object]] | None = None,
     chat_template_kwargs: dict[str, object] | None = None,
+    *,
+    add_generation_prompt: bool = True,
+    continue_final_message: bool = False,
 ) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
@@ -918,7 +962,8 @@ def _compute_tokens(
     result = tokenizer.apply_chat_template(
         dict_messages,
         tokenize=True,
-        add_generation_prompt=True,
+        add_generation_prompt=add_generation_prompt,
+        continue_final_message=continue_final_message,
         return_dict=False,
         **template_kwargs,
     )
@@ -1034,21 +1079,30 @@ async def _create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not ctx.engine.supports_route_capture:
-        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
-    config = ctx.engine.config
-    if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
-        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
+def _validate_generation_prompt(
+    prompt: list[int], max_tokens: int, config: InferenceEngineConfig, vocab_size: int
+) -> None:
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt must contain at least one token")
+    if min(prompt) < 0 or max(prompt) >= vocab_size:
+        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
     max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
+    if max_tokens < 1 or len(prompt) + max_tokens > config.max_seq_len or len(prompt) > max_prefill_size:
         raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
-    if options.n > config.max_seqs:
+
+
+def _validate_generation_options(
+    ctx: InferenceContext,
+    n: int,
+    stops: list[list[int]] | None,
+    expected_logprob_mode: LogprobMode | None,
+) -> None:
+    config = ctx.config.service
+    if expected_logprob_mode is not None and expected_logprob_mode != config.logprob_mode:
+        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
+    if n > config.max_seqs:
         raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
     vocab_size = ctx.model.Vocab.size
-    if np.any((prompt < 0) | (prompt >= vocab_size)):
-        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
-    stops = options.stop_tokens
     if stops and (
         len(stops) > config.max_stop_seqs
         or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
@@ -1059,11 +1113,15 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
 
 async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
     prompt, options = await read_generate_request(request)
-    _validate_binary_options(ctx, prompt, options)
+    if options.return_route_captures and not ctx.engine.supports_route_capture:
+        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
+    prompt_tokens = prompt.tolist()
+    _validate_generation_options(ctx, options.n, options.stop_tokens, options.expected_logprob_mode)
+    _validate_generation_prompt(prompt_tokens, options.max_tokens, ctx.config.service, ctx.model.Vocab.size)
     async with ctx.http_generation(request) as abort_event:
         future = asyncio.get_running_loop().create_future()
         ctx.submit_request(
-            prompt.tolist(),
+            prompt_tokens,
             options.max_tokens,
             options.temperature,
             options.top_p,
@@ -1109,7 +1167,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
         if output.expert_routes is not None:
             tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
             tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices, "logprob_mode": score_mode}, tensors)
+    return encode_frame({"choices": choices, LOGPROB_MODE: score_mode}, tensors)
 
 
 class InferenceServer:
@@ -1220,6 +1278,23 @@ class InferenceServer:
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
             return await _fetch_tokens(inference_context, request)
+
+        @app.post("/tokenize", response_model=ChatTokenizeResponse)
+        async def tokenize_chat(request: ChatTokenizeRequest) -> ChatTokenizeResponse:
+            try:
+                tokens = _compute_tokens(
+                    request.messages,
+                    inference_context.tokenizer,
+                    request.tools,
+                    request.chat_template_kwargs,
+                    add_generation_prompt=request.add_generation_prompt,
+                    continue_final_message=request.continue_final_message,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ChatTokenizeResponse(
+                tokens=tokens, count=len(tokens), max_model_len=inference_context.config.service.max_seq_len
+            )
 
         @app.post(GENERATE_PATH)
         async def generate_binary(request: HttpRequest) -> Response:
