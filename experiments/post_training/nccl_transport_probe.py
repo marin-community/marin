@@ -81,6 +81,7 @@ ENDPOINT_BASE_NAME = "nccl-probe"
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
 IB_DEVICE_SELECTION_RE = re.compile(r"\bNET/IB\s*:\s*Using\b")
+NVLS_RANKS_RE = re.compile(r"\bNCCL INFO NVLS comm \S+ headRank -?\d+ nHeads \d+ nvlsRanks (\d+)\b")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
@@ -103,6 +104,7 @@ class NcclCensus:
     nccl_version: str
     transports: list[str]
     ib_device_lines: list[str] = field(default_factory=list)
+    nvls_rank_counts: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -164,10 +166,11 @@ def build_variants(extra_env: dict[str, str] | None = None) -> list[Variant]:
 
 
 def parse_nccl_census(lines: list[str]) -> NcclCensus:
-    """Extract the version, transports, and InfiniBand device selection from NCCL INFO output."""
+    """Extract the active NCCL channel transports, IB rails, and NVLS communicator sizes."""
     version = ""
     transports: list[str] = []
     ib_device_lines: list[str] = []
+    nvls_rank_counts = set()
     for line in lines:
         if not version:
             match = NCCL_VERSION_RE.search(line)
@@ -178,7 +181,9 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
             transports.append(match.group(1))
         if IB_DEVICE_SELECTION_RE.search(line) and line not in ib_device_lines:
             ib_device_lines.append(line)
-    return NcclCensus(nccl_version=version, transports=transports, ib_device_lines=ib_device_lines)
+        if match := NVLS_RANKS_RE.search(line):
+            nvls_rank_counts.add(int(match.group(1)))
+    return NcclCensus(version, transports, ib_device_lines, sorted(nvls_rank_counts))
 
 
 def allocate_port_block(count: int) -> int:
@@ -422,6 +427,7 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
         "nccl_version": rank.census.nccl_version,
         "transports": rank.census.transports,
         "ib_device_lines": rank.census.ib_device_lines,
+        "nvls_rank_counts": rank.census.nvls_rank_counts,
     }
 
 
@@ -533,14 +539,15 @@ def gate_endpoint_name(job_info: JobInfo) -> str:
 
 
 def run_gate(args: argparse.Namespace) -> None:
-    """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
+    """Check the launch's collectives and require InfiniBand or full-world NVLink evidence.
 
     With ``--gate-coverage first-pair`` (the default), tasks 0 and 1 each run one
     NCCL rank over the default environment; any other task exits immediately.
     With ``--gate-coverage all-gpus``, every task joins with all of its local
     GPUs, so communicator init exercises every GPU-to-NIC pairing (a 64-rank
     data-parallel engine can fail on one GPU's HCA even when the first pair is
-    healthy). On a multi-node job the check requires InfiniBand transport evidence.
+    healthy). A full-world NVLS communicator spans hosts when its size exceeds
+    the local GPU count, as in one GB200 NVLink domain.
     """
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
@@ -600,7 +607,7 @@ def run_gate(args: argparse.Namespace) -> None:
         )
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
-    verdicts = [gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]]) for result in results]
+    verdicts = [gate_variant_verdict(result) for result in results]
     verdict = next((item for item in verdicts if item != "pass"), "pass")
     report = {
         "gate": {
@@ -673,14 +680,21 @@ def collect_ib_port_inventory() -> list[dict[str, str]]:
     return inventory
 
 
-def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
-    """Require positive InfiniBand evidence for a multi-node gate variant."""
+def gate_variant_verdict(result: dict) -> str:
+    ranks = result["ranks"]
+    world_size = result["world_size"]
+    full_world_nvls = 0 < len(ranks) < world_size and all(world_size in rank["nvls_rank_counts"] for rank in ranks)
+    return gate_verdict(result["pass"], [rank["transports"] for rank in ranks], full_world_nvls=full_world_nvls)
+
+
+def gate_verdict(passed: bool, rank_transports: list[list[str]], *, full_world_nvls: bool = False) -> str:
+    """Require positive interconnect evidence and reject sockets and unexpected network transports."""
     if not passed:
         return "collective_failed"
     flat = {transport for transports in rank_transports for transport in transports}
     if any(transport.startswith("NET/Socket") for transport in flat):
         return "socket_transport"
-    if not flat:
+    if not flat and not full_world_nvls:
         return "missing_transport_evidence"
     if any(not transport.startswith("NET/IB/") for transport in flat):
         return "unexpected_transport"
