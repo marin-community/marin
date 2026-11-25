@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import List, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
@@ -51,7 +51,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -124,10 +124,6 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
-
-    @property
-    def openai_finish_reason(self) -> Literal["stop", "length"]:
-        return "stop" if self.finish_reason == FinishReason.STOP else "length"
 
 
 class InferenceBatch(list):
@@ -633,7 +629,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason=generation.openai_finish_reason,
+                        finish_reason=format_finish_reason(generation.finish_reason),
                         logprobs=logprobs,
                     )
                 )
@@ -776,7 +772,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason=generation.openai_finish_reason,
+                    finish_reason=format_finish_reason(generation.finish_reason),
                     logprobs=logprobs,
                 )
             )
@@ -845,7 +841,10 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
     choices = []
     for choice, output in enumerate(outputs):
         choices.append(
-            {"completion_tokens": output.completion_tokens, "finish_reason": output.finish_reason.name.lower()}
+            {
+                "completion_tokens": output.completion_tokens,
+                "finish_reason": format_finish_reason(output.finish_reason),
+            }
         )
         prefix = f"choice.{choice}."
         tensors[prefix + "token_ids"] = np.asarray(output.tokens, dtype=np.int32)
