@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from rolloutengine.models import GradedRollout, Rollout
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -101,15 +103,36 @@ async def test_jsonl_round_trips_resource_results_and_binary_payloads(tmp_path: 
     assert tuple(record.event for record in restored) == events
 
 
-async def test_jsonl_reads_a_solver_rollout_whose_attempt_id_is_stored_as_run_id(tmp_path: Path) -> None:
-    resolved = Resolved(
-        SolverRollout(rollout_spec(arithmetic_task()), 1, 0),
-        (),
-        GradedRollout(Rollout("trial", (), "stop"), GradeResult(Outcome.GRADED, 1)),
+@dataclass(frozen=True)
+class LegacyRollout:
+    """``Rollout`` with its attempt ID under the field name that older event logs store."""
+
+    run_id: str
+    conversations: tuple[Any, ...]
+    stop_reason: str
+    metrics: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, bytes] = field(default_factory=dict)
+    failure: Any = None
+
+
+@dataclass(frozen=True)
+class LegacyGradedRollout:
+    rollout: LegacyRollout
+    grade: GradeResult
+
+
+async def test_jsonl_reads_and_extends_a_log_that_stores_the_attempt_id_as_run_id(tmp_path: Path) -> None:
+    spec, grade = rollout_spec(arithmetic_task()), GradeResult(Outcome.GRADED, 1)
+    legacy = Resolved(
+        SolverRollout(spec, 1, 0), (), LegacyGradedRollout(LegacyRollout("trial", (), "stop"), grade), True
     )
-    sink = JsonlSink(str(tmp_path / "results.jsonl"))
-    await sink.write((Record(1, 0.0, resolved),))
     path = tmp_path / "results.jsonl"
-    path.write_text(path.read_text().replace('"rollout_id": "trial"', '"run_id": "trial"'))
-    (restored,) = await JsonlSink(str(path)).read()
-    assert restored.event == resolved
+    # A resumed workpiece logs the same replayed rollout again, which the log stores as a reference.
+    await JsonlSink(str(path)).write((Record(1, 0.0, legacy), Record(2, 0.0, legacy)))
+    assert '"ref"' in path.read_text().splitlines()[1]
+
+    resolved = Resolved(SolverRollout(spec, 1, 0), (), GradedRollout(Rollout("trial", (), "stop"), grade), True)
+    sink = JsonlSink(str(path))
+    assert [record.event for record in await sink.read()] == [resolved, resolved]
+    await sink.write((Record(3, 0.0, resolved),))
+    assert [record.event for record in await JsonlSink(str(path)).read()] == [resolved] * 3

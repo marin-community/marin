@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import time
@@ -93,12 +94,21 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     if cls is Resolved:
         request = restored["request"]
         stored = restored["value"]
-        if request.result_type is GradedRollout and "run_id" in stored["rollout"]:
+        legacy = request.result_type is GradedRollout and "run_id" in stored["rollout"]
+        if legacy:
             # Older event logs store the attempt ID of a GradedRollout as run_id.
             stored["rollout"]["rollout_id"] = stored["rollout"].pop("run_id")
         value = TypeAdapter(cast(Any, request.result_type)).validate_python(stored)
         fingerprints = TypeAdapter(tuple[Fingerprint, ...]).validate_python(restored["fingerprints"])
         event = Resolved(request, fingerprints, value, restored["replayed"])
+        if legacy:
+            # Later records refer to this one by the digest of its stored form.
+            document = json_value((data["type"], event.identity()))
+            document[1][MAPPING_TAG]["value"] = data["payload"]["value"]
+            encoded = json.dumps(
+                {"value": document}, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True
+            )
+            known[hashlib.sha256(encoded.encode()).hexdigest()] = event
     elif cls is Retrying:
         event = Retrying(restored["request"], restored["attempt"], restored["cause"])
     else:
