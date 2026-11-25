@@ -43,7 +43,7 @@ def test_publication_compiles_mmlu_pro_variants_from_staged_fewshots(tmp_path, a
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
     )
     recipe = source_recipe(dataset.recipe, inputs, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": 1})
+    protocol = dataset.protocol
     output = tmp_path / "output"
     client = LocalClient()
     try:

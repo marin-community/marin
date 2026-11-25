@@ -23,7 +23,6 @@ class MultipleChoiceDataset:
     name: str
     benchmark: str
     source: HfSource
-    population: int
     pool_file: str
 
 
@@ -43,7 +42,6 @@ def _compile(
         name=dataset.name,
         benchmark=dataset.benchmark,
         source=source,
-        population=dataset.population,
         template=HarnessTemplate(
             name=dataset.name, num_fewshot=shots, fewshot_file=dataset.pool_file or source.files[0]
         ),
@@ -92,7 +90,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("ARC-Challenge/test-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=1172,
                 pool_file="ARC-Challenge/train-00000-of-00001.parquet",
             ),
             shots=(25, 10),
@@ -108,7 +105,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("ARC-Easy/test-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=2376,
                 pool_file="ARC-Easy/train-00000-of-00001.parquet",
             ),
             shots=(0, 10),
@@ -124,7 +120,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("data/validation-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=10042,
                 pool_file="data/train-00000-of-00001.parquet",
             ),
             shots=(10, 0),
@@ -140,7 +135,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("boolq/validation-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=3270,
                 pool_file="boolq/train-00000-of-00001.parquet",
             ),
             shots=(0, 10),
@@ -157,7 +151,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("piqa_validation.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=1838,
                 pool_file="piqa_train.parquet",
             ),
             shots=(0, 10),
@@ -174,7 +167,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("main/test-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=500,
                 pool_file="",
             ),
             shots=(0,),
@@ -190,7 +182,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("winogrande_xl/validation-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=1267,
                 pool_file="winogrande_xl/train-00000-of-00001.parquet",
             ),
             shots=(5, 0),
@@ -206,7 +197,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     ("multiple_choice/validation-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=817,
                 pool_file="",
             ),
             shots=(0, 6),

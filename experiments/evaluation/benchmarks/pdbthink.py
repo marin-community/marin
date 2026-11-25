@@ -46,7 +46,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         ),
         primary_metric="macro_accuracy",
         summary=SummaryKind.WEIGHTED_MEAN,
-        expected_population=manifest()["n_renders"],
         context_policy=ContextPolicy(overflow="error", context_reserve=64),
     )
     source = evaluation_source(

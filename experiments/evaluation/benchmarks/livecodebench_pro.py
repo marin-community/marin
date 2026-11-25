@@ -225,7 +225,6 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=POPULATION,
             ),
             item_builder=livecodebench_pro_item,
             protocol_name="official",

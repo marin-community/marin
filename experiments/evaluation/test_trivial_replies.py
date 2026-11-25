@@ -82,7 +82,6 @@ def publish_corpus(tmp_path, rows: list[dict]) -> str:
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=len(rows),
     )
     corpus = tmp_path / "corpus"
     client = LocalClient()

@@ -42,7 +42,6 @@ CHEMBENCH_TOPICS = (
     "toxicity_and_safety",
 )
 CHEMBENCH_FILES = tuple(f"{topic}/train-00000-of-00001.parquet" for topic in CHEMBENCH_TOPICS)
-CHEMBENCH_POPULATION = 2785
 VERSION = "2026.11.19"
 
 
@@ -63,7 +62,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=CHEMBENCH_POPULATION,
     )
     source = evaluation_source(
         name="chembench",

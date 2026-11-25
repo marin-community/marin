@@ -32,7 +32,6 @@ from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource
 
 PHYSICS_VERIFIED_REVISION = "724170025e3541c9b877285b2d577a1257796f0b"
-PHYSICS_VERIFIED_POPULATION = 602
 VERSION = "2026.11.20"
 
 
@@ -54,7 +53,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=PHYSICS_VERIFIED_POPULATION,
     )
     source = evaluation_source(
         name="physics-verified",

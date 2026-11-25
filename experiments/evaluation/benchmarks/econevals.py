@@ -58,7 +58,6 @@ SAMPLED_PER_CATEGORY = 6
 class EconEvalsRun:
     benchmark: str
     run: str
-    rows: int
     categories: int
     questions_sha256: str
     categories_sha256: str
@@ -69,7 +68,6 @@ RUNS = (
     EconEvalsRun(
         benchmark="EconEvals-Synthetic-DWA",
         run="synth_sampled_dwas",
-        rows=2351,
         categories=40,
         questions_sha256="d4de7271642857a71d6db597f6139d9d6bfdeaebc6721d70c36459ae25a3c137",
         categories_sha256="4e33e6fa4458e5a41a08588fff4678e610db20c6239f2b11ef55667558e1510d",
@@ -81,7 +79,6 @@ RUNS = (
     EconEvalsRun(
         benchmark="EconEvals-Synthetic-Occupation",
         run="synth_sampled_occs_gdpval",
-        rows=2426,
         categories=43,
         questions_sha256="5f94198cd50b519b86aedf23369c7a36e895169130a86f87c395e17dd27a645f",
         categories_sha256="c5819bfeb0cf75bdbfdb761a67a95f34d2b6eb380aaaee70a1a9b78ea6c088ca",
@@ -99,7 +96,6 @@ def econevals_source(
     root = f"{INTERMEDIATE_URL}/.runs/{run.run}/predictions-arena-hard"
     suffix = ("" if per_category is None else "-Sampled") + BASELINE_SUFFIXES[baseline_model]
     benchmark = run.benchmark + suffix
-    rows = run.rows if per_category is None else per_category * run.categories
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -154,7 +150,6 @@ def econevals_source(
                 metrics=(Metric(name=PAIRWISE_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),),
                 primary_metric=PAIRWISE_METRIC,
                 summary=SummaryKind.WEIGHTED_MEAN,
-                expected_population=rows,
             ),
             econevals_item,
         ),

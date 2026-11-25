@@ -43,7 +43,6 @@ FACTS_GROUNDING_URL = (
     "?datasetVersionNumber=17"
 )
 FACTS_GROUNDING_SHA256 = "66990aea86a91d40edcda6ebcd0d686674246dc7c07338ed8c17e1c275b1e096"
-FACTS_GROUNDING_POPULATION = 856
 VERSION = "2026.11.18"
 
 
@@ -69,7 +68,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         ),
         primary_metric="factuality",
         summary=SummaryKind.MEAN,
-        expected_population=FACTS_GROUNDING_POPULATION,
     )
     source = evaluation_source(
         name="facts-grounding-v2",

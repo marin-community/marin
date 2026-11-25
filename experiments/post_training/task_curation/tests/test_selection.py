@@ -909,7 +909,7 @@ def eval_lite_recipe(tmp_path: Path, benchmark: str = "mmlu") -> EvalLiteRecipe:
                         command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="tomli-w==1.2.0\n"
                     ),
                 ),
-                dataset.protocol.model_copy(update={"expected_population": 6}),
+                dataset.protocol,
                 dataset.item_builder,
                 context,
                 str(tmp_path / "questions"),

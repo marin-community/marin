@@ -38,14 +38,14 @@ MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
 
 def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
-    for subject, population in (
-        ("algebra", 1187),
-        ("counting_and_probability", 474),
-        ("geometry", 479),
-        ("intermediate_algebra", 903),
-        ("number_theory", 540),
-        ("prealgebra", 871),
-        ("precalculus", 546),
+    for subject in (
+        "algebra",
+        "counting_and_probability",
+        "geometry",
+        "intermediate_algebra",
+        "number_theory",
+        "prealgebra",
+        "precalculus",
     ):
         result.append(
             text_generation_evaluation(
@@ -57,7 +57,6 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     (subject + "/test-00000-of-00001.parquet",),
                     SourceFormat.PARQUET,
                 ),
-                population=population,
                 template=minerva_template(subject),
                 metrics=("exact_match,none", "math_verify,none"),
                 sampling=Sampling(
@@ -91,7 +90,6 @@ def math_dataset(
     benchmark: str,
     source: HfSource | UrlSource,
     answer_field: str,
-    population: int,
     trials: int,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     recipe = CurationRecipe(
@@ -131,7 +129,6 @@ def math_dataset(
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=population,
             ),
             partial(chat_item, response_selection="final_or_complete_boxed_reasoning"),
         ),
@@ -179,7 +176,6 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=30,
             ),
             chat_item,
         ),
@@ -194,7 +190,6 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             benchmark="MATH500",
             source=HfSource("HuggingFaceH4/MATH-500", MATH500_REVISION, ("test.jsonl",), SourceFormat.JSONL),
             answer_field="answer",
-            population=500,
             trials=1,
         ),
         math_dataset(
@@ -208,7 +203,6 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 SourceFormat.JSONL,
             ),
             answer_field="expected_answer",
-            population=30,
             trials=10,
         ),
     ]
@@ -220,7 +214,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         benchmark="AIME25",
         source=bundled_source("AIME25", "aime25.json", AIME25_SHA256),
         answer_field="answer",
-        population=30,
         trials=10,
     )
     amc = math_dataset(
@@ -228,7 +221,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         benchmark="AMC23",
         source=bundled_source("AMC23", "amc23.json", AMC23_SHA256),
         answer_field="answer",
-        population=40,
         trials=10,
     )
     assert aime.config is not None and amc.config is not None

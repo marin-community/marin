@@ -55,7 +55,6 @@ def instruction_following_evaluation(
     name: str,
     benchmark: str,
     source: HfSource,
-    population: int,
     profile: InstructionProfile,
     max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
@@ -107,7 +106,6 @@ def instruction_following_evaluation(
                 ),
                 primary_metric=names[0],
                 summary=SummaryKind.WEIGHTED_MEAN,
-                expected_population=population,
             ),
             partial(instruction_item, profile=profile),
         ),
@@ -121,7 +119,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             name="ifeval",
             benchmark="ifeval",
             source=HfSource("google/IFEval", IFEVAL_REVISION, ("ifeval_input_data.jsonl",), SourceFormat.JSONL),
-            population=541,
             profile=InstructionProfile.HARNESS,
             max_tokens=1280,
         ),
@@ -131,7 +128,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             source=HfSource(
                 "allenai/IFBench_test", IFBENCH_REVISION, ("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET
             ),
-            population=300,
             profile=InstructionProfile.IFBENCH,
             max_tokens=None,
         ),

@@ -1022,7 +1022,6 @@ def build_native_fixtures(dest: str) -> list[str]:
             primary_metric=metric,
             num_fewshot=shots,
             summary="mean",
-            expected_population=3,
             likelihood_metrics=(LikelihoodMetric(name=metric, normalization="raw"),) if likelihood else (),
         )
         with DataStore.open(root) as store:

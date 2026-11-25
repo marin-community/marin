@@ -33,12 +33,10 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 LEXAM_REVISION = "31e57ae395f92ed7284a4c28d278c55da892b898"
 LEXAM_MCQ_4_FILE = "mcq_4_choices/test-00000-of-00001.parquet"
-LEXAM_MCQ_4_EN_POPULATION = 619
-LEXAM_MCQ_4_DE_POPULATION = 1036
 VERSION = "2026.11.20"
 
 
-def _lexam_mcq_4(name: str, select: RowSelector, population: int) -> RlDataSource[EvaluationCorpusRecipe]:
+def _lexam_mcq_4(name: str, select: RowSelector) -> RlDataSource[EvaluationCorpusRecipe]:
     protocol = EvaluationProtocol(
         benchmark=name,
         version=VERSION,
@@ -55,7 +53,6 @@ def _lexam_mcq_4(name: str, select: RowSelector, population: int) -> RlDataSourc
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=population,
     )
     return evaluation_source(
         name=name,
@@ -76,7 +73,7 @@ def _lexam_mcq_4(name: str, select: RowSelector, population: int) -> RlDataSourc
 
 def benchmarks() -> list[EvaluationBenchmark]:
     sources = [
-        _lexam_mcq_4("lexam-mcq-4-en", is_english, LEXAM_MCQ_4_EN_POPULATION),
-        _lexam_mcq_4("lexam-mcq-4-de", is_german, LEXAM_MCQ_4_DE_POPULATION),
+        _lexam_mcq_4("lexam-mcq-4-en", is_english),
+        _lexam_mcq_4("lexam-mcq-4-de", is_german),
     ]
     return fixed_benchmarks(sources, "chat")

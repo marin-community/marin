@@ -69,7 +69,7 @@ def econevals_cases(tmp_path, monkeypatch):
     (categories / CATEGORIES_FILENAME).write_text(json.dumps(CATEGORIES))
     source = replace(
         source,
-        config=replace(dataset, protocol=dataset.protocol.model_copy(update={"expected_population": len(QUESTIONS)})),
+        config=replace(dataset, protocol=dataset.protocol),
     )
     runtime = CampaignRuntime()
     overrides = InputOverrides(

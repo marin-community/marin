@@ -25,7 +25,7 @@ def published_cases(source, write_rows, tmp_path, monkeypatch, population):
     write_rows(file)
     source = replace(
         source,
-        config=replace(dataset, protocol=dataset.protocol.model_copy(update={"expected_population": population})),
+        config=replace(dataset, protocol=dataset.protocol),
     )
     runtime = CampaignRuntime()
     options = PipelineOptions(SourceProcessingMode.QUICK, runtime, inputs=InputOverrides(root=str(root)))

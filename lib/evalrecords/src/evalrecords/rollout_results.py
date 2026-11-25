@@ -286,7 +286,7 @@ def benchmark_scores(reader: ReadView) -> dict[str, BenchmarkScores]:
         protocol = protocols[datasets[0]]
         for dataset in datasets[1:]:
             other = protocols[dataset]
-            if other.model_dump(exclude={"expected_population"}) != protocol.model_dump(exclude={"expected_population"}):
+            if other.model_dump() != protocol.model_dump():
                 raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
         scores[name] = BenchmarkScores(
             protocol,

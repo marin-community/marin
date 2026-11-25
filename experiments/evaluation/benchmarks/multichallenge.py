@@ -29,7 +29,6 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 MULTICHALLENGE_REVISION = "670fd81f270314d0f8f82b34fcfe2187fd28f699"
-MULTICHALLENGE_ROWS = 266
 VERSION = "2026.11.20"
 
 
@@ -77,7 +76,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     metrics=(Metrics.ACCURACY,),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=MULTICHALLENGE_ROWS,
                 ),
                 multichallenge_item,
             ),
