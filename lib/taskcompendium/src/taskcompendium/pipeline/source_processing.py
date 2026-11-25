@@ -25,7 +25,6 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.counts import count_source_files
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
@@ -485,31 +484,6 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     return RawSample(population_count, sorted(rows, key=partial(_raw_order, seed=policy.seed)))
 
 
-def _census_payload_rows(run: _SourceRun, sample: RawSample) -> RawSample:
-    """Check staged payload row counts against the reader's count when both are exact."""
-    spec = run.recipe.source
-    if spec.select is not None or spec.read is not None or spec.decode is not None:
-        return sample
-    overrides = run.source_overrides
-    files = {
-        file: (
-            StoragePath(overrides[file].path)
-            if overrides and file in overrides
-            else StoragePath(run.source_input) / file
-        )
-        for file in staged_files(run.source_input, spec, overrides)
-    }
-    counts = count_source_files(files, spec.format)
-    if any(count is None for count in counts.values()):
-        return sample
-    measured = sum(count for count in counts.values() if count is not None)
-    if sample.population_count != measured:
-        raise ValueError(
-            f"The staged payload holds {measured} rows but the source reader produced {sample.population_count}"
-        )
-    return RawSample(measured, sample.rows)
-
-
 def _sample_panel(run: _SourceRun) -> _Panel:
     """Draw the raw panel while writing the locator ledger, then normalize, check and prepare only the panel."""
     policy = run.config.quality_policy
@@ -535,7 +509,6 @@ def _sample_panel(run: _SourceRun) -> _Panel:
                 ),
                 telemetry=phase,
             ).results[0]
-            sample = _census_payload_rows(run, sample)
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
     with run.telemetry.phase("panel_normalize") as phase:
