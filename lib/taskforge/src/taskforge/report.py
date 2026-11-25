@@ -60,6 +60,10 @@ def summary(rows: Sequence[WorkpieceMetrics], now: float, cutoff: float, since_h
         if accepted:
             per = " ".join(f"{name}={value / len(accepted):.0f}" for name, value in fields.items())
             lines.append(f"tokens_per_accepted role={role} {per}")
+    machines = [machine for row in rows for machine in row.machines]
+    lines.append(f"machines_per_workpiece {quantiles([len(row.machines) for row in rows])}")
+    lines.append(f"machine_start_seconds {quantiles([m.seconds for m in machines if m.error is None])}")
+    lines.append(f"machine_start_failures count={sum(m.error is not None for m in machines)}")
     finished = [row.finished - row.started for row in rows if row.terminal != RUNNING]
     lines.append(f"end_to_end_seconds {quantiles(finished)}")
     for name in ("initial", "final"):

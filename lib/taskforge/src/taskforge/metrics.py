@@ -25,6 +25,7 @@ from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.resources.env import TIMEOUT_EXIT_CODE, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.sandbox.metered import MachineStarted
 from taskforge.stages.author import AUTHOR_IMAGE_FALLBACK
 from taskforge.stages.rules import solved_trials
 
@@ -62,6 +63,7 @@ class WorkpieceMetrics:
         tokens: Token usage by role, from events at or after the caller's cutoff.
         stage_seconds: Durations of stage scopes that ended at or after the cutoff.
         event_gaps: Seconds since the previous event, keyed by request type, for latency proxies.
+        machines: Sandbox starts, including failed ones, at or after the cutoff.
     """
 
     id: str
@@ -79,6 +81,7 @@ class WorkpieceMetrics:
     tokens: Mapping[Role, Usage]
     stage_seconds: Mapping[Stage, tuple[float, ...]]
     event_gaps: Mapping[str, tuple[float, ...]]
+    machines: tuple[MachineStarted, ...]
 
 
 def reason_class(reason: str) -> str:
@@ -207,4 +210,5 @@ def workpiece_metrics(
         tokens=used.tokens,
         stage_seconds=used.stage_seconds,
         event_gaps=used.event_gaps,
+        machines=tuple(event for event, stamp in events if isinstance(event, MachineStarted) and stamp >= since),
     )

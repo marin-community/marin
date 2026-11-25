@@ -24,6 +24,7 @@ from taskforge.model.proposal import Environment, TaskProposal, Verification
 from taskforge.policy import GRADER_BASE_IMAGE, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
+from taskforge.resources.sandbox.metered import MeteredFactory
 
 
 @pytest.mark.parametrize("verification", list(Verification))
@@ -139,6 +140,8 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
         assert set(resources.factories) == {"gvisor", "shellsim"}
         factory = resources.factories["gvisor"]
+        assert isinstance(factory, MeteredFactory)
+        factory = factory.factory
         assert isinstance(factory, IrisMachineFactory)
         assert factory.controller_url == "http://controller"
         assert factory.cluster is None

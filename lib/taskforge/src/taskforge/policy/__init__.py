@@ -67,6 +67,14 @@ class Policy:
             raise ValueError(f"policy entry {key} is {value!r}, not a {kind.__name__}")
         return value
 
+    def settings(self) -> Mapping[str, Setting]:
+        """Every entry that is not a prompt."""
+        return {key: value for key, value in self.entries.items() if not isinstance(value, Prompt)}
+
+    def prompts_digest(self) -> str:
+        """The sha256 of every prompt template, by key."""
+        return digest({key: value.sha256 for key, value in sorted(self.entries.items()) if isinstance(value, Prompt)})
+
     def stage_digest(self, prefix: str) -> str:
         """The sha256 of the sorted entries under ``prefix``: a prompt by its template's sha256, a setting by value."""
         under = {key: value for key, value in self.entries.items() if key.startswith(f"{prefix}.")}

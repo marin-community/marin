@@ -183,9 +183,14 @@ computes one `WorkpieceMetrics` row per workpiece (`src/taskforge/metrics.py`), 
 summary for all workpieces and again for each origin present (`generated` or `repaired`),
 every line prefixed `origin=`. A summary has terminal/reason counts, accepted/hour over 1/6/24 hours,
 accepted tasks without an author session, author sessions per accepted task, `author.image`
-fallbacks, timed-out author and adversary commands, tokens by role in total and per accepted task,
+fallbacks, timed-out author and adversary commands, sandbox starts per workpiece with their start
+seconds and failures, tokens by role in total and per accepted task,
 end-to-end seconds of finished workpieces, the solve rate of accepted tasks as first validated and
-as accepted, stage durations, and consecutive-event latency proxies. Replayed results do not add token
+as accepted, stage durations, and consecutive-event latency proxies.
+Each sandbox `create` records a `MachineStarted` event with the Iris job id, image, requested CPU
+and memory, and the seconds it took to schedule, pull and start; a machine's lifetime and measured
+usage come from Iris, joined on that job id. Each driver process records a `WorkpieceStarted` event
+with the input, arm, policy settings, prompt digest and its own Iris task. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
 their scopes. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;

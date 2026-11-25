@@ -8,7 +8,7 @@ from pathlib import Path
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.effects.events import Event, Note, Resolved, StageCompleted
+from taskforge.effects.events import Event, Note, Resolved, StageCompleted, WorkpieceStarted
 from taskforge.effects.log import JsonlSink, Record, Status
 from taskforge.metrics import workpiece_metrics
 from taskforge.model.proposal import TaskProposal
@@ -17,6 +17,7 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Generated, Repaired, Submission, Terminal, Workpiece
 from taskforge.report import report
 from taskforge.resources.env import TIMEOUT_EXIT_CODE, CommandResult, RunCommand
+from taskforge.resources.sandbox.metered import MachineStarted
 from taskforge.stages.author import AUTHOR_IMAGE_FALLBACK
 
 
@@ -73,6 +74,16 @@ async def test_report_splits_lines_by_origin(tmp_path: Path, proposal: TaskPropo
             Workpiece("generated", Generated(proposal), submission=untouched, terminal=Terminal.ACCEPTED),
             [(0, StageCompleted(Stage.AUTHOR, "", "Submitted", 0))],
         ),
+        # A source task whose environment never started, so its author fell back to another image.
+        "fallback": (
+            Workpiece("fallback", Repaired(untouched), submission=untouched, terminal=Terminal.ACCEPTED),
+            [
+                (0, WorkpieceStarted("in/fallback.task.json", "S", {"solver.k": 4, "band.low": 0.2}, "d", "")),
+                (0, MachineStarted("", "gvisor", "repo:v1", 1, 8192, 600.0, "TimeoutError: did not start")),
+                (0, MachineStarted("/u/driver/shellbox-1", "gvisor", "python:3.12", 1, 8192, 30.0, None)),
+                (0, StageCompleted(Stage.AUTHOR, "", "Submitted", 1)),
+            ],
+        ),
         "untouched": (
             Workpiece("untouched", Repaired(untouched), submission=untouched, terminal=Terminal.ACCEPTED),
             [],
@@ -86,8 +97,11 @@ async def test_report_splits_lines_by_origin(tmp_path: Path, proposal: TaskPropo
         accepted = (1, StageCompleted(Stage.REVIEW, "", "Accept", 0, Terminal.ACCEPTED))
         await JsonlSink(str(directory / "events.jsonl")).write(records([*events, accepted]))
     lines = await report(str(tmp_path))
-    assert "origin=all workpieces count=2" in lines
+    assert "origin=all workpieces count=3" in lines
     assert "origin=all accepted_without_author count=1" in lines
     assert "origin=generated accepted_without_author count=0" in lines
     assert "origin=repaired accepted_without_author count=1" in lines
-    assert "origin=repaired terminal=accepted count=1" in lines
+    assert "origin=repaired terminal=accepted count=2" in lines
+    assert "origin=repaired machine_start_seconds n=1 p50=30.000 p90=30.000" in lines
+    assert "origin=repaired machine_start_failures count=1" in lines
+    assert "origin=generated machine_start_failures count=0" in lines
