@@ -34,14 +34,12 @@ def main(path: Path) -> None:
     else:
         raise AssertionError("retry-enabled records launch was accepted")
     import cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records
-
     for module in (cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records):
         assert Path(module.__file__).resolve().is_relative_to(Path.cwd()), module.__file__
 
     def history_config(attempt_id, export_root):
-        return OmegaConf.create(
-            {"trainer": {"export_path": str(export_root)}, "runtime": {"run_id": "history", "attempt_id": attempt_id}}
-        )
+        return OmegaConf.create({"trainer": {"export_path": str(export_root)},
+            "runtime": {"run_id": "history", "attempt_id": attempt_id}})
 
     ancestor_root = root / "ancestor-exports"
     with Tracking("tests-project", "history", ("records",), history_config("original", ancestor_root)) as original:
@@ -52,9 +50,7 @@ def main(path: Path) -> None:
         middle.start(resumed_step=3, checkpoint=parent)
         middle.log({"loss": 0.5, "eval/all/avg_score": 0.4}, step=5)
     try:
-        with Tracking(
-            "tests-project", "history", ("records",), history_config("failed-direct", root / "exports")
-        ) as failed:
+        with Tracking("tests-project", "history", ("records",), history_config("failed-direct", root / "exports")) as failed:
             failed.start(resumed_step=None)
             failed.log({"loss": 0.9}, step=1)
             raise RuntimeError("fixture workload failed")
@@ -79,12 +75,8 @@ def main(path: Path) -> None:
                     (policy / name).write_text("{}")
             elif config.run.attempt_id != "earlier-failed-attempt":
                 with open_dict(config.skyrl):
-                    config.skyrl.runtime = {
-                        "run_id": config.run.id,
-                        "attempt_id": config.run.attempt_id,
-                        "iris_job_id": "/local/training",
-                        "coordinator_iris_job_id": None,
-                    }
+                    config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
+                        "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
                 with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
                     interrupted = OmegaConf.create(OmegaConf.to_container(config, resolve=True))
                     interrupted.run.attempt_id = "interrupted-attempt"
@@ -94,9 +86,7 @@ def main(path: Path) -> None:
                         startup_path.write_text(OmegaConf.to_yaml(launch_config))
                         main = SimpleNamespace(run=lambda _: None)
                         with (
-                            patch(
-                                "cloud.iris.skyrl_entrypoint.get_job_info", return_value=SimpleNamespace(job_id=job_id)
-                            ),
+                            patch("cloud.iris.skyrl_entrypoint.get_job_info", return_value=SimpleNamespace(job_id=job_id)),
                             patch.dict(sys.modules, {"skyrl_train.entrypoints.main_base": main}),
                         ):
                             run_config(startup_path)
@@ -104,23 +94,14 @@ def main(path: Path) -> None:
                     foreign["run"]["id"] = "unrelated-native-run"
                     foreign["run"]["attempt_id"] = "foreign-native"
                     with DataStore.open(run_records_root(str(config.artifacts.export_root))) as store:
-                        update_attempt(
-                            store,
-                            AttemptRecord(
-                                run_id="unrelated-native-run",
-                                attempt_id="foreign-native",
-                                config=foreign,
-                                started_at="2026-11-11T01:00:00+00:00",
-                            ),
-                        )
+                        update_attempt(store, AttemptRecord(run_id="unrelated-native-run", attempt_id="foreign-native",
+                            config=foreign, started_at="2026-11-11T01:00:00+00:00"))
                 startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
                 assert startup is not None and startup.vllm_version == "fixture-vllm"
                 (root / "startup-observation.json").write_text(startup.model_dump_json())
                 with Tracking("tests-project", "record-boundary", ("records",), config.skyrl) as tracker:
-                    tracker.start(
-                        resumed_step=5,
-                        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5),
-                    )
+                    tracker.start(resumed_step=5,
+                        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
                     immediate = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
                     assert immediate.metrics_started_at is not None and immediate.parent.attempt_id == "middle"
                     tracker.log({"startup/resume": 0.05, "eval/all/avg_score": 0.6}, step=5)
@@ -134,26 +115,13 @@ def main(path: Path) -> None:
 
         def export_terminal_policy(self, config_path):
             config = load_launch_config(config_path)
-            request = HFExportRequest(
-                step=8,
-                checkpoint_base_path=str(config.artifacts.checkpoint_root),
+            request = HFExportRequest(step=8, checkpoint_base_path=str(config.artifacts.checkpoint_root),
                 checkpoint_path=str(Path(config.artifacts.checkpoint_root) / "global_step_8"),
-                export_path=str(config.artifacts.export_root),
-                model_path=str(config.skyrl.trainer.policy.model.path),
-                model_source_uri=str(config.inputs.model.uri),
-                model_source_identity=str(config.inputs.model.identity),
-                num_nodes=1,
-                gpus_per_node=4,
-            )
-            spec = ExportJobSpec(
-                request=request,
-                cluster="local",
-                priority="batch",
-                gpu_variant="H100",
-                job_name=None,
-                timeout=60,
-                no_wait=False,
-            )
+                export_path=str(config.artifacts.export_root), model_path=str(config.skyrl.trainer.policy.model.path),
+                model_source_uri=str(config.inputs.model.uri), model_source_identity=str(config.inputs.model.identity),
+                num_nodes=1, gpus_per_node=4)
+            spec = ExportJobSpec(request=request, cluster="local", priority="batch", gpu_variant="H100",
+                job_name=None, timeout=60, no_wait=False)
             export = checkpoint_export_launch_config(config, request, spec)
             export_path = root / "export.yaml"
             export_path.write_text(OmegaConf.to_yaml(export))
