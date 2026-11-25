@@ -110,9 +110,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
 
 def _run_head_script(args: SimpleNamespace, script: str, monkeypatch, *, trainer_timing_uri: str | None = None) -> int:
     def launch(_config_path, environment):
-        # run_head starts the liveness clock when launch returns. Hold the return until the
-        # child interpreter has started so its startup time, which is unbounded on a loaded
-        # host, is not charged against the test's short liveness windows.
+        # Start the progress deadline after the child interpreter is ready.
         ready_read, ready_write = os.pipe()
         handshake = f"import os\nos.write({ready_write}, b'r')\nos.close({ready_write})\n"
         try:
@@ -181,7 +179,6 @@ os.kill(os.getpid(), signal.SIGABRT)
 
 def test_head_keeps_a_quiet_driver_alive_while_work_advances(tmp_path, monkeypatch) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
-    # The driver runs well past the liveness window, but no single silence exceeds it.
     script = f"""
 import os
 from pathlib import Path

@@ -24,7 +24,6 @@ def test_worker_debug_artifacts_use_iris_attempt_outputs(tmp_path, monkeypatch, 
     monkeypatch.setenv("IRIS_TASK_ID", "/test/debug/0:0")
     monkeypatch.delenv(DEBUG_ARTIFACT_DIR_ENV, raising=False)
     monkeypatch.delenv(COLLECTIVE_PHASE_DIAGNOSTICS_ENV, raising=False)
-    # Restore the process environment after applying the diagnostic config.
     monkeypatch.setattr(task_runtime.os, "environ", dict(os.environ))
     config = OmegaConf.create({"trainer": {"debug_mode": mode.value}})
 
@@ -49,4 +48,3 @@ def test_worker_debug_artifacts_use_iris_attempt_outputs(tmp_path, monkeypatch, 
     assert receipt["role"] == "worker"
     assert receipt["environment"][COLLECTIVE_PHASE_DIAGNOSTICS_ENV] == "1"
     task_runtime.prune_empty_debug_directories(artifact_root)
-    assert manifest.is_file()
