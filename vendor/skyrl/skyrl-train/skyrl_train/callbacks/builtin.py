@@ -75,6 +75,7 @@ from .types import (
 CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
 EVALUATION_ATTEMPTED_METRIC = "eval/all/num_attempted"
 EVALUATION_SCORED_METRIC = "eval/all/num_scored"
+BEST_WINDOW_FILENAME = "best_checkpoint_window.json"
 
 
 def register_callback(name: str):
@@ -221,6 +222,7 @@ class BestCheckpointCallback(TrainerCallback):
         expected_tasks: int,
         minimum_scored_tasks: int,
         selection_metric: str = "eval/all/avg_verifier_score",
+        selection_window: int = 1,
         save_after_fraction: float = 0.0,
         preservation_max_drop: dict[str, float] | None = None,
     ):
@@ -230,11 +232,41 @@ class BestCheckpointCallback(TrainerCallback):
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
         self.selection_metric = selection_metric
+        if selection_window < 1:
+            raise ValueError("selection_window must be positive")
+        self.selection_window = selection_window
+        self.score_history: list[tuple[int, float | None]] = []
         self.save_after_fraction = save_after_fraction
         self.preservation_max_drop = dict(preservation_max_drop or {})
         if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
             raise ValueError("Preservation drops must be finite and nonnegative")
         self.preservation_baseline: dict[str, float] = {}
+
+    def _window_score(self, root: str, step: int, score: float | None) -> float | None:
+        path = join_resource_path(root, BEST_WINDOW_FILENAME)
+        if not self.score_history and io.exists(path):
+            saved = json.loads(io.read_bytes(path))
+            if saved["window"] != self.selection_window or saved["metric"] != self.selection_metric:
+                raise ValueError("Best-checkpoint window policy changed on resume")
+            self.score_history = [tuple(row) for row in saved["scores"]]
+        if self.score_history and self.score_history[-1][0] > step:
+            raise ValueError("Best-checkpoint history is ahead of the resumed step")
+        if self.score_history and self.score_history[-1][0] == step:
+            self.score_history[-1] = (step, score)
+        else:
+            self.score_history.append((step, score))
+        self.score_history = self.score_history[-self.selection_window :]
+        io.makedirs(root, exist_ok=True)
+        io.write_bytes_atomic(
+            path,
+            json.dumps(
+                {"window": self.selection_window, "metric": self.selection_metric, "scores": self.score_history}
+            ).encode(),
+        )
+        scores = [value for _, value in self.score_history if value is not None]
+        if len(scores) != self.selection_window:
+            return None
+        return math.fsum(scores) / self.selection_window
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         root = trainer.cfg.trainer.ckpt_path
@@ -254,6 +286,8 @@ class BestCheckpointCallback(TrainerCallback):
         if state.global_step == 0 and self.preservation_max_drop and ineligible:
             raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
         if ineligible:
+            if self.selection_window > 1:
+                self._window_score(root, state.global_step, None)
             return control
         if state.global_step == 0:
             self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
@@ -266,10 +300,17 @@ class BestCheckpointCallback(TrainerCallback):
             if not math.isfinite(value):
                 raise ValueError(f"Nonfinite preservation metric: {key}")
             if value < self.preservation_baseline[key] - maximum_drop:
+                if self.selection_window > 1:
+                    self._window_score(root, state.global_step, None)
                 return control
         score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
+        if self.selection_window > 1:
+            score = self._window_score(root, state.global_step, score)
+            if score is None:
+                return control
+            metrics["eval/selection_score"] = score
         if self.best_score is not None and score <= self.best_score:
             return control
         if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
@@ -291,6 +332,7 @@ class BestCheckpointCallback(TrainerCallback):
             "model_format": model_format,
             "selection": "Highest eligible selected metric; keep the earliest checkpoint on ties",
             "selection_metric": self.selection_metric,
+            **({"selection_window": self.selection_window} if self.selection_window > 1 else {}),
             "preservation_baseline": self.preservation_baseline,
             "preservation_max_drop": self.preservation_max_drop,
             "save_after_fraction": self.save_after_fraction,

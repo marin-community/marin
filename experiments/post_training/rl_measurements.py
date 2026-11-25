@@ -425,7 +425,7 @@ def read_measurements(
     for index, evaluation in enumerate(preset.evaluations):
         quality = evaluation.held_out and _checks_task_coverage(preset, evaluation)
         expected = recipe.evaluation_answer_count(
-            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
+            evaluation, recipe.evaluation_source(evaluation, selection, default, preset)
         )
         all_scores = read_answers(evaluation, path, launch=launch, attempt=terminal)
         if index == 0:

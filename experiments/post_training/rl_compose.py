@@ -74,6 +74,7 @@ from experiments.post_training.task_curation.selection import (
     TASK_MANIFEST_FILENAME,
     TASK_SPEC_COLUMN,
     GraderKind,
+    curriculum_holdout_step,
 )
 from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
 
@@ -139,6 +140,8 @@ def selection_summary(selection: ArtifactStep) -> dict:
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
+    if evaluation.training_holdout is not None:
+        return evaluation.training_holdout.count * evaluation.answers
     key = "training_rows" if not evaluation.held_out else f"{evaluation.file}_rows"
     return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
@@ -442,7 +445,11 @@ def _training_config(
     trainer = sections.Trainer(
         max_steps=preset.updates or 1,
         micro_forward_batch_size_per_gpu=micro_batch,
-        eval_interval=max(1, preset.updates) if preset.evaluations else -1,
+        eval_interval=(
+            preset.evaluations[0].every
+            if preset.evaluations and preset.evaluations[0].training_holdout is not None
+            else max(1, preset.updates) if preset.evaluations else -1
+        ),
         resume_mode="latest" if preset.checkpoints != "none" else "none",
         ckpt_interval=0,
         hf_save_interval=-1,
@@ -585,8 +592,12 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.held_out_tasks)
-        _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
+        evaluation_tasks = evaluation_source(evaluation, selection, default, preset)
+        if evaluation.training_holdout is not None:
+            assert index == 0
+            training_selection = evaluation_tasks
+        else:
+            _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
         tasks_for_evaluation = evaluation_tasks
         if evaluation.sample is not None:
             tasks_for_evaluation = sampled_tasks_step(
@@ -716,11 +727,14 @@ def run_step(
 
 
 def evaluation_source(
-    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, held_out_tasks: str | None
+    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, preset: Preset
 ) -> ArtifactStep:
+    if evaluation.training_holdout is not None:
+        source = _training_selection(selection, selection_summary(selection), preset.recipe.config.to_skyrl())
+        return curriculum_holdout_step(source, evaluation.training_holdout)
     if evaluation.source == "default":
         return default
     if evaluation.source == "tasks":
         return selection
-    assert held_out_tasks is not None
-    return selection_artifact(held_out_tasks)
+    assert preset.held_out_tasks is not None
+    return selection_artifact(preset.held_out_tasks)

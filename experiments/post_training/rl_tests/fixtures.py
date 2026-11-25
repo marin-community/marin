@@ -559,7 +559,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
         )
         for index, evaluation in enumerate(preset.evaluations):
-            source = recipe.evaluation_source(evaluation, selected, default, preset.held_out_tasks)
+            source = recipe.evaluation_source(evaluation, selected, default, preset)
             sources = (
                 launch["inputs"]["validation_data"]
                 if index == 0
