@@ -24,13 +24,14 @@ Modes:
                   receipt per stage under the release prefix. Stages whose real
                   write-mode upstream receipts do not exist yet are reported as
                   blocked (with the reason) instead of failing.
-- ``run``       — the submission path: the guard refuses anything not landed on
+- ``run``       — the one idempotent verb: the guard refuses anything not landed on
                   ``atlas-env-audit`` or carrying release literals, every stage gates
                   on its fresh preflight receipt, then the lazy graph builds the
                   release (cluster stages through ``marin.execution.remote``).
+                  Sealed steps skip by fingerprint, missing steps build, failed
+                  steps re-run — a rerun after an interruption is this same
+                  command at the same version.
 - ``status``    — per-node artifact and preflight state.
-- ``resume``    — a rerun: completed stages are skipped (matching fingerprints),
-                  failed stages restart alone.
 
 Nothing outside the repository is read or executed; the plan document (or the
 release config the plan stage derives from) is the only release configuration, and
@@ -253,7 +254,7 @@ def mode_release(args) -> int:
         # bundle bundles at the newest landed tip containing the freeze, and the
         # root job auto-resumes at the same version.
         submission = SimpleNamespace(version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster)
-        return _submit_root(submission, verb="run")
+        return _submit_root(submission)
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
     for node in graph_nodes(release_graph(plan)):
@@ -263,8 +264,13 @@ def mode_release(args) -> int:
     return _run_preflight(plan, source=args.source, max_files=args.max_files, stages=None)
 
 
-def mode_run(args, *, force_run_failed: bool) -> int:
-    """The submission path: guard, per-stage preflight gate, then the lazy graph."""
+def mode_run(args) -> int:
+    """The one verb: guard, per-stage preflight gate, then the idempotent graph.
+
+    Every invocation does the same thing: sealed steps skip by fingerprint,
+    missing steps build, failed steps re-run. There is no run/resume choice —
+    a rerun after an interruption is this same command at the same version.
+    """
     configure_coreweave_s3()
     plan = _plan_document(args)
     _attest_revision(args, plan)
@@ -284,9 +290,8 @@ def mode_run(args, *, force_run_failed: bool) -> int:
         # a plan that opts in runs it on every build; other plans never touch it.
         if plan.main_source_sync is not None:
             handles.append(graph.stages["main_source_sync"])
-    run_handles(*handles, force_run_failed=force_run_failed, max_concurrent=args.max_concurrent)
-    verb = "RESUME" if force_run_failed else "RUN"
-    print(f"{verb} {plan.release_id}: {len(handles) - 1} terminal handle(s) built")
+    run_handles(*handles, force_run_failed=True, max_concurrent=args.max_concurrent)
+    print(f"RUN {plan.release_id}: {len(handles) - 1} terminal handle(s) built")
     return 0
 
 
@@ -327,20 +332,13 @@ def _artifact_status(handle) -> str:
     return status or "absent"
 
 
-def mode_resume(args) -> int:
-    """A rerun: completed stages are skipped; failed stages restart alone.
-
-    With ``--cluster`` the resume submits as an in-region root job (the sealed
-    steps skip by fingerprint there too); without it the graph runs locally.
-    """
-    if getattr(args, "cluster", None):
-        return _submit_root(args, verb="resume")
-    return mode_run(args, force_run_failed=True)
-
-
 def mode_submit(args) -> int:
-    """Submit the release's root job: the graph runs in-region, auto-resuming."""
-    return _submit_root(args, verb="run")
+    """Submit the release's root job: the graph runs in-region under the one verb.
+
+    A resubmission after an interruption is this same command: sealed steps skip
+    by fingerprint, failed steps re-run, and the retry caps are constants.
+    """
+    return _submit_root(args)
 
 
 # ---------------------------------------------------------------------------
@@ -441,18 +439,16 @@ def _submit_environment() -> dict[str, str]:
     return env
 
 
-def _root_command(plan: ReleasePlan, plan_relative: str, *, mode: str) -> list[str]:
-    """The root job's entrypoint: the attempt-aware run/resume verb.
+def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
+    """The root job's entrypoint: one idempotent verb on every attempt.
 
-    A submit runs the graph on attempt 0; a resume submission reruns ``resume`` on
-    every attempt, and any interruption retry (preemption, node loss, a killed hung
-    root) reruns ``resume`` at the same version, so sealed steps skip and only
-    failed or unstarted nodes re-run.
+    There is no run/resume choice and no attempt-aware mapping: every attempt
+    runs the same idempotent build — sealed steps skip by fingerprint, missing
+    steps build, failed steps re-run — so an interruption retry and a deliberate
+    resubmission do exactly the same thing at the same version. The retry and
+    failure caps are constants in the submit code, never caller flags; watching
+    is the watchdog's release prefix entry, not a worker-side process.
     """
-    attempt_check = (
-        "from iris.cluster.client.job_info import get_job_info;"
-        " info = get_job_info(); print(getattr(info, 'attempt_id', 0) or 0)"
-    )
     script = (
         'set -euo pipefail; cd "$IRIS_WORKDIR";'
         " export ATLAS_PUSH_LOG=$IRIS_WORKDIR/atlas-landing-log.jsonl;"
@@ -461,21 +457,18 @@ def _root_command(plan: ReleasePlan, plan_relative: str, *, mode: str) -> list[s
         ' if [ -n "${MARIN_IAP_CREDENTIAL_JSON:-}" ]; then'
         " mkdir -p ~/.config/marin/credentials;"
         " printf '%s' \"$MARIN_IAP_CREDENTIAL_JSON\" > ~/.config/marin/credentials/marin.json; fi;"
-        ' ATTEMPT=$(uv run --frozen python -c "' + attempt_check + '" 2>/dev/null || echo 0);'
-        " VERB=" + mode + '; if [ "$ATTEMPT" -gt 0 ]; then VERB=resume; fi;'
-        ' echo "root attempt $ATTEMPT -> $VERB";'
         " exec uv run --frozen atlas-release --version "
         + plan.release_id
         + " --plan "
         + plan_relative
         + " --source-revision "
         + plan.source_revision
-        + ' "$VERB"'
+        + " run"
     )
     return ["bash", "-lc", script]
 
 
-def _submit_root(args, *, verb: str) -> int:
+def _submit_root(args) -> int:
     """Submit the in-region root job that runs (or resumes) the plan's graph."""
     configure_coreweave_s3()
     if getattr(args, "source_revision", None) and args.source_revision != _plan_document(args).source_revision:
@@ -497,8 +490,8 @@ def _submit_root(args, *, verb: str) -> int:
     subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
     try:
         (snapshot / "atlas-landing-log.jsonl").write_bytes(landing_log.read_bytes())
-        command = _root_command(plan, relative, mode=verb)
-        name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{verb}-{uuid.uuid4().hex[:8]}"
+        command = _root_command(plan, relative)
+        name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:
             with IrisClient.remote(
                 endpoint.url,
@@ -521,7 +514,7 @@ def _submit_root(args, *, verb: str) -> int:
                     max_task_failures=_ROOT_JOB_MAX_TASK_FAILURES,
                 )
         job_id = str(job.job_id)
-        print(f"SUBMITTED {verb} {plan.release_id}@{plan.artifact_version} bundle={revision[:12]} job={job_id}")
+        print(f"SUBMITTED {plan.release_id}@{plan.artifact_version} bundle={revision[:12]} job={job_id}")
         return 0
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(snapshot)], cwd=REPO_ROOT, check=False)
@@ -627,7 +620,9 @@ def main(argv: list[str] | None = None) -> int:
     preflight_parser.add_argument("--source", help="The census/corpus slice source (default: first declared)")
     preflight_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
 
-    run_parser = modes.add_parser("run", help="Guard, then build the release through the lazy graph")
+    run_parser = modes.add_parser(
+        "run", help="The one idempotent verb: guard, preflight gate, then the lazy graph"
+    )
     run_parser.add_argument("--stage", action="append", help="Restrict to one graph node's subtree (repeatable)")
     run_parser.add_argument("--source", help="The census/corpus slice source for auto-preflight")
     run_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
@@ -636,16 +631,6 @@ def main(argv: list[str] | None = None) -> int:
     status_parser = modes.add_parser("status", help="Per-node artifact and preflight state")
     status_parser.add_argument("--json", action="store_true")
     status_parser.add_argument("--source", help="The census/corpus slice source the receipts were sealed with")
-
-    resume_parser = modes.add_parser("resume", help="Rerun: skip completed, restart failed alone")
-    resume_parser.add_argument("--stage", action="append")
-    resume_parser.add_argument("--source")
-    resume_parser.add_argument("--max-files", type=int, default=preflight_slices.DEFAULT_MAX_FILES)
-    resume_parser.add_argument("--max-concurrent", type=int, default=8)
-    resume_parser.add_argument(
-        "--cluster",
-        help="Submit the resume as an in-region root job on this cluster instead of running locally",
-    )
 
     submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
     submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
@@ -661,17 +646,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.landing_log:
         os.environ[guard.ATLAS_PUSH_LOG_ENV] = args.landing_log
     handlers = {
+        "run": mode_run,
         "plan": mode_plan,
         "preflight": mode_preflight,
         "release": mode_release,
         "status": mode_status,
-        "resume": mode_resume,
         "submit": mode_submit,
     }
     try:
-        if args.mode == "run":
-            # run threads the explicit force flag; resume sets it itself.
-            return mode_run(args, force_run_failed=False)
         return handlers[args.mode](args)
     except Exception as error:
         print(f"ATLAS-RELEASE REFUSED: {str(error)[:600]}", file=sys.stderr)

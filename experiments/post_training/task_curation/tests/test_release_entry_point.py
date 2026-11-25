@@ -137,11 +137,12 @@ def test_run_mode_gates_on_the_submission_guard(tmp_path, plan_document, monkeyp
     assert "not landed" in capsys.readouterr().err
 
 
-def test_resume_mode_forces_failed_stages_alone(tmp_path, plan_document, monkeypatch, capsys):
-    """Resume forces failed stages alone through the same terminal run.
+def test_run_mode_is_the_idempotent_verb(tmp_path, plan_document, monkeypatch, capsys):
+    """Run is the one verb: it re-runs failed steps (force_run_failed=True).
 
-    Regression: the dispatch passed ``force_run_failed`` to ``mode_resume``, which
-    does not accept it, so every resume died at the handler boundary.
+    Regression: the run/resume split forced the caller to choose a verb per
+    attempt, and attempt 0's ``run`` refused a previously failed step (the R40
+    bug class). The collapse makes run itself idempotent.
     """
     captured = {}
 
@@ -151,51 +152,51 @@ def test_resume_mode_forces_failed_stages_alone(tmp_path, plan_document, monkeyp
 
     monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *a, **k: None)
     monkeypatch.setattr(entry_point, "run_handles", fake_run)
-    exit_code = entry_point.main(_argv(plan_document, "resume"))
+    exit_code = entry_point.main(_argv(plan_document, "run"))
     assert exit_code == 0
     assert captured["force_run_failed"] is True
-    assert "RESUME testrelease" in capsys.readouterr().out
+    assert "RUN testrelease" in capsys.readouterr().out
 
 
-def test_resume_with_cluster_submits_the_resume_job(tmp_path, plan_document, monkeypatch):
-    """`resume --cluster` submits an in-region resume job instead of running locally."""
+def test_resubmission_is_the_same_submit_command(tmp_path, plan_document, monkeypatch):
+    """There is no run/resume choice: the submitter is the one submission command."""
     captured = {}
 
-    def fake_submit(args, *, verb):
-        captured["verb"] = verb
+    def fake_submit(args):
         captured["cluster"] = args.cluster
-        return 0
-
-    monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
-    exit_code = entry_point.main(_argv(plan_document, "resume", "--cluster", "cw-us-east-02a"))
-    assert exit_code == 0
-    assert captured == {"verb": "resume", "cluster": "cw-us-east-02a"}
-
-
-def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):
-    captured = {}
-
-    def fake_submit(args, *, verb):
-        captured["verb"] = verb
         return 0
 
     monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
     exit_code = entry_point.main(_argv(plan_document, "submit", "--cluster", "cw-us-east-02a"))
     assert exit_code == 0
-    assert captured == {"verb": "run"}
+    assert captured == {"cluster": "cw-us-east-02a"}
 
 
-def test_root_command_carries_the_submission_verb():
-    """The resume submission's entrypoint runs resume on attempt 0.
+def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):
+    captured = {}
+
+    def fake_submit(args):
+        captured["submitted"] = True
+        return 0
+
+    monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
+    exit_code = entry_point.main(_argv(plan_document, "submit", "--cluster", "cw-us-east-02a"))
+    assert exit_code == 0
+    assert captured == {"submitted": True}
+
+
+def test_root_command_runs_the_one_idempotent_verb():
+    """The root job's entrypoint runs the one verb with no attempt mapping.
 
     Regression: the entrypoint mapped attempt 0 to `run` for BOTH modes, so a
-    resume submission refused at the first previously-failed step.
+    resume submission refused at the first previously-failed step. The collapse
+    removed the mapping entirely: run is idempotent.
     """
     plan = fixture_plan()
-    submit_script = entry_point._root_command(plan, "p/r40.json", mode="run")[-1]
-    assert "VERB=run;" in submit_script
-    resume_script = entry_point._root_command(plan, "p/r40.json", mode="resume")[-1]
-    assert "VERB=resume;" in resume_script
+    script = entry_point._root_command(plan, "p/r40.json")[-1]
+    assert ' "$VERB"' not in script
+    assert "ATTEMPT=" not in script
+    assert script.rstrip().endswith(" run")
 
 
 def test_interrupted_graph_resumes_and_skips_sealed_nodes(tmp_path, monkeypatch):
@@ -378,9 +379,8 @@ def test_release_mode_seals_and_submits_the_derived_plan(tmp_path, monkeypatch, 
     monkeypatch.setattr(entry_point, "seal_derivation", lambda release_root, d: {"uri": sealed_uri, "sha256": "b" * 64})
     captured = {}
 
-    def fake_submit(args, *, verb):
+    def fake_submit(args):
         captured["args"] = args
-        captured["verb"] = verb
         return 0
 
     monkeypatch.setattr(entry_point, "_submit_root", fake_submit)
@@ -388,7 +388,6 @@ def test_release_mode_seals_and_submits_the_derived_plan(tmp_path, monkeypatch, 
     output = capsys.readouterr().out
     assert exit_code == 0
     assert f"SEALED {sealed_uri}" in output
-    assert captured["verb"] == "run"
     assert captured["args"].version == "testrelease"
     assert captured["args"].plan == sealed_uri
     assert captured["args"].cluster == "cw-us-east-02a"
