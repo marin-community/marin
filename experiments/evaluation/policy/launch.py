@@ -53,8 +53,6 @@ def launch_specs(
     """
     resolved = resolve(policy, candidate)
     if evaluations is not None:
-        if not evaluations:
-            raise ValueError("no evaluations named")
         unknown = set(evaluations) - {item.evaluation.name for item in resolved}
         if unknown:
             raise ValueError(f"{candidate.name} does not run {sorted(unknown)} under {policy.version}")
