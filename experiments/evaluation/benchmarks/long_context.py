@@ -101,7 +101,6 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
             origin=SourceOrigin.EVALCHEMY,
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
-            count=MRCR_SOURCE_POPULATION,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -157,7 +156,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.EVALCHEMY,
                 family="long-context",
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
-                count=1150,
             ),
             config=EvaluationCorpusRecipe(
                 CurationRecipe(

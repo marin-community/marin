@@ -71,7 +71,6 @@ def _source(
             build_path="IMOBench",
             family="judged-math",
             tags=("eval", "source:imobench", "single-turn", "benchmark", "math", "llm-judge"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

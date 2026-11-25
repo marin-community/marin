@@ -72,7 +72,6 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
             origin=SourceOrigin.MARIN,
             family="test",
             tags=("eval",),
-            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

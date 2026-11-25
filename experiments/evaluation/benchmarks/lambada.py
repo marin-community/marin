@@ -39,7 +39,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             origin=SourceOrigin.EVALCHEMY,
             family="likelihood-continuation",
             tags=("eval", "source:evalchemy", "benchmark"),
-            count=5153,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(

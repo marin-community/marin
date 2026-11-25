@@ -70,7 +70,6 @@ def instruction_following_evaluation(
             origin=SourceOrigin.EVALCHEMY,
             family="instruction-following",
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

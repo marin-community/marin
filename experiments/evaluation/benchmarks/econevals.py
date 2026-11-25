@@ -110,7 +110,6 @@ def econevals_source(
             origin=SourceOrigin.ECONEVALS,
             family="judged-preference",
             tags=("eval", "source:econevals", "single-turn", "benchmark", "llm-judge"),
-            count=rows,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

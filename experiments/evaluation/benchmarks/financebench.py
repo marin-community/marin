@@ -38,7 +38,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.EVALCHEMY,
                 family="judged-answer",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
-                count=50,
             ),
             config=EvaluationCorpusRecipe(
                 CurationRecipe(

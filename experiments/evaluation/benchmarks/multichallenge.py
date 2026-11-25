@@ -45,7 +45,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.SCALE_AI,
                 family="judged-answer",
                 tags=("eval", "source:scaleai", "multi-turn", "benchmark", "llm-judge"),
-                count=MULTICHALLENGE_ROWS,
             ),
             config=EvaluationCorpusRecipe(
                 CurationRecipe(

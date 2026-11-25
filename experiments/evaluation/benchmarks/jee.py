@@ -39,7 +39,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.EVALCHEMY,
                 family="engineering-exam",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark"),
-                count=515,
             ),
             config=EvaluationCorpusRecipe(
                 recipe=CurationRecipe(

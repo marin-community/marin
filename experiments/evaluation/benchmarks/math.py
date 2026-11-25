@@ -112,7 +112,6 @@ def math_dataset(
             origin=SourceOrigin.EVALCHEMY,
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe,
@@ -153,7 +152,6 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
             origin=SourceOrigin.EVALCHEMY,
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math", "legacy-subset"),
-            count=30,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

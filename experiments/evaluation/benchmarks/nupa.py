@@ -61,7 +61,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     origin=SourceOrigin.EVALCHEMY,
                     family="numeric-representation",
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
-                    count=rows,
                 ),
                 config=EvaluationCorpusRecipe(
                     recipe=CurationRecipe(

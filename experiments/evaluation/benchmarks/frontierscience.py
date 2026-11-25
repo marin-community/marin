@@ -58,7 +58,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     build_path="Evalchemy",
                     family="judged-answer",
                     tags=("eval", "single-turn", "benchmark", "llm-judge"),
-                    count=count,
                 ),
                 config=EvaluationCorpusRecipe(
                     recipe=CurationRecipe(

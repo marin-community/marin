@@ -68,7 +68,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="shell-cmd",
                 tags=("agentic", "multi-turn", "language:bash"),
-                count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),

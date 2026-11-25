@@ -186,7 +186,6 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
             origin=SourceOrigin.LIVECODEBENCH_PRO,
             family="competitive-programming",
             tags=("eval", "source:livecodebench-pro", "benchmark", "code", "single-turn"),
-            count=POPULATION,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(

@@ -99,7 +99,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
-                count=1068,
                 notes=(
                     "Multi-turn with four factual or formatting criteria per task. The converter "
                     "preserves the source's explicit positive or negated pass condition."

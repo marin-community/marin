@@ -335,8 +335,10 @@ def _publish(
                 }
             )
         )
-    # Inventory-only pointers are carried at their pinned declared count so the Atlas
-    # lists them; they have no embedded tasks, so no placement statistics exist for them.
+    # Inventory-only pointers are carried at their published count so the Atlas lists
+    # them; that count exists only when a measurement identifies the pointer's pin, so
+    # unmeasured pointers do not appear. They have no embedded tasks, so no placement
+    # statistics exist for them.
     sources.extend(
         AlignmentSource(
             source_id=row.id,
@@ -346,7 +348,7 @@ def _publish(
             task_count=row.task_count,
             ready_count=0,
             insufficient_context_count=0,
-            basis="declared",
+            basis="inventory",
         )
         for row in inventory
         if row.id not in curated_roots and row.task_count is not None

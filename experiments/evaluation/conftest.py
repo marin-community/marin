@@ -103,7 +103,6 @@ def agent_source() -> RlDataSource[EvaluationCorpusRecipe]:
             origin=SourceOrigin.MARIN,
             family="test",
             tags=(),
-            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

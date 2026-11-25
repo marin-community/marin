@@ -75,7 +75,6 @@ def evaluation_source(
             build_path="Evalchemy",
             family=protocol.operation.value,
             tags=("eval", "benchmark", "benchmark:" + protocol.benchmark),
-            count=protocol.expected_population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -119,7 +118,6 @@ def multiple_choice_evaluation(
             origin=SourceOrigin.LM_EVAL,
             family="checkpoint",
             tags=("eval", "benchmark"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -199,7 +197,6 @@ def lm_eval_multiple_choice(
                 "family:likelihood",
                 "task:" + original_task_name(template),
             ),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe=recipe,
@@ -260,7 +257,6 @@ def text_generation_evaluation(
             origin=SourceOrigin.LM_EVAL,
             family="checkpoint",
             tags=("eval", "benchmark"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -319,7 +315,6 @@ def _compile_lm_eval_text_generation(
             origin=SourceOrigin.EVALCHEMY,
             family="short-answer",
             tags=("eval", "source:evalchemy", "benchmark", "family:short-answer"),
-            count=dataset.population,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(

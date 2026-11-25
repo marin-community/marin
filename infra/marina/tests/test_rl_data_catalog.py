@@ -98,6 +98,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False,
         origin="native",
         family="math",
         tags=[],
+        # The count a COMPLETE attempt measured at this row's pin, as publication wrote it.
         task_count=3,
         notes="",
         dataset_id=None,
@@ -203,7 +204,7 @@ def count_declaration(source_id: str) -> SourceDeclaration:
         origin="native",
         family="count",
         tags=[],
-        task_count=9,
+        task_count=None,
         notes="",
         dataset_id=None,
         dataset_revision=None,
@@ -217,23 +218,8 @@ def count_declaration(source_id: str) -> SourceDeclaration:
     )
 
 
-def count_curation(population: int | None) -> CurationSummary:
-    return CurationSummary(
-        status="completed",
-        mode="full",
-        source_revision=None,
-        recipe_revision="1",
-        raw_population_count=population,
-        raw_sample_count=population,
-        processed_rows=population,
-        unprocessed_rows=0,
-        admission_counts={"admitted": population or 0},
-        verification=None,
-    )
-
-
 def publish_count_rows(root: str, rows: list[SnapshotSource]) -> None:
-    """Store an assessment-free snapshot whose rows carry distinct count sources."""
+    """Store an assessment-free snapshot whose rows carry distinct published counts."""
     with DataStore.open(root, writer_id="counts") as store:
         register_catalog(store)
         store.flush()
@@ -247,38 +233,25 @@ def publish_count_rows(root: str, rows: list[SnapshotSource]) -> None:
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="counts").model_dump())
 
 
-def test_source_task_count_prefers_the_pin_checked_measurement(catalog_database, catalog_query, tmp_path):
-    """A published row's task count prefers its pin-checked measured input rows, then the
-    attempt's measured population, then the declared count."""
-    declaration = count_declaration("measured")
+def test_source_task_count_is_the_published_measurement(catalog_database, catalog_query, tmp_path):
+    """A published row's task count is the measurement publication wrote; an unmeasured
+    source publishes null and the interface reports it as not measured."""
     publish_count_rows(
         str(tmp_path / "catalog"),
         [
             SnapshotSource(
                 snapshot_id="counts",
                 id="measured",
-                declaration=declaration,
+                declaration=count_declaration("measured").model_copy(update={"task_count": 7}),
                 assessment_key=None,
                 latest_attempt_key=None,
                 latest_attempt_status="skipped",
                 reason=None,
-                curation=count_curation(3),
-                input_row_count=7,
             ),
             SnapshotSource(
                 snapshot_id="counts",
-                id="assessed",
-                declaration=declaration.model_copy(update={"id": "assessed", "name": "assessed"}),
-                assessment_key=None,
-                latest_attempt_key=None,
-                latest_attempt_status="skipped",
-                reason=None,
-                curation=count_curation(3),
-            ),
-            SnapshotSource(
-                snapshot_id="counts",
-                id="declared",
-                declaration=declaration.model_copy(update={"id": "declared", "name": "declared"}),
+                id="unmeasured",
+                declaration=count_declaration("unmeasured"),
                 assessment_key=None,
                 latest_attempt_key=None,
                 latest_attempt_status="skipped",
@@ -290,8 +263,7 @@ def test_source_task_count_prefers_the_pin_checked_measurement(catalog_database,
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
         assert sources["measured"]["task_count"] == 7
-        assert sources["assessed"]["task_count"] == 3
-        assert sources["declared"]["task_count"] == 9
+        assert sources["unmeasured"]["task_count"] is None
 
 
 def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_context") -> Path:

@@ -1183,16 +1183,6 @@ class SnapshotSource(CatalogRecord):
     latest_attempt_status: AssessmentStatus
     reason: str | None
     curation: CurationSummary | None = None
-    input_row_count: int | None = None
-    """Measured selected input rows at this row's dataset pin, from a COMPLETE attempt.
-
-    Publication fills this only when the attempt's curation document recorded
-    ``raw_population_count`` at the same dataset revision and recipe version the
-    declaration publishes, and clears it when the pin or recipe moves without a
-    new measurement. Consumers that need a pin-checked count read this field;
-    the carried ``curation`` summary keeps the historical measurement whatever
-    the current pin is.
-    """
     diagnostics: list[ArchivedFile] = Field(default_factory=list)
 
 

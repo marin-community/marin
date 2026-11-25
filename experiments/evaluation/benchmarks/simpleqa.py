@@ -49,7 +49,6 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
             origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
-            count=rows,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -108,7 +107,6 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
             origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
-            count=SIMPLEQA_VERIFIED_ROWS,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

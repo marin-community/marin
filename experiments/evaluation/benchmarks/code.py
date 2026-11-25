@@ -57,7 +57,6 @@ def python_source(
             origin=SourceOrigin.EVALCHEMY,
             family="python-code",
             tags=("eval", "source:evalchemy", "benchmark", "code", "single-turn"),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(

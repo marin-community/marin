@@ -157,7 +157,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "language:cpp",
                     "language:ocaml",
                 ),
-                count=18319,
                 notes=(
                     "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
                     "retained non-Python sources keep their parser with exit-code credit disabled."
@@ -185,7 +184,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "language:python"),
-                count=12927,
                 notes=(
                     "Trusted repository pytest tests with unresolved Docker build contexts; "
                     "original config patches remain oracle-only."

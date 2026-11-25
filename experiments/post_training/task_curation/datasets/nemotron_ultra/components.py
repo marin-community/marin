@@ -504,7 +504,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1281,
         ),
         "hs3_multi": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -515,7 +514,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=962,
         ),
         "hs3_multiturn": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -526,7 +524,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1243,
         ),
         "makeshn_ultra_v3_ipi_train": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -537,7 +534,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="agentic-safety",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2000,
         ),
         "safety_en": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -548,7 +544,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=629,
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -559,7 +554,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1884,
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -570,7 +564,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=5307,
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -581,7 +574,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=860,
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -592,7 +584,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=3903,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -603,7 +594,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-abstention",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -614,7 +604,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -625,7 +614,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="competitive-programming",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -636,7 +624,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=10409,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -647,7 +634,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="safety",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -658,7 +644,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -669,7 +654,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -680,7 +664,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -691,7 +674,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -702,7 +684,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -713,7 +694,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2069,
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -724,7 +704,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="chemistry",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1403,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -735,7 +714,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="reasoning-gym",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1385,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -746,7 +724,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -757,7 +734,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -768,7 +744,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=682,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -779,7 +754,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2666,
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -790,7 +764,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=250,
         ),
         "ultra_v3_agentic_rl_step73_freeform_text_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -801,7 +774,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=250,
         ),
         "ultra_v3_agentic_rl_step73_structured_outputs_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -812,7 +784,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=10000,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -823,7 +794,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=246,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -834,7 +804,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=932,
         ),
     },
     "rlvr1": {
@@ -847,7 +816,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4795,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -858,7 +826,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-abstention",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -869,7 +836,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -880,7 +846,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="competitive-programming",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -891,7 +856,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=11828,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -902,7 +866,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="safety",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -913,7 +876,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -924,7 +886,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -935,7 +896,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -946,7 +906,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -957,7 +916,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -968,7 +926,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2069,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -979,7 +936,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="reasoning-gym",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2089,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -990,7 +946,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1001,7 +956,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1012,7 +966,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2080,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1023,7 +976,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1034,7 +986,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1045,7 +996,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1056,7 +1006,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4011,
         ),
     },
     "rlvr2": {
@@ -1069,7 +1018,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="preference",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4757,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1080,7 +1028,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-abstention",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1091,7 +1038,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1102,7 +1048,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="competitive-programming",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1113,7 +1058,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=10409,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1124,7 +1068,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="safety",
             tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1135,7 +1078,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1146,7 +1088,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1157,7 +1098,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1168,7 +1108,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1179,7 +1118,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1190,7 +1128,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="arc-agi",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2069,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1201,7 +1138,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="reasoning-gym",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1385,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1212,7 +1148,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1223,7 +1158,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="qa-multiple-choice",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1234,7 +1168,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=682,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1245,7 +1178,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1256,7 +1188,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1267,7 +1198,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1278,7 +1208,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=2666,
         ),
         "ultra_sft_step3200_ds2_freeform": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1289,7 +1218,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1392,
         ),
         "ultra_sft_step3200_ds3_citation": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1300,7 +1228,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1403,
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1311,7 +1238,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="chemistry",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1403,
         ),
         "ultra_sft_step3200_structured_outputs_v3": SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -1322,7 +1248,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             origin=SourceOrigin.NEMOTRON,
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
-            count=1398,
         ),
     },
 }

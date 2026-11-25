@@ -152,7 +152,6 @@ def choice_dataset(
             origin=SourceOrigin.EVALCHEMY,
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

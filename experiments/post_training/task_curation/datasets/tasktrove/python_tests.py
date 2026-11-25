@@ -210,7 +210,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=509,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
@@ -232,7 +231,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=492,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
@@ -254,7 +252,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python", "language:javascript"),
-            count=487,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles overlap with the large cut."
@@ -275,7 +272,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=4998,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles repeated katas."
@@ -296,7 +292,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=4843,
             notes=(
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                 "submissions failed every task. Kept with the kata tag."
@@ -317,7 +312,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=500,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
@@ -338,7 +332,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
@@ -359,7 +352,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=491,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                 "passed all 10 sampled oracles and rejected all 10 empty submissions."
@@ -380,7 +372,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
@@ -401,7 +392,6 @@ SOURCES = {
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
-            count=500,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."

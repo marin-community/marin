@@ -124,7 +124,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
-                count=53870,
                 notes="All formats require both a format check and a source-grounding judge.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),

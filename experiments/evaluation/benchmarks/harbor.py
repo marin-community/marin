@@ -282,7 +282,6 @@ def harbor_source(
             origin=SourceOrigin.HARBOR,
             family="agentic",
             tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
-            count=dataset.count,
             task_format=TaskFormat.HARBOR,
         ),
         config=EvaluationCorpusRecipe(

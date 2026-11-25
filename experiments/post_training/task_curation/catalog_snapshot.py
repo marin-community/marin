@@ -78,7 +78,7 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
     )
 
 
-def measured_input_row_count(declaration: SourceDeclaration, summary: CurationSummary | None) -> int | None:
+def measured_task_count(declaration: SourceDeclaration, summary: CurationSummary | None) -> int | None:
     """The attempt's measured raw population, only when taken at the declaration's pin and recipe.
 
     A measurement describes one dataset revision under one recipe version; when
@@ -94,14 +94,14 @@ def measured_input_row_count(declaration: SourceDeclaration, summary: CurationSu
     return summary.raw_population_count
 
 
-def published_input_row_count(
+def published_task_count(
     declaration: SourceDeclaration,
     summary: CurationSummary | None,
     attempt: AssessmentAttempt | None,
     prior: SnapshotSource | None,
     unchanged: bool,
 ) -> int | None:
-    """The published row's measured input rows, when a measurement identifies the published declaration.
+    """The published row's task count: the measurement that identifies the published declaration.
 
     A COMPLETE attempt publishes its own measurement when its document names the
     declaration's pin and recipe; a failed or skipped attempt keeps the prior
@@ -109,10 +109,10 @@ def published_input_row_count(
     attempt whose document describes another pin.
     """
     if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
-        measured = measured_input_row_count(declaration, summary)
+        measured = measured_task_count(declaration, summary)
         if measured is not None:
             return measured
-    return prior.input_row_count if unchanged else None
+    return prior.declaration.task_count if unchanged else None
 
 
 def archive_files(store: DataStore, root: str, prefix: str, patterns: tuple[str, ...]) -> list[ArchivedFile]:
@@ -276,9 +276,6 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                     # No assessment pins an inventory-only declaration, so the code's current one wins.
                     if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
                         update["declaration"] = declaration
-                        # A replaced inventory-only declaration has no pipeline, so no
-                        # measurement can identify it.
-                        update["input_row_count"] = None
                     elif declaration.id in by_id:
                         # The verdict and its measurement describe runtime cost, not what the pinned
                         # assessment graded, so an unselected source picks up the current measurement.
@@ -326,18 +323,19 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
-                measured = published_input_row_count(declaration, summary, attempt, prior, unchanged)
+                measured = published_task_count(declaration, summary, attempt, prior, unchanged)
                 rows.append(
                     SnapshotSource(
                         snapshot_id=run_id,
                         id=declaration.id,
-                        declaration=declaration,
+                        # The published row's task count is the measurement that identifies
+                        # this declaration; an unmeasured declaration publishes an empty count.
+                        declaration=declaration.model_copy(update={"task_count": measured}),
                         assessment_key=key,
                         latest_attempt_key=latest,
                         latest_attempt_status=status,
                         reason=reason,
                         curation=summary,
-                        input_row_count=measured,
                         diagnostics=diagnostics,
                     )
                 )

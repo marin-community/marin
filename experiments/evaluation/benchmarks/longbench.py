@@ -78,7 +78,6 @@ def longbench_source(protocol_name: str, sampling: Sampling, seed: int | None) -
             build_path="Checkpoint",
             family="long-context",
             tags=("eval", "source:longbench-v2", "benchmark", "long-context", "multiple-choice"),
-            count=LONGBENCH_V2_POPULATION,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(

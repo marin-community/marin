@@ -396,7 +396,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="reasoning-gym",
                 tags=("agentic", "multi-turn"),
-                count=14259,
                 notes="Preserve upstream fractional scoring with targeted repairs to five pinned scorers.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
