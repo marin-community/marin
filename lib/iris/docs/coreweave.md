@@ -292,6 +292,22 @@ Iris `region` constraints match the backend's advertised region. They do not
 become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
 `topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
 rejected before Pod creation; preferred regions do not restrict placement.
+Task pods receive `IRIS_WORKER_REGION` from the backend's single advertised
+region. This value overrides user and cluster environment values. Backends with
+no region or multiple advertised regions remove supplied values and leave it
+unset because they cannot attest one physical region. Consumers that require
+worker-region attestation must dispatch through a controller that maps the
+backend's advertised region into task pods.
+Child jobs inherit the parent's region by default, as worker-backed tasks
+already do. An explicit region or the ANY marker overrides this default.
+
+An NVLink-domain exclusion (`nvlink.domain` with a required NE constraint)
+becomes a required node-affinity `NotIn` on `ds.coreweave.com/nvlink.domain`.
+Kubernetes compares that value byte-exactly against Node labels, and CoreWeave
+writes them uppercase (`DH1-136-US-EAST-08A` on `cw-us-east-08a`): supply the
+spelling shown by `kubectl get nodes -L ds.coreweave.com/nvlink.domain`. Iris
+keeps that spelling on the wire; constraint matching inside Iris remains
+case-insensitive.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
@@ -706,7 +722,8 @@ Setup preserves the provider's NVIDIA runtime and other options, saves the
 original configuration beside the log directory, and replaces the config
 atomically. It refuses placement on the same filesystem as the host config
 directory, so a missing NVMe mount cannot silently put logs back on root.
-Nodes without a runsc config skip this step. Configuration failures leave the
+Nodes without a runsc config, or whose config comments out both log settings
+so shims log through containerd, skip this step. Configuration failures leave the
 init container failed for Kubernetes to retry; inspect its logs before changing
 the provider configuration.
 

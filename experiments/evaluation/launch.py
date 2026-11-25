@@ -70,7 +70,7 @@ from marin.evaluation.runner import (
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, DAYTONA_TARGET, JUDGE_API_KEY
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, JUDGE_API_KEY
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.iris import RemoteInferenceSession
@@ -124,10 +124,22 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
+
+
+def _judge_identity(config: ModelConfigRef | None) -> dict | None:
+    return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
 def _evaluation_identity(evaluation: EvalRef) -> dict:
@@ -174,7 +186,7 @@ class LaunchSpec:
     seed: int | None = None
     default_seed: int | None = DEFAULT_RUN_SEED
     """The seed of curated runs that set none where the server accepts seeds; None leaves it to each protocol."""
-    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
+    task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -279,7 +291,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
     task_machine_backend: TaskMachineBackend | None,
@@ -312,9 +324,6 @@ def _resolve_definitions(
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
             )
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
-                # The worker reads the target from the forwarded launch environment; fail before serving.
-                if not os.environ.get(DAYTONA_TARGET):
-                    raise ValueError(f"{name} runs Daytona task machines, which require {DAYTONA_TARGET}")
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
                 egress_allow = (*egress_allow, *DAYTONA_EGRESS)
             resolved.append(
@@ -409,7 +418,7 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
-    if spec.task_evidence is not TaskEvidence.EMBEDDED and not has_curated_definitions:
+    if spec.task_evidence is not None and not has_curated_definitions:
         raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
@@ -543,9 +552,7 @@ def build_evaluation_batch(
                     else {}
                 ),
                 "judge": (
-                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
-                    else None
+                    _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
                 "policy": spec.version,
             },
@@ -627,7 +634,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
             record
@@ -635,7 +642,9 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            and _judge_identity(
+                record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
+            )
             == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),

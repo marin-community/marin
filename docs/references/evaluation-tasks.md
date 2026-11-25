@@ -15,7 +15,7 @@ remain separate work; this path produces no headline score or legacy
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
-| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
+| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, resume, and reuse of stored model responses |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
@@ -214,8 +214,8 @@ limits; the run still supplies `tool_turn_timeout` and `cleanup_timeout`. Machin
 settings are part of the run identity, so changing the backend requires a new result
 root. The worker builds factories for the `local`, `docker`, and `daytona` backends that
 the task and verifier machines select, and rejects others. Daytona uses the eval
-account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`)
-and `DAYTONA_TARGET`, then passes the key to the Iris worker as `DAYTONA_API_KEY`
+account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`),
+then passes the key to the Iris worker as `DAYTONA_API_KEY`
 and installs `marin-core`'s `daytona` extra. Harness names resolve through
 `marin.evaluation.task_worker.episode_harnesses`; library callers pass their own
 `harnesses` mapping to `run_evaluation`.
@@ -263,6 +263,53 @@ Source grading programs and private tests are packaged with their pinned grader
 environment. Source program builders prepare tests and apply the benchmark
 execution timer. A completion receipt distinguishes finished tests from an early
 process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
+
+## Trivial-reply floor
+
+A benchmark's trivial-reply floor is the score its graders give to replies that
+ignore the task. A grader can credit such a reply: one word satisfies
+instruction constraints that only restrict the reply, and `0` matches numeric
+answers of zero. `experiments.evaluation.trivial_replies` passes each reply to
+`run_evaluation` in place of the model, so cohort selection, prompt variants,
+response selection, grading, and grading retries are those of a model run.
+
+| Reply | Text |
+| --- | --- |
+| `empty` | the empty string |
+| `word` | `hello` |
+| `zero` | `0` |
+| `abstain` | `I don't know.` |
+| `echo` | the request's last user message |
+| `json_empty`, `json_word`, `json_abstain`, `json_echo` | the plain reply of that name as a JSON string |
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.trivial_replies \
+  --dataset "$CORPUS_ROOT" \
+  --config run-config.json \
+  --output scratch/trivial-replies
+```
+
+`--config` is the run configuration of the model run to compare with. Its
+tokenizer, context window, token budgets, and source limit select the cohort
+and prompts of that run. The command replaces the model identity with
+`trivial-reply/<reply>` and drops the judge, and writes each reply's archive to
+`<output>/<reply>`, which resumes like any result root. It runs on the host, as
+`task_driver --local` does, so graders that need a machine need Shellbox's
+bubblewrap backend. The driver refuses corpora scored by likelihood and corpora
+graded by a judge.
+
+`--reply` selects replies and repeats; the default is the five plain replies.
+A JSON-value answer format parses the whole reply as one JSON value, so a plain
+reply other than `0` is a malformed submission there, as it is for a model. The
+JSON replies show what the grader gives the same text as a JSON string. A reply
+is not cut at the output budget or at stop sequences, and its attempts record
+zero tokens.
+
+The command prints a Markdown table with each benchmark's primary metric per
+reply, reduced by `benchmark_scores` in `evalrecords.rollout_results`, which
+`score_curated_record` also uses. A pass/fail metric is followed by the trials
+that passed over the trials scored, and any other metric by the trials scored.
 
 ## Published corpus and raw results
 
@@ -314,6 +361,42 @@ source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at
 `phase="started"` have no terminal result. Exhausted infrastructure
 failures preserve evidence and raise `EvaluationInfrastructureError`.
+
+## Regrade stored model responses
+
+A grader correction publishes a new corpus, which an existing result root
+cannot resume. To grade the model responses that a run already stored on the
+new corpus, pass the run's result root as `--responses-from`:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.task_driver --local \
+  --responses-from scratch/eval-run \
+  --dataset "$NEW_CORPUS_ROOT" \
+  --config run-config.json --endpoint-file endpoint.txt \
+  --output scratch/eval-run-regraded
+```
+
+A generation attempt then takes the latest completed model response that the
+source run stored for the same benchmark, source row, and trial, provided the
+attempt sends the identical request: the same messages and sampling options,
+including the trial seed. The new corpus's response policy selects the graded
+text from the stored channels. Every other attempt asks the endpoint, so the
+command takes `--config` and an endpoint as any run does. The run
+configuration must keep the source run's model identity. Judged tasks call the
+judge again, so judge variation also changes grades.
+
+Raw evidence names the source root, its run identity, and the evidence blob in
+`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
+that reuses its own response after a grading failure does. `evaluation/run.json`
+lists each source in `response_sources` with its root, run identity, and
+`driver_revision`, so a regraded root differs from a fresh run on the same
+corpus without opening the evidence. Only model identity is checked, so the
+recorded revision is how to tell that responses stored under another driver
+revision were graded under the current one. The sources are not part of the
+run identity. A resume keeps the sources already recorded and adds a new one.
+Without `--local`, the run goes to Iris as usual, and the source root must be
+shared object storage as well.
 
 ## Summary semantics
 
