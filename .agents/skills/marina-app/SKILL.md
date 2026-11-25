@@ -110,9 +110,12 @@ uv run marina apps versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
-Use `--allow-dirty` to explicitly release branch or uncommitted source without
-verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout. Use `--local`
-for a disposable preview.
+Add `--release-branch <name>` to release a clean checkout whose commit origin's
+declared branch already contains — the integration-branch path, with the branch
+recorded beside the source commit. Use `--allow-dirty` to explicitly release
+branch or uncommitted source without verified Git provenance; `release-status`
+then reports `unrecorded` from a clean checkout. `--allow-dirty` cannot combine
+with `--release-branch`. Use `--local` for a disposable preview.
 
 Use zero for a new declared UUID. Version conflicts mean the live selection changed;
 inspect the new revision before retrying. Do not blindly reread the version and

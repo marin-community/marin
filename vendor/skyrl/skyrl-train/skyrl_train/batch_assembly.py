@@ -29,7 +29,7 @@ from skyrl_train.trajectory_runners.types import BatchFields, TrajectoryBatch
 from skyrl_train.utils.advantage_estimators import batch_advantages, compute_advantages_and_returns
 from marinskyrl.runtime_options import OUTCOME_ADVANTAGE_ESTIMATORS
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.utils.utils import moe_router_replay_requested
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 
 
 @dataclass(frozen=True)
@@ -130,7 +130,7 @@ def plan_worker_batch(
         ),
         num_experts=num_experts,
     )
-    metrics = rollout_metrics(facts, tis_lcs_alert_threshold=float(cfg.trainer.algorithm.tis_lcs_alert_threshold))
+    metrics = rollout_metrics(facts)
     metrics.update(reward_metrics(facts, plan.uids, n_samples_per_prompt=cfg.generator.n_samples_per_prompt))
     metrics.update(
         rollout_staleness_metrics(staleness, global_step=global_step, max_staleness_steps=max_staleness_steps)
@@ -339,7 +339,6 @@ def install_plan_advantages(
             group_advantage_invariant=invariant,
         )
         batch["advantages"] = advantages[rows.start : rows.stop] * batch["response_mask"]
-        batch["returns"] = batch["advantages"]
     else:
-        batch["advantages"], batch["returns"] = batch_advantages(batch, algorithm, invariant=invariant)
+        batch["advantages"], _ = batch_advantages(batch, algorithm, invariant=invariant)
     return scores

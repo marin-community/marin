@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from collections.abc import Mapping
 
 from skyrl_gym.task_factories import EpisodeFactory
-from skyrl_gym.rollout_specs import SHELLBOX_HARNESS
 
 from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
@@ -25,10 +24,12 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
+from skyrl_train.config.placement_geometry import num_rollout_gpus
+from skyrl_train.config.driver_validation import validate_driver_config
+from skyrl_train.evaluation_profiles import EvaluationProfile, resolve_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
-    validate_rollout_launch,
 )
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
@@ -42,7 +43,7 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
-from skyrl_train.dataset.preference_pairs import PreferencePairFormat
+from marinskyrl.task_sources import PreparedTaskCacheSource
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -125,6 +126,7 @@ def create_ray_wrapped_inference_engines_from_config(
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
+    evaluation_profiles: Mapping[str, EvaluationProfile] | None = None,
 ):
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
@@ -178,12 +180,12 @@ def create_ray_wrapped_inference_engines_from_config(
             engine_init_kwargs["weight_transfer_config"] = {"backend": "runai_streamer"}
 
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
-    for callback in cfg.trainer.get("callbacks") or []:
-        if callback.get("type") == "evaluation":
-            requested_logprobs.extend(
-                (profile.get("sampling_params") or {}).get("logprobs")
-                for profile in (callback.get("additional_evaluations") or {}).values()
-            )
+    requested_logprobs.extend(
+        profile.sampling_params.logprobs if profile.sampling_params is not None else None
+        for profile in (
+            resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
+        ).values()
+    )
     requested_logprobs = [
         value + 1
         for value in requested_logprobs
@@ -200,12 +202,8 @@ def create_ray_wrapped_inference_engines_from_config(
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
         expert_parallel_size=cfg.generator.inference_engine_expert_parallel_size,
-        # vLLM Decode Context Parallel (DCP). Default 1 (disabled) -> forwarded as the
-        # signature default and (per ray_wrapped_inference_engine) NOT passed to the vLLM
-        # engine, so flag-off engine init is byte-identical to today (G1). When > 1 it is
-        # threaded into vllm.LLM / AsyncEngineArgs as a native EngineArgs kwarg. DCP rides
-        # the TP GPUs and is NOT part of any GPU/placement math (G4). Reaches both the
-        # standard and terminal_bench entrypoints via this shared config-assembly seam (G5).
+        # Decode context parallelism uses the tensor-parallel GPUs. Pass values above 1
+        # as native vLLM engine arguments without changing placement.
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),
@@ -244,7 +242,12 @@ def create_ray_wrapped_inference_engines_from_config(
             )
             engine_kwargs["enforce_eager"] = False
 
-    if stream_policy_model and rollout_model_path.startswith("s3://") and cfg.generator.backend == "vllm":
+    # Coordinated DP ranks must restart together after an actor fails during
+    # rendezvous, including when their checkpoint is staged on local disk.
+    if cfg.generator.backend == "vllm" and (
+        (stream_policy_model and rollout_model_path.startswith("s3://"))
+        or cfg.generator.inference_engine_data_parallel_size > 1
+    ):
         retry = cfg.trainer.model_load_retry
 
         def create_engines(remaining_timeout_seconds: float):
@@ -292,10 +295,22 @@ class BasePPOExp:
 
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
+        from skyrl_train.tokenizer import validate_checkpoint_vocabulary  # noqa: PLC0415
+
         self.cfg = cfg
+        self.evaluation_profiles = resolve_evaluation_profiles(cfg)
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
+        model = cfg.trainer.policy.model
+        validate_checkpoint_vocabulary(
+            self.tokenizer,
+            checkpoint_path=model.path,
+            checkpoint_revision=model.get("revision"),
+            checkpoint_identity=model.path,
+            tokenizer_identity=str(model.tokenizer_path),
+            disable_fast_tokenizer=cfg.trainer.disable_fast_tokenizer,
+        )
         self.train_dataset = self.get_train_dataset()
         self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
@@ -324,6 +339,7 @@ class BasePPOExp:
                 self.colocate_pg,
                 entrypoint=entrypoint,
                 operation=operation,
+                evaluation_profiles=self.evaluation_profiles,
             )
         else:
             inference_engines = create_remote_inference_engines_from_config(self.cfg)
@@ -365,7 +381,7 @@ class BasePPOExp:
             PromptDataset: The training dataset.
         """
         if static_preference_pairs_requested(self.cfg):
-            from skyrl_train.dataset import PreferencePairDataset  # noqa: PLC0415
+            from skyrl_train.dataset.preference_pairs import PreferencePairDataset, PreferencePairFormat  # noqa: PLC0415
 
             return PreferencePairDataset(
                 tokenizer=self.tokenizer,
@@ -383,51 +399,42 @@ class BasePPOExp:
         return prompts_dataset
 
     def task_dataset(self, data_files):
-        from skyrl_train.dataset.nemotron_ultra import NemotronTaskDataset  # noqa: PLC0415
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
-        from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
 
-        terminal_data = list(self.cfg.data.get("terminal_bench_data", []))
-        dataset_type = NemotronTaskDataset if terminal_data else SourceTaskDataset
-        terminal_options = {}
-        if terminal_data:
-            terminal_options = {
-                "terminal_bench_data": terminal_data,
-                "cache_dir": Path(self.cfg.data.task_cache_dir),
-                "grader_override": HarborTaskSettings.from_config(self.cfg.terminal_bench_config).grader_override(),
-            }
-        return dataset_type(
+        prepared_cache = self.cfg.get("runtime", {}).get("prepared_task_cache")
+        return SourceTaskDataset(
             datasets=data_files,
             environment_configs=OmegaConf.to_container(self.cfg.environment.task_sessions, resolve=True),
             tokenizer=self.tokenizer,
             max_prompt_length=self.cfg.trainer.max_prompt_length,
             num_workers=8,
             chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
-            **terminal_options,
+            prepared_cache=None if prepared_cache is None else PreparedTaskCacheSource(**prepared_cache),
         )
 
-    def get_eval_dataset(self):
-        """Load validation prompts for evaluation or new mismatch-probe generation."""
+    def get_eval_dataset(self, data_files: list[str] | None = None):
+        """Load selected evaluation prompts or new mismatch-probe prompts."""
+        data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts) and self.cfg.data.val_data:
-            if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR:
-                return self.harbor_task_dataset(self.cfg.data.val_data)
-            return self.task_dataset(self.cfg.data.val_data)
+        needs_additional_evaluation = bool(self.evaluation_profiles)
+        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_additional_evaluation) and data_files:
+            return self._build_eval_dataset(data_files)
         return None
 
-    def harbor_task_dataset(self, data_files):
-        from skyrl_train.dataset.harbor import HarborTaskDataset  # noqa: PLC0415
-        from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415
+    def _build_eval_dataset(self, data_files):
+        return self.task_dataset(data_files)
 
-        return HarborTaskDataset(
-            data_files=data_files,
-            tokenizer=self.tokenizer,
-            max_prompt_length=self.cfg.trainer.max_prompt_length,
-            cache_dir=Path(self.cfg.data.task_cache_dir),
-            session={**dict(self.cfg.environment.task_sessions.session), "task_session": SHELLBOX_HARNESS},
-            grader_override=HarborTaskSettings.from_config(self.cfg.terminal_bench_config).grader_override(),
-        )
+    def get_additional_eval_datasets(self):
+        """Build the datasets selected by additional evaluation profiles."""
+        datasets = {}
+        for name, profile in self.evaluation_profiles.items():
+            if profile.data_files is not None:
+                dataset = self.get_eval_dataset(profile.data_files)
+                if dataset is None:
+                    raise ValueError(f"evaluation profile {name} requires a dataset")
+                datasets[name] = dataset
+        return datasets
 
     def get_colocate_pg(self, timeout: int | None = None) -> PlacementGroup:
         """Initializes a placement group for colocated training.
@@ -445,11 +452,7 @@ class BasePPOExp:
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
         if self.cfg.trainer.placement.colocate_all and inference_engines_required(self.cfg):
             pg = placement_group(
-                [{"GPU": 1, "CPU": 1}]
-                * self.cfg.generator.num_inference_engines
-                * self.cfg.generator.inference_engine_tensor_parallel_size
-                * self.cfg.generator.inference_engine_pipeline_parallel_size
-                * self.cfg.generator.inference_engine_data_parallel_size,
+                [{"GPU": 1, "CPU": 1}] * num_rollout_gpus(self.cfg),
                 strategy="PACK",
             )
             get_ray_pg_ready_with_timeout(pg, timeout=timeout)
@@ -512,10 +515,9 @@ class BasePPOExp:
             TrajectoryRunner: The runner.
         """
         if static_preference_pairs_requested(cfg):
+            from skyrl_train.dataset.preference_pairs import PreferencePairFormat  # noqa: PLC0415
             from skyrl_train.trajectory_runners.preference_pairs import PreferencePairTrajectoryRunner  # noqa: PLC0415
 
-            if list(cfg.data.get("terminal_bench_data", [])):
-                raise ValueError("preference-pair training cannot mix terminal-bench rows")
             return PreferencePairTrajectoryRunner(
                 tokenizer,
                 data_format=PreferencePairFormat(cfg.data.preference_pair_format),
@@ -525,20 +527,16 @@ class BasePPOExp:
             )
         return self.get_task_runner(cfg, inference_engine_client)
 
-    def get_task_runner(self, cfg, inference_engine_client, *, harbor_config=None):
+    def get_task_runner(self, cfg, inference_engine_client):
         """Build the shared task worker pool for training or validation."""
         from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkerResources  # noqa: PLC0415
         from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec  # noqa: PLC0415
 
         resources = RolloutWorkerResources.from_config(cfg)
-        terminal_data = list(cfg.data.get("terminal_bench_data", []))
-        if terminal_data and not cfg.get("terminal_bench_config"):
-            raise ValueError("data.terminal_bench_data requires terminal_bench_config")
         return RolloutWorkerPool(
             TaskRolloutWorkerSpec.from_config(
                 cfg,
                 inference_engine_client.engines,
-                harbor_config=harbor_config if harbor_config is not None else cfg.get("terminal_bench_config"),
                 sessions=self.sessions,
             ),
             resources,
@@ -562,6 +560,7 @@ class BasePPOExp:
         """
         from skyrl_train.rollouts.context import TrainingContext  # noqa: PLC0415
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
+        from skyrl_train.callbacks.builtin import create_default_callbacks  # noqa: PLC0415
 
         return RayPPOTrainer(
             context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
@@ -570,16 +569,12 @@ class BasePPOExp:
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            additional_eval_datasets=self.get_additional_eval_datasets(),
+            callbacks=create_default_callbacks(cfg, evaluation_profiles=self.evaluation_profiles),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
             eval_trajectory_runner=(
-                self.get_task_runner(
-                    cfg,
-                    inference_engine_client,
-                    harbor_config=cfg.terminal_bench_config
-                    if EvaluationRunner(cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR
-                    else None,
-                )
+                self.get_task_runner(cfg, inference_engine_client)
                 if EvaluationRunner(cfg.trainer.evaluation_runner) is not EvaluationRunner.TRAINING
                 else trajectory_runner
             ),
@@ -587,12 +582,12 @@ class BasePPOExp:
         )
 
     def get_worker_classes(self):
-        """Return the policy, critic, and reference Ray actor classes for the configured strategy."""
+        """Return policy and reference Ray actor classes."""
         if self.cfg.trainer.strategy != "megatron":
             raise ValueError(f"Unknown strategy type: {self.cfg.trainer.strategy}")
-        from skyrl_train.workers.megatron.megatron_worker import PolicyWorker, CriticWorker, RefWorker  # noqa: PLC0415
+        from skyrl_train.workers.megatron.megatron_worker import PolicyWorker, RefWorker  # noqa: PLC0415
 
-        return PolicyWorker, CriticWorker, RefWorker
+        return PolicyWorker, RefWorker
 
     def get_tracker(self):
         """Initializes the tracker for experiment tracking.
@@ -615,7 +610,7 @@ class BasePPOExp:
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
-        PolicyWorker, CriticWorker, RefWorker = self.get_worker_classes()
+        PolicyWorker, RefWorker = self.get_worker_classes()
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
@@ -639,7 +634,7 @@ class BasePPOExp:
         # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
+            trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
@@ -669,14 +664,8 @@ class BasePPOExp:
         # libuv's epoll-ctl machinery SIGABRTs this orchestrator under Daytona
         # sandbox-teardown socket churn (uv__epoll_ctl_prep AND uv__io_poll asserts;
         # present across libuv 1.45-1.49+). Reset the policy in this shared
-        # BasePPOExp._run() path, which every training entrypoint funnels through
-        # (main_base.skyrl_entrypoint, skyrl_train.entrypoints.terminal_bench's
-        # TerminalBenchExp(BasePPOExp) which does NOT override run(), etc.) -- and
-        # it runs immediately before the asyncio.run() below creates the loop, so
-        # both asyncio.run() calls build a stock SelectorEventLoop with no libuv
-        # path. Placing it on the per-entrypoint skyrl_entrypoint wrapper is a
-        # trap: there are 26+ such functions and terminal_bench uses its own, so
-        # the fix must live on this shared _run() method. Orchestrator is
+        # BasePPOExp._run() path, which every training entrypoint uses, before
+        # asyncio.run() creates the loop. The orchestrator is
         # network-RTT-bound (vLLM/Daytona) so uvloop's throughput edge is moot.
         #
         # DEPRECATION NOTE: asyncio.set_event_loop_policy() emits a
@@ -688,6 +677,7 @@ class BasePPOExp:
         # See agent_logs/2026-05-29_skyrl_uvloop_integration_and_robustness_research.md
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
+        started = time.monotonic()
         with self.get_tracker() as tracker:
             trainer = None
             try:
@@ -701,14 +691,15 @@ class BasePPOExp:
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
 
+        elapsed = time.monotonic() - started
+        logger.info(
+            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
+            elapsed - trainer.evaluation_wall_time,
+        )
+
 
 @ray.remote(num_cpus=1, max_retries=0)
 def skyrl_entrypoint(cfg: DictConfig):
-    # NOTE: the uvloop->stock-asyncio reset that prevents the libuv epoll SIGABRT
-    # lives in BasePPOExp.run() (the shared chokepoint all entrypoints funnel
-    # through), NOT here -- terminal_bench and other entrypoints use their own
-    # skyrl_entrypoint wrappers, so the fix must be on run(). See run() above.
-    # make sure that the training loop is not run on the head node.
     exp = BasePPOExp(cfg)
     exp.run()
 
@@ -724,19 +715,10 @@ def run_ray_driver(
     from skyrl_train.entrypoints.ray_lifecycle import exit_without_ray_destructors, shutdown_ray  # noqa: PLC0415
     from marinskyrl.process_diagnostics import write_exception_receipt  # noqa: PLC0415
     from skyrl_train.telemetry import DRIVER_ROLE, process_telemetry  # noqa: PLC0415
-    from skyrl_train import objective  # noqa: F401, PLC0415 - register losses when the training runtime loads
-    from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
-    from skyrl_train.utils import validate_cfg  # noqa: PLC0415
     from skyrl_train.utils.logging_utils import log_exception_as_text  # noqa: PLC0415
-    from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
     from skyrl_train.utils.utils import initialize_ray  # noqa: PLC0415
 
-    validate_rollout_launch(cfg, operation)
-    if cfg.get("terminal_bench_config") is not None:
-        HarborTaskSettings.from_config(cfg.terminal_bench_config)
-    validate_cfg(cfg)
-    configure_progress(cfg.trainer.progress)
-
+    validate_driver_config(cfg, operation)
     initialize_ray(cfg)
 
     with process_telemetry(DRIVER_ROLE):

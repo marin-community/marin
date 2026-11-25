@@ -10,7 +10,7 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.utils import worker_batch_refusal, validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg, worker_batch_refusal
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
@@ -274,7 +274,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
     )
     whole = assemble_slice(whole_plan, range(len(uids)), normalized, pad_token_id=0, algorithm=algorithm)
     # This oracle sums the full token-width reward tensors through the public estimator.
-    whole["advantages"], whole["returns"] = compute_advantages_and_returns(
+    whole["advantages"], _ = compute_advantages_and_returns(
         token_level_rewards=whole["rewards"],
         response_mask=whole["response_mask"],
         index=uids,
@@ -318,13 +318,17 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         (
             {
                 "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
                 "batch.rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4,
                 "model_experts": 4,
             },
             (None, "g0.*route dtype without the model expert count"),
         ),
         (
-            {"trainer.policy.megatron_config.moe_router_replay": True},
+            {
+                "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
+            },
             ("router replay without the model expert count", None),
         ),
         ({"trainer.algorithm.use_kl_loss": True}, ("DPO and reference-model objectives", None)),
@@ -401,7 +405,14 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             },
             ("model configuration unreadable", None),
         ),
-        ({"trainer.policy.megatron_config.moe_router_replay": True, "model_experts": 4}, (None, None)),
+        (
+            {
+                "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
+                "model_experts": 4,
+            },
+            (None, None),
+        ),
         ({"trainer.dump_data_batch": True}, ("dense batch dumping", None)),
     ],
 )
@@ -447,6 +458,8 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     if config_reason:
         if config_reason == "router replay without the model expert count":
             auto_cfg = deepcopy(cfg)
+            validate_cfg(auto_cfg, check_runtime_resources=False)
+            assert auto_cfg.trainer.batch_builder == "auto"
             validate_cfg(auto_cfg)
             assert auto_cfg.trainer.batch_builder == "driver"
         cfg.trainer.batch_builder = "worker"

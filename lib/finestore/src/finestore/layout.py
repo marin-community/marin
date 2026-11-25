@@ -23,12 +23,15 @@ HEAD_FILE = "HEAD"
 MAINTENANCE_LEASE_FILE = "_maintenance"
 FORMAT_VERSION = 2
 DATA_DIR = "data"
+STAGED_TABLE_DIR = "_staged"
 MANIFESTS_DIR = "manifests"
 SCHEMAS_DIR = "schemas"
 
 URI_SCHEME = "finestore"
 CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
 CACHE_HISTORY_FLOOR_FEATURE = "cache-history-floor-v1"
+TABLE_INCARNATIONS_FEATURE = "table-incarnations-v1"
+INITIAL_TABLE_INCARNATION = 0
 
 
 class SystemColumns(StrEnum):
@@ -59,7 +62,9 @@ class BlobColumns(StrEnum):
 
 
 RESERVED_COLUMNS = frozenset(SystemColumns)
-SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE, CACHE_HISTORY_FLOOR_FEATURE})
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset(
+    {CHUNKED_BLOBS_FEATURE, CACHE_HISTORY_FLOOR_FEATURE, TABLE_INCARNATIONS_FEATURE}
+)
 
 
 class FormatVersionError(ValueError):
@@ -92,6 +97,13 @@ class OnConflict(StrEnum):
 
     ERROR = "error"
     SUPERSEDE = "supersede"
+
+
+class TableNameConflict(StrEnum):
+    """How a rename handles an occupied destination."""
+
+    ERROR = "error"
+    REPLACE = "replace"
 
 
 class TableMetadata(_FormatModel):
@@ -211,6 +223,36 @@ class ManifestTable(_FormatModel):
     shards: tuple[Shard, ...] = ()
 
 
+@dataclass(frozen=True)
+class TableVersion:
+    """A table's incarnation and immutable file references in a snapshot."""
+
+    incarnation: int
+    metadata_path: str | None
+    shard_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TableContentVersion:
+    """The schema and row version used to detect logical table changes."""
+
+    incarnation: int
+    metadata_path: str | None
+    row_commit_upper_bound: int
+    history_floor: int
+
+
+class CommitInfo(_FormatModel):
+    """Metadata about the transaction that published a commit."""
+
+    author: str
+    message: str
+    # Sequence of the commit this record describes. Older writers copy the parent's record
+    # forward; readers ignore a record whose sequence differs from the manifest's.
+    sequence: int
+    created_at: str
+
+
 class Manifest(_FormatModel):
     """One immutable, complete archive snapshot."""
 
@@ -220,12 +262,34 @@ class Manifest(_FormatModel):
     sequence: int
     required_features: tuple[str, ...] = ()
     tables: dict[str, ManifestTable] = Field(default_factory=dict)
+    # Keep the last reset sequence even when a table is absent.
+    table_incarnations: dict[str, int] = Field(default_factory=dict)
     sealed: SealMarker | None = None
     # Advanced by each writer that acquires the maintenance lease. A compaction prepared under
     # an older epoch cannot be published after a takeover.
     maintainer_epoch: int = 0
     # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
     cache_history_floor: int = 0
+    commit_info: CommitInfo | None = None
+
+    def table_version(self, name: str) -> TableVersion:
+        table = self.tables.get(name)
+        return TableVersion(
+            incarnation=self.table_incarnations.get(name, INITIAL_TABLE_INCARNATION),
+            metadata_path=table.metadata_path if table is not None else None,
+            shard_paths=tuple(shard.path for shard in table.shards) if table is not None else (),
+        )
+
+    def table_content_version(self, name: str) -> TableContentVersion:
+        table = self.tables.get(name)
+        shards = () if table is None else table.shards
+        upper_bound = max((shard.row_commit_upper_bound for shard in shards), default=0)
+        return TableContentVersion(
+            incarnation=self.table_incarnations.get(name, INITIAL_TABLE_INCARNATION),
+            metadata_path=table.metadata_path if table is not None else None,
+            row_commit_upper_bound=upper_bound if upper_bound > self.cache_history_floor else 0,
+            history_floor=self.cache_history_floor,
+        )
 
 
 class HeadMetadata(_FormatModel):

@@ -9,6 +9,7 @@ import struct
 from typing import BinaryIO, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from .model_files import MODEL_MANIFEST_FILENAME
 
 from .hf_model import (
     normalize_fast_tokenizer_metadata,
@@ -16,7 +17,6 @@ from .hf_model import (
     validate_portable_hf_model_files,
 )
 
-MODEL_MANIFEST_FILENAME = ".marinskyrl-model-manifest.json"
 HF_WEIGHT_INDEX_FILENAME = "model.safetensors.index.json"
 MAX_SAFETENSORS_HEADER_BYTES = 100 * 2**20
 _HEADER_READ_CHUNK_BYTES = 8 * 2**20

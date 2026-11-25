@@ -11,7 +11,6 @@ reached through the Cloud SQL connector with IAM authentication as the service's
 account; locally and in tests it is a plain SQLAlchemy URL.
 """
 
-import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping
@@ -23,8 +22,6 @@ import sqlalchemy
 from google.cloud.sql.connector import Connector
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection, Engine
-
-logger = logging.getLogger(__name__)
 
 POOL_SIZE = 2
 MAX_OVERFLOW = 2
@@ -109,21 +106,12 @@ def schema_name(app: str) -> str:
     return app.replace("-", "_")
 
 
-def grant_read(engine: Engine, schema: str, role: str) -> None:
-    """Let ``role`` read ``schema``, including tables an app adds later.
-
-    People hold a Cloud SQL group login for queries the apps do not expose; every write
-    still goes through an app as the service account.
+def grant_read_on_connection(connection: Connection, schema: str, role: str) -> None:
+    """Let ``role`` read existing and future relations in ``schema`` within a caller transaction.
 
     ``GRANT`` takes each table's exclusive lock, which would otherwise queue behind a long
     write and hold every reader behind it, so the grant gives up rather than wait.
     """
-    with engine.begin() as conn:
-        grant_read_on_connection(conn, schema, role)
-
-
-def grant_read_on_connection(connection: Connection, schema: str, role: str) -> None:
-    """Let ``role`` read existing and future relations in ``schema`` within a caller transaction."""
     connection.execute(text(f"SET LOCAL lock_timeout = '{GRANT_LOCK_TIMEOUT}'"))
     connection.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
     connection.execute(text(f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"'))

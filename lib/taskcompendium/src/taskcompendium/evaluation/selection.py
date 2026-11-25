@@ -3,6 +3,7 @@
 
 """Select reproducible cohorts from task annotations and declarative token budgets."""
 
+import hashlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.evaluation.corpus import EvaluationCase, EvaluationCorpus, TaskRow, source_order, text_prompt
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     CohortOrder,
     CohortPolicy,
@@ -143,6 +145,9 @@ def _context_decision(
     if protocol.sampling is None:
         return SelectionDecision(record, case)
     cap = min(max_tokens, protocol.sampling.max_tokens or max_tokens)
+    if isinstance(case.item.operation, AgentEpisode):
+        # The harness renders the prompts, so the episode has no prompt to admit before it starts.
+        return SelectionDecision(record.model_copy(update={"max_tokens": cap}), case)
     case = replace(case, task=prompt_variant(case, context_window, cap, tokenizer))
     if tokenizer is None:
         if protocol.context_policy is not None:
@@ -227,6 +232,10 @@ def _context_decision(
 
 
 def _candidate_rows(rows: Sequence[TaskRow], policy: CohortPolicy, context_window: int) -> list[TaskRow]:
+    if policy.order is CohortOrder.SHUFFLED:
+        if policy.groups:
+            raise ValueError("Shuffled cohort order does not support task groups")
+        return sorted(rows, key=lambda row: hashlib.sha256(row.source_row.encode()).digest())
     if not policy.groups:
         return list(rows)
     groups = [
@@ -292,6 +301,12 @@ def select_cases(
             if policy.order is CohortOrder.SOURCE and policy.limit_stage is LimitStage.ELIGIBLE:
                 rank = len(eligible)
             decision = _context_decision(case, rendering, dataset_id, context_window, max_tokens, tokenizer, rank)
+            if (
+                protocol.context_policy is not None
+                and protocol.context_policy.overflow == "error"
+                and decision.record.status is SelectionStatus.EXCLUDED
+            ):
+                raise ValueError(f"{protocol.benchmark}: {case.item.source_row} cannot fit: {decision.record.reason}")
             decisions[case.item.source_row] = decision.record
             if decision.case is not None:
                 eligible.append(case.item.source_row)
@@ -340,7 +355,7 @@ def select_cases(
                         SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
                     ),
                     reason="group_filter" if rank is None else "source_limit",
-                    rank=rank if policy.order is CohortOrder.ROUND_ROBIN else None,
+                    rank=rank if policy.order is not CohortOrder.SOURCE else None,
                     context_window=context_window,
                     max_tokens=record.max_tokens if record is not None else None,
                     prompt_tokens=record.prompt_tokens if record is not None else None,

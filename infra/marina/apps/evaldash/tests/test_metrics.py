@@ -15,6 +15,7 @@ from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
+    CuratedAgentRef,
     CuratedRef,
     CuratedSettings,
     EvalchemyRef,
@@ -34,6 +35,7 @@ from evalrecords.records import (
     ResolvedEvaluationSelection,
     RunStatus,
     TaskCoverage,
+    TaskMachineSettings,
 )
 
 ITEMS = 1000
@@ -986,3 +988,91 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     detail = build_model_detail(records, "old")
     assert detail is not None
     assert set(detail["history"]) == set(rows)
+
+
+def test_historical_harbor_and_curated_agent_scores_share_a_family_and_the_reward_metric():
+    dataset = "hf://DCAgent2/terminal_bench_2"
+    reward = BenchmarkMetricRef(
+        name="reward", source_name="mean_reward", kind=MetricKind.CONTINUOUS, higher_is_better=True
+    )
+    coverage = TaskCoverage(n_benchmark=89, n_attempted=89, n_scored=89)
+    harbor = _record("a", "tb2", None, "2026-01-01T00:00:00+00:00", 0.3)
+    harbor = harbor.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="tb2",
+                mechanism="harbor",
+                tasks=(
+                    EvalTaskRef(
+                        name=dataset,
+                        num_fewshot=None,
+                        benchmark=BenchmarkMetadataRef(
+                            schema_version=1,
+                            task=dataset,
+                            primary_metric="reward",
+                            metric_kind=MetricKind.CONTINUOUS,
+                            metrics=(reward,),
+                            n_benchmark=89,
+                            n_attempted=89,
+                        ),
+                    ),
+                ),
+                harbor=HarborRef(dataset=dataset, version="main", agent="terminus-2", env="daytona"),
+            ),
+            "metrics": {dataset: {"mean_reward": 0.3, "solved": 27.0, "total": 89.0}},
+            "canonical_metrics": {dataset: {"reward": 0.3, "reward_stderr": 0.05}},
+            "coverage": {dataset: coverage},
+        }
+    )
+    summary = {"reward": 0.4, "reward_stderr": 0.05, "solved": 0.4, "solved_stderr": 0.05}
+    curated = _record("b", "terminal-bench-2.0", None, "2026-02-01T00:00:00+00:00", 0.4)
+    curated = curated.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="terminal-bench-2.0",
+                mechanism="curated",
+                family="terminal-bench-2.0",
+                tasks=(
+                    EvalTaskRef(
+                        name="terminal-bench-2.0",
+                        num_fewshot=None,
+                        benchmark=BenchmarkMetadataRef(
+                            schema_version=1,
+                            task="terminal-bench-2.0",
+                            primary_metric="reward",
+                            metric_kind=MetricKind.CONTINUOUS,
+                            metrics=(
+                                reward.model_copy(update={"source_name": "reward"}),
+                                BenchmarkMetricRef(
+                                    name="solved", source_name="solved", kind=MetricKind.BINARY, higher_is_better=True
+                                ),
+                            ),
+                            n_benchmark=89,
+                            n_attempted=89,
+                        ),
+                    ),
+                ),
+                curated=CuratedRef(
+                    datasets=("terminal-bench-2.0@1",),
+                    settings=CuratedSettings(task_machine=TaskMachineSettings()),
+                    selection=ResolvedEvaluationSelection(benchmark="terminal-bench-2.0", protocol="terminus-2"),
+                    agent=CuratedAgentRef(
+                        harness="terminus-2", revision="1", max_input_tokens=32768, max_output_tokens=8192
+                    ),
+                ),
+            ),
+            "metrics": {"terminal-bench-2.0": summary},
+            "canonical_metrics": {"terminal-bench-2.0": summary},
+            "coverage": {"terminal-bench-2.0": coverage},
+        }
+    )
+    records = [harbor, curated]
+    column = "terminal-bench-2.0 [terminus-2]"
+
+    assert build_meta(records)["families"] == [{"family": "terminal-bench-2.0", "variants": ["tb2", column]}]
+    panel = build_panel(records, panel_request())
+    cells = {name: cell for row in panel["rows"] for name, cell in row["cells"].items()}
+    assert {name: (cell["metric"], cell["value"]) for name, cell in cells.items()} == {
+        "tb2": ("reward", 0.3),
+        column: ("reward", 0.4),
+    }

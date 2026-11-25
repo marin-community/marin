@@ -41,8 +41,6 @@ class Experience:
     sequences: (B, S)
     action_log_probs: (B, A)
     base_action_log_probs: (B, A)
-    values: (B, A)
-    returns: (B, A)
     advatanges: (B, A)
     attention_mask: (B, S)
     action_mask: (B, A)
@@ -54,8 +52,6 @@ class Experience:
     sequences: Integer[torch.Tensor, "batch seq_len"]
     action_log_probs: Float[torch.Tensor, "batch response_len"]
     base_action_log_probs: Optional[Float[torch.Tensor, "batch response_len"]]
-    values: Optional[Float[torch.Tensor, "batch response_len"]]
-    returns: Optional[Float[torch.Tensor, "batch response_len"]]
     advantages: Optional[Float[torch.Tensor, "batch response_len"]]
     attention_mask: Optional[Integer[torch.LongTensor, "batch seq_len"]]
     loss_mask: Optional[Integer[torch.LongTensor, "batch response_len"]]
@@ -83,10 +79,6 @@ class Experience:
         self.action_log_probs = to(self.action_log_probs, device)
         if self.base_action_log_probs is not None:
             self.base_action_log_probs = to(self.base_action_log_probs, device)
-        if self.values is not None:
-            self.values = to(self.values, device)
-        if self.returns is not None:
-            self.returns = to(self.returns, device)
         if self.advantages is not None:
             self.advantages = to(self.advantages, device)
         if self.attention_mask is not None:
@@ -115,10 +107,6 @@ class Experience:
         self.action_log_probs = pin_memory(self.action_log_probs)
         if self.base_action_log_probs is not None:
             self.base_action_log_probs = pin_memory(self.base_action_log_probs)
-        if self.values is not None:
-            self.values = pin_memory(self.values)
-        if self.returns is not None:
-            self.returns = pin_memory(self.returns)
         if self.advantages is not None:
             self.advantages = pin_memory(self.advantages)
         if self.attention_mask is not None:

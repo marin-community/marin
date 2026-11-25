@@ -1,15 +1,20 @@
 """Assign each model to an Iris group confined to one NVLink domain."""
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import pynvml
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_nvlink_roles
 
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, SkyRLRolePlan
 
 LOCALITY_GROUP_LABEL = "iris.locality_group"
+RANK_LABEL = "iris.task_rank"
+HOST_LABEL = "iris.physical_host"
+FABRIC_LABEL = "iris.nvlink_fabric"
 
 
 @dataclass(frozen=True)
@@ -67,3 +72,87 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
         max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
     )
     return RoleTopology(tuple(roles), locality)
+
+
+@dataclass(frozen=True)
+class FabricSample:
+    """One GPU's NVLink fabric identity and health, as NVML reports it."""
+
+    cluster_uuid: uuid.UUID
+    clique_id: int
+    state: int
+    status: int
+
+
+def probe_fabric_info() -> tuple[FabricSample, ...]:
+    """Read every GPU's NVLink fabric identity and health through NVML."""
+    pynvml.nvmlInit()
+    try:
+        samples = []
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            info = pynvml.c_nvmlGpuFabricInfoV_t()
+            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, info)
+            samples.append(
+                FabricSample(
+                    cluster_uuid=uuid.UUID(bytes=bytes(info.clusterUuid)),
+                    clique_id=info.cliqueId,
+                    state=info.state,
+                    status=info.status,
+                )
+            )
+        return tuple(samples)
+    finally:
+        pynvml.nvmlShutdown()
+
+
+def node_physical_labels(
+    *, rank: int, gpus_per_node: int, host: str, fabric_info: Sequence[FabricSample]
+) -> dict[str, str]:
+    """Return the node's physical Ray labels after checking GPU count and fabric health."""
+    if len(fabric_info) != gpus_per_node:
+        raise ValueError("Physical GPU count disagrees with the allocated node width")
+    fabrics = set()
+    for sample in fabric_info:
+        if sample.state != pynvml.NVML_GPU_FABRIC_STATE_COMPLETED or sample.status != pynvml.NVML_SUCCESS:
+            raise ValueError("Every GPU must report a completed, healthy NVLink fabric")
+        fabrics.add(f"{sample.cluster_uuid}:{sample.clique_id}")
+    if len(fabrics) != 1:
+        raise ValueError("A physical node must fit inside one NVLink domain")
+    return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
+
+
+@dataclass(frozen=True)
+class RoleNodeRow:
+    """One node's verified physical placement, as persisted in the attempt report."""
+
+    rank: int
+    host: str
+    locality_group: int
+    fabric: str
+
+
+def audit_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology) -> list[RoleNodeRow]:
+    """Check observed Ray nodes against the plan and return each node's physical placement."""
+    alive = [node for node in nodes if node["Alive"]]
+    if len(alive) != topology.num_nodes:
+        raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
+    ranks = [int(node["Labels"][RANK_LABEL]) for node in alive]
+    if set(ranks) != set(range(topology.num_nodes)):
+        raise ValueError(f"Ray nodes must cover every Iris rank: {ranks}")
+    hosts = [node["Labels"][HOST_LABEL] for node in alive]
+    if len(set(hosts)) != topology.num_nodes:
+        raise ValueError(f"Ray nodes must occupy distinct physical hosts: {hosts}")
+    rows = []
+    fabrics: dict[int, set[str]] = {}
+    for rank, node in zip(ranks, alive, strict=True):
+        labels = node["Labels"]
+        group = topology.locality.group_for_rank(rank)
+        if labels[LOCALITY_GROUP_LABEL] != str(group):
+            raise ValueError(f"Ray locality label disagrees with Iris rank {rank}")
+        fabric = labels[FABRIC_LABEL]
+        fabrics.setdefault(group, set()).add(fabric)
+        rows.append(RoleNodeRow(rank=rank, host=labels[HOST_LABEL], locality_group=group, fabric=fabric))
+    if any(len(value) != 1 for value in fabrics.values()):
+        raise ValueError(f"Each locality group must fit inside one physical NVLink domain: {fabrics}")
+    return sorted(rows, key=lambda row: row.rank)

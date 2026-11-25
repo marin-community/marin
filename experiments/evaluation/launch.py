@@ -29,7 +29,10 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     PromptFormat,
+    RLAttemptRef,
     RunStatus,
+    TaskEvidence,
+    TaskMachineBackend,
     list_records,
     scoring_settings,
 )
@@ -67,7 +70,7 @@ from marin.evaluation.runner import (
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.evaluation.task_worker import JUDGE_API_KEY
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, JUDGE_API_KEY
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.iris import RemoteInferenceSession
@@ -81,14 +84,18 @@ from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import (
     DEFAULT_RUN_SEED,
+    agent_ref_for,
     corpus_key,
     corpus_steps,
     pinned_model,
     record_ref_for,
     resolve_selection,
+    runs_agent,
+    selected_sources,
     settings_for,
 )
 from experiments.evaluation.evals import (
+    DAYTONA_SECRET_ENV,
     EvaluationDefinition,
     HarborDefinition,
     harbor_model_agent_kwargs,
@@ -101,6 +108,7 @@ from experiments.evaluation.policy_finalization import (
     requires_policy_judge,
 )
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.pipeline import download_hosts
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -118,10 +126,22 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
+
+
+def _judge_identity(config: ModelConfigRef | None) -> dict | None:
+    return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
 def _evaluation_identity(evaluation: EvalRef) -> dict:
@@ -166,6 +186,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -174,6 +195,9 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
+    task_machine_backend: TaskMachineBackend | None = None
+    """Replaces the task-machine backend of every curated selection that runs on task machines."""
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -267,8 +291,10 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
+    task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
+    task_machine_backend: TaskMachineBackend | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     harbor_runtime = harbor_runtime_descriptor() if harbor_definitions else None
@@ -287,24 +313,38 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
-            settings = settings_for(definition, model, limit, seed, default_seed)
+            settings = settings_for(
+                definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
+            )
+            secret_env: dict[str, SecretSpec] = {
+                **definition.run.task_secrets,
+                **({JUDGE_API_KEY: definition.run.judge_api_key} if definition.run.judge is not None else {}),
+            }
+            egress_allow = (
+                (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
+            )
+            egress_allow += tuple(
+                host
+                for source in selected_sources(protocol)
+                if source.config is not None
+                for host in download_hosts(source.config.recipe)
+            )
+            if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
+                secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
+                egress_allow = (*egress_allow, *DAYTONA_EGRESS)
             resolved.append(
                 (
                     name,
                     _ResolvedDefinition(
-                        record_ref=record_ref_for(definition, protocol, settings),
+                        record_ref=record_ref_for(
+                            definition, protocol, settings, agent_ref_for(protocol, model, settings)
+                        ),
                         runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
                         cache_runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
                         executor=None,
                         endpoint_route=EndpointRoute.DIRECT,
-                        secret_env=(
-                            {JUDGE_API_KEY: definition.run.judge_api_key} if definition.run.judge is not None else {}
-                        ),
-                        egress_allow=(
-                            (urlsplit(definition.run.judge_endpoint).hostname,)
-                            if definition.run.judge_endpoint is not None
-                            else ()
-                        ),
+                        secret_env=secret_env,
+                        egress_allow=egress_allow,
                     ),
                 )
             )
@@ -312,18 +352,17 @@ def _resolve_definitions(
 
         config: ValidatedHarborConfig = next(validated_configs)
         validate_harbor_dataset_source(config)
-        runtime_task_limit = definition.max_eval_instances if limit is None else limit
         resolved.append(
             (
                 name,
                 _ResolvedDefinition(
-                    record_ref=definition.record_ref_for(config, runtime_task_limit),
+                    record_ref=definition.record_ref_for(config, limit),
                     runtime_descriptor=harbor_runtime,
                     cache_runtime_descriptor=harbor_runtime,
                     executor=definition.executor_for(
                         config,
                         model,
-                        runtime_task_limit,
+                        limit,
                         retry_unscored_harbor_trials,
                         judge_model,
                     ),
@@ -385,6 +424,8 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
+    if spec.task_evidence is not None and not has_curated_definitions:
+        raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
             f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
@@ -398,8 +439,12 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
+    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+    # An agent's token budgets and run identity come from the window the server runs, which the checkpoint can clamp.
     if model.serve.max_model_len is not None and any(
-        isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+        isinstance(definition, HarborDefinition)
+        or (isinstance(definition, EvaluationSelection) and runs_agent(resolve_selection(definition, model_format)))
+        for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
     seeded = supports_request_seed(accelerator.platform, model.serve.backend)
@@ -411,9 +456,16 @@ def build_evaluation_batch(
         spec.limit,
         spec.seed,
         DEFAULT_RUN_SEED if seeded else None,
+        spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
+        spec.task_machine_backend,
     )
+    if spec.task_machine_backend is not None and not any(
+        definition.record_ref.curated is not None and definition.record_ref.curated.settings.task_machine is not None
+        for _, definition in definitions
+    ):
+        raise ValueError("--task-machine-backend requires a curated evaluation that runs on task machines")
     if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
         raise ValueError("--retry-unscored-harbor-trials requires --resume-results-path")
     if spec.resume_results_path is not None:
@@ -488,6 +540,7 @@ def build_evaluation_batch(
                 model,
                 reference,
                 selection.run.judge_endpoint,
+                tuple(selection.run.task_secrets),
                 spec.policy_finalization,
                 policy_judge.accelerator if policy_judge is not None else None,
                 spec.priority_band,
@@ -505,9 +558,7 @@ def build_evaluation_batch(
                     else {}
                 ),
                 "judge": (
-                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
-                    else None
+                    _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
                 "policy": spec.version,
             },
@@ -536,6 +587,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -548,6 +600,7 @@ def build_evaluation_batch(
         max_concurrent=spec.max_concurrent,
         instances=spec.instances,
         judge=judge,
+        prepared_judges=(policy_judge,) if policy_judge is not None else (),
         secret_env=secret_env,
         egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,
@@ -587,7 +640,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
             record
@@ -595,7 +648,9 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            and _judge_identity(
+                record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
+            )
             == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),
@@ -626,6 +681,7 @@ def _execute_curated(
     model: ModelConfig,
     reference: EvalRef,
     judge_endpoint: str | None,
+    task_secrets: tuple[str, ...],
     policy: PolicyFinalization | None,
     judge_accelerator: AcceleratorChoice | None,
     priority: int,
@@ -639,7 +695,14 @@ def _execute_curated(
     """Construct the evaluator after its regional corpus dependencies have finished."""
     assert reference.curated is not None and reference.curated.selection is not None
     datasets = tuple(step.lower().output_path for step in corpus_steps(reference.curated.selection, CampaignRuntime()))
-    source = DatasetEvaluator(datasets, model, reference.curated.settings, judge_endpoint)
+    source = DatasetEvaluator(
+        datasets,
+        model,
+        reference.curated.settings,
+        judge_endpoint,
+        agent=reference.curated.agent,
+        task_secrets=task_secrets,
+    )
     executor = source if policy is None else policy_executor(source, reference, policy, judge_accelerator, priority)
     return executor(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 

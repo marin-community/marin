@@ -91,14 +91,12 @@ def source_documents(config_dir: Path) -> SourceDocuments:
                     # These rule files are data for the algorithm's rule-list field.
                     if folder.name == "off_policy_correction":
                         document = {"trainer": {"algorithm": {"off_policy_correction_rules": document[key]["rules"]}}}
-                    if "terminal_bench_config" in document:
-                        document["terminal_bench"] = document.pop("terminal_bench_config")
                     options[source.stem] = document
                     _, separator, mount = key.partition("@")
                     if not separator:
                         package = re.search(r"@package (.*)", source.read_text())
                         mount = package[1] if package else folder.name
-                    mount = {"terminal_bench_config": "terminal_bench", "_global_": ""}.get(mount, mount)
+                    mount = "" if mount == "_global_" else mount
                     comments.update(field_comments(source, mount))
                 if options:
                     groups[key] = options
@@ -176,7 +174,7 @@ def generated_module(body: str, imports: str = "") -> str:
 from __future__ import annotations
 from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 {imports}
 {body}
 '''
@@ -198,7 +196,10 @@ def section_paths(mapping: dict, sidecar: dict, owned: frozenset, prefix: str = 
         path = f"{prefix}.{key}".lstrip(".")
         annotation = sidecar["UNDECLARED"][path][0] if path in sidecar["UNDECLARED"] else sidecar["TYPES"].get(path)
         section = (
-            isinstance(value, dict) and value and path not in owned | sidecar["OPEN"] and annotation != "NumberMap"
+            isinstance(value, dict)
+            and value
+            and path not in owned | sidecar["OPEN"]
+            and annotation not in ("NumberMap", "CountMap")
             if prefix
             else path not in owned | sidecar["UNDECLARED"].keys() and annotation not in ("OpenMap", "OpenMap | None")
         )
@@ -306,7 +307,7 @@ def render_sections(schema: RenderSchema) -> str:
         if path != SAMPLING_PATH
     )
     fields = []
-    for group in ("terminal_bench_config", "algorithm_recipe"):
+    for group in ("algorithm_recipe",):
         if options := schema.source.groups.get(group):
             choices = ", ".join(repr(option) for option in sorted(options))
             fields.append(f"    {group}: Literal[{choices}] = unset_field()")

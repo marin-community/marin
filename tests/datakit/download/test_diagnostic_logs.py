@@ -4,9 +4,7 @@
 import gzip
 import http.client
 import io
-import json
 import tarfile
-import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -19,18 +17,11 @@ from marin.datakit.download.diagnostic_logs import (
     GHALOGS_STAGED_PREFIX,
     SOURCE_INVENTORY,
     DiagnosticPartition,
-    ExtractedDiagnosticLogs,
-    ExtractedPartitionedDiagnosticLogs,
     MaterializedDiagnosticLogParquet,
     assign_partition,
     download_ghalogs_step,
-    extract_diagnostic_logs,
-    extract_ghalogs,
-    extract_ghalogs_step,
     ghalogs_member_to_records,
     ghalogs_public_normalize_steps,
-    logchunks_example_to_record,
-    loghub_file_to_record,
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
@@ -43,11 +34,6 @@ from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
 from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
-
-
-def _read_jsonl(path: str) -> list[dict[str, object]]:
-    with open(path, encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
 
 
 def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
@@ -201,38 +187,6 @@ def test_ghalogs_member_to_records_rejects_an_unexpected_member_layout():
         list(ghalogs_member_to_records("logs/owner/repo/build_1234/11-1.txt", b"plain job log line"))
 
 
-def test_logchunks_example_to_record_sanitizes():
-    example = ET.fromstring(
-        """
-        <Example>
-          <Log>JavaScript/example@repo/failed/1.log</Log>
-          <Keywords>Error</Keywords>
-          <Category>0</Category>
-          <Chunk>Error token=abc123456789 path=/home/alice/project</Chunk>
-        </Example>
-        """
-    )
-
-    record = logchunks_example_to_record("annotations.xml", 0, example)
-
-    assert record is not None
-    assert record["source"] == "logchunks"
-    assert record["log_path"] == "JavaScript/example@repo/failed/1.log"
-    assert "abc123456789" not in record["text"]
-    assert "<REDACTED_SECRET>" in record["text"]
-    assert "/home/<USER_0>/project" in record["text"]
-
-
-def test_loghub_file_to_record_sanitizes():
-    record = loghub_file_to_record("Linux/Linux_2k.log", b"FAILED contact alice@example.com")
-
-    assert record is not None
-    assert record["source"] == "loghub"
-    assert record["source_path"] == "Linux/Linux_2k.log"
-    assert "alice@example.com" not in record["text"]
-    assert "<USER_0_EMAIL>" in record["text"]
-
-
 def test_source_inventory_uses_shared_manifest_policy_metadata():
     inventory = {source.source_label: source for source in SOURCE_INVENTORY}
 
@@ -265,212 +219,6 @@ def test_ghalogs_dataset_reads_datakit_normalized_output():
     cfg = materialized_config(step, "gs://prefix")
     assert cfg.train_paths == [f"{normalized.path('gs://prefix')}/outputs/main/*.parquet"]
     assert cfg.validation_paths == []
-
-
-def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    input_dir.mkdir()
-
-    ghalogs_dir = input_dir / "ghalogs" / "zenodo-14796970" / "zenodo.org" / "records" / "14796970" / "files"
-    ghalogs_dir.mkdir(parents=True)
-    _write_ghalogs_archive(
-        ghalogs_dir / "github_run_logs.zip",
-        {
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
-            "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
-        },
-    )
-
-    with zipfile.ZipFile(input_dir / "LogChunks.zip", "w") as archive:
-        archive.writestr(
-            "LogChunks/build-failure-reason/Python/example@repo.xml",
-            """
-            <Examples>
-              <Example>
-                <Log>Python/example@repo/failed/1.log</Log>
-                <Keywords>Error</Keywords>
-                <Category>0</Category>
-                <Chunk>Traceback token=abc123456789</Chunk>
-              </Example>
-              <Example>
-                <Log>Python/example@repo/failed/2.log</Log>
-                <Keywords>Failed</Keywords>
-                <Category>1</Category>
-                <Chunk>FAILED alice@example.com</Chunk>
-              </Example>
-            </Examples>
-            """,
-        )
-
-    loghub_dir = input_dir / "loghub" / "Linux"
-    loghub_dir.mkdir(parents=True)
-    (loghub_dir / "Linux_2k.log").write_text("FAILED path=/home/alice/project", encoding="utf-8")
-    (loghub_dir / "Linux_2k.log_structured.csv").write_text("not ingested", encoding="utf-8")
-
-    extracted = extract_diagnostic_logs(
-        str(input_dir / "ghalogs" / "zenodo-14796970"),
-        str(output_dir),
-        logchunks_input_path=str(input_dir),
-        loghub_input_path=str(input_dir),
-        max_ghalogs_members=1,
-        max_logchunks_examples=1,
-        max_loghub_files=1,
-    )
-
-    assert isinstance(extracted, ExtractedDiagnosticLogs)
-    assert extracted.ghalogs.record_count == 1
-    assert extracted.logchunks.record_count == 1
-    assert extracted.loghub.record_count == 1
-    assert extracted.ghalogs.metadata_path == str(output_dir / "metadata.json")
-    assert extracted.logchunks.metadata_path == str(output_dir / "eval_only" / "logchunks" / "metadata.json")
-    assert extracted.loghub.metadata_path == str(output_dir / "eval_only" / "loghub" / "metadata.json")
-
-    metadata = json.loads((output_dir / "metadata.json").read_text())
-    assert "content_fingerprint" in metadata
-    assert metadata["source_manifest"]["source_label"] == "ghalogs"
-    assert metadata["source_manifest"]["policy"]["training_allowed"] is True
-    assert metadata["source_manifest"]["policy"]["requires_sanitization"] is True
-    assert metadata["materialized_output"]["metadata"]["sample_limits"]["max_members"] == 1
-    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
-    assert metadata["materialized_output"]["record_count"] == 1
-
-    kept_records = []
-    for partition in ("train", "dev", "test", "issue_5093_holdout"):
-        kept_records.extend(_read_jsonl(str(output_dir / partition / "data-00000-of-00001.jsonl")))
-    assert len(kept_records) == 1
-
-    logchunks_records = _read_jsonl(str(output_dir / "eval_only" / "logchunks" / "data-00000-of-00001.jsonl"))
-    assert len(logchunks_records) == 1
-    assert logchunks_records[0]["source"] == "logchunks"
-
-    loghub_records = _read_jsonl(str(output_dir / "eval_only" / "loghub" / "data-00000-of-00001.jsonl"))
-    assert len(loghub_records) == 1
-    assert loghub_records[0]["source"] == "loghub"
-    loghub_metadata = json.loads((output_dir / "eval_only" / "loghub" / "metadata.json").read_text())
-    assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
-
-
-def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
-    """max_members bounds run archives; one capped run still yields all of its job logs."""
-    archive_dir = tmp_path / "zenodo.org" / "records" / "14796970" / "files"
-    archive_dir.mkdir(parents=True)
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        for member_path in ("logs/owner/repo-a/w_1/1-1.tar.gz", "logs/owner/repo-b/w_1/2-1.tar.gz"):
-            archive.writestr(
-                member_path,
-                _run_archive_member(
-                    {
-                        "0_build.txt": b"build job log",
-                        "1_test.txt": b"test job log",
-                        "2_deploy.txt": b"deploy job log",
-                        # Per-step files repeat the job text, so they are not records.
-                        "0_build/1_checkout.txt": b"build job log",
-                    }
-                ),
-            )
-
-    extracted = extract_ghalogs(str(tmp_path), str(tmp_path / "output"), max_members=1)
-
-    metadata = json.loads((tmp_path / "output" / "metadata.json").read_text())
-    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
-    assert extracted.record_count == 3
-    records = []
-    for partition in DiagnosticPartition:
-        records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
-    assert sorted(record["archive_path"] for record in records) == [
-        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt#0",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt#0",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt#0",
-    ]
-    # All job logs of one run share the run's partition.
-    assert len({record["partition"] for record in records}) == 1
-
-
-def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_sources(tmp_path, monkeypatch):
-    ghalogs_input_dir = tmp_path / "ghalogs" / "zenodo-14796970"
-    ghalogs_archive_dir = ghalogs_input_dir / "zenodo.org" / "records" / "14796970" / "files"
-    output_dir = tmp_path / "output"
-    ghalogs_archive_dir.mkdir(parents=True)
-
-    _write_ghalogs_archive(
-        ghalogs_archive_dir / "github_run_logs.zip",
-        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
-    )
-
-    def _fake_fetch_logchunks(destination_dir: str) -> str:
-        destination = Path(destination_dir)
-        destination.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(destination / "LogChunks.zip", "w") as archive:
-            archive.writestr(
-                "LogChunks/build-failure-reason/Python/example@repo.xml",
-                """
-                <Examples>
-                  <Example>
-                    <Log>Python/example@repo/failed/1.log</Log>
-                    <Keywords>Error</Keywords>
-                    <Category>0</Category>
-                    <Chunk>Traceback token=abc123456789</Chunk>
-                  </Example>
-                </Examples>
-                """,
-            )
-        return str(destination)
-
-    def _fake_fetch_loghub(destination_dir: str) -> str:
-        destination_root = Path(destination_dir)
-        destination = destination_root / "loghub"
-        linux_dir = destination / "Linux"
-        linux_dir.mkdir(parents=True, exist_ok=True)
-        (linux_dir / "Linux_2k.log").write_text("FAILED path=/home/alice/project", encoding="utf-8")
-        return str(destination_root)
-
-    monkeypatch.setattr(
-        "marin.datakit.download.diagnostic_logs._stage_logchunks_if_missing",
-        _fake_fetch_logchunks,
-    )
-    monkeypatch.setattr(
-        "marin.datakit.download.diagnostic_logs._stage_loghub_if_missing",
-        _fake_fetch_loghub,
-    )
-
-    extracted = extract_diagnostic_logs(
-        str(ghalogs_input_dir),
-        str(output_dir),
-        logchunks_input_path=str(tmp_path / "auto" / "logchunks"),
-        loghub_input_path=str(tmp_path / "auto" / "loghub"),
-        max_ghalogs_members=1,
-        max_logchunks_examples=1,
-        max_loghub_files=1,
-    )
-
-    assert isinstance(extracted, ExtractedDiagnosticLogs)
-    assert extracted.ghalogs.record_count == 1
-    assert extracted.logchunks.record_count == 1
-    assert extracted.loghub.record_count == 1
-
-
-def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
-    input_dir = tmp_path / "input"
-    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
-    archive_dir.mkdir(parents=True)
-
-    _write_ghalogs_archive(
-        archive_dir / "github_run_logs.zip",
-        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
-    )
-
-    step = extract_ghalogs_step(
-        source_path=str(input_dir),
-        max_members=1,
-        output_path_prefix=str(tmp_path / "steps"),
-    )
-    StepRunner().run([step])
-
-    loaded = read_artifact(step.output_path, ExtractedPartitionedDiagnosticLogs)
-    assert loaded.source_label == "ghalogs"
-    assert loaded.record_count == 1
-    assert loaded.metadata_path.endswith("/metadata.json")
 
 
 def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):

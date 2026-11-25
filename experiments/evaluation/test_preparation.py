@@ -11,8 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import run
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_protocol
@@ -22,6 +21,7 @@ from taskcompendium.evaluation.spec import (
     Metric,
     MetricKind,
     Sampling,
+    ShellAgent,
     SummaryKind,
     TextGeneration,
     TrialPolicy,
@@ -29,18 +29,14 @@ from taskcompendium.evaluation.spec import (
 from taskcompendium.importers.evalchemy.code import python_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
-from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
-from zephyr.context import ZephyrContext
 
 from experiments.evaluation.benchmarks.code import sources as python_sources
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
-from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def decode_prefix(data: dict, _context: ConversionContext, *, prefix: str) -> dict:
@@ -69,7 +65,14 @@ def grouped_item(task):
 def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="eval-identity",
+            upstream_name="eval-identity",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            family="test",
+            tags=("eval",),
+            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -94,25 +97,6 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
         ),
         pipeline=prepare_evaluation,
     )
-
-
-@pytest.fixture
-def local_graph(tmp_path, monkeypatch):
-    root = tmp_path / "source"
-    root.mkdir()
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    runtime = CampaignRuntime()
-    options = PipelineOptions(SourceProcessingMode.QUICK, runtime, inputs=InputOverrides(root=str(root)))
-    client = LocalClient()
-    try:
-        with (
-            set_current_client(client),
-            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
-            runtime.activate(context),
-        ):
-            yield root, options
-    finally:
-        client.shutdown()
 
 
 def test_evaluation_artifact_cache_distinguishes_source_preparation(local_graph):
@@ -221,3 +205,21 @@ def test_remote_quick_wrapper_does_not_reuse_corpora_after_protocol_or_item_buil
         case = next(evaluation_cases(artifact.path))
         published.append((protocol.sampling.max_tokens, case.item.groups))
     assert published == [(10, {}), (7, {}), (7, {"panel": "changed"})]
+
+
+def test_agent_corpus_publishes_only_its_declared_agent(local_graph, agent_source):
+    root, options = local_graph
+    (root / "rows.jsonl").write_text(json.dumps({"prompt": "Name a color"}) + "\n")
+    dataset = agent_source.config
+    assert dataset is not None and dataset.agent is not None
+
+    artifact = run(prepare_evaluation(agent_source, options), max_concurrent=1)[0]
+    assert next(evaluation_cases(artifact.path)).item.operation == dataset.agent
+
+    # Launchers record the declared agent, so an item running another harness must not publish.
+    other = dataset.agent.model_copy(update={"harness": ShellAgent()})
+    mismatched = replace(agent_source, config=replace(dataset, item_builder=partial(dataset.item_builder, agent=other)))
+    step = prepare_evaluation(mismatched, options)
+    with pytest.raises(RuntimeError):
+        run(step, max_concurrent=1)
+    assert not (Path(step.path()) / MANIFEST_FILENAME).exists()

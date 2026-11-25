@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from finestore.rl.run_records import METRIC_METADATA_KEYS
 from skyrl_train.entrypoints.main_base import BasePPOExp
 
 from tests.batch_assertions import assert_metric_parity
@@ -23,7 +24,11 @@ def tiny_policy(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _trained_steps(root: Path) -> list[dict]:
-    return [record for record in read_metrics(root) if "policy/raw_grad_norm" in record]
+    return [
+        {key: value for key, value in record.items() if key not in METRIC_METADATA_KEYS}
+        for record in read_metrics(root)
+        if "policy/raw_grad_norm" in record
+    ]
 
 
 def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator: str = "grpo"):

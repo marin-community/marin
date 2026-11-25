@@ -1,0 +1,94 @@
+# Standalone grader for the task log parser; do not edit by hand.
+# Parser: @@PARSER@@
+@@NOTE@@from __future__ import annotations
+
+import json
+import sys
+from enum import Enum
+@@IMPORTS@@
+
+LOG_PARSER = '@@PARSER@@'
+
+
+class TestStatus(str, Enum):
+    FAILED = "FAILED"
+    PASSED = "PASSED"
+    SKIPPED = "SKIPPED"
+    ERROR = "ERROR"
+
+    def __str__(self):
+        return self.value
+
+
+@@DEFINITIONS@@
+
+
+def parse_test_log(test_log):
+    test_log = ansi_escape(test_log).replace("\r", "\n")
+    parsed = @@PARSER@@(test_log)
+    for name in _names_failed_on_any_line(test_log, @@PARSER@@) & parsed.keys():
+        if parsed[name] == TestStatus.PASSED:
+            parsed[name] = TestStatus.FAILED
+    results = {"FAILED": set(), "PASSED": set(), "SKIPPED": set(), "ERROR": set()}
+    for name, status in parsed.items():
+        results[status.value].add(name)
+    return results
+
+
+def grade(config, test_log):
+    fail_to_pass = config["FAIL_TO_PASS"]
+    pass_to_pass = config["PASS_TO_PASS"]
+    results = parse_test_log(test_log)
+    expected = {"PASSED": set(fail_to_pass) | set(pass_to_pass)}
+    # Package build failures and parser placeholders identify no test.
+    unscorable = not any(
+        not name.endswith(BUILD_ERROR_SUFFIX) and not _is_placeholder_test_name(_normalize_test_name_for_compare(name))
+        for names in results.values()
+        for name in names
+    )
+    actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
+
+    def status(names):
+        return {
+            name: all(
+                _expected_name_satisfied(actual_passed, normalized)
+                for normalized in _normalized_passed_names({name})
+            )
+            for name in names
+        }
+
+    return {
+        "log_parser": LOG_PARSER,
+        "unscorable": unscorable,
+        "resolved": not results["ERROR"] and normalized_passed_subset(results, expected),
+        "parsed_counts": {key: len(value) for key, value in results.items()},
+        "fail_to_pass": status(fail_to_pass),
+        "pass_to_pass": status(pass_to_pass),
+        "test_results": {key: sorted(value) for key, value in results.items()},
+    }
+
+
+def main():
+    config_path, log_path, report_path = sys.argv[1:4]
+    with open(config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        report = grade(config, fh.read())
+    test_results = report.pop("test_results")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(report, indent=2) + "\n")
+    if len(sys.argv) > 4:
+        with open(sys.argv[4], "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(test_results) + "\n")
+    f2p_ok = sum(report["fail_to_pass"].values())
+    p2p_ok = sum(report["pass_to_pass"].values())
+    print("parser=%s parsed=%s" % (LOG_PARSER, report["parsed_counts"]))
+    print("F2P %d/%d P2P %d/%d" % (f2p_ok, len(report["fail_to_pass"]), p2p_ok, len(report["pass_to_pass"])))
+    if report["unscorable"]:
+        print("UNSCORABLE: no named test results were parsed from the test log")
+    print("RESOLVED" if report["resolved"] else "UNRESOLVED")
+    sys.exit(0 if report["resolved"] else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -18,6 +18,7 @@ import haliax as hax
 from haliax import Axis, NamedArray, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
+from levanter.metrics import Metric
 from levanter.models.loss import maybe_fused_next_token_loss
 
 
@@ -334,8 +335,34 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
-        activations, aux_loss = split_activations(self.activations(example.tokens, example.attn_mask, key=key))
+        return self._loss_from_activations(
+            example,
+            self.activations(example.tokens, example.attn_mask, key=key),
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
 
+    def next_token_loss_and_metrics(
+        self, example: LmExample, *, key=None, **kwargs
+    ) -> tuple[jnp.ndarray | NamedArray, dict[str, Metric]]:
+        """Compute the training loss and any metrics returned by its forward pass."""
+        return self.compute_next_token_loss(example, key=key, **kwargs), {}
+
+    def _loss_from_activations(
+        self,
+        example: LmExample,
+        activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+        *,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        activations, aux_loss = split_activations(activations)
         loss = maybe_fused_next_token_loss(
             self.Pos,
             self.Embed,

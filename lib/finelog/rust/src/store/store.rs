@@ -40,6 +40,7 @@ use crate::store::catalog::projection::{floor_persisted_high_water, namespace_ca
 use crate::store::catalog::{
     Catalog, ForwardingSettlement, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle,
 };
+use crate::store::column_bounds::ColumnBounds;
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
@@ -149,8 +150,9 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            // Each segment covers a short time span, but the key column is
-            // `key`, so key bounds say nothing about time.
+            // Each segment covers a short time span, so per-segment bounds in
+            // the catalog drop most segments for a time-bounded search; the
+            // key column is `key`, so key bounds cannot.
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
@@ -175,6 +177,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
+    pub column_bounds: BTreeMap<String, ColumnBounds>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
@@ -1404,6 +1407,7 @@ impl Store {
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_column_bounds(snapshot.column_bounds)
             .with_segment_seq_bounds(snapshot.seq_bounds)
             .with_segment_row_counts(snapshot.row_counts)
             .with_segment_partitions(physical_partition_policy_for(name), snapshot.partitions);
@@ -1427,6 +1431,7 @@ impl Store {
             key_column: engine.key_column().to_string(),
             paths: segments.paths,
             key_bounds: segments.key_bounds,
+            column_bounds: segments.column_bounds,
             seq_bounds: segments.seq_bounds,
             row_counts: segments.row_counts,
             partitions: segments.partitions,
@@ -1766,6 +1771,10 @@ mod tests {
 
     use arrow::array::{Int64Array, StringArray};
     use buffa::{Message, MessageField, MessageView};
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::datasource::physical_plan::FileScanConfig;
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion::physical_plan::metrics::MetricValue;
 
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
@@ -5331,7 +5340,8 @@ mod tests {
         assert_eq!(fingerprint(flagged), fingerprint(plain));
     }
 
-    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`.
+    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`:
+    /// its key bounds cannot prune by time, so only the column bounds can.
     fn time_bounded_worker_spec() -> ValidatedTableSpec {
         let mut schema = worker_schema_keyed_on("worker_id");
         for column in &mut schema.columns {
@@ -5341,6 +5351,11 @@ mod tests {
         }
         ObjectSpec::new(1).schema(schema).validated()
     }
+
+    /// The unconverted time filter OPS.md allows: `extract(epoch ...) * 1000`
+    /// is a Float64, so the comparison casts `timestamp_ms` to a float.
+    const FLOAT_EPOCH_FILTER: &str =
+        "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400";
 
     struct TimeBoundedTable {
         store: Store,
@@ -5413,6 +5428,135 @@ mod tests {
                         .and_then(|record| record.column_bounds.get("timestamp_ms").copied())
                 })
                 .collect()
+        }
+
+        fn provider(&self, with_column_bounds: bool) -> crate::query::provider::NamespaceProvider {
+            let mut snapshot = self.store.query_snapshot("iris.worker").unwrap();
+            if !with_column_bounds {
+                snapshot.column_bounds.clear();
+            }
+            self.store
+                .namespace_provider("iris.worker", snapshot)
+                .unwrap()
+        }
+
+        async fn rows(&self, sql: &str, with_column_bounds: bool) -> String {
+            let providers = vec![crate::query::RegisteredProvider {
+                name: "iris.worker".to_string(),
+                provider: self.provider(with_column_bounds),
+            }];
+            let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, sql)
+                .await
+                .unwrap();
+            datafusion::arrow::util::pretty::pretty_format_batches(&result.batches)
+                .unwrap()
+                .to_string()
+        }
+
+        /// `sql` planned over this table, with the context that planned it.
+        async fn physical_plan(
+            &self,
+            with_column_bounds: bool,
+            sql: &str,
+        ) -> (
+            datafusion::prelude::SessionContext,
+            Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        ) {
+            let ctx = crate::query::make_ctx();
+            ctx.register_table(
+                datafusion::common::TableReference::bare("iris.worker"),
+                Arc::new(self.provider(with_column_bounds)),
+            )
+            .unwrap();
+            let plan = ctx
+                .sql(sql)
+                .await
+                .unwrap()
+                .create_physical_plan()
+                .await
+                .unwrap();
+            (ctx, plan)
+        }
+
+        /// How many segment files the physical scan for `sql` opens.
+        async fn planned_segment_count(&self, sql: &str) -> usize {
+            let (_ctx, plan) = self.physical_plan(/* with_column_bounds */ true, sql).await;
+            let mut files = 0;
+            plan.apply(|node| {
+                if let Some(config) = node
+                    .downcast_ref::<DataSourceExec>()
+                    .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+                {
+                    files += config
+                        .file_groups
+                        .iter()
+                        .map(|group| group.len())
+                        .sum::<usize>();
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            files
+        }
+
+        /// Assert each time filter returns the same rows with and without column
+        /// bounds, and that its scan opens the paired number of segments.
+        async fn assert_pruning_keeps_rows(&self, cases: &[(&str, usize)]) {
+            for &(filter, expected_segments) in cases {
+                let sql = format!(
+                    "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
+                     WHERE {filter} ORDER BY timestamp_ms, mem_bytes"
+                );
+                assert_eq!(
+                    self.rows(&sql, /* with_column_bounds */ true).await,
+                    self.rows(&sql, /* with_column_bounds */ false).await,
+                    "{filter}: rows differ with column bounds"
+                );
+                assert_eq!(
+                    self.planned_segment_count(&sql).await,
+                    expected_segments,
+                    "{filter}"
+                );
+            }
+        }
+
+        /// The Parquet scan's statistics pruning for `filter`. Segment planning
+        /// gets no column bounds, so every row group reaches the scan and the
+        /// time filter has to prune there.
+        async fn row_group_pruning(&self, filter: &str) -> RowGroupPruning {
+            let sql = format!("SELECT worker_id FROM \"iris.worker\" WHERE {filter}");
+            let (ctx, plan) = self
+                .physical_plan(/* with_column_bounds */ false, &sql)
+                .await;
+            datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx())
+                .await
+                .unwrap();
+            let mut pruning = RowGroupPruning::default();
+            plan.apply(|node| {
+                let scan_metrics = node
+                    .downcast_ref::<DataSourceExec>()
+                    .and_then(|_| node.metrics());
+                for metric in scan_metrics.iter().flat_map(|metrics| metrics.iter()) {
+                    match metric.value() {
+                        MetricValue::Count { name, count }
+                            if name == "predicate_evaluation_errors" =>
+                        {
+                            pruning.predicate_errors += count.value();
+                        }
+                        MetricValue::PruningMetrics {
+                            name,
+                            pruning_metrics,
+                        } if name == "row_groups_pruned_statistics" => {
+                            pruning.pruned += pruning_metrics.pruned();
+                            pruning.checked += pruning_metrics.pruned() + pruning_metrics.matched();
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            pruning
         }
 
         fn cleanup(self) {
@@ -5561,6 +5705,128 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_filters_prune_by_column_bounds() {
+        let table = TimeBoundedTable::new("column_bounds_pruned", false).await;
+        table
+            .assert_pruning_keeps_rows(&[
+                // (filter, segments its scan plans, of the table's three)
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 2),
+                ("timestamp_ms > 2400.5", 2),
+                (FLOAT_EPOCH_FILTER, 2),
+                ("timestamp_ms < 1000", 0),
+            ])
+            .await;
+        table.cleanup();
+    }
+
+    /// The scan types strings as `Utf8View`, which DataFusion's pruning rewrite
+    /// of a prefix `LIKE` cannot compare with its `Utf8` bounds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn string_filters_run_beside_time_pruning() {
+        let table = TimeBoundedTable::new("column_bounds_like", false).await;
+        table
+            .assert_pruning_keeps_rows(&[
+                ("worker_id LIKE 'w-%'", 3),
+                ("worker_id LIKE 'w-2'", 1),
+                ("worker_id LIKE 'w-%' AND timestamp_ms >= 2000", 2),
+                // The optimizer turns `starts_with` into a prefix `LIKE`.
+                ("starts_with(worker_id, 'w-') AND timestamp_ms >= 2000", 2),
+                (
+                    "(worker_id LIKE 'w-1%' OR worker_id LIKE 'w-3%') AND timestamp_ms >= 2000",
+                    2,
+                ),
+                ("worker_id LIKE 'w-1%' OR timestamp_ms >= 3000", 3),
+            ])
+            .await;
+        table.cleanup();
+    }
+
+    /// Row-group statistics pruning summed over a plan's Parquet scans.
+    #[derive(Debug, Default, PartialEq)]
+    struct RowGroupPruning {
+        predicate_errors: usize,
+        pruned: usize,
+        checked: usize,
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_prefix_like_keeps_row_group_statistics_pruning() {
+        // Before DataFusion 55, statistics pruning compared a `Utf8View` column's
+        // bounds with `Utf8` prefix literals, failed, and then pruned nothing,
+        // the time conjunct included.
+        let table = TimeBoundedTable::new("column_bounds_like_row_groups", false).await;
+        let time_only = table.row_group_pruning("timestamp_ms >= 2000").await;
+        assert_eq!(
+            time_only.predicate_errors, 0,
+            "the time filter alone evaluates cleanly"
+        );
+        assert!(
+            time_only.pruned > 0,
+            "the time filter alone prunes a row group: {time_only:?}"
+        );
+        for filter in [
+            "worker_id LIKE 'w-%' AND timestamp_ms >= 2000",
+            "starts_with(worker_id, 'w-') AND timestamp_ms >= 2000",
+        ] {
+            let pruning = table.row_group_pruning(filter).await;
+            assert_eq!(
+                pruning.predicate_errors, 0,
+                "{filter}: the LIKE failed to evaluate against row-group statistics"
+            );
+            assert_eq!(
+                pruning, time_only,
+                "{filter}: the LIKE changed statistics pruning"
+            );
+        }
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn segments_without_column_bounds_are_always_scanned() {
+        let table = TimeBoundedTable::new("column_bounds_absent", false).await;
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        assert_eq!(table.recorded_bounds(), vec![None, None, None]);
+        table
+            .assert_pruning_keeps_rows(&[
+                ("timestamp_ms >= 2000", 3),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 3),
+                ("timestamp_ms > 2400.5", 3),
+                (FLOAT_EPOCH_FILTER, 3),
+                ("timestamp_ms < 1000", 3),
+            ])
+            .await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mix_of_segments_with_and_without_column_bounds_keeps_results() {
+        // Mid-backfill, some segments have bounds and the rest are scanned.
+        let table = TimeBoundedTable::new("column_bounds_partial", false).await;
+        table.clear_column_bounds(&table.paths[2]);
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some(ColumnRange::new(1_000, 1_500)),
+                Some(ColumnRange::new(2_000, 2_500)),
+                None
+            ]
+        );
+        table
+            .assert_pruning_keeps_rows(&[
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 3),
+                ("timestamp_ms > 2400.5", 2),
+                (FLOAT_EPOCH_FILTER, 2),
+                ("timestamp_ms < 1000", 1),
+            ])
+            .await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bounds_backfill_skips_l0_segments() {
         let table = TimeBoundedTable::new("column_bounds_skip_l0", false).await;
         for path in &table.paths {
@@ -5614,6 +5880,15 @@ mod tests {
             sources_after, sources_before,
             "the backfill reuses each object"
         );
+        table
+            .assert_pruning_keeps_rows(&[
+                ("timestamp_ms >= 2000", 2),
+                ("timestamp_ms BETWEEN 1200 AND 2100", 2),
+                ("timestamp_ms > 2400.5", 2),
+                (FLOAT_EPOCH_FILTER, 2),
+                ("timestamp_ms < 1000", 0),
+            ])
+            .await;
         table.cleanup();
     }
 
