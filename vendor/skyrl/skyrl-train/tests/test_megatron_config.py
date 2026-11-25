@@ -96,3 +96,11 @@ def test_sizing_rejects_maximum_below_trained_generation_bound():
     config.generator.sampling_params.max_generate_length = 2048
     with pytest.raises(ValueError):
         validate_cfg(config)
+    config.generator.sampling_params.max_generate_length = 1024
+    assert validate_cfg(config) is None
+
+    # A null maximum must fail its own explicit-positive guard, not the bound comparison.
+    with open_dict(megatron):
+        megatron.memory_profile.max_sequence_length = None
+    with pytest.raises(ValueError, match="explicit positive"):
+        validate_cfg(config)
