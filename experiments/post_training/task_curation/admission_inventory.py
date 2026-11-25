@@ -12,7 +12,7 @@ from functools import partial
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceDeclaration
+from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration, SourceDeclaration
 from marin.execution.artifact import RECORD_FILENAME
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -29,12 +29,21 @@ LOGGER = logging.getLogger(__name__)
 PANEL_SCHEMA = pa.schema([("task_id", pa.string()), ("task_spec", pa.large_string()), ("runtime", pa.large_string())])
 
 
-def inventory_source(declaration: SourceDeclaration, output_root: str, resume_root: str | None) -> SampleInventory:
-    """Verify the current complete population and retain its seed-zero content panel."""
+def inventory_source(
+    declaration: SourceDeclaration,
+    output_root: str,
+    resume_root: str | None,
+    binding: ActorCensusInput | None = None,
+) -> SampleInventory:
+    """Verify the current complete population and retain its seed-zero content panel.
+
+    ``binding`` overrides the declaration's own actor census input: the census stage
+    resolves retained-release sources through their retained lineage's census.
+    """
     root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
     if root.exists():
         raise FileExistsError(f"Preserve previous inventory and use a new version: {root}")
-    binding = declaration.actor_census_input
+    binding = binding if binding is not None else declaration.actor_census_input
     if binding is None:
         raise ValueError(f"Current source lacks its exact input census: {declaration.id}")
     population_record = StoragePath(binding.evidence_url).parent / RECORD_FILENAME

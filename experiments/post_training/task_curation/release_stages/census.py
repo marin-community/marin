@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
+from finestore.rl.curation import ActorCensusInput, SourceDeclaration
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -137,6 +138,20 @@ def population_documents(population: SourceTextPopulation):
                     yield json.loads(row["task_spec"])
 
 
+def declared_binding(declaration: SourceDeclaration, source_id: str) -> ActorCensusInput:
+    """The source's declared census input: its own binding, or the retained lineage's.
+
+    A retained release declares through its retained lineage, not a live actor
+    census binding; the retained receipt's own actor census is the declared input.
+    """
+    if declaration.actor_census_input is not None:
+        return declaration.actor_census_input
+    retained = retained_release_receipts().get(source_id)
+    if retained is None or retained.source_id != source_id:
+        raise ValueError(f"declared source lacks its exact input census: {source_id}")
+    return retained.actor.input
+
+
 def measure_source(
     row: CensusSourceRow,
     output_root: str,
@@ -156,7 +171,9 @@ def measure_source(
     for pinned in (population.path, population.specs_output_dir):
         if not pinned.startswith(region_prefix):
             raise ValueError(f"population path {pinned} is outside the release region prefix {region_prefix}")
-    inventory = inventory_fn(declaration, f"{output_root}/inventories", None)
+    inventory = inventory_fn(
+        declaration, f"{output_root}/inventories", None, binding=declared_binding(declaration, row.source_id)
+    )
     reasons: Counter[str] = Counter()
     partitions: Counter[tuple[str, ...]] = Counter()
     count = oracle_count = blocked_count = 0
@@ -177,14 +194,7 @@ def measure_source(
             blocked_count += bool(blockers)
             reasons.update(blockers)
             partitions[tuple(sorted(blockers))] += 1
-    binding = declaration.actor_census_input
-    if binding is None:
-        retained = retained_release_receipts().get(row.source_id)
-        if retained is None or retained.source_id != row.source_id:
-            raise ValueError(f"declared source lacks its exact input census: {row.source_id}")
-        # A retained release declares through its retained lineage, not a live actor
-        # census binding; the retained receipt's own actor census is the declared input.
-        binding = retained.actor.input
+    binding = declared_binding(declaration, row.source_id)
     if count != inventory.retained_tasks or count != binding.measured_tasks:
         raise ValueError(
             f"census count {count} disagrees with the inventory ({inventory.retained_tasks})"

@@ -81,6 +81,9 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
     return rows
 
 
+PAGE_ROWS = 500
+
+
 def _paged(query, sql: str, params: dict, order_column: str) -> list[dict]:
     """Read one panel's table rows through the applet's bounded response size."""
     rows: list[dict] = []
@@ -91,7 +94,7 @@ def _paged(query, sql: str, params: dict, order_column: str) -> list[dict]:
         if after is not None:
             bound["after"] = after
             predicate = f" AND {order_column}>CAST(:after AS TEXT)"
-        page = query(sql.format(predicate=predicate), bound)["rows"]
+        page = query(sql.format(predicate=predicate) + f" LIMIT {PAGE_ROWS}", bound)["rows"]
         if not page:
             return rows
         rows.extend(page)

@@ -54,7 +54,7 @@
       "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/release.json"
     },
     "registry_index": {
-      "sha256": "c2a0a8c4cc60795760f367df8a9c762526a9dd8e9f21521aa6fe350677aa75bf",
+      "sha256": "dcf0992fc5a5ae10ee47519f11223c9c6045775da4194a09c9376be45dfc863b",
       "uri": "experiments/post_training/task_curation/release_stages/plans/registry-index.json"
     },
     "source_counts": {
