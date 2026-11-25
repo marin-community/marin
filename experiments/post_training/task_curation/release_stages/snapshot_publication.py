@@ -45,6 +45,7 @@ class SnapshotPublicationInputs:
     catalog_root: str
     release_root: str
     targets: tuple[str, ...]
+    removed_sources: tuple[str, ...]
     expected_source_count: int
     expected_contract_count: int
     expected_contract_tasks: int
@@ -132,11 +133,18 @@ def verify_current_declarations(inputs: SnapshotPublicationInputs) -> dict[str, 
 def verify_no_prior_drift(
     inputs: SnapshotPublicationInputs, current: dict[str, dict], prior_declarations_uri: str
 ) -> None:
-    """Non-target declarations must be byte-identical to the prior snapshot's."""
+    """Non-target declarations must be byte-identical to the prior snapshot's.
+
+    A planned removal must be absent from the current declarations; it is the only
+    prior source allowed to disappear.
+    """
     prior = json.loads(StoragePath(prior_declarations_uri).read_text())
+    still_declared = sorted(set(inputs.removed_sources) & set(current))
+    if still_declared:
+        raise ValueError(f"planned removals are still declared: {still_declared[:4]}")
     drift = []
     for source_id, row in prior.items():
-        if source_id in inputs.targets:
+        if source_id in inputs.targets or source_id in inputs.removed_sources:
             continue
         if source_id not in current or fingerprint_input(current[source_id]) != fingerprint_input(row):
             drift.append(source_id)

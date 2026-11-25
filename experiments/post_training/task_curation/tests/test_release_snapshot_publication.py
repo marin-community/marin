@@ -40,6 +40,7 @@ def _inputs(tmp_path, **overrides) -> sp.SnapshotPublicationInputs:
         catalog_root="s3://test/catalog",
         release_root=str(tmp_path / "releases/rtest"),
         targets=("Test:One", "Test:Two"),
+        removed_sources=("Test:Gone",),
         expected_source_count=2,
         expected_contract_count=2,
         expected_contract_tasks=10,
@@ -82,6 +83,19 @@ def test_verify_repo_state_attests_in_the_bundle_mode(tmp_path, monkeypatch):
     monkeypatch.setenv(guard.ATTESTED_REVISION_ENV, "b" * 40)
     inputs = _inputs(tmp_path, source_revision="b" * 40)
     assert sp.verify_repo_state(tmp_path / "not-a-git-repo", inputs) == "b" * 40
+
+
+def test_verify_no_prior_drift_allows_only_planned_removals(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "fingerprint_input", lambda row: json.dumps(row, sort_keys=True))
+    prior = {"Test:Kept": {"id": "Test:Kept"}, "Test:Gone": {"id": "Test:Gone"}, "Test:One": {"id": "old"}}
+    prior_path = tmp_path / "prior.json"
+    prior_path.write_text(json.dumps(prior))
+    current = {"Test:Kept": {"id": "Test:Kept"}, "Test:One": {"id": "new"}, "Test:Two": {"id": "Test:Two"}}
+    sp.verify_no_prior_drift(_inputs(tmp_path), current, str(prior_path))
+    with pytest.raises(ValueError, match="non-target declaration drift: \\['Test:Gone'\\]"):
+        sp.verify_no_prior_drift(_inputs(tmp_path, removed_sources=()), current, str(prior_path))
+    with pytest.raises(ValueError, match="planned removals are still declared"):
+        sp.verify_no_prior_drift(_inputs(tmp_path), {**current, "Test:Gone": {"id": "Test:Gone"}}, str(prior_path))
 
 
 def test_verify_survey_alignment_refuses_mismatch(tmp_path):
