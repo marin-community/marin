@@ -27,6 +27,7 @@ from skyrl_train.group_admission import (
     TrainingGroupInvariantError,
 )
 from skyrl_train.grader_reporting import GraderStats, GraderSummary
+from skyrl_train.metric_names import curriculum_metric_prefix
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -462,7 +463,7 @@ class _SelectionStats:
             "async/rejected_rate": rejected / self.inspected,
             **{f"async/rejected_count/{reason.value}": self.rejections[reason] for reason in AdmissionRejection},
             **{
-                f"curriculum/{source}/rejected/{reason.value}": count
+                f"{curriculum_metric_prefix(source)}rejected/{reason.value}": count
                 for (source, reason), count in self.source_rejections.items()
             },
         }

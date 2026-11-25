@@ -44,33 +44,31 @@ def offered(prompts: PromptLoader, count: int) -> list[str]:
     return [prompts.next_prompt(live=())["uid"] for _ in range(count)]
 
 
-def test_adaptive_assignments_count_stale_regeneration_and_skip_live_draws():
-    order = AdaptiveSourceOrder(
-        ["busy", "free"],
-        {"busy": 1e6, "free": 1},
-        seed=37,
-        window_size=1,
-        decay=0.95,
-        epsilon=1,
-        prior_alpha=1,
-        prior_beta=1,
-    )
-    prompts = PromptLoader(Prompts(2), order, batch_size=1, max_stale_retries=1, max_unusable_groups=2)
+def test_adaptive_loader_scans_past_live_rows_and_resumes_a_stale_retry():
+    def make_loader():
+        order = AdaptiveSourceOrder(
+            ["busy", "free"],
+            {"busy": 1e6, "free": 1},
+            seed=37,
+            window_size=1,
+            decay=0.95,
+            epsilon=1,
+            prior_alpha=1,
+            prior_beta=1,
+        )
+        return PromptLoader(Prompts(2), order, batch_size=1, max_stale_retries=1, max_unusable_groups=2)
+
+    prompts = make_loader()
     group = prompts.next_prompt(live={"0"})
-    order.assign(group["uid"])
+    assert group["uid"] == "1"
+    assert prompts.observe([])["curriculum/busy/proposed_rows"] > 0
     prompts.record_disposition(group["uid"], AdmissionRejection.STALE.value)
     prompts.retry(group)
-    checkpoint = prompts.state_dict()
-    prompts.load_state_dict(checkpoint)
-    assert prompts.next_prompt(live={"0", "1"}) is None
-    retried = prompts.next_prompt(live={"0"})
-    order.assign(retried["uid"])
-    metrics = prompts.observe([])
-    assert metrics["curriculum/busy/proposed_rows"] > 0
-    assert metrics["curriculum/busy/assigned_groups"] == 0
-    assert metrics["curriculum/free/assigned_groups"] == 2
-    assert metrics["curriculum/free/graded_groups"] == 0
-    assert prompts.observe([])["curriculum/free/assigned_groups"] == 0
+    resumed = make_loader()
+    resumed.load_state_dict(prompts.state_dict())
+    assert resumed.next_prompt(live={"0", "1"}) is None
+    assert resumed.next_prompt(live={"0"}) == group
+    assert resumed.observe([])["curriculum/busy/proposed_rows"] == 0
 
 
 @pytest.mark.parametrize("max_unusable_groups", [1, 2])

@@ -24,3 +24,7 @@ CORRECTION_TRUNCATED_FRACTION_METRIC = "policy/correction/truncated_fraction"
 CORRECTION_MASKED_FRACTION_METRIC = "policy/correction/masked_fraction"
 
 PROMPTS_DROPPED_TOO_LONG_METRIC = "generate/prompts_dropped_too_long"
+
+
+def curriculum_metric_prefix(source: str) -> str:
+    return f"curriculum/{source}/"

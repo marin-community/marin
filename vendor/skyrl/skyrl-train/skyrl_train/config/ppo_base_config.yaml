@@ -15,7 +15,9 @@ data:
     domain_weights: {} # domain-weighted route shares, or adaptive-source reference shares (empty uses row counts)
     source_column: data_source # adaptive-source bin label on each prepared training row
     decay: 0.95 # per-step multiplicative decay of bin sufficient stats
-    epsilon: 0.05 # exploration mass (adaptive-source draws from the reference mixture)
+    # adaptive-source reserves this fraction for reference shares.
+    # thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization.
+    epsilon: 0.05
     reversion_mass: 0.0 # per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak
     instance_decay: 0.7 # per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)
     prior_alpha: 1.0 # Beta prior for thompson (informative rate) and learnability (pass rate)

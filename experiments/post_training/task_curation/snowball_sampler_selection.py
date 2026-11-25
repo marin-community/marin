@@ -23,12 +23,12 @@ from experiments.post_training.task_curation.selection import (
 PARENT = selection_artifact("snowball-100k@2026.11.19.1")
 EVAL_LITE = selection_artifact("eval-lite@2026.11.17.1")
 REASONING_GYM = "Reasoning Gym:reasoning_gym"
-SOURCES = {
-    REASONING_GYM: "arithmetic",
-    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": "calendar",
-    "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": "instruction_calendar",
-    "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3": "structural",
-}
+SOURCE_FAMILIES = (
+    (REASONING_GYM, "arithmetic"),
+    ("TaskTrove:laion__nemotron-gym-agent-calendar-v2", "calendar"),
+    ("TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3", "instruction_calendar"),
+    ("TaskTrove:laion__nemotron-gym-instruction-following-structured-v3", "structural"),
+)
 
 
 def full_panel(step: ArtifactStep, rows: int) -> HeldoutSource:
@@ -43,8 +43,8 @@ def full_panel(step: ArtifactStep, rows: int) -> HeldoutSource:
 PILOT = SelectionRecipe(
     name="snowball-sampler-four",
     version="2026.11.25.1",
-    sources=SOURCES,
-    family_limits=dict.fromkeys(SOURCES.values(), 256),
+    sources=dict(SOURCE_FAMILIES),
+    family_limits={family: 256 for _, family in SOURCE_FAMILIES},
     grader_task_names={REASONING_GYM: ("chain_sum", "base_conversion", "basic_arithmetic", "leg_counting")},
     heldout=(full_panel(PARENT, 910),),
     exclusions=(full_panel(EVAL_LITE, 1500),),
@@ -58,7 +58,7 @@ def pilot_selection_step() -> ArtifactStep:
     sources = {}
     for row in selection_summary(PARENT)["sources"]:
         key = canonical_source_id(row["source_id"])
-        if key in SOURCES:
+        if key in PILOT.sources:
             sources[key] = ArtifactStep.adopt(
                 f"rl-data/sampler-inputs/{key}", version=PARENT.version, source=row["root"]
             )

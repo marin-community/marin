@@ -305,8 +305,9 @@ verifier scores within a prompt group. `source_column` selects the prepared row 
 Parquet). `domain_weights` sets the reference shares. An empty map uses the filtered row
 counts. At least two answers per prompt are required.
 
-After each update, the sampler discounts earlier counts by `decay` and adds one observation
-per fully verified group, including groups discarded by dynamic sampling. It weights each
+When selection fills a batch and before its optimizer update, the sampler discounts the
+counts from previous batches by `decay`. It adds one observation per fully verified
+group judged for the batch, including groups discarded by dynamic sampling. It weights each
 source's reference share by its estimated mixed-group rate under a Beta prior
 (`prior_alpha`, `prior_beta`), then reserves `epsilon` of the total mass for the reference
 mix. Set `epsilon=1` for a fixed-share control with the same draw and checkpoint behavior.
@@ -315,9 +316,9 @@ source sizes and admission can change the realized mix. The `curriculum/<source>
 use these denominators:
 
 - `proposed_rows` counts sampler draws since the last feedback update, including rows
-  skipped because their UID is live or quarantined. `assigned_groups` counts actual
-  dispatches over that interval, including retries and loader scans. Regenerating an
-  interrupted group creates a new assignment.
+  skipped because their UID is live or quarantined. `assigned_groups` counts one
+  dispatch for each group sent to a worker, including a group found by scanning eligible
+  rows or sent again for regeneration.
 - `rejected/<reason>` counts completed groups rejected before feedback, attributed to the
   batch that inspected them. Reasons include fully masked, too few eligible answers, stale
   and duplicate UIDs. Absent rejection keys count as zero.

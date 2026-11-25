@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from skyrl_train.metric_names import curriculum_metric_prefix
 from skyrl_train.rollouts.loader import JudgedGroup
 
 
@@ -16,8 +17,9 @@ class AdaptiveSourceOrder:
     """Reweight a reference mixture by each source's posterior mean informative-group rate.
 
     Each fully graded prompt group supplies one observation. A group is informative when
-    its verifier awarded different scores to its answers. Decay discounts older policy
-    steps, and epsilon reserves a fraction of draws for the original reference mix.
+    its verifier awarded different scores to its answers. Each completed selection batch
+    discounts the counts accumulated from earlier batches. Epsilon reserves a fraction
+    of draws for the original reference mix.
     """
 
     def __init__(
@@ -117,7 +119,7 @@ class AdaptiveSourceOrder:
             self.graded[name] = self.graded[name] * self.decay + graded[name]
         metrics = {}
         for name, weight in self.probabilities().items():
-            prefix = f"curriculum/{name}/"
+            prefix = curriculum_metric_prefix(name)
             metrics[prefix + "weight"] = weight
             metrics[prefix + "proposed_rows"] = float(self.proposed[name])
             metrics[prefix + "assigned_groups"] = float(self.assigned[name])
