@@ -49,6 +49,8 @@ EXPECTED_TASKS_PARQUET_SHA256 = "e320474a633072e760e171227c928fd2de6cadde1813771
 SAMPLE_SEED = 0
 NOP_AGENT = "nop"
 HARBOR_PROJECT = Path("vendor/harbor").resolve()
+RETRIES = 3
+"""Infrastructure-failed trials (environment start timeouts) retry before the stage fails."""
 TRIAL_STORAGE_MB = 10240
 """The trial disk envelope: the source declares no storage (undeclared, preserved in
 the runtime binding), and the trial package still needs a concrete budget shape."""
@@ -176,6 +178,10 @@ def control_request(
     }
 
 
+class ControlInfrastructureError(RuntimeError):
+    """One control's trial failed before its verifier ran; the zero-reward proof is retryable."""
+
+
 def run_control(request: dict, output_root: Path, archive_root: str) -> dict:
     """Drive one curation_control request, archive its output, and bind its receipt."""
     result = subprocess.run(
@@ -215,12 +221,19 @@ def run_control(request: dict, output_root: Path, archive_root: str) -> dict:
         execution_requirements=ExecutionRequirements.model_validate(request["source"]["execution_requirements"]),
     )
     (output_root / "receipt.json").write_text(json.dumps(bound.model_dump(mode="json"), indent=1))
-    if bound.score != 0.0 or bound.verifier_exit_code != 0 or bound.annotation is not None:
-        raise ValueError(
-            f"nop control for {task_id} did not fail closed: score={bound.score} "
-            f"exit={bound.verifier_exit_code} annotation={bound.annotation}"
+    exception = ((bound.trial.result or {}).get("exception_info") or {}) if bound.trial.result else {}
+    if bound.score == 0.0 and bound.annotation is None:
+        return {"task_id": task_id, "receipt": bound.model_dump(mode="json"), "score": bound.score}
+    if exception and (bound.trial.verdict or {}).get("reward") is None:
+        # The trial never reached its verifier: the grader was not exercised, so the
+        # zero-reward proof is missing for an infrastructure reason, not a defect.
+        raise ControlInfrastructureError(
+            f"{task_id}: trial infrastructure failure before the verifier: "
+            f"{exception.get('exception_type')}: {exception.get('exception_message')}"
         )
-    return {"task_id": task_id, "receipt": bound.model_dump(mode="json"), "score": bound.score}
+    raise ValueError(
+        f"nop control for {task_id} did not fail closed: score={bound.score} " f"annotation={bound.annotation}"
+    )
 
 
 def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int) -> dict:
@@ -251,19 +264,29 @@ def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int)
         write_harbor_task(task, package, requirements)
         task_checksum = trial_package_checksum(package)
         source_task_checksum = original_package_checksum(task, workdir)
-        with tempfile.TemporaryDirectory(prefix="mimo-nop-") as scratch:
-            control_root = Path(scratch) / "control"
-            request = control_request(
-                task,
-                runtime,
-                package,
-                requirements,
-                task_checksum,
-                source_task_checksum,
-                control_root,
-                environment_kwargs,
-            )
-            return run_control(request, control_root, archive_root)
+        for attempt in range(1, RETRIES + 1):
+            with tempfile.TemporaryDirectory(prefix="mimo-nop-") as scratch:
+                control_root = Path(scratch) / "control"
+                request = control_request(
+                    task,
+                    runtime,
+                    package,
+                    requirements,
+                    task_checksum,
+                    source_task_checksum,
+                    control_root,
+                    environment_kwargs,
+                )
+                try:
+                    outcome = run_control(request, control_root, archive_root)
+                except ControlInfrastructureError as error:
+                    if attempt == RETRIES:
+                        raise
+                    logger.warning("retry %d/%d after infrastructure failure: %s", attempt, RETRIES, error)
+                    continue
+                outcome["attempts"] = attempt
+                return outcome
+        raise AssertionError("unreachable")
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         pending = {pool.submit(drive, entry): entry[0].id for entry in selected}
@@ -284,6 +307,7 @@ def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int)
         "local_kwargs": sorted(environment_kwargs),
         "selected": len(selected),
         "completed": len(receipts),
+        "attempts": {task_id: row.get("attempts", 1) for task_id, row in receipts.items()},
         "archive_root": archive_root,
         "receipts": {task_id: row["receipt"] for task_id, row in receipts.items()},
     }

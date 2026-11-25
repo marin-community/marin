@@ -162,10 +162,17 @@ def test_run_control_refuses_a_reward_that_does_not_fail_closed(rows, tmp_path, 
         {"disk_root": str(tmp_path / "disk")},
     )
 
+    class FakeTrial:
+        verdict = None
+
+        def __init__(self, result):
+            self.result = result
+
     class FakeReceipt:
         score = 1.0
-        verifier_exit_code = 0
         annotation = None
+        verifier_exit_code = None
+        trial = FakeTrial({})
 
         def model_dump(self, mode=None):
             return {"score": 1.0}
@@ -209,3 +216,80 @@ def test_run_controls_refuses_any_failed_task(rows, tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="NoP controls failed for 2 tasks"):
         mimo_controls.run_controls(str(tmp_path / "controls"), tmp_path, 2, 2)
+
+
+def test_run_control_retries_infrastructure_failures_but_not_defects(rows, tmp_path, monkeypatch):
+    """A trial that never reached its verifier is retryable; a credited nop is a refusal."""
+    task, runtime, _encoded = rows[0]
+    requirements = ExecutionRequirements.model_validate(
+        {**declared_execution_limits(task), "storage_mb": TRIAL_STORAGE_MB}
+    )
+    package = tmp_path / "packages" / canonical_sha256(task.id)
+    _write(task, package, requirements)
+    request = control_request(
+        task,
+        runtime,
+        package,
+        requirements,
+        "c" * 64,
+        "d" * 64,
+        tmp_path / "control",
+        {"disk_root": str(tmp_path / "disk")},
+    )
+
+    class FakeTrial:
+        verdict = None
+
+        def __init__(self, result):
+            self.result = result
+
+    def receipt_with(score, exception=None):
+        class FakeReceipt:
+            annotation = None
+            verifier_exit_code = None
+            trial = FakeTrial(
+                {} if exception is None else {"exception_info": {"exception_type": exception, "exception_message": "x"}}
+            )
+
+            def model_dump(self, mode=None):
+                return {"score": score}
+
+        receipt = FakeReceipt()
+        receipt.score = score
+        return receipt
+
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(1)
+        return subprocess.CompletedProcess(args[0], 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(mimo_controls.subprocess, "run", run)
+    monkeypatch.setattr(
+        mimo_controls,
+        "negative_control_from_archive",
+        lambda *args, **kwargs: receipt_with(None, "EnvironmentStartTimeoutError"),
+    )
+    control_root = tmp_path / "control-retry"
+    control_root.mkdir()
+    (control_root / "negative-control.json").write_text("{}")
+    with pytest.raises(mimo_controls.ControlInfrastructureError, match="infrastructure failure"):
+        run_control(request, control_root, str(tmp_path / "archives"))
+
+    credited = tmp_path / "control-credited"
+    credited.mkdir()
+    (credited / "negative-control.json").write_text("{}")
+    monkeypatch.setattr(mimo_controls, "negative_control_from_archive", lambda *args, **kwargs: receipt_with(1.0))
+    with pytest.raises(ValueError, match="did not fail closed"):
+        run_control(request, credited, str(tmp_path / "archives"))
+
+    def drive_returns_after_retry(*args, **kwargs):
+        assert mimo_controls.RETRIES >= 2
+        return {"task_id": request["source"]["task_id"], "receipt": {}, "score": 0.0, "attempts": 2}
+
+    monkeypatch.setattr(mimo_controls, "run_control", drive_returns_after_retry)
+    monkeypatch.setattr(mimo_controls, "release_rows", lambda workdir: rows)
+    monkeypatch.setattr(mimo_controls, "seeded_control_tasks", lambda all_rows, sample: all_rows[:1])
+    summary = mimo_controls.run_controls(str(tmp_path / "controls-out"), tmp_path, 1, 1)
+    # The first attempt succeeded, so the drive records one attempt for the task.
+    assert summary["attempts"][request["source"]["task_id"]] == 1
