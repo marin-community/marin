@@ -100,3 +100,34 @@ def test_go_json_build_error_keeps_suite_unresolved(tmp_path, named_pass):
     assert report["unscorable"] is not named_pass
     assert report["resolved"] is False
     assert report["parsed_counts"]["ERROR"] == 1
+
+
+# pytest -rA prints the captured log of passing tests; a record logged at ERROR level parses as an ERROR result.
+PYTEST_PASSING_SUITE_WITH_ERROR_LOG = """\
+============================= test session starts ==============================
+collected 2 items
+
+tests/test_demo.py ..                                                    [100%]
+
+==================================== PASSES ====================================
+________________________ test_sync_reports_empty_input _________________________
+------------------------------ Captured log call -------------------------------
+ERROR    app.sync:test_demo.py:8 nothing to sync
+=========================== short test summary info ============================
+PASSED tests/test_demo.py::test_sync_counts_items
+PASSED tests/test_demo.py::test_sync_reports_empty_input
+============================== 2 passed in 0.01s ===============================
+"""
+
+
+def test_pytest_error_log_record_of_a_passing_test_keeps_suite_resolved(tmp_path):
+    config = {
+        "FAIL_TO_PASS": ["tests/test_demo.py::test_sync_reports_empty_input"],
+        "PASS_TO_PASS": ["tests/test_demo.py::test_sync_counts_items"],
+    }
+
+    result, report = run_grader(tmp_path, "parse_log_pytest", config, PYTEST_PASSING_SUITE_WITH_ERROR_LOG)
+
+    assert report["parsed_counts"]["ERROR"] == 1
+    assert report["resolved"] is True
+    assert result.returncode == 0

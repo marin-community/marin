@@ -46,6 +46,10 @@ def grade(config, test_log):
         for names in results.values()
         for name in names
     )
+    # A package that fails to build runs none of its tests, and a test of the same bare name in another package
+    # could stand in for them. Other ERROR results, such as log lines a passing pytest suite prints under -rA,
+    # leave the verdict to the configured tests, as upstream.
+    build_failed = any(name.endswith(BUILD_ERROR_SUFFIX) for name in results["ERROR"])
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
 
     def status(names):
@@ -60,7 +64,7 @@ def grade(config, test_log):
     return {
         "log_parser": LOG_PARSER,
         "unscorable": unscorable,
-        "resolved": not results["ERROR"] and normalized_passed_subset(results, expected),
+        "resolved": not build_failed and normalized_passed_subset(results, expected),
         "parsed_counts": {key: len(value) for key, value in results.items()},
         "fail_to_pass": status(fail_to_pass),
         "pass_to_pass": status(pass_to_pass),

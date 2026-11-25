@@ -22,8 +22,8 @@ The vendored `grade.py.tmpl` adds `unscorable: true` and an `UNSCORABLE` log lin
 when the parser reports no named test results, even when the config expects test
 IDs. Package build-error markers and parser placeholders do not count as named
 results. The grader exits nonzero for an unscorable log, and `test.sh` leaves
-reward at zero with a diagnostic. A parsed error also prevents a resolved
-verdict when other named tests passed.
+reward at zero with a diagnostic. A package build failure also prevents a
+resolved verdict when the configured tests passed; other parsed errors do not.
 `normalized_passed_subset` still requires a nonempty expected set.
 
 The vendored Go parser strips the package prefix from `go test -json` test
