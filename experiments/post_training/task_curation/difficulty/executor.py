@@ -297,7 +297,7 @@ def reconcile_once(
                     release = (
                         VLLM_GPU_RELEASE.release_tag if action.solver == Solver.SNOWBALL else action.vllm_release_tag
                     )
-                    if campaign_record(ledger) is not None and action.solver != Solver.HOSTED:
+                    if tpu_campaign and action.solver != Solver.HOSTED:
                         release = TPU_SERVING_ID
                     actions[index] = replace(action, max_gpu_hours=0.0, vllm_release_tag=release)
             return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
