@@ -5,12 +5,9 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from statistics import mean
-from threading import Condition, Thread
 from typing import TypedDict
 
 import numpy as np
@@ -173,70 +170,9 @@ class GraderReportSections(TypedDict, total=False):
     evaluation_duration_seconds: float
 
 
-class _GraderReportWriter:
-    """Write one attempt's report updates in order on a bounded daemon queue."""
-
-    def __init__(self):
-        self._condition = Condition()
-        self._pending: dict[tuple[str, str], GraderReportSections] = {}
-        self._closed = False
-        self._thread = Thread(target=self._write, name="grader-report-writer", daemon=True)
-        self._thread.start()
-
-    def submit(self, path: str, key: str, sections: GraderReportSections) -> None:
-        address = (path, key)
-        with self._condition:
-            if self._closed or (address not in self._pending and len(self._pending) == 64):
-                logger.warning("Grader report queue could not accept {} at {}", key, path)
-                return
-            self._pending.setdefault(address, {}).update(sections)
-            self._condition.notify()
-
-    def _write(self) -> None:
-        while True:
-            with self._condition:
-                self._condition.wait_for(lambda: self._closed or self._pending)
-                if not self._pending:
-                    return
-                path, key = next(iter(self._pending))
-                sections = self._pending.pop((path, key))
-            _store_grader_report(path, key, sections)
-
-    def close(self, timeout: float) -> None:
-        with self._condition:
-            self._closed = True
-            self._condition.notify()
-        self._thread.join(timeout)
-        if self._thread.is_alive():
-            logger.warning("Grader report writer did not finish within {} seconds", timeout)
-
-
-_writer: ContextVar[_GraderReportWriter | None] = ContextVar("grader_report_writer", default=None)
-
-
-@contextmanager
-def grader_report_session(*, flush_timeout: float = 10) -> Iterator[None]:
-    """Serialize report writes and give the workload a bounded terminal flush."""
-    writer = _GraderReportWriter()
-    token = _writer.set(writer)
-    try:
-        yield
-    finally:
-        _writer.reset(token)
-        writer.close(flush_timeout)
-
-
 def write_grader_report(report_dir: str, key: str, sections: GraderReportSections) -> None:
-    """Submit a diagnostic update to the current workload's report writer."""
+    """Update the attempt's diagnostics for a training or evaluation step."""
     path = join_resource_path(report_dir, GRADER_REPORT_FILENAME)
-    writer = _writer.get()
-    if writer is not None:
-        writer.submit(path, key, sections)
-    else:
-        _store_grader_report(path, key, sections)
-
-
-def _store_grader_report(path: str, key: str, sections: GraderReportSections) -> None:
     try:
         try:
             report = json.loads(io.read_bytes(path))

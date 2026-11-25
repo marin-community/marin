@@ -142,7 +142,7 @@ def _run_rl(
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
-        rl_publication.reserve_issue(config.output.export_root, issue)
+        rl_publication.assign_issue(config.output.export_root, config.run_id, config.attempt_id, issue)
     if index is not None:
         launch = yaml.safe_load(config.launch_config_yaml)
         if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
@@ -628,7 +628,7 @@ class _PublicationWatch(BaseModel):
     job: str
     preset: str
     outputs: tuple[str, ...]
-    gate_required: bool
+    gate: rl_gate.GateAddress | None
     timeout_seconds: float
     service_url: str | None
     issue: int | None = None
@@ -643,7 +643,7 @@ def _publication_watch(
         job=str(job),
         preset=preset.name,
         outputs=tuple(step.path(prefix) for step in run.runs),
-        gate_required=run.gate is not None,
+        gate=rl_gate.gate_address(run.gate, prefix) if run.gate is not None else None,
         timeout_seconds=preset.recipe.layout.coordinator_timeout_hours * 3600,
         service_url=service_url,
         issue=issue,
@@ -686,8 +686,7 @@ def _watch_publication(
             time.sleep(_PUBLICATION_POLL_SECONDS)
     gate_path = None
     try:
-        evidence = rl_publication.read_coordinator_evidence(watch.outputs[0], watch.job)
-        gate_path = evidence.gate_path if evidence is not None else None
+        gate_path = watch.gate.completed_path() if watch.gate is not None else None
         publication = rl_publication.publish_runs(
             watch.outputs,
             preset,
@@ -695,9 +694,8 @@ def _watch_publication(
             gate_path=gate_path,
             service_url=watch.service_url,
             coordinator=watch.job,
-            evidence=evidence,
             interrupted=state != JobState.SUCCEEDED,
-            gate_required=watch.gate_required,
+            gate_required=watch.gate is not None,
             issue=watch.issue,
         )
     except Exception as error:
@@ -845,9 +843,9 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
-        if (coordinator := get_job_info()) is not None:
+        if get_job_info() is not None:
             validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent, preset, str(coordinator.job_id))
+            _run_graph(rl_handles, max_concurrent)
             if following := handles[count:]:
                 build_artifacts(*following, max_concurrent=max_concurrent)
             return
@@ -1143,21 +1141,10 @@ def command(
     return run_command
 
 
-def _run_graph(handles: list[ArtifactStep], max_concurrent: int, preset: presets.Preset, coordinator: str) -> None:
+def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
     planned = _from_handles(handles)
-    prefix = recipe.run_prefix(preset)
-    outputs = tuple(step.path(prefix) for step in planned.runs)
-    artifacts = build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-    attempts = tuple(
-        rl_publication.completed_artifact_attempt(path, artifact.attempt_id)
-        for path, artifact in zip(outputs, artifacts, strict=True)
-    )
-    gate = rl_gate.completed_gate(planned.gate, attempts)
-    evidence = rl_publication.CoordinatorEvidence(
-        attempts=dict(zip(outputs, (row.attempt_id if row is not None else None for row in attempts), strict=True)),
-        gate_path=gate.path(prefix) if gate is not None else None,
-    )
-    rl_publication.store_coordinator_evidence(outputs[0], coordinator, evidence)
+    build_artifacts(*planned.runs, max_concurrent=max_concurrent)
+    gate = rl_gate.completed_gate(planned.gate)
     if gate is not None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 

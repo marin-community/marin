@@ -1009,30 +1009,47 @@ def _stored_attempt(path: str) -> AttemptRecord | None:
         return None
 
 
-def _gate_with_evidence(
-    step: ArtifactStep[GateReport], run_attempts: tuple[AttemptRecord | None, ...] | None = None
-) -> ArtifactStep[GateReport]:
+class GateAddress(BaseModel):
+    """The submitted gate address and the native receipts that determine its suffix."""
+
+    path: str
+    sources: tuple[tuple[tuple[str, str], ...], ...]
+
+    def receipts(self) -> tuple[tuple[AttemptRecord | None, ...], ...]:
+        return tuple(tuple(_stored_attempt(path) for _, path in group) for group in self.sources)
+
+    def suffix(self, receipts: tuple[tuple[AttemptRecord | None, ...], ...]) -> str:
+        evidence = [
+            (
+                identity,
+                receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt else None,
+            )
+            for sources, group in zip(self.sources, receipts, strict=True)
+            for (identity, _), receipt in zip(sources, group, strict=True)
+        ]
+        return "-evidence-" + fingerprint_hash(canonical_json(evidence))
+
+    def completed_path(self) -> str:
+        parent, version = self.path.rsplit("/", 1)
+        return f"{parent}{self.suffix(self.receipts())}/{version}"
+
+
+def gate_address(step: ArtifactStep[GateReport], prefix: str | None = None) -> GateAddress:
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     paths = step.runtime_args["paths"]
-    if run_attempts is None:
-        run_attempts = tuple(map(_stored_attempt, paths["run_paths"]))
-    control_attempts = tuple(map(_stored_attempt, paths["control_paths"]))
-    evidence = [
-        (
-            identity,
-            receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt is not None else None,
-        )
-        for key, receipts in (("run_paths", run_attempts), ("control_paths", control_attempts))
-        for identity, receipt in zip(config[key], receipts, strict=True)
-    ]
-    name = step.runtime_args["name"] + "-evidence-" + fingerprint_hash(canonical_json(evidence))
+    return GateAddress(
+        path=replace(step, name=step.runtime_args["name"]).path(prefix),
+        sources=tuple(tuple(zip(config[key], paths[key], strict=True)) for key in ("run_paths", "control_paths")),
+    )
+
+
+def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateReport]:
+    address = gate_address(step)
+    runs, controls = address.receipts()
     return replace(
         step,
-        name=name,
-        runtime_args={
-            **step.runtime_args,
-            "evidence": {"run_attempts": run_attempts, "control_attempts": control_attempts},
-        },
+        name=step.runtime_args["name"] + address.suffix((runs, controls)),
+        runtime_args={**step.runtime_args, "evidence": {"run_attempts": runs, "control_attempts": controls}},
     )
 
 
@@ -1139,8 +1156,6 @@ def command(table: ModelPresets) -> click.Command:
     return main
 
 
-def completed_gate(
-    gate: ArtifactStep[GateReport] | None, attempts: tuple[AttemptRecord | None, ...] | None = None
-) -> ArtifactStep[GateReport] | None:
+def completed_gate(gate: ArtifactStep[GateReport] | None) -> ArtifactStep[GateReport] | None:
     """Bind native attempt evidence to the gate identity fixed at submission."""
-    return _gate_with_evidence(gate, attempts) if gate is not None else None
+    return _gate_with_evidence(gate) if gate is not None else None

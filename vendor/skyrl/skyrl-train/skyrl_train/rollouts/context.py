@@ -169,7 +169,6 @@ class TrainingContext:
         self._workers = workers
         self._rollout_spans = rollout_spans
         self._grader_report = grader_report
-        self._grader_report_task: asyncio.Task[None] | None = None
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -263,20 +262,16 @@ class TrainingContext:
         self._dispatcher = asyncio.create_task(self._dispatch())
 
     async def close(self) -> None:
-        tasks = [
-            task
-            for task in (self._dispatcher, self._grader_report_task, *self._running)
-            if task is not None and not task.done()
-        ]
+        tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         try:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._write_grader_report()
         finally:
             ray.kill(self._buffer)
 
-    async def write_grader_report(self) -> None:
-        """Save aggregate grading diagnostics while the rollout buffer is available."""
+    async def _write_grader_report(self) -> None:
         if self._grader_report is None:
             return
         try:
@@ -372,10 +367,7 @@ class TrainingContext:
                     raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
-                if self._grader_report is not None and (
-                    self._grader_report_task is None or self._grader_report_task.done()
-                ):
-                    self._grader_report_task = asyncio.create_task(self.write_grader_report())
+                await self._write_grader_report()
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
