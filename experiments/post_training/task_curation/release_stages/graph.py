@@ -154,6 +154,7 @@ from experiments.post_training.task_curation.release_stages.sizing import (
     census_sizing,
     corpus_sizing,
     embedding_sizing,
+    qc_browse_sizing,
 )
 
 PLAN_KIND = "atlas-release-plan"
@@ -1586,6 +1587,8 @@ def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
         "declarations": declarations_ref,
         "output_root": stage_output_root(plan, "qc-browse"),
         "expected_panels": plan.expected_panels,
+        # The copy fans panels out across paced SQL clients; the plan step stays serial.
+        "workers": qc_browse_sizing(plan.expected_browse_source_count).workers,
         "exclusions": plan.qc_exclusions,
         "service_url": plan.service.service_url,
         "applet_id": plan.service.applet_id,
@@ -1634,7 +1637,7 @@ def _qc_browse_copy_step(plan: ReleasePlan, browse_plan: ArtifactStep) -> Artifa
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=qc_browse_stage.QcBrowseInputs,
-        resources=_sql_stage_resources,
+        resources=lambda: _resources_config(qc_browse_sizing(plan.expected_browse_source_count)),
         receipt_key="completion",
     )
 

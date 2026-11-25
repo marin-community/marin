@@ -13,9 +13,11 @@ import hashlib
 import json
 import re
 import sys
+import threading
 
 import pytest
 
+from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.release_stages.qc_browse import (
     COPY_TABLES,
@@ -94,7 +96,12 @@ _PAGE_BYTES_OF = {
 
 
 class FakeQuery:
-    """Serves the QC-browse SQL shapes from in-memory state and records every statement."""
+    """Serves the QC-browse SQL shapes from in-memory state and records every statement.
+
+    One statement at a time under a lock: the real paced client serves one statement
+    per call, and the parallel copy runs several clients against shared in-memory
+    tables.
+    """
 
     def __init__(self, panels, declarations, *, prior=PRIOR, target=TARGET):
         self.prior = prior
@@ -108,8 +115,13 @@ class FakeQuery:
         }
         self.tables = {table.name: [] for table in COPY_TABLES}
         self.statements: list[tuple[str, dict]] = []
+        self._lock = threading.Lock()
 
     def __call__(self, sql, parameters):
+        with self._lock:
+            return self._serve(sql, parameters)
+
+    def _serve(self, sql, parameters):
         self.statements.append((sql, parameters))
         upper = " ".join(sql.split()).upper()
         if "FROM ATLAS_CURRENT" in upper:
@@ -283,7 +295,7 @@ def seed_prior_tables(fake, panel, *, batches=2, chunks=2, tasks=2, reviews=2):
     )
 
 
-def make_inputs(tmp_path, panels, declarations, *, expected_panels=2, exclusions=()):
+def make_inputs(tmp_path, panels, declarations, *, expected_panels=2, exclusions=(), workers=1):
     """Seal the frozen declarations doc and build typed inputs plus a seeded fake query."""
     inputs = QcBrowseInputs(
         release_id="rtest",
@@ -293,6 +305,7 @@ def make_inputs(tmp_path, panels, declarations, *, expected_panels=2, exclusions
         declarations=seal_declarations(tmp_path, declarations),
         output_root=str(tmp_path / "release"),
         expected_panels=expected_panels,
+        workers=workers,
         exclusions=exclusions,
     )
     fake = FakeQuery(panels, declarations)
@@ -553,3 +566,66 @@ def test_alerts_record_start_finish_and_failure(tmp_path):
         ("atlas-release:rtest:qc_browse", "STAGE_START"),
         ("atlas-release:rtest:qc_browse", "STAGE_FAIL"),
     ]
+
+
+def _six_panels():
+    """Six independent panels so a three-worker copy really runs concurrently."""
+    declarations = {f"source-{index}": make_declaration(f"source-{index}") for index in range(1, 7)}
+    panels = [make_panel(declarations[f"source-{index}"]) for index in range(1, 7)]
+    return panels, declarations
+
+
+def _copy_without_timestamps(proof: dict) -> list[dict]:
+    return [{key: value for key, value in row.items() if key != "completed_at"} for row in proof["results"]]
+
+
+def test_copy_fans_out_across_workers_with_identical_results(tmp_path):
+    """The worker fan-out copies the same panels as a serial run, in declared order."""
+    panels, declarations = _six_panels()
+
+    def inputs(root, workers):
+        typed, fake = make_inputs(tmp_path, panels, declarations, expected_panels=6, workers=workers)
+        return dataclasses.replace(typed, output_root=str(root / "release")), fake
+
+    parallel_root, serial_root = tmp_path / "parallel", tmp_path / "serial"
+    parallel_inputs, parallel_fake = inputs(parallel_root, workers=3)
+    serial_inputs, serial_fake = inputs(serial_root, workers=1)
+    parallel_plan = plan_qc_browse(parallel_inputs, query=parallel_fake, dry_run=False, feeds=(tmp_path / FEED_NAME,))
+    serial_plan = plan_qc_browse(serial_inputs, query=serial_fake, dry_run=False, feeds=(tmp_path / FEED_NAME,))
+
+    parallel = run_qc_browse_copy(
+        parallel_inputs, parallel_plan["plan_ref"], query_factory=lambda: parallel_fake, feeds=(tmp_path / FEED_NAME,)
+    )
+    serial = run_qc_browse_copy(
+        serial_inputs, serial_plan["plan_ref"], query_factory=lambda: serial_fake, feeds=(tmp_path / FEED_NAME,)
+    )
+    assert [row["source_id"] for row in parallel["results"]] == [row["source_id"] for row in serial["results"]]
+    assert _copy_without_timestamps(parallel) == _copy_without_timestamps(serial)
+    for field in ("status", "source_count", "qa_bindings_changed", "selected_pointer_changed"):
+        assert parallel[field] == serial[field], field
+    # Every panel sealed its own receipt at the source-keyed path, exactly once.
+    for panel in parallel_plan["plan"]["panels"]:
+        digest = hashlib.sha256(panel["source_id"].encode()).hexdigest()
+        receipt = json.loads((parallel_root / f"release/prior-qc-browse/panels/{digest}.json").read_text())
+        assert receipt["tables"]["atlas_raw_reviews"]["rows"] == 2
+    for table in COPY_TABLES:
+        assert len([row for row in parallel_fake.tables[table.name] if row["load_id"] == TARGET]) == len(
+            [row for row in serial_fake.tables[table.name] if row["load_id"] == TARGET]
+        )
+
+
+def test_copy_refuses_parallel_workers_without_a_factory(tmp_path):
+    panels, declarations = _six_panels()
+    inputs, fake = make_inputs(tmp_path, panels, declarations, expected_panels=6, workers=3)
+    plan_proof = plan_qc_browse(inputs, query=fake, dry_run=False, feeds=(tmp_path / FEED_NAME,))
+    with pytest.raises(ValueError, match="query_factory"):
+        run_qc_browse_copy(inputs, plan_proof["plan_ref"], query=fake, feeds=(tmp_path / FEED_NAME,))
+
+
+def test_qc_browse_sizing_scales_with_panels():
+    anchor = sizing.qc_browse_sizing(sizing._QC_BROWSE_ANCHOR_PANELS)
+    assert anchor.workers == sizing._QC_BROWSE_ANCHOR_WORKERS
+    assert sizing.qc_browse_sizing(40).workers == 2  # the floor: a stalled copy is observable
+    assert sizing.qc_browse_sizing(1000).workers == 16  # the cap
+    with pytest.raises(ValueError, match="positive"):
+        sizing.qc_browse_sizing(0)

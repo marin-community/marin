@@ -18,7 +18,9 @@ The copy step has no partial-write mode.
 import argparse
 import hashlib
 import json
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -117,6 +119,8 @@ class QcBrowseInputs:
     declarations: ArtifactRef
     output_root: str
     expected_panels: int
+    # Explicit per-panel copy workers, sized by the graph from qc_browse_sizing.
+    workers: int
     exclusions: tuple[str, ...] = ()
     service_url: str = DEFAULT_SERVICE_URL
     applet_id: str = DEFAULT_APPLET_ID
@@ -131,6 +135,8 @@ class QcBrowseInputs:
             raise ValueError("release_id, source_revision and output_root are required")
         if self.expected_panels <= 0:
             raise ValueError(f"expected_panels must be positive, got {self.expected_panels}")
+        if self.workers <= 0:
+            raise ValueError(f"workers must be positive, got {self.workers}")
 
 
 def seal(path: str, value: dict) -> ArtifactRef:
@@ -450,6 +456,57 @@ def _plan_provenance(inputs: QcBrowseInputs, plan_ref_or_plan: ArtifactRef | dic
     return {"uri": f"{inputs.output_root}/{BROWSE_DIR}/plan.json", "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+class _ThreadClient(threading.local):
+    """One paced SQL client per copy thread, built lazily from the factory."""
+
+    query: Query | None = None
+
+
+def _copy_panels(
+    inputs: QcBrowseInputs,
+    plan: dict,
+    declarations: dict[str, dict],
+    control: RetryControl,
+    query_factory: Callable[[], Query],
+    workers: int,
+) -> list[dict]:
+    """Copy every planned panel across ``workers`` paced clients, in declared order.
+
+    Panels are disjoint (one pipeline key each), so each thread copies its own
+    panels through its own client; one failure sets the shared stop event so the
+    remaining threads halt instead of retrying against a broken budget. The
+    results are collected in the plan's declared order, and the per-panel seals
+    stay write-once at their source-keyed paths.
+    """
+    clients = _ThreadClient()
+
+    def copy_one(panel: dict) -> dict:
+        if control.stop.is_set():
+            raise RuntimeError("QC-browse copy stopped after another client failed")
+        try:
+            if clients.query is None:
+                clients.query = query_factory()
+            return _stage_panel(inputs, clients.query, panel, declarations)
+        except BaseException:
+            control.stop.set()
+            raise
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="atlas-qc-browse") as executor:
+        futures = [executor.submit(copy_one, panel) for panel in plan["panels"]]
+        results: list[dict] = []
+        failure: BaseException | None = None
+        for future in futures:
+            try:
+                results.append(future.result())
+            except BaseException as error:
+                control.stop.set()
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
+    return results
+
+
 def run_qc_browse_copy(
     inputs: QcBrowseInputs,
     plan_ref_or_plan: ArtifactRef | dict,
@@ -469,8 +526,8 @@ def run_qc_browse_copy(
     try:
         inputs.validate()
         configure_coreweave_s3()
+        control = RetryControl()
         if query is None:
-            control = RetryControl()
             query = (
                 query_factory()
                 if query_factory is not None
@@ -494,7 +551,15 @@ def run_qc_browse_copy(
         if completion_path.exists():
             raise FileExistsError("Verify the existing completion instead of restaging")
         declarations = read_declarations(inputs.declarations)
-        results = [_stage_panel(inputs, query, panel, declarations) for panel in plan["panels"]]
+        if inputs.workers == 1:
+            results = [_stage_panel(inputs, query, panel, declarations) for panel in plan["panels"]]
+        else:
+            if query_factory is None:
+                raise ValueError(
+                    "the parallel QC-browse copy builds one paced client per worker;"
+                    " provide query_factory (or set workers=1 for a single injected client)"
+                )
+            results = _copy_panels(inputs, plan, declarations, control, query_factory, inputs.workers)
         _check_latest_pointer(query, inputs, "after every panel")
         receipt: dict[str, Any] = {
             "kind": f"atlas-{inputs.release_id}-{COMPLETION_SUFFIX}",

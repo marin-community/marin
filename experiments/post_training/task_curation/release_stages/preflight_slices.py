@@ -550,6 +550,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     declarations=_slice_declarations_ref(plan),
                     output_root=f"{root}/qc-browse",
                     expected_panels=plan.expected_panels,
+                    workers=1,
                     exclusions=plan.qc_exclusions,
                     service_url=plan.service.service_url,
                     applet_id=plan.service.applet_id,

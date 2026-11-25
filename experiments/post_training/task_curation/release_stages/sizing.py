@@ -116,6 +116,36 @@ def corpus_sizing(total_tasks: int) -> StageResources:
     return replace(sizing, workers=workers)
 
 
+# Measured on the R40 cut-v22 QC-browse copy (2026-11-25, job remote_job-810554cf on
+# cw-us-east-02a): 220 panels copied through ONE paced SQL client in 128.8 minutes
+# (~31,000 statements). One worker copies the anchor population in that anchor time;
+# workers scale linearly with the panel count so a release holds the anchor wall clock.
+_QC_BROWSE_ANCHOR_PANELS = 220
+_QC_BROWSE_ANCHOR_WORKERS = 8
+_QC_BROWSE_MIN_WORKERS = 2
+_QC_BROWSE_MAX_WORKERS = 16
+
+
+def qc_browse_sizing(total_panels: int) -> StageResources:
+    """Scale the QC-browse copy's panel workers with the planned panel count.
+
+    Panels are disjoint (one pipeline key each), so the copy fans out across paced
+    SQL clients; CPU stays at the measured 4-core shape because the work is
+    network-bound.
+    """
+    if total_panels <= 0:
+        raise ValueError(f"qc browse sizing needs a positive panel count, got {total_panels}")
+    scaled = round(_QC_BROWSE_ANCHOR_WORKERS * total_panels / _QC_BROWSE_ANCHOR_PANELS)
+    workers = max(_QC_BROWSE_MIN_WORKERS, min(_QC_BROWSE_MAX_WORKERS, scaled))
+    return StageResources(
+        cpu=4,
+        memory_gb=16,
+        disk_gb=64,
+        timeout_s=14_400,
+        workers=workers,
+    )
+
+
 def embedding_sizing(total_tasks: int) -> StageResources:
     """Scale the CPU embedding job with the measured population's task count.
 
