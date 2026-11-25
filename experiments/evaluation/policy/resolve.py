@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass
 
-from evalrecords.records import EvaluationSelection
+from evalrecords.records import EvaluationOverrides, EvaluationSelection
 from marin.evaluation.model_config import prompt_format
 
 from experiments.evaluation.curated import selection_dataset
@@ -31,7 +31,9 @@ class ResolvedPolicyEvaluation:
     def selection(self) -> EvaluationSelection:
         """The catalog selection this candidate runs, with every policy setting applied."""
         selection = self.evaluation.selection
-        run = selection.run.model_copy(update={"max_tokens": self.max_output, "seed": self.seed})
+        run = EvaluationOverrides.model_validate(
+            {**selection.run.model_dump(), "max_tokens": self.max_output, "seed": self.seed}
+        )
         return selection.model_copy(update={"run": run})
 
     def __post_init__(self) -> None:

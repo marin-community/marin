@@ -12,6 +12,7 @@ from dataclasses import KW_ONLY, dataclass
 
 from evalrecords.records import EvaluationOverrides, EvaluationSelection, PromptFormat, TaskMachineSettings
 from marin.evaluation.model_config import ModelConfig
+from pydantic import NonNegativeInt, PositiveInt
 
 from experiments.evaluation.evals import JUDGES
 
@@ -27,7 +28,7 @@ class PolicyCandidate:
     """
 
     model: ModelConfig
-    max_context: int
+    max_context: PositiveInt
 
     def __post_init__(self) -> None:
         if "://" not in self.model.location and (
@@ -53,18 +54,18 @@ class PolicyEvaluation:
     _: KW_ONLY
     label: str | None = None
     protocol: str | None = None
-    num_fewshot: int | None = None
+    num_fewshot: NonNegativeInt | None = None
     prompt_format: PromptFormat | None = None
-    context: int | None = None
+    context: PositiveInt | None = None
     """The input window to request; None requests the policy's ``default_context``. A protocol window replaces
     it, and the candidate's window and any agent input limit cap it."""
-    max_output: int | None = None
+    max_output: PositiveInt | None = None
     """None leaves output limited only by the context and the benchmark protocol."""
     seed: int | None = None
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
     judge: str | None = None
     """The name of the judge in ``configs/evaluations.yaml`` that grades the benchmark, for benchmarks that need one."""
-    concurrency: int | None = None
+    concurrency: PositiveInt | None = None
     """The most attempts that run at once."""
     task_machine: TaskMachineSettings | None = None
     """The task machines agent episodes run on."""
@@ -77,14 +78,17 @@ class PolicyEvaluation:
     def selection(self) -> EvaluationSelection:
         """The catalog selection with the evaluation's judge, concurrency and task machines, without the output
         limit and seed, which can differ by candidate."""
-        run = EvaluationOverrides() if self.judge is None else JUDGES[self.judge]
+        judge = {} if self.judge is None else JUDGES[self.judge].model_dump()
+        run = EvaluationOverrides.model_validate(
+            {**judge, "concurrency": self.concurrency, "task_machine": self.task_machine}
+        )
         return EvaluationSelection(
             benchmark=self.benchmark,
             label=self.label,
             protocol=self.protocol,
             num_fewshot=self.num_fewshot,
             prompt_format=self.prompt_format,
-            run=run.model_copy(update={"concurrency": self.concurrency, "task_machine": self.task_machine}),
+            run=run,
         )
 
     @property
@@ -106,15 +110,8 @@ class PolicyOverride:
     candidate: PolicyCandidate
     evaluation: PolicyEvaluation
     reason: str
-    context: int | None = None
-    max_output: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.context is not None and self.context > self.candidate.max_context:
-            raise ValueError(
-                f"override for {self.candidate.name} on {self.evaluation.name} "
-                "sets a context larger than the candidate's window"
-            )
+    context: PositiveInt | None = None
+    max_output: PositiveInt | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -125,7 +122,7 @@ class EvalPolicy:
     """
 
     version: str
-    default_context: int
+    default_context: PositiveInt
     candidates: tuple[PolicyCandidate, ...]
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()
