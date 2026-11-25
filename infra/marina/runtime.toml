@@ -16,7 +16,7 @@ secrets = ["MARINMIRROR_TOKEN"]
 [runners.evaldash]
 schedule = "*/10 * * * *"
 timeout = 2100
-cpu = 2
+cpu = 4
 memory_gib = 16
 secrets = ["CW_KEY_ID", "CW_KEY_SECRET"]
 
