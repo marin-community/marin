@@ -73,27 +73,14 @@ class StagedCensus:
     census: dict
 
 
-def verify_acceptance_execution(job_name: str, source_id: str) -> str:
-    """Fail closed unless the cohort's acceptance job ran the declarative execution to a pass.
+def acceptance_evidence_uri(job_name: str) -> str:
+    """The acceptance run's evidence URI the census basis cites.
 
-    Returns the job path (the evidence URI the census basis cites). The
-    coordinator's ruling 2026-11-25 13:00 EST makes the acceptance runs the
-    declarative execution evidence; a cohort whose acceptance did not pass
-    stays Pending for the repair cycle.
+    The passing-acceptance verification runs at SUBMISSION (the launcher
+    refuses without a succeeded acceptance job; the census pod cannot resolve
+    the cluster config to re-check). The ruling 2026-11-25 13:00 EST makes the
+    acceptance runs the declarative execution evidence.
     """
-    describe = subprocess.run(
-        ["uv", "run", "--no-sync", "iris", "--cluster=cw-us-east-02a", "job", "describe", f"/benfeuer/{job_name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    state_line = next((line for line in describe.stdout.splitlines() if line.startswith("State:")), None)
-    if state_line is None or "succeeded" not in state_line:
-        raise ValueError(
-            f"No passing declarative execution receipt for {source_id}: acceptance job "
-            f"{job_name} is not succeeded ({(state_line or 'no state').strip()}); the cohort stays "
-            "Pending for the repair cycle"
-        )
     return f"iris://cw-us-east-02a/benfeuer/{job_name}"
 
 
@@ -112,11 +99,11 @@ def measure_staged_population(
     are acceptable for admission with execution evidence. The cohort's passing
     acceptance run built and executed its contexts through Daytona without
     named snapshots - that is the execution evidence, and it supersedes the
-    declared measurement's unbuilt-image classifications. Fail closed: a
-    cohort without a passing acceptance run refuses here and stays Pending
-    for the repair cycle.
+    declared measurement's unbuilt-image classifications. The launcher
+    verifies the passing acceptance run at submission; a cohort without one is
+    never submitted and stays Pending for the repair cycle.
     """
-    evidence_uri = verify_acceptance_execution(acceptance_job, source_id)
+    evidence_uri = acceptance_evidence_uri(acceptance_job)
     path = Path(hf_hub_download(release_repo, "tasks.parquet", repo_type="dataset", revision=release_revision))
     documents = pq_read(path)
     result: EnvelopeCensus = measure_envelopes(documents)

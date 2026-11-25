@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--acceptance-job", required=True, help="The cohort's passing acceptance Iris job name.")
     parser.add_argument("--census-root", required=True, help="The regional bucket root for the census artifacts.")
     parser.add_argument("--job-name", required=True, help="The Iris job name.")
+    parser.add_argument("--cluster", default="cw-us-east-02a", help="The cluster the acceptance jobs ran on.")
     parser.add_argument("--cpu", default="8")
     parser.add_argument("--memory", default="32GB")
     parser.add_argument("--disk", default="128GB")
@@ -74,6 +75,32 @@ def main() -> None:
         "-c",
         command,
     ]
+    # Fail closed at submission: the census job's pod cannot resolve the
+    # cluster config, so the passing-acceptance verification runs here, where
+    # iris works. The census job records the verified evidence.
+    describe = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--no-sync",
+            "iris",
+            f"--cluster={args.cluster}",
+            "job",
+            "describe",
+            f"/benfeuer/{args.acceptance_job}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    state_line = next((line for line in describe.stdout.splitlines() if line.startswith("State:")), None)
+    if state_line is None or "succeeded" not in state_line:
+        raise SystemExit(
+            f"REFUSED: the acceptance job {args.acceptance_job} is not succeeded "
+            f"({(state_line or 'no state').strip()}); the cohort stays Pending for the repair cycle"
+        )
+    print(f"acceptance verified: {args.acceptance_job} succeeded")
+
     completed = subprocess.run(argv)
     if completed.returncode:
         raise SystemExit(completed.returncode)
