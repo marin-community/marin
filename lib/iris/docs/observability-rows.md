@@ -30,8 +30,8 @@ exceptions: the free-text `error` and `status_message` columns, redacted; the
 launch's git identity, read from the environment into the `provenance_*`
 columns (both described below); and job tags. Job tags (`job_config.tags_json`, copied to
 `iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
-they are copied with token-like strings in each value redacted, best-effort
-like `error` (see **Free text** below). Rows are kept forever, so any other
+they are copied as written, without redaction; never put credentials or
+sensitive content in a tag. Rows are kept forever, so any other
 column that fails the rule is left out, not redacted and kept.
 
 Not copied, all from `job_config`:
@@ -52,7 +52,7 @@ Copied columns that differ from the controller DB:
 
 | Column | Differs from the controller DB |
 | --- | --- |
-| `iris.controller_db__jobs.tags` | Added: `job_config.tags_json`, each value token-redacted |
+| `iris.controller_db__jobs.tags` | Added: `job_config.tags_json`, as written |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
 | `iris.controller_db__job_config.provenance_*` | Added: four fields of `environment_json`'s `MARIN_PROVENANCE` (below) |
@@ -158,8 +158,7 @@ ORDER BY accelerator_hours DESC;
 ```
 
 `iris.controller_db__jobs.tags` holds the job's tags as a JSON object
-(`json_get(tags, 'category')`), with token-like strings in each value
-redacted (best-effort, see **Free text** above), or NULL for an untagged job; jobs submitted before tags existed are
+(`json_get(tags, 'category')`), copied as written, or NULL for an untagged job; jobs submitted before tags existed are
 untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see

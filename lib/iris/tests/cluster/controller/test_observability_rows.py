@@ -356,18 +356,6 @@ def test_job_rows_carry_tags_and_children_inherit_them(state):
     }
 
 
-def test_job_tags_keep_plain_text_and_redact_tokens(state):
-    rows = _attach(state, "marin")
-    request = make_job_request("train")
-    request.tags.CopyFrom(
-        job_pb2.JobTags(project="made-up-project", description="Sweep sizes with ghp_madeUpToken0123456789abcdefghijkl")
-    )
-    submit_job(state, "train", request)
-
-    (job,) = rows.jobs
-    assert json.loads(job.tags) == {"project": "made-up-project", "description": "Sweep sizes with [REDACTED]"}
-
-
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
 
 

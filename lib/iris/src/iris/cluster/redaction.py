@@ -4,12 +4,9 @@
 """Iris-specific redaction wrappers around :mod:`rigging.redaction`.
 
 The actual secret-pattern matching lives in ``rigging``; this module only
-adapts iris-specific shapes (the ``LaunchJobRequest`` proto, Click argv for
-``iris job run`` and the job tags copied to the controller's Finelog rows) into
-a form the shared redactor can consume.
+adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
+for ``iris job run``) into a form the shared redactor can consume.
 """
-
-import json
 
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
@@ -95,11 +92,3 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out
-
-
-def redact_job_tags(tags_json: str | None) -> str | None:
-    """Job tags as a JSON object, each value kept readable with token-like strings
-    redacted, as for the free-text error columns; ``None`` when untagged."""
-    if tags_json is None:
-        return None
-    return json.dumps({name: redact_string(value) for name, value in json.loads(tags_json).items()})

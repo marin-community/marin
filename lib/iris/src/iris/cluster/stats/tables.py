@@ -279,7 +279,7 @@ class IrisJob:
     # Named placement because this table's cluster is the writing controller.
     placement: str
     ts: datetime
-    # JobTags as JSON without empty fields, each value token-redacted; NULL when untagged.
+    # JobTags as JSON without empty fields, copied as written; NULL when untagged.
     tags: str | None = None
 
 
