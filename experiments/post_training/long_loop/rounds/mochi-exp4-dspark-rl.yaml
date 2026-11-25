@@ -40,7 +40,8 @@ rl:
     cluster: cw-us-east-08a
     cluster_config: lib/iris/config/cw-us-east-08a.yaml
     cpu: 120
-    memory: 900GB
+    # .129 all-task peak 539.57 GiB + 25% headroom, rounded up to 32 GiB.
+    memory: 704GiB
     disk: 2TB
     priority: production
     max_retries: 0
@@ -337,5 +338,5 @@ rl:
   retained_checkpoints: 1
   draft: mochi-interleaved-766m-step400407
 evaluation: frozen-micro210
-evaluation_profile: mochi-gb200-cw-us-east-08a
+evaluation_profile: mochi-gb200-cw-us-east-08a-v2
 evaluation_checkpoints: best_and_final
