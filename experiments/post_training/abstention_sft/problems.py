@@ -82,10 +82,19 @@ class ProblemsConfig:
     output_path: str
 
 
-def _write_problems(config: ProblemsConfig) -> Artifact:
+def nemotron_rows() -> list[dict[str, Any]]:
     path = hf_hub_download(NEMOTRON_DATASET, NEMOTRON_FILE, repo_type="dataset", revision=NEMOTRON_REVISION)
     with open(path) as stream:
-        rows = [json.loads(line) for line in stream]
+        return [json.loads(line) for line in stream]
+
+
+def load_problems() -> list[dict[str, Any]]:
+    """The pinned Nemotron questions without any pinned AbstentionBench question."""
+    return nemotron_problems(nemotron_rows(), _abstentionbench_questions())
+
+
+def _write_problems(config: ProblemsConfig) -> Artifact:
+    rows = nemotron_rows()
     problems = nemotron_problems(rows, _abstentionbench_questions())
     output = StoragePath(config.output_path)
     output.mkdirs()

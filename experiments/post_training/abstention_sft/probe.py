@@ -26,6 +26,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.inference.iris import remote_inference
+from marin.inference.types import OpenAIEndpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from taskcompendium.importers.evalchemy.judge_prompts import simpleqa_verified_spec
@@ -92,36 +93,26 @@ class ProbeConfig:
     seed: int
 
 
-def _serve_and_probe(config: ProbeConfig) -> None:
-    problems = list(load_parquet(str(StoragePath(config.problems_path) / PROBLEMS_FILENAME)))
-    inference = inference_config_for_model(
-        config.model,
-        config.accelerator,
-        env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-    with remote_inference(inference) as session:
-        endpoint = session.model.endpoint
-        with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-            outputs = list(
-                pool.map(
-                    lambda problem: sample_completions(
-                        endpoint,
-                        problem["problem"],
-                        n=SAMPLES,
-                        temperature=TEMPERATURE,
-                        top_p=TOP_P,
-                        max_tokens=MAX_TOKENS,
-                        seed=config.seed,
-                        enable_thinking=True,
-                    ),
-                    problems,
-                )
+def probe_problems(
+    endpoint: OpenAIEndpoint, problems: list[dict[str, Any]], connection: JudgeConnection, seed: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Sample and judge every problem; return (samples, labels) rows."""
+    with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
+        outputs = list(
+            pool.map(
+                lambda problem: sample_completions(
+                    endpoint,
+                    problem["problem"],
+                    n=SAMPLES,
+                    temperature=TEMPERATURE,
+                    top_p=TOP_P,
+                    max_tokens=MAX_TOKENS,
+                    seed=seed,
+                    enable_thinking=True,
+                ),
+                problems,
             )
-
-    connection = JudgeConnection(
-        config.judge_endpoint, require_secret(config.judge_api_key_env), default_model=config.judge_model
-    )
+        )
     jobs = [
         (problem, index, finish_reason, output)
         for problem, samples in zip(problems, outputs, strict=True)
@@ -145,18 +136,42 @@ def _serve_and_probe(config: ProbeConfig) -> None:
         }
         for request_id, count in counts.items()
     ]
-    output = StoragePath(config.output_path)
+    return samples, labels
+
+
+def write_probe(output_path: str, samples: list[dict[str, Any]], labels: list[dict[str, Any]], manifest: dict) -> None:
+    output = StoragePath(output_path)
     output.mkdirs()
     write_table(output, SAMPLES_FILENAME, samples, SAMPLE_SCHEMA)
     write_table(output, LABELS_FILENAME, labels, LABEL_SCHEMA)
-    manifest = {
-        "model": config.model.location,
-        "revision": config.model.revision,
-        "judge_model": config.judge_model,
-        "samples_per_question": SAMPLES,
-        "labels": {label: sum(row["label"] == label for row in labels) for label in ("answer", "abstain", "drop")},
-    }
-    (output / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
+    counts = {label: sum(row["label"] == label for row in labels) for label in ("answer", "abstain", "drop")}
+    (output / MANIFEST_FILENAME).write_text(json.dumps({**manifest, "labels": counts}, indent=2) + "\n")
+
+
+def _serve_and_probe(config: ProbeConfig) -> None:
+    problems = list(load_parquet(str(StoragePath(config.problems_path) / PROBLEMS_FILENAME)))
+    inference = inference_config_for_model(
+        config.model,
+        config.accelerator,
+        env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    connection = JudgeConnection(
+        config.judge_endpoint, require_secret(config.judge_api_key_env), default_model=config.judge_model
+    )
+    with remote_inference(inference) as session:
+        samples, labels = probe_problems(session.model.endpoint, problems, connection, config.seed)
+    write_probe(
+        config.output_path,
+        samples,
+        labels,
+        {
+            "model": config.model.location,
+            "revision": config.model.revision,
+            "judge_model": config.judge_model,
+            "samples_per_question": SAMPLES,
+        },
+    )
 
 
 def probe_step(
