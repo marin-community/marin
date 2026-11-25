@@ -977,9 +977,13 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 ):
     early_failure = outcome != "succeeded"
     real_archive = model == "snowball" and not early_failure
+    entry_module = f"experiments.post_training.{model}_rl"
+    if real_archive:
+        entry_module = "experiments.post_training.rl_tests.archive_preset_fixture"
+        monkeypatch.setenv("MARIN_RL_TEST_SELECTION_ROOT", recipe.SELECTION_ROOT)
     if model == "mochi":
         table = MOCHI
-        preset = table.by_name["train-medium"]
+        preset = nominal = table.by_name["train-medium"]
         binding = recipe.selection_artifact(preset.tasks)
         path = Path(binding.path()) / "summary.json"
         if not path.is_file():
@@ -1045,7 +1049,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         if argv[:2] == ["git", "archive"]:
             assert argv[2] == archive_tree
         if argv[1:3] == ["-m", "experiments.post_training.rl_preset_cli"]:
-            assert argv[3:] == ["describe", f"experiments.post_training.{model}_rl", model, preset.name]
+            assert argv[3:] == ["describe", entry_module, model, preset.name]
             assert (kwargs["cwd"] / "vendor/skyrl/cloud/iris/config_cli.py").is_file()
             assert str(kwargs["cwd"]) in kwargs["env"]["PYTHONPATH"]
             if not real_archive:
@@ -1113,9 +1117,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
     arguments = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--run"]
-    result = CliRunner().invoke(
-        snowball.command(table, argv=tuple(arguments), entry_module=f"experiments.post_training.{model}_rl"), arguments
-    )
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=entry_module), arguments)
     assert result.exit_code == 0, (result.output, result.exception)
     grafana_link = next(
         line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
