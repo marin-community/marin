@@ -10,6 +10,7 @@ from marinskyrl.runtime_options import WeightSyncTransport
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
+SPARE_PROMPTS_PER_POOL = 1
 
 
 class BatchPolicy(StrEnum):
@@ -47,8 +48,10 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
 
 
 def minimum_family_pool_sizes(groups_per_family: Mapping[str, int], max_staleness_steps: int) -> dict[str, int]:
-    """Reserve a distinct prompt for each open slot and one spare per family."""
-    return {family: (max_staleness_steps + 1) * count + 1 for family, count in groups_per_family.items()}
+    """Return the minimum distinct prompt count for each family, including one spare."""
+    return {
+        family: (max_staleness_steps + 1) * count + SPARE_PROMPTS_PER_POOL for family, count in groups_per_family.items()
+    }
 
 
 def validate_family_pools(
