@@ -595,6 +595,24 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
+def test_mochi_one_rack_drafts_by_default_and_can_opt_out(selection, tmp_path):
+    preset = MOCHI.by_name["train-medium"]
+    settings = ("generator.speculative_decoding=null",)
+    (draft_run,) = snowball.build_experiment(preset, table=MOCHI).runs
+    (plain_run,) = snowball.build_experiment(preset, table=MOCHI, settings=settings).runs
+    draft = yaml.safe_load(materialized_config(draft_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    config = draft["skyrl"]["generator"]
+    speculator = config.pop("speculative_decoding")
+    assert speculator["method"] == "dspark"
+    assert speculator["num_speculative_tokens"] == 4
+    assert config["gpu_memory_utilization"] == 0.775
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert config == plain["skyrl"]["generator"]
+    assert draft["inputs"] == plain["inputs"]
+
+
 def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(selection, tmp_path):
     preset = MOCHI.by_name["train-long-3rack"]
     (step,) = snowball.build_experiment(preset, table=MOCHI).runs
@@ -602,6 +620,7 @@ def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(sel
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
     model = config["inputs"]["model"]
     assert model["uri"] == MOCHI_STEP_400407_EXPORT
     assert model["tokenizer_uri"] == MOCHI_TOKENIZER_URI

@@ -45,6 +45,15 @@ _MODEL = ArtifactHfModel(
     relative_path="",
 )
 
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="s3://marin-us-east-08a/marin/checkpoints/dspark/mochi/e43c1b81/2026.11.24-skyrl",
+        source_identity="sha256:4a327e965aa38cb7a06c4afd49faec296e45dcf052f7cd2aa7a2fc70929d71af",
+    ),
+    num_speculative_tokens=4,
+)
+
 _ONE_RACK_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
@@ -128,6 +137,7 @@ _ONE_TURN = RL_TRAINING_BASE.merge(
         ),
         generator=sections.Generator(
             model_dtype="bfloat16",
+            gpu_memory_utilization=0.775,
             max_num_seqs=16,
             chat_template_kwargs={"enable_thinking": True},
             sampling_params=sections.SamplingParams(
@@ -204,7 +214,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.4",
+    revision="2026.11.25",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -217,6 +227,7 @@ _TRAIN_LONG = Preset(
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
     model=_MODEL,
+    default_speculative_decoding=_DSPARK,
     held_out_tasks="eval-lite@2026.11.17.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
@@ -229,16 +240,16 @@ _TRAIN_LONG = Preset(
 _TRAIN_LONG_3RACK = replace(
     _TRAIN_LONG,
     name="train-long-3rack",
+    revision="2026.11.20.4",
     recipe=replace(_TRAIN_LONG.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
+    default_speculative_decoding=None,
 )
 _TRAIN_MEDIUM = replace(
     _TRAIN_LONG.with_updates(2),
     name="train-medium",
     evaluations=(),
 )
-_TRAIN_LONG_AGENTIC = replace(
-    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.7"
-)
+_TRAIN_LONG_AGENTIC = agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS)
 
 MOCHI = ModelPresets(
     model="mochi",
@@ -250,7 +261,7 @@ MOCHI = ModelPresets(
         _TRAIN_LONG_AGENTIC,
         replace(
             agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
-            revision=_TRAIN_LONG_AGENTIC.revision,
+            revision="2026.11.20.7",
         ),
     ),
     namespace="mochi-rl",

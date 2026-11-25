@@ -259,6 +259,12 @@ JSON object with `source_uri` and `source_identity`. For `hf://` sources, use th
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
 compatible draft. Online draft training remains EAGLE3-only.
 
+Mochi one-rack presets use four DSpark proposals with the step-400407 initializer.
+The one-rack vLLM memory fraction is 0.775, which restores the KV token capacity
+available with plain decoding at 0.75. Use `--set generator.speculative_decoding=null`
+to run plain decoding. Also set `--set generator.gpu_memory_utilization=0.75` to
+reproduce the previous one-rack serving budget. Three-rack presets use plain decoding.
+
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
