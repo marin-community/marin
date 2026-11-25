@@ -2068,16 +2068,7 @@ class RayPPOTrainer:
 
     @cached_property
     def _num_experts(self) -> Optional[int]:
-        """Resolve the policy model's MoE expert count from its HF config, memoized.
-
-        Used to pick a deterministic, rank-invariant route dtype when each worker
-        materializes a microbatch. Reads the HF config at
-        ``cfg.trainer.policy.model.path`` once and resolves the expert count across
-        MoE arch variants (Qwen3-MoE: ``num_experts``; Mixtral: ``num_local_experts``;
-        DeepSeek/Qwen-style: ``n_routed_experts``). Returns None (and caches None) if
-        the config has no such field (non-MoE) or can't be loaded, in which case
-        the selected batch uses one observed-max dtype for all workers.
-        """
+        """Read the policy expert count for choosing a rank-invariant route dtype."""
         try:
             num_experts = model_expert_count(load_policy_model_config(self.cfg, local_files_only=False))
         except Exception as e:  # noqa: BLE001 — config load is best-effort; fallback is safe

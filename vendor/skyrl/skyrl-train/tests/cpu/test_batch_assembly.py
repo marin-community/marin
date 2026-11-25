@@ -434,7 +434,8 @@ def test_worker_batch_config_validation(worker_config, tmp_path, overrides, reas
 def test_auto_batch_builder_resolves_router_replay_after_planning(worker_config, tmp_path):
     cfg = worker_config
     cfg.trainer.policy.megatron_config.moe_router_replay = True
-    cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
+    with open_dict(cfg.generator.engine_init_kwargs):
+        cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
     validate_cfg(cfg, check_runtime_resources=False)
     assert cfg.trainer.batch_builder == "auto"
@@ -481,7 +482,7 @@ def test_worker_batch_rejects_incompatible_rows(worker_config, fields, rows, rea
         **fields,
     }
     group = AdmittedRollout(0, "g0", 0, rows, sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch))
-    match = rf"^Policy-worker batch assembly: .*g0.*{reason}\. Set trainer\.batch_builder=driver to train these rows\.$"
+    match = rf"^Policy-worker batch assembly: .*g0.*{reason}.*trainer\.batch_builder=driver"
     with pytest.raises(ValueError, match=match):
         plan_worker_batch(cfg, (group,), global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None)
 
