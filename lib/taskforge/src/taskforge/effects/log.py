@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlsplit
 from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url, url_to_fs
+from rolloutengine.models import GradedRollout
 
 from taskforge.effects.events import (
     BYTES_TAG,
@@ -91,7 +92,11 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     restored = _restore(data["payload"], known)
     if cls is Resolved:
         request = restored["request"]
-        value = TypeAdapter(cast(Any, request.result_type)).validate_python(restored["value"])
+        stored = restored["value"]
+        if request.result_type is GradedRollout and "run_id" in stored["rollout"]:
+            # Older event logs store the attempt ID of a GradedRollout as run_id.
+            stored["rollout"]["rollout_id"] = stored["rollout"].pop("run_id")
+        value = TypeAdapter(cast(Any, request.result_type)).validate_python(stored)
         fingerprints = TypeAdapter(tuple[Fingerprint, ...]).validate_python(restored["fingerprints"])
         event = Resolved(request, fingerprints, value, restored["replayed"])
     elif cls is Retrying:

@@ -99,3 +99,17 @@ async def test_jsonl_round_trips_resource_results_and_binary_payloads(tmp_path: 
     await sink.write(tuple(Record(index, 0.0, event) for index, event in enumerate(events, 1)))
     restored = await sink.read()
     assert tuple(record.event for record in restored) == events
+
+
+async def test_jsonl_reads_a_solver_rollout_whose_attempt_id_is_stored_as_run_id(tmp_path: Path) -> None:
+    resolved = Resolved(
+        SolverRollout(rollout_spec(arithmetic_task()), 1, 0),
+        (),
+        GradedRollout(Rollout("trial", (), "stop"), GradeResult(Outcome.GRADED, 1)),
+    )
+    sink = JsonlSink(str(tmp_path / "results.jsonl"))
+    await sink.write((Record(1, 0.0, resolved),))
+    path = tmp_path / "results.jsonl"
+    path.write_text(path.read_text().replace('"rollout_id": "trial"', '"run_id": "trial"'))
+    (restored,) = await JsonlSink(str(path)).read()
+    assert restored.event == resolved
