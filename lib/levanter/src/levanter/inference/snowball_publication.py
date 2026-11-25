@@ -52,6 +52,6 @@ def publish_snowball_checkpoint(
             return source
 
         candidate = jax.tree.map(match_array, candidate, active)
-        return jax.block_until_ready(candidate)
+        return candidate
 
-    return server.reload(restore, expected_version=expected_serving_version, policy_id=policy_id)
+    return server.publish(restore, expected_version=expected_serving_version, policy_id=policy_id)

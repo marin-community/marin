@@ -25,8 +25,10 @@ from haliax.partitioning import ResourceMapping
 from jax.sharding import NamedSharding, PartitionSpec
 
 import levanter.tracker
+from levanter.compat.hf_generation_config import stop_token_ids
 from levanter.inference.jit_scheduler import (
     DecodeState,
+    FinishReason,
     SeqDecodingParams,
     TokenQueue,
     _CapturedRoutes,
@@ -41,11 +43,13 @@ from levanter.layers.kv_cache import ListCache, PageCache
 from levanter.layers.sampler import FULL_DISTRIBUTION_TOP_P, LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
 
 _release_finished_slots = jax.jit(DecodeState.free_pages_for_finished, donate_argnums=0)
+_abort_slots = jax.jit(DecodeState.abort_slots, donate_argnums=0)
 
 
 @dataclass(frozen=True)
@@ -292,8 +296,12 @@ class DecodeResult:
     token_list: list[int]
     # Count of newly appended tokens (includes prompt tokens as extracted)
     tokens_decoded: int = 0
-    done: bool = False
+    finish_reason: FinishReason = FinishReason.RUNNING
     logprobs: list[float] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return self.finish_reason != FinishReason.RUNNING
 
 
 class GenState(eqx.Module):
@@ -643,7 +651,7 @@ def _prefill_kernel(
         max_seqs=decode_state.max_seqs,
         with_logprobs=True,
     )
-    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
@@ -854,7 +862,7 @@ def _handle_clones(
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
     # Append clone outputs
-    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
+    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons)
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
@@ -955,7 +963,7 @@ def _run_generation_loop(
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -990,6 +998,7 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    finish_reasons: list[FinishReason]
     expert_routes: list[GeneratedExpertRoutes] | None = None
 
 
@@ -1096,7 +1105,7 @@ class InferenceEngine:
         self,
         *,
         model: LmHeadModel,
-        tokenizer,
+        tokenizer: MarinTokenizer | None,
         cache: PageCache,
         decode_state: DecodeState,
         sampler: Sampler,
@@ -1144,7 +1153,7 @@ class InferenceEngine:
     def from_model_with_config(
         cls,
         model: LmHeadModel,
-        tokenizer,
+        tokenizer: MarinTokenizer | None,
         config: InferenceEngineConfig,
         axis_resources: ResourceMapping | None = None,
     ) -> "InferenceEngine":
@@ -1188,6 +1197,9 @@ class InferenceEngine:
             )
         decode_state = DecodeState.init(
             table,
+            generation_stop_ids=(
+                tuple(stop_token_ids(tokenizer, tokenizer.chat_template)) if tokenizer is not None else ()
+            ),
             max_stop_seqs=config.max_stop_seqs,
             max_stop_tokens=config.max_stop_tokens,
             max_queued_tokens=config.max_queued_tokens,
@@ -1646,16 +1658,18 @@ class InferenceEngine:
         )
         tokens = []
         logprobs = []
+        finish_reasons: list[FinishReason] = []
         expert_routes = [] if capture_routes else None
         for request in requests:
             result = results[request.request_id]
             tokens.extend(result.tokens)
             assert result.logprobs is not None
             logprobs.extend(result.logprobs)
+            finish_reasons.extend(result.finish_reasons)
             if expert_routes is not None:
                 assert result.expert_routes is not None
                 expert_routes.extend(result.expert_routes)
-        return GenerationResult(tokens, logprobs, sum(map(len, tokens)), expert_routes)
+        return GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, expert_routes)
 
     def generate_continuously(
         self,
@@ -1665,6 +1679,7 @@ class InferenceEngine:
         poll_requests: Callable[[int], Sequence[Request]] | None = None,
         on_tokens: Callable[[int, int, list[int]], None] | None = None,
         step_callback: Callable[[int], None] | None = None,
+        should_abort: Callable[[int], bool] | None = None,
         capture_routes: bool = False,
     ) -> None:
         """Admit more requests between rounds and publish each response when it finishes.
@@ -1673,6 +1688,8 @@ class InferenceEngine:
         with unique IDs and at most that many choices in total. When no work
         remains, the loop returns and the caller can wait for another request.
         The token callback receives the request ID, choice, and new tokens in order.
+        At each scheduling boundary, should_abort can terminate one request
+        and publish its partial choices while leaving peers in the decode queue.
         """
         if not requests:
             return
@@ -1723,7 +1740,22 @@ class InferenceEngine:
                     ]
                     for choice in range(request.n_generations):
                         route_chunks.pop((request_id, choice), None)
-                on_complete(request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), routes))
+                finish_reasons = [choices[i].finish_reason for i in range(request.n_generations)]
+                on_complete(
+                    request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, routes)
+                )
+
+        def abort_requested() -> bool:
+            if should_abort is None:
+                return False
+            cancelled = {request_id for request_id in outstanding if should_abort(request_id)}
+            if not cancelled:
+                return False
+
+            pending[:] = [request for request in pending if request.request_id not in cancelled]
+            self._abort_requests(cancelled)
+            publish_finished()
+            return True
 
         admit(requests)
         decode_iteration = 0
@@ -1738,6 +1770,10 @@ class InferenceEngine:
                     if sum(request.n_generations for request in incoming) > available:
                         raise ValueError("The request poll returned more choices than available slots")
                     admit(incoming)
+            abort_requested()
+            if not outstanding:
+                break
+            prefill_outputs = None
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, capture_routes, route_chunks)
                 if prefill_outputs is not None:
@@ -1750,6 +1786,8 @@ class InferenceEngine:
 
             if step_callback is not None:
                 step_callback(decode_iteration)
+            if (prefill_outputs is not None or step_callback is not None) and abort_requested():
+                continue
             token_capacity = _token_bucket(
                 len(self.local_map), self.config.decode_bucket_sizes, self.config.imputed_max_tokens_per_round
             )
@@ -1768,6 +1806,22 @@ class InferenceEngine:
             decode_iteration += 1
             if generated == 0 and outstanding:
                 raise RuntimeError("Inference made no progress with unfinished requests")
+
+    def _abort_requests(self, cancelled: set[int]) -> None:
+        slots = [slot for slot, (request_id, _) in self.local_map.items() if request_id in cancelled]
+        if slots:
+            mask = np.zeros(self.gen_state.decode_state.max_seqs, dtype=bool)
+            mask[slots] = True
+            decode_state = _abort_slots(self.gen_state.decode_state, jnp.asarray(mask))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            for slot in slots:
+                del self.local_map[slot]
+            self.free_slots.extend(slots)
+
+        for request_id in cancelled:
+            for choice in self.results[request_id].values():
+                if not choice.done:
+                    choice.finish_reason = FinishReason.ABORT
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
@@ -1880,7 +1934,8 @@ class InferenceEngine:
                 chunk = (routes.positions.array[:count][take], routes.experts.array[:count][take])
                 route_chunks.setdefault(request, []).append(chunk)
         n = int(pending_outputs.num_tokens)
-        fins = pending_outputs.finished.array
+        reasons = pending_outputs.finish_reasons.array
+        finished_slots = reasons != FinishReason.RUNNING
         toks_arr = pending_outputs.tokens.array
         sids_arr = pending_outputs.slot_ids.array
 
@@ -1913,7 +1968,7 @@ class InferenceEngine:
 
         # Finish outputs before releasing slots, so a new request can reuse them.
         released_slots = []
-        for local_slot, is_done in enumerate(fins):
+        for local_slot, is_done in enumerate(finished_slots):
             if not bool(is_done):
                 continue
             info = self.local_map.get(local_slot)
@@ -1921,11 +1976,11 @@ class InferenceEngine:
                 continue
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.done = True
+            dr.finish_reason = FinishReason(int(reasons[local_slot]))
             del self.local_map[local_slot]
             released_slots.append(local_slot)
 
-            if logger.isEnabledFor(logging.DEBUG):
+            if self.tokenizer is not None and logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
                     logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
@@ -1935,7 +1990,7 @@ class InferenceEngine:
                     )
 
         if released_slots:
-            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(fins))
+            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(finished_slots))
             self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
             self.free_slots.extend(released_slots)
         logger.debug(

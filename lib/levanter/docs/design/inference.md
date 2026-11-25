@@ -57,8 +57,71 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, and `seed`. In chat requests, `max_completion_tokens` takes precedence over `max_tokens`.
-- **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
+- **Response Schema**: Each choice reports `finish_reason` in OpenAI completion responses
+  and as an enum in the gRPC response. A sampled EOS, a chat
+  turn-boundary token, or a matched stop sequence reports `stop`, including on
+  the final allowed token. Budget exhaustion reports `length`.
+- **Cancellation**: Send an `X-Request-ID` header on generation, then post
+  `{"request_ids": ["<id>"]}` to `/abort`. Unfinished choices return `abort` with their
+  sampled tokens and scores so far. Queued choices return zero completion tokens.
+  Disconnecting cancels the same request.
+- **Pause and resume**: Post `{"mode": "abort", "clear_cache": true}` to
+  `/pause_generation` to abort active requests and discard queued work. The
+  server clears its cache state before returning. Requests received while
+  paused return zero completion tokens with reason `abort`. Post to
+  `/resume_generation` to reopen admission. A binary client can append returned
+  token IDs to the prompt and request the rest of its token budget.
 - **Error Handling**: Proper HTTP status codes and error messages
+
+### Frozen checkpoint publication
+
+Native Snowball checkpoint publication restores and validates an immutable
+candidate while the current policy serves. Installation rechecks the base
+serving version and policy ID, then drains generation and resets the KV state
+before making the candidate visible. New binary requests can supply
+`expected_policy_id` to reject a stale policy with HTTP 409.
+
+### Exact-token gRPC generation
+
+Set `InferenceServerConfig.grpc_port` to enable a plaintext gRPC listener on the
+configured serving host. The unary `levanter.inference.v1.Inference/Generate`
+RPC takes prompt token IDs and returns each choice's generated token IDs and
+log probabilities. Exact-token requests default to temperature 1 and
+top-p 1, and draw a seed when the caller omits it. Both listeners submit to the
+same inference queue.
+Run the gRPC listener on the private rollout network.
+
+The schema at `lib/levanter/src/levanter/inference/inference.proto` defines the
+request and response. Generate Python bindings from the repo root after editing it.
+
+```sh
+uvx --from grpcio-tools==1.76.0 python -m grpc_tools.protoc \
+  -I lib/levanter/src --python_out=lib/levanter/src --pyi_out=lib/levanter/src \
+  --grpc_python_out=lib/levanter/src lib/levanter/src/levanter/inference/inference.proto
+```
+
+Set `expected_policy_id` to require the installed policy to match when the
+request enters generation. A mismatch returns `FAILED_PRECONDITION`. Each
+choice reports the actual `policy_id` and `model_version` used to generate it.
+
+Set `expected_logprob_mode` to require behavior or raw policy log probabilities.
+The response identifies the mode and fills the matching per-choice score field.
+
+To capture Snowball router replay, set `capture_router_replay`. Each choice then
+includes `router_replay`. Both fields use tag 50001 in their respective messages.
+The replay positions index the concatenated prompt and generated tokens. A
+route at position `i` was used to predict token `i + 1`. The validity mask
+marks positions actually processed by the model.
+
+For long contexts or multiple choices, size the client's
+`grpc.max_receive_message_length` for the expected route payload. Packed expert
+IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
+
+Clients can set the `x-request-id` metadata header to correlate a gRPC call
+with the existing abort endpoint. A cancelled gRPC call releases its generation
+request. Native Snowball streaming chat can also embed the serialized
+`GenerateResponse` in the final SSE choice event as a base64 string in
+`levanter_generation`.
 
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation

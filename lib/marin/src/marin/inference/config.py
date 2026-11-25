@@ -406,6 +406,7 @@ class LevanterEngineConfig:
     expert_parallel_size: int = DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
     checkpoint_load_mode: Literal["standard", "snowball_layerwise"] = "standard"
     profile: LevanterServingProfile = "standard"
+    grpc_port: int | None = None
 
     def __post_init__(self) -> None:
         if self.profile == SNOWBALL_AGENTX_PROFILE:

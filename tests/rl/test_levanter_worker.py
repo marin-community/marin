@@ -10,6 +10,7 @@ import socket
 import sys
 from contextlib import contextmanager
 
+import grpc
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,20 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.binary import (
-    EXPERT_IDS,
-    EXPERT_VALID,
-    GENERATE_PATH,
-    LOGPROB_MODE,
-    MEDIA_TYPE,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    choice_tensor_key,
-    decode_frame,
-    encode_frame,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.snowball_publication import publish_snowball_checkpoint
@@ -82,17 +70,26 @@ def _hf_initializer(path):
 def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
     valid = np.ones(tokens.size, dtype=bool)
     valid[-1] = False
-    fields = {
-        TOKEN_IDS: tokens[-scores.size :],
-        POLICY_LOGPROBS: scores,
-        EXPERT_IDS: np.broadcast_to(np.asarray(expert_ids, np.uint8), (2, tokens.size, 2)),
-        EXPERT_VALID: valid,
-    }
-    return encode_frame(
-        {"choices": [{POLICY_ID: policy_id}], LOGPROB_MODE: "policy"},
-        {PROMPT_TOKEN_IDS: tokens[: -scores.size]}
-        | {choice_tensor_key(0, name): values for name, values in fields.items()},
+    ids = np.broadcast_to(np.asarray(expert_ids, np.uint32), (2, tokens.size, 2))
+    response = inference_pb2.GenerateResponse(
+        prompt_token_ids=tokens[: -scores.size].tolist(),
+        logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+        choices=[
+            inference_pb2.Choice(
+                token_ids=tokens[-scores.size :].tolist(),
+                policy_logprobs=scores,
+                policy_id=policy_id,
+                router_replay=inference_pb2.RouterReplay(
+                    num_layers=2,
+                    num_positions=tokens.size,
+                    experts_per_token=2,
+                    expert_ids=ids.ravel().tolist(),
+                    valid=valid.tolist(),
+                ),
+            )
+        ],
     )
+    return response.SerializeToString()
 
 
 def _request_all(children, method, payloads):
@@ -212,7 +209,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
                 (_rollout_with_routes(row[1:], values, expert_ids, policy_id), 0)
                 for row, values in zip(tokens, scores, strict=True)
             ]
-            return payload | {"policy_id": policy_id, "binary_rollouts": rollouts}
+            return payload | {"policy_id": policy_id, "grpc_rollouts": rollouts}
 
         replayed = _same_request(children, "forward", with_served_routes([0, 1]))[0]["output"]
         other = _same_request(children, "forward", with_served_routes([2, 3]))[0]["output"]
@@ -271,6 +268,8 @@ def test_served_snowball_rollout_updates_and_publishes_in_learner_worker(tmp_pat
             compute_dtype=jnp.float32,
         ),
         initial_policy_id="initializer",
+        host="127.0.0.1",
+        grpc_port=0,
     )
     mesh = compact_grug_mesh(expert_axis_size=1)
     with jax.set_mesh(mesh):
@@ -278,25 +277,26 @@ def test_served_snowball_rollout_updates_and_publishes_in_learner_worker(tmp_pat
             options, model.with_packed_experts().with_split_decode_cache(), load_tokenizer(str(initializer)), mesh=mesh
         )
         try:
-            with TestClient(server.app) as client:
+            with (
+                TestClient(server.app),
+                grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+            ):
+                stub = inference_pb2_grpc.InferenceStub(channel)
 
                 def generate(policy_id):
-                    request = encode_frame(
-                        {
-                            "max_tokens": 2,
-                            "temperature": 0,
-                            "return_route_captures": True,
-                            "expected_policy_id": policy_id,
-                        },
-                        {PROMPT_TOKEN_IDS: prompt},
+                    request = inference_pb2.GenerateRequest(
+                        prompt_token_ids=prompt.tolist(),
+                        max_new_tokens=2,
+                        temperature=0,
+                        capture_router_replay=True,
+                        expected_policy_id=policy_id,
+                        expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
                     )
-                    return client.post(GENERATE_PATH, content=request, headers={"content-type": MEDIA_TYPE})
+                    return stub.Generate(request, timeout=30)
 
                 before = generate("initializer")
-                assert before.status_code == 200
-                _, fields = decode_frame(before.content)
-                original_scores = fields[choice_tensor_key(0, POLICY_LOGPROBS)]
-                tokens = np.tile(np.r_[prompt, fields[choice_tensor_key(0, TOKEN_IDS)]], (batch_size, 1))
+                original_scores = np.asarray(before.choices[0].policy_logprobs, dtype=np.float32)
+                tokens = np.tile(np.r_[prompt, before.choices[0].token_ids].astype(np.int32), (batch_size, 1))
                 response_length = len(original_scores)
                 assert response_length == 2
                 payload = {
@@ -314,7 +314,7 @@ def test_served_snowball_rollout_updates_and_publishes_in_learner_worker(tmp_pat
                     "response_length": response_length,
                     "global_step": 1,
                     "policy_id": "initializer",
-                    "binary_rollouts": [(before.content, 0)] * batch_size,
+                    "grpc_rollouts": [(before.SerializeToString(), 0)] * batch_size,
                 }
                 checkpoint = {"ckpt_dir": str(tmp_path / "updated")}
                 with _learner_processes(config, 1) as (children, _):
@@ -327,11 +327,11 @@ def test_served_snowball_rollout_updates_and_publishes_in_learner_worker(tmp_pat
                     )
                     == 1
                 )
-                assert generate("initializer").status_code == 409
-                after = generate(receipt["policy_id"])
-                assert after.status_code == 200
-                metadata, fields = decode_frame(after.content)
-                assert metadata["choices"][0][POLICY_ID] == receipt["policy_id"]
-                assert not np.array_equal(fields[choice_tensor_key(0, POLICY_LOGPROBS)], original_scores)
+                with pytest.raises(grpc.RpcError) as stale:
+                    generate("initializer")
+                assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+                choice = generate(receipt["policy_id"]).choices[0]
+                assert choice.policy_id == receipt["policy_id"]
+                assert not np.array_equal(choice.policy_logprobs, original_scores)
         finally:
             server.shutdown()

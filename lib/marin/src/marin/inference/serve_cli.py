@@ -45,6 +45,7 @@ _LOCAL_LEVANTER_OPTIONS = {
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
     "levanter_profile": "--levanter-profile",
+    "grpc_port": "--grpc-port",
 }
 
 
@@ -88,6 +89,7 @@ def main() -> None:
 )
 @click.option("--startup-timeout", type=int, default=1800)
 @click.option("--max-seqs", type=int, default=16)
+@click.option("--grpc-port", type=click.IntRange(1, 65535), help="Enable the Levanter exact-token gRPC listener.")
 @click.option("--page-size", type=int, default=128)
 @click.option("--hbm-utilization", type=float, default=0.8)
 @click.option("--levanter-profile", type=click.Choice(get_args(LevanterServingProfile)), default="standard")
@@ -112,6 +114,7 @@ def local(
     vllm_metrics_config: Path | None,
     startup_timeout: int,
     max_seqs: int,
+    grpc_port: int | None,
     page_size: int,
     hbm_utilization: float,
     levanter_profile: LevanterServingProfile,
@@ -162,6 +165,7 @@ def local(
     else:
         engine = LevanterEngineConfig(
             max_seqs=max_seqs,
+            grpc_port=grpc_port,
             page_size=page_size,
             hbm_utilization=hbm_utilization,
             profile=levanter_profile,
@@ -170,6 +174,8 @@ def local(
         click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")
     with local_inference(model_config, engine, host=host, port=port) as session:
         click.echo(f"OpenAI endpoint: {session.model.endpoint.base_url}")
+        if grpc_port is not None:
+            click.echo(f"Exact-token gRPC port: {grpc_port}")
         click.echo("Press Ctrl-C to stop.")
         with contextlib.suppress(KeyboardInterrupt):
             while True:

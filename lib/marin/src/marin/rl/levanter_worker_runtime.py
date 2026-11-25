@@ -29,7 +29,8 @@ from jax.sharding import NamedSharding, PartitionSpec
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
-from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
+from levanter.inference import inference_pb2
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
@@ -55,10 +56,10 @@ def _payload_fingerprint(payload: dict) -> str:
     digest = hashlib.sha256()
     for name in ("old_logprobs", "advantages", "policy_weights"):
         value = payload["arrays"].get(name)
-        if name == "old_logprobs" and payload.get("binary_rollouts") is not None:
+        if name == "old_logprobs" and payload.get("grpc_rollouts") is not None:
             digest.update(name.encode())
-            for frame, choice in payload["binary_rollouts"]:
-                digest.update(hashlib.sha256(frame).digest())
+            for response, choice in payload["grpc_rollouts"]:
+                digest.update(hashlib.sha256(response).digest())
                 digest.update(str(choice).encode())
             continue
         digest.update(name.encode())
@@ -272,10 +273,13 @@ class NativePolicyRuntime:
             segment_ids=named("segment_ids", response=False) if "segment_ids" in source else None,
         )
 
-        binary_rollouts = payload.get("binary_rollouts")
-        if binary_rollouts is not None:
-            rollouts = [BinaryRolloutChoice(frame=frame, choice=choice) for frame, choice in binary_rollouts]
-            batch = prepare_binary_policy_batch(self.state.model, batch, rollouts, policy_id=payload["policy_id"])
+        grpc_rollouts = payload.get("grpc_rollouts")
+        if grpc_rollouts is not None:
+            rollouts = [
+                RolloutChoice(inference_pb2.GenerateResponse.FromString(response), choice)
+                for response, choice in grpc_rollouts
+            ]
+            batch = prepare_rollout_policy_batch(self.state.model, batch, rollouts, policy_id=payload["policy_id"])
 
         def place(value: hax.NamedArray) -> hax.NamedArray:
             mesh = self.trainer.device_mesh

@@ -4,6 +4,7 @@
 """Run the frozen 64K AgentX replay against native Snowball on one v5p-8."""
 
 import argparse
+import base64
 import dataclasses
 import json
 import logging
@@ -12,22 +13,14 @@ import tempfile
 import time
 from pathlib import Path
 
+import grpc
 import haliax as hax
 import httpx
 import jax
 import jax.numpy as jnp
 import jmp
-import numpy as np
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.inference.binary import (
-    GENERATE_PATH,
-    MEDIA_TYPE,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    choice_tensor_key,
-    decode_frame,
-    encode_frame,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -52,7 +45,7 @@ from experiments.evaluation.knotmeter.workload import check_native_cache, restor
 
 logger = logging.getLogger(__name__)
 
-_PROBE_HTTP_TIMEOUT = 180.0
+_PROBE_TIMEOUT = 180.0
 
 
 def _request(tokens: list[int], request_id: int, generated: int) -> Request:
@@ -89,10 +82,8 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
         "return_route_captures": capture_routes,
     }
     completed = False
-    route_frame = False
-    with httpx.stream(
-        "POST", f"{server_url}/v1/chat/completions", json=request, timeout=_PROBE_HTTP_TIMEOUT
-    ) as response:
+    captured_routes = False
+    with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=_PROBE_TIMEOUT) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line.startswith("data: "):
@@ -101,25 +92,27 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
             if payload == "[DONE]":
                 completed = True
                 break
-            route_frame |= "levanter_route_frame" in json.loads(payload)
-    if not completed or (capture_routes and not route_frame):
+            encoded = json.loads(payload).get("levanter_generation")
+            if encoded is not None:
+                generation = inference_pb2.GenerateResponse.FromString(base64.b64decode(encoded, validate=True))
+                captured_routes = any(choice.HasField("router_replay") for choice in generation.choices)
+    if not completed or (capture_routes and not captured_routes):
         raise RuntimeError("Native chat preflight did not complete its requested stream")
     logger.info("Native chat stream completed with route capture %s", capture_routes)
 
 
-def _check_binary_context_limit(server_url: str, token: int, max_context: int) -> None:
-    prompt = np.full(max_context - 1, token, dtype=np.int32)
-    response = httpx.post(
-        f"{server_url}{GENERATE_PATH}",
-        headers={"content-type": MEDIA_TYPE},
-        content=encode_frame({"max_tokens": 1, "temperature": 0}, {PROMPT_TOKEN_IDS: prompt}),
-        timeout=_PROBE_HTTP_TIMEOUT,
-    )
-    response.raise_for_status()
-    _, tensors = decode_frame(response.content)
-    if not np.array_equal(tensors[PROMPT_TOKEN_IDS], prompt) or tensors[choice_tensor_key(0, TOKEN_IDS)].shape != (1,):
-        raise RuntimeError("Native binary generation did not round-trip the context-boundary request")
-    logger.info("Native binary generation completed with %d prompt tokens and one output token", prompt.size)
+def _check_grpc_context_limit(server: InferenceServer, token: int, max_context: int) -> None:
+    prompt = [token] * (max_context - 1)
+    request = inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=1, temperature=0)
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        response = inference_pb2_grpc.InferenceStub(channel).Generate(request, timeout=_PROBE_TIMEOUT)
+    if (
+        list(response.prompt_token_ids) != prompt
+        or len(response.choices) != 1
+        or len(response.choices[0].token_ids) != 1
+    ):
+        raise RuntimeError("Native gRPC generation did not round-trip the context-boundary request")
+    logger.info("Native gRPC generation completed with %d prompt tokens and one output token", len(prompt))
 
 
 def main() -> None:
@@ -156,6 +149,8 @@ def main() -> None:
         service=config,
         batch_timeout=AGENTX_BATCH_TIMEOUT,
         initial_policy_id=args.weights,
+        host="127.0.0.1",
+        grpc_port=0,
     )
     with tempfile.TemporaryDirectory(prefix="snowball-agentx-") as directory:
         bundle = Path(directory) / "bundle"
@@ -209,7 +204,7 @@ def main() -> None:
                         timeout=series["warmup_grace_period"] + series["duration"] + 300,
                         sample=output / "client-load.jsonl",
                     )
-                    _check_binary_context_limit(server_url, filler, config.max_seq_len)
+                    _check_grpc_context_limit(server, filler, config.max_seq_len)
                 profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
                 if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
                     raise RuntimeError("AgentX reported no completed timed requests")

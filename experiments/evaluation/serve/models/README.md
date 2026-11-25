@@ -219,6 +219,8 @@ profile, and slot count. Set `LIBTPU_INIT_ARGS` to
 `--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true`
 before launch. Iris sets those flags in the worker environment. The profile uses BF16 weights, four expert shards,
 and raw policy log probabilities. Streaming chat callers can request
-`return_route_captures` to receive a binary generation frame in the final
-choice event. Token-ID clients can request the same frame through
-`POST /v1/levanter/generate`.
+`return_route_captures` to receive a base64-encoded protobuf `GenerateResponse`
+in the final SSE choice event's `levanter_generation` field. For exact-token
+clients, start `marin-serve local --backend levanter --grpc-port 50051` with the
+model and profile above and call `levanter.inference.v1.Inference/Generate`
+with `capture_router_replay`.

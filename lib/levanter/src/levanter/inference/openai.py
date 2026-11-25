@@ -13,22 +13,29 @@ import asyncio
 import base64
 import collections
 import collections.abc
+import json
 import logging
+import math
 import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
+import grpc
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
+from pydantic import BaseModel, Field
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
+from fastapi import FastAPI, HTTPException, Request as HttpRequest
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
@@ -39,23 +46,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from levanter.inference.binary import (
-    BEHAVIOR_LOGPROBS,
-    EXPERT_IDS,
-    EXPERT_VALID,
-    GENERATE_PATH,
-    LOGPROB_MODE,
-    MEDIA_TYPE,
-    MAX_POLICY_ID_LENGTH,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    GenerateOptions,
-    choice_tensor_key,
-    decode_frame,
-    encode_frame,
-)
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
     GenerationResult,
     GeneratedExpertRoutes,
@@ -64,7 +55,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -81,9 +72,12 @@ from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
 
+POLICY_MISMATCH = "The requested policy is no longer active"
+CONTROL_SUCCESS = {"status": "ok"}
+
 
 DEFAULT_MODEL_NAME = "levanter"
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+MAX_POLICY_ID_LENGTH = 256
 _EVENT_STREAM = "text/event-stream"
 _CHAT_CHUNK = "chat.completion.chunk"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
@@ -112,6 +106,7 @@ class InferenceServerConfig:
 
     host: str = "localhost"
     port: int = 0  # auto-assign port
+    grpc_port: int | None = None
 
 
 @dataclass
@@ -126,6 +121,7 @@ class InferenceRequest:
     stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
+    abort_event: threading.Event = field(default_factory=threading.Event)
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
@@ -142,6 +138,7 @@ class InferenceResponse:
     tokens: List[int]
     prompt_tokens: int
     completion_tokens: int
+    finish_reason: FinishReason
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -150,8 +147,17 @@ class InferenceResponse:
     policy_id: str | None = None
 
 
+class PauseGenerationRequest(BaseModel):
+    mode: Literal["abort"]
+    clear_cache: Literal[True]
+
+
+class AbortRequest(BaseModel):
+    request_ids: list[str] = Field(min_length=1)
+
+
 class PolicyMismatchError(ValueError):
-    """A generate request was queued for a different immutable policy."""
+    """The requested policy ID differs from the active policy ID."""
 
 
 class InferenceBatch(list):
@@ -211,12 +217,16 @@ class InferenceContext:
         self.model_lock = threading.Lock()
         self._publication_lock = threading.Lock()
         self._publication_pending = threading.Event()
+        self._paused = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
         self._published_policy_ids = {self._policy_id} if self._policy_id is not None else set()
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
+        self._requests_lock = threading.Lock()
+        self._active_requests: dict[str, threading.Event] = {}
+        self._queued_requests: dict[str, InferenceRequest] = {}
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -234,51 +244,110 @@ class InferenceContext:
     def unload(self):
         """Unload the inference model to free up resources."""
         logger.info("Unloading inference model...")
-        with self.model_lock:
+        with self._publication_lock, self.model_lock:
             # pyrefly: ignore[bad-assignment]  # unload() deliberately clears the model; reload() restores it
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
 
+    def pause_generation(self) -> None:
+        """Abort outstanding generation and wait for the serving cache to clear."""
+        with self._publication_lock:
+            with self._requests_lock:
+                self._paused.set()
+                for request in self._queued_requests.values():
+                    request.abort_event.set()
+                    self._abort_queued_request(request)
+                self._queued_requests.clear()
+            with (
+                self.model_lock,
+                hax.partitioning.set_mesh(self.mesh),
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+                self.engine.reset()
+                jax.block_until_ready(self.engine.gen_state)
+
+    def resume_generation(self) -> None:
+        """Reopen admission after any in-flight pause or publication completes."""
+        with self._publication_lock, self._requests_lock:
+            self._paused.clear()
+
+    def _check_policy_update(self, expected_version: int | None, policy_id: str | None) -> None:
+        if expected_version is not None and expected_version != self._model_version:
+            raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+        if policy_id is not None and (
+            not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
+        ):
+            raise ValueError("A weight update requires a new, nonempty policy ID")
+
+    @contextmanager
+    def _publication_barrier(self) -> collections.abc.Iterator[None]:
+        with self._publication_lock:
+            self._publication_pending.set()
+            try:
+                with (
+                    self.model_lock,
+                    hax.partitioning.set_mesh(self.mesh),
+                    hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+                ):
+                    yield
+            finally:
+                self._publication_pending.clear()
+
+    def publish(self, restore: WeightSource, *, expected_version: int, policy_id: str) -> int:
+        """Stage compatible weights while serving, then install at the expected version."""
+        with self._publication_lock:
+            self._check_policy_update(expected_version, policy_id)
+            active, engine = self.model, self.engine
+        with (
+            hax.partitioning.set_mesh(self.mesh),
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            candidate = restore(active)
+            if not engine.can_reuse_cache(candidate):
+                raise ValueError("Staged weights must preserve the model structure and array layouts")
+            jax.block_until_ready(candidate)
+
+        with self._publication_barrier():
+            self._check_policy_update(expected_version, policy_id)
+            if engine is not self.engine:
+                raise ValueError("Serving engine changed while staging weights")
+            self._reset_engine_for_model(engine, candidate)
+            return self._commit_policy(candidate, engine, policy_id)
+
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
         """Install new weights with empty KV state and return the new serving version."""
-        with self._publication_lock:
-            self._publication_pending.set()
-            try:
-                with self.model_lock:
-                    if expected_version is not None and expected_version != self._model_version:
-                        raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
-                    if policy_id is not None and (
-                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
-                    ):
-                        raise ValueError("A weight update requires a new, nonempty policy ID")
+        with self._publication_barrier():
+            self._check_policy_update(expected_version, policy_id)
+            model = weight_callback(self.model)
+            engine = self.engine
+            if engine.can_reuse_cache(model):
+                self._reset_engine_for_model(engine, model)
+            else:
+                engine = InferenceEngine.from_model_with_config(
+                    model=model,
+                    tokenizer=self.tokenizer,
+                    config=self.config.service,
+                    axis_resources=self.config.trainer.compute_axis_mapping,
+                )
+            return self._commit_policy(model, engine, policy_id)
 
-                    with (
-                        hax.partitioning.set_mesh(self.mesh),
-                        hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-                    ):
-                        model = weight_callback(self.model)
-                        engine = self.engine
-                        if engine.can_reuse_cache(model):
-                            engine.reset()
-                            engine.model = model
-                        else:
-                            engine = InferenceEngine.from_model_with_config(
-                                model=model,
-                                tokenizer=self.tokenizer,
-                                config=self.config.service,
-                                axis_resources=self.config.trainer.compute_axis_mapping,
-                            )
-                    self.model, self.engine = model, engine
-                    self._model_version += 1
-                    self._policy_id = policy_id
-                    if policy_id is not None:
-                        self._published_policy_ids.add(policy_id)
-                    return self._model_version
-            finally:
-                self._publication_pending.clear()
+    @staticmethod
+    def _reset_engine_for_model(engine: InferenceEngine, model: LmHeadModel) -> None:
+        engine.reset()
+        jax.block_until_ready(engine.gen_state)
+        engine.model = model
+
+    def _commit_policy(self, model: LmHeadModel, engine: InferenceEngine, policy_id: str | None) -> int:
+        self.model, self.engine = model, engine
+        with self._requests_lock:
+            self._model_version += 1
+            self._policy_id = policy_id
+            if policy_id is not None:
+                self._published_policy_ids.add(policy_id)
+            return self._model_version
 
     def submit_request(
         self,
@@ -292,34 +361,113 @@ class InferenceContext:
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
         *,
+        abort_event: threading.Event | None = None,
         return_route_captures: bool = False,
         expected_policy_id: str | None = None,
         on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
-        request_id = f"req_{self._next_request_id}"
-        self._next_request_id += 1
+        with self._requests_lock:
+            request_id = f"req_{self._next_request_id}"
+            self._next_request_id += 1
 
-        request = InferenceRequest(
-            request_id=request_id,
-            prompt_tokens=prompt_tokens,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop_tokens=stop_tokens,
-            seed=seed,
-            future=future,
-            n_generations=n_generations,
-            echo_logprobs_top_k=echo_logprobs_top_k,
-            return_route_captures=return_route_captures,
-            expected_policy_id=expected_policy_id,
-            on_tokens=on_tokens,
+            request = InferenceRequest(
+                request_id=request_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop_tokens=stop_tokens,
+                seed=seed,
+                future=future,
+                abort_event=abort_event if abort_event is not None else threading.Event(),
+                n_generations=n_generations,
+                echo_logprobs_top_k=echo_logprobs_top_k,
+                return_route_captures=return_route_captures,
+                expected_policy_id=expected_policy_id,
+                on_tokens=on_tokens,
+            )
+            if self._paused.is_set() or request.abort_event.is_set():
+                self._abort_queued_request(request)
+            else:
+                self._queued_requests[request_id] = request
+                self.request_queue.put(request)
+            return request_id
+
+    def _register_request(self, request_id: str) -> threading.Event:
+        event = threading.Event()
+        with self._requests_lock:
+            if request_id in self._active_requests:
+                raise ValueError("Request ID is already active")
+            self._active_requests[request_id] = event
+        return event
+
+    def _register_http_request(self, request: HttpRequest) -> tuple[str, threading.Event]:
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        try:
+            return request_id, self._register_request(request_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def _unregister_request(self, request_id: str, event: threading.Event) -> None:
+        with self._requests_lock:
+            if self._active_requests.get(request_id) is event:
+                del self._active_requests[request_id]
+
+    async def _watch_disconnect(self, request: HttpRequest, request_id: str) -> None:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+        self.abort([request_id])
+
+    @asynccontextmanager
+    async def http_generation(self, request: HttpRequest) -> collections.abc.AsyncIterator[threading.Event]:
+        request_id, event = self._register_http_request(request)
+        disconnect = asyncio.create_task(self._watch_disconnect(request, request_id))
+        try:
+            yield event
+        except BaseException:
+            self.abort([request_id])
+            raise
+        finally:
+            disconnect.cancel()
+            self._unregister_request(request_id, event)
+            with suppress(asyncio.CancelledError):
+                await disconnect
+
+    def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
+        """Abort queued or running generation for the supplied request IDs."""
+        with self._requests_lock:
+            for request_id in request_ids:
+                event = self._active_requests.get(request_id)
+                if event is not None:
+                    event.set()
+            cancelled = [request for request in self._queued_requests.values() if request.abort_event.is_set()]
+            for request in cancelled:
+                del self._queued_requests[request.request_id]
+                self._abort_queued_request(request)
+
+    def _abort_queued_request(self, request: InferenceRequest) -> None:
+        if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
+            self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
+            return
+        self._resolve_request(
+            request,
+            [
+                InferenceResponse(
+                    request_id=request.request_id,
+                    text="",
+                    tokens=[],
+                    logprobs=[],
+                    prompt_tokens=len(request.prompt_tokens),
+                    completion_tokens=0,
+                    finish_reason=FinishReason.ABORT,
+                    model_version=self._model_version,
+                    policy_id=self._policy_id,
+                )
+                for _ in range(request.n_generations)
+            ],
         )
-
-        logger.debug("Enqueuing request %s with %d prompt tokens", request_id, len(prompt_tokens))
-        self.request_queue.put(request)
-        return request_id
 
     def _inference_loop(self) -> None:
         """Collect requests from the serving and batch them into batches of appropriate size for inference."""
@@ -336,6 +484,8 @@ class InferenceContext:
             logger.debug("Max tokens per sequence %d and batch %d", max_tokens_per_seq, max_tokens_per_batch)
 
             for r in requests:
+                if r.abort_event.is_set():
+                    continue
                 if len(r.prompt_tokens) > max_tokens_per_seq:
                     # slice down requests that are too long
                     logger.warning(
@@ -353,7 +503,9 @@ class InferenceContext:
                         f"the maximum allowed {self.engine.config.max_seqs}"
                     )
                     logger.error(error_msg)
-                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    with self._requests_lock:
+                        if self._queued_requests.pop(r.request_id, None) is not None:
+                            self._resolve_request(r, ValueError(error_msg))
                     continue
 
                 if (
@@ -415,33 +567,42 @@ class InferenceContext:
             except Exception as exc:
                 logger.exception("Inference window failed")
                 for request in batch:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
 
     def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
         admitted = InferenceBatch()
         for request in requests:
-            if request.future.cancelled():
+            with self._requests_lock:
+                queued = self._queued_requests.pop(request.request_id, None)
+                if queued is not None and request.abort_event.is_set():
+                    self._abort_queued_request(request)
+                    continue
+            if queued is None or request.future.cancelled():
                 continue
             if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
-                self._fail_request(request, PolicyMismatchError("The requested policy is no longer active"))
+                self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
             else:
                 admitted.append(request)
         return admitted
 
     @staticmethod
-    def _fail_request(request: InferenceRequest, error: Exception) -> None:
-        def fail() -> None:
-            if not request.future.done():
-                request.future.set_exception(error)
+    def _resolve_request(request: InferenceRequest, outcome: list[InferenceResponse] | Exception) -> None:
+        def resolve() -> None:
+            if request.future.done():
+                return
+            if isinstance(outcome, Exception):
+                request.future.set_exception(outcome)
+            else:
+                request.future.set_result(outcome)
 
-        request.future.get_loop().call_soon_threadsafe(fail)
+        request.future.get_loop().call_soon_threadsafe(resolve)
 
     @staticmethod
     def _engine_request(request: InferenceRequest, request_id: int) -> Request:
         stop_ids = None
         if request.stop_tokens:
             width = max(map(len, request.stop_tokens))
-            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            padded = [[INVALID] * (width - len(seq)) + seq for seq in request.stop_tokens]
             stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
         seed = request.seed
         if seed is None:
@@ -471,7 +632,7 @@ class InferenceContext:
                 try:
                     engine_request = self._engine_request(request, next_id)
                 except Exception as exc:
-                    self._fail_request(request, exc)
+                    self._resolve_request(request, exc)
                     continue
                 outstanding[next_id] = request
                 admitted.append(engine_request)
@@ -479,7 +640,7 @@ class InferenceContext:
             return admitted
 
         def receive(capacity: int) -> list[Request]:
-            if self._publication_pending.is_set() or self.shutdown_event.is_set():
+            if self._paused.is_set() or self._publication_pending.is_set() or self.shutdown_event.is_set():
                 return []
             return admit(poll(capacity, capture_routes))
 
@@ -490,7 +651,11 @@ class InferenceContext:
             try:
                 self._complete_request(request, result)
             except Exception as exc:
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
+
+        def should_abort(request_id: int) -> bool:
+            request = outstanding[request_id]
+            return self._paused.is_set() or request.abort_event.is_set() or request.future.cancelled()
 
         def stream_tokens(request_id: int, choice: int, tokens: list[int]) -> None:
             request = outstanding[request_id]
@@ -504,18 +669,21 @@ class InferenceContext:
                 on_complete=complete,
                 poll_requests=receive,
                 on_tokens=stream_tokens,
+                should_abort=should_abort,
                 capture_routes=capture_routes,
             )
         except Exception as exc:
             for request in outstanding.values():
-                self._fail_request(request, exc)
+                self._resolve_request(request, exc)
             raise
 
     def _complete_request(self, request: InferenceRequest, result: GenerationResult) -> None:
         outputs = []
         for index, tokens in enumerate(result.tokens):
             echo_token_ids = echo_logprobs = None
-            if request.echo_logprobs_top_k is not None:
+            if request.echo_logprobs_top_k is not None and (
+                tokens or result.finish_reasons[index] != FinishReason.ABORT
+            ):
                 echo_token_ids = request.prompt_tokens + tokens
                 echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, request.echo_logprobs_top_k)
             outputs.append(
@@ -525,6 +693,7 @@ class InferenceContext:
                     tokens=tokens,
                     prompt_tokens=len(request.prompt_tokens),
                     completion_tokens=len(tokens),
+                    finish_reason=result.finish_reasons[index],
                     logprobs=result.logprobs[index] if result.logprobs is not None else None,
                     model_version=self._model_version,
                     policy_id=self._policy_id,
@@ -538,11 +707,7 @@ class InferenceContext:
                 )
             )
 
-        def finish() -> None:
-            if not request.future.done():
-                request.future.set_result(outputs)
-
-        request.future.get_loop().call_soon_threadsafe(finish)
+        self._resolve_request(request, outputs)
 
 
 def _health_check() -> dict:
@@ -563,7 +728,7 @@ def _chat_completion_events(
     *,
     emitted_text: dict[int, str] | None = None,
     include_usage: bool = False,
-    route_frame: str | None = None,
+    route_capture: str | None = None,
 ) -> collections.abc.Iterator[str]:
     """Finish each choice and optionally deliver final token usage."""
     final_choice = completion.choices[-1].index
@@ -588,7 +753,9 @@ def _chat_completion_events(
                 )
             )
         chunks.append(
-            ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
+            ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
+                update={"finish_reason": choice.finish_reason}
+            )
         )
         for chunk_choice in chunks:
             chunk = ChatCompletionChunk(
@@ -599,8 +766,8 @@ def _chat_completion_events(
                 choices=[chunk_choice],
             )
             payload = chunk.model_dump_json()
-            if route_frame is not None and choice.index == final_choice and chunk_choice.finish_reason is not None:
-                payload = payload[:-1] + ',"levanter_route_frame":"' + route_frame + '"}'
+            if route_capture is not None and choice.index == final_choice and chunk_choice.finish_reason is not None:
+                payload = json.dumps(chunk.model_dump(mode="json") | {"levanter_generation": route_capture})
             yield _sse_event(payload)
     if include_usage:
         usage = ChatCompletionChunk(
@@ -682,7 +849,23 @@ def _completion_logprobs(
     )
 
 
-async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
+def _generation_options_error(
+    config: InferenceEngineConfig, num_choices: int, stops: list[list[int]] | None, vocab_size: int
+) -> str | None:
+    if not 1 <= num_choices <= config.max_seqs:
+        return "Requested choices exceed the configured capacity"
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+        or any(not 0 <= token < vocab_size for sequence in stops for token in sequence)
+    ):
+        return "Stop tokens exceed the configured capacity or vocabulary"
+    return None
+
+
+async def _create_completion(
+    ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
+) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
         if isinstance(request.prompt, str):
@@ -691,6 +874,9 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             prompts = request.prompt
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create futures for all prompts
         futures = []
@@ -729,8 +915,9 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=num_choices,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                abort_event=abort_event,
             )
 
         # Wait for all results
@@ -744,7 +931,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
                 # Format logprobs if available
                 logprobs = None
-                if request.logprobs:
+                if request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
                     if request.echo:
                         if generation.echo_token_ids is None or generation.echo_logprobs is None:
                             raise RuntimeError("Echo logprobs requested but missing from generation result.")
@@ -781,10 +968,10 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         )
 
                 choices.append(
-                    CompletionChoice(
+                    CompletionChoice.model_construct(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason=format_finish_reason(generation.finish_reason),
                         logprobs=logprobs,
                     )
                 )
@@ -870,19 +1057,26 @@ def _submit_chat_completion(
     ctx: InferenceContext,
     request: ChatCompletionRequest,
     on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
+    *,
+    abort_event: threading.Event | None = None,
 ) -> tuple[list[int], asyncio.Future[list[InferenceResponse]]]:
     prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools, request.chat_template_kwargs)
+    stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+    num_choices = request.n or 1
+    if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+        raise HTTPException(status_code=400, detail=error)
     future = asyncio.get_running_loop().create_future()
     ctx.submit_request(
         prompt_tokens=prompt_tokens,
         max_tokens=request.max_tokens,
         temperature=request.temperature,
         top_p=request.top_p,
-        stop_tokens=_encode_stop_tokens(request.stop, ctx.tokenizer),
+        stop_tokens=stop_tokens,
         seed=request.seed,
         future=future,
-        n_generations=request.n or 1,
+        n_generations=num_choices,
         on_tokens=on_tokens,
+        abort_event=abort_event,
         return_route_captures=request.return_route_captures,
         expected_policy_id=request.expected_policy_id,
     )
@@ -927,10 +1121,10 @@ def _format_chat_completion(
             logprobs = ChoiceLogprobs(content=content_logprobs)
 
         choices.append(
-            ChatCompletionChoice(
+            ChatCompletionChoice.model_construct(
                 index=i,
                 message=ChatCompletionMessage(role="assistant", content=generation.text),
-                finish_reason="stop",
+                finish_reason=format_finish_reason(generation.finish_reason),
                 logprobs=logprobs,
             )
         )
@@ -951,9 +1145,11 @@ def _format_chat_completion(
     return response
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+async def _create_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, abort_event: threading.Event | None = None
+) -> ChatCompletion:
     try:
-        prompt, future = _submit_chat_completion(ctx, request)
+        prompt, future = _submit_chat_completion(ctx, request, abort_event=abort_event)
         return _format_chat_completion(
             ctx,
             request,
@@ -972,7 +1168,12 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
 
 
 async def _stream_chat_completion(
-    ctx: InferenceContext, request: ChatCompletionRequest, tokenizer: HfMarinTokenizer, *, include_usage: bool
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    tokenizer: HfMarinTokenizer,
+    raw_request: HttpRequest,
+    *,
+    include_usage: bool,
 ) -> StreamingResponse:
     loop = asyncio.get_running_loop()
     updates: asyncio.Queue[tuple[int, list[int]] | None] = asyncio.Queue()
@@ -988,7 +1189,12 @@ async def _stream_chat_completion(
         if not closed.is_set():
             updates.put_nowait(None)
 
-    prompt, future = _submit_chat_completion(ctx, request, on_tokens)
+    request_id, abort_event = ctx._register_http_request(raw_request)
+    try:
+        prompt, future = _submit_chat_completion(ctx, request, on_tokens, abort_event=abort_event)
+    except Exception:
+        ctx._unregister_request(request_id, abort_event)
+        raise
     future.add_done_callback(on_done)
     header = ChatCompletionChunk(
         id=_chat_completion_id(),
@@ -997,21 +1203,30 @@ async def _stream_chat_completion(
         model=request.model,
         choices=[],
     )
+    disconnect = asyncio.create_task(ctx._watch_disconnect(raw_request, request_id))
     try:
         first = await updates.get()
         if first is None:
             future.result()
     except asyncio.CancelledError:
         closed.set()
+        ctx.abort([request_id])
         future.cancel()
+        ctx._unregister_request(request_id, abort_event)
         raise
     except PolicyMismatchError as exc:
         closed.set()
+        ctx._unregister_request(request_id, abort_event)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         closed.set()
+        ctx._unregister_request(request_id, abort_event)
         logger.exception("Error before chat streaming started")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        disconnect.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnect
 
     async def events() -> collections.abc.AsyncIterator[str]:
         decoders: dict[int, collections.abc.Callable[[list[int]], str | None]] = {}
@@ -1036,16 +1251,16 @@ async def _stream_chat_completion(
             completion = _format_chat_completion(
                 ctx, request, prompt, results, completion_id=header.id, created=header.created
             )
-            frame = None
+            route_capture = None
             if request.return_route_captures:
-                frame = await asyncio.to_thread(
-                    _encode_chat_route_frame, prompt, results, LogprobMode(ctx.config.service.logprob_mode)
+                route_capture = await asyncio.to_thread(
+                    _encode_chat_route_capture, prompt, results, LogprobMode(ctx.config.service.logprob_mode)
                 )
             yield_events = _chat_completion_events(
                 completion,
                 emitted_text={choice: "".join(pieces) for choice, pieces in emitted.items()},
                 include_usage=include_usage,
-                route_frame=frame,
+                route_capture=route_capture,
             )
             for event in yield_events:
                 yield event
@@ -1054,112 +1269,148 @@ async def _stream_chat_completion(
             yield _sse_event('{"error":{"message":"Chat generation failed","type":"server_error"}}')
         finally:
             closed.set()
-            future.cancel()
+            if future.cancel():
+                ctx.abort([request_id])
+            ctx._unregister_request(request_id, abort_event)
 
-    return StreamingResponse(events(), media_type=_EVENT_STREAM)
-
-
-def _encode_chat_route_frame(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
-    frame = _encode_binary_outputs(np.asarray(prompt, dtype=np.int32), results, score_mode)
-    return base64.b64encode(frame).decode("ascii")
-
-
-async def _read_generate_request(request: HttpRequest) -> tuple[np.ndarray, GenerateOptions]:
-    """Read a bounded generation frame with exactly one int32 token vector."""
-    if request.headers.get("content-type", "").split(";")[0].strip().lower() != MEDIA_TYPE:
-        raise HTTPException(status_code=415, detail=f"Expected {MEDIA_TYPE}")
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > _MAX_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Generation frame exceeds the request size limit")
-        body.extend(chunk)
-
-    try:
-        metadata, tensors = decode_frame(bytes(body))
-        options = GenerateOptions.model_validate(metadata)
-        if tensors.keys() != {PROMPT_TOKEN_IDS}:
-            raise ValueError("Generation requires exactly one prompt_token_ids tensor")
-        prompt = tensors[PROMPT_TOKEN_IDS]
-        if prompt.ndim != 1 or prompt.dtype != np.int32 or prompt.size == 0:
-            raise ValueError("prompt_token_ids must be a nonempty one-dimensional int32 tensor")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return prompt, options
-
-
-def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not ctx.engine.supports_route_capture:
-        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
-    config = ctx.engine.config
-    if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
-        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
-    max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
-        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
-    if options.n > config.max_seqs:
-        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
-    vocab_size = ctx.model.Vocab.size
-    if np.any((prompt < 0) | (prompt >= vocab_size)):
-        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
-    stops = options.stop_tokens
-    if stops and (
-        len(stops) > config.max_stop_seqs
-        or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
-        or any(not 0 <= token < vocab_size for seq in stops for token in seq)
-    ):
-        raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
-
-
-async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
-    prompt, options = await _read_generate_request(request)
-    _validate_binary_options(ctx, prompt, options)
-    future = asyncio.get_running_loop().create_future()
-    ctx.submit_request(
-        prompt.tolist(),
-        options.max_tokens,
-        options.temperature,
-        options.top_p,
-        options.stop_tokens,
-        options.seed,
-        future,
-        n_generations=options.n,
-        return_route_captures=options.return_route_captures,
-        expected_policy_id=options.expected_policy_id,
+    return StreamingResponse(
+        events(),
+        media_type=_EVENT_STREAM,
+        background=BackgroundTask(ctx._unregister_request, request_id, abort_event),
     )
-    try:
-        outputs = await future
-    except PolicyMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    score_mode = LogprobMode(ctx.config.service.logprob_mode)
-    if options.return_route_captures:
-        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs, score_mode)
-    else:
-        content = _encode_binary_outputs(prompt, outputs, score_mode)
-    return Response(content=content, media_type=MEDIA_TYPE)
 
 
-def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse], score_mode: LogprobMode) -> bytes:
-    score_field = POLICY_LOGPROBS if score_mode == LogprobMode.POLICY else BEHAVIOR_LOGPROBS
-    tensors = {PROMPT_TOKEN_IDS: prompt}
-    choices = []
-    for choice, output in enumerate(outputs):
-        metadata: dict[str, int | str] = {
-            "completion_tokens": output.completion_tokens,
-            "model_version": output.model_version,
-        }
-        if output.policy_id is not None:
-            metadata[POLICY_ID] = output.policy_id
-        choices.append(metadata)
-        tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
+def _encode_chat_route_capture(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
+    response = _grpc_generate_response(prompt, results, _grpc_score_mode(score_mode))
+    return base64.b64encode(response.SerializeToString()).decode("ascii")
+
+
+def _grpc_score_mode(mode: LogprobMode) -> inference_pb2.LogprobMode:
+    return inference_pb2.LOGPROB_MODE_POLICY if mode == LogprobMode.POLICY else inference_pb2.LOGPROB_MODE_BEHAVIOR
+
+
+def _grpc_finish_reason(reason: FinishReason) -> inference_pb2.FinishReason:
+    match reason:
+        case FinishReason.STOP:
+            return inference_pb2.FINISH_REASON_STOP
+        case FinishReason.LENGTH:
+            return inference_pb2.FINISH_REASON_LENGTH
+        case FinishReason.ABORT:
+            return inference_pb2.FINISH_REASON_ABORT
+        case _:
+            raise ValueError(f"Invalid terminal finish reason {reason}")
+
+
+class _GrpcInference:
+    def __init__(self, inference_context: InferenceContext):
+        self._inference_context = inference_context
+
+    async def Generate(
+        self, request: inference_pb2.GenerateRequest, context: grpc.aio.ServicerContext
+    ) -> inference_pb2.GenerateResponse:
+        ctx = self._inference_context
+        prompt = list(request.prompt_token_ids)
+        max_tokens = request.max_new_tokens
+        temperature = request.temperature if request.HasField("temperature") else 1.0
+        top_p = request.top_p if request.HasField("top_p") else 1.0
+        seed = request.seed if request.HasField("seed") else None
+        num_choices = request.num_choices if request.HasField("num_choices") else 1
+        stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
+
+        policy_id = request.expected_policy_id if request.HasField("expected_policy_id") else None
+        if policy_id is not None and not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid expected policy ID")
+
+        capture_routes = request.capture_router_replay
+        if capture_routes and not ctx.engine.supports_route_capture:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
+
+        config = ctx.engine.config
+        score_mode = _grpc_score_mode(config.logprob_mode)
+        if request.expected_logprob_mode not in (inference_pb2.LOGPROB_MODE_UNSPECIFIED, score_mode):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "The server uses a different logprob mode")
+        max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
+        if (
+            not prompt
+            or not max_tokens
+            or len(prompt) + max_tokens > config.max_seq_len
+            or len(prompt) > max_prefill_size
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Prompt and generation must fit the configured context"
+            )
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid temperature or top_p")
+        vocab_size = ctx.model.Vocab.size
+        if any(token >= vocab_size for token in prompt):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
+        if error := _generation_options_error(config, num_choices, stops, vocab_size):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, error)
+
+        request_id = dict(context.invocation_metadata()).get("x-request-id") or uuid.uuid4().hex
+        try:
+            abort_event = ctx._register_request(request_id)
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))
+        try:
+            future = asyncio.get_running_loop().create_future()
+            ctx.submit_request(
+                prompt,
+                max_tokens,
+                temperature,
+                top_p,
+                stops or None,
+                seed,
+                future,
+                n_generations=num_choices,
+                abort_event=abort_event,
+                return_route_captures=capture_routes,
+                expected_policy_id=policy_id,
+            )
+            outputs = await future
+        except asyncio.CancelledError:
+            ctx.abort([request_id])
+            raise
+        except PolicyMismatchError as exc:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        finally:
+            ctx._unregister_request(request_id, abort_event)
+
+        if capture_routes:
+            if any(output.expert_routes is None and output.finish_reason != FinishReason.ABORT for output in outputs):
+                await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs, score_mode)
+        return _grpc_generate_response(prompt, outputs, score_mode)
+
+
+def _grpc_generate_response(
+    prompt: list[int], outputs: list[InferenceResponse], score_mode: inference_pb2.LogprobMode
+) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt, logprob_mode=score_mode)
+    for output in outputs:
+        choice = response.choices.add(
+            token_ids=output.tokens,
+            finish_reason=_grpc_finish_reason(output.finish_reason),
+            model_version=output.model_version,
+            policy_id=output.policy_id,
+        )
         if output.logprobs is not None:
-            tensors[choice_tensor_key(choice, score_field)] = np.asarray(output.logprobs, dtype=np.float32)
+            scores = (
+                choice.policy_logprobs if score_mode == inference_pb2.LOGPROB_MODE_POLICY else choice.behavior_logprobs
+            )
+            scores.extend(output.logprobs)
         if output.expert_routes is not None:
-            tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
-            tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices, LOGPROB_MODE: score_mode}, tensors)
+            experts = output.expert_routes.expert_ids
+            layers, positions, experts_per_token = experts.shape
+            replay = choice.router_replay
+            replay.num_layers = layers
+            replay.num_positions = positions
+            replay.experts_per_token = experts_per_token
+            replay.expert_ids.extend(experts.ravel().tolist())
+            replay.valid.extend(output.expert_routes.valid.tolist())
+    return response
 
 
 class InferenceServer:
@@ -1216,13 +1467,45 @@ class InferenceServer:
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
-        app = FastAPI(title="Levanter Inference Service", version="1.0.0")
-        model_name = inference_context.config.model_name
+        config = inference_context.config
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if config.grpc_port is None:
+                yield
+                return
+            server = grpc.aio.server()
+            inference_pb2_grpc.add_InferenceServicer_to_server(_GrpcInference(inference_context), server)
+            host = f"[{config.host}]" if ":" in config.host and not config.host.startswith("[") else config.host
+            app.state.grpc_port = server.add_insecure_port(f"{host}:{config.grpc_port}")
+            await server.start()
+            try:
+                yield
+            finally:
+                await server.stop(grace=0)
+
+        app = FastAPI(title="Levanter Inference Service", version="1.0.0", lifespan=lifespan)
+        model_name = config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
         async def health_check():
             return _health_check()
+
+        @app.post("/pause_generation")
+        async def pause_generation(_request: PauseGenerationRequest):
+            await asyncio.to_thread(inference_context.pause_generation)
+            return CONTROL_SUCCESS
+
+        @app.post("/resume_generation")
+        async def resume_generation():
+            await asyncio.to_thread(inference_context.resume_generation)
+            return CONTROL_SUCCESS
+
+        @app.post("/abort")
+        async def abort(request: AbortRequest):
+            inference_context.abort(request.request_ids)
+            return CONTROL_SUCCESS
 
         @app.get("/v1/models")
         async def list_models() -> dict:
@@ -1237,7 +1520,7 @@ class InferenceServer:
         # A streaming request returns a StreamingResponse, which FastAPI passes through
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
-        async def create_chat_completion(request: ChatCompletionRequest):
+        async def create_chat_completion(request: ChatCompletionRequest, raw_request: HttpRequest):
             include_usage = (request.stream_options or {}).get("include_usage") is True
             tokenizer = inference_context.tokenizer
             if request.return_route_captures and (
@@ -1246,20 +1529,22 @@ class InferenceServer:
                 or not isinstance(tokenizer, HfMarinTokenizer)
                 or not inference_context.engine.supports_route_capture
             ):
-                raise HTTPException(status_code=400, detail="Route frames require native Snowball streaming")
+                raise HTTPException(status_code=400, detail="Route capture requires native Snowball streaming")
             if request.stream and not request.logprobs and isinstance(tokenizer, HfMarinTokenizer):
                 return await _stream_chat_completion(
-                    inference_context, request, tokenizer, include_usage=include_usage
+                    inference_context, request, tokenizer, raw_request, include_usage=include_usage
                 )
-            completion = await _create_chat_completion(inference_context, request)
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_chat_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             events = _chat_completion_events(completion, include_usage=include_usage)
             return StreamingResponse(events, media_type=_EVENT_STREAM)
 
         @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest):
-            completion = await _create_completion(inference_context, request)
+        async def create_completion(request: CompletionRequest, raw_request: HttpRequest):
+            async with inference_context.http_generation(raw_request) as abort_event:
+                completion = await _create_completion(inference_context, request, abort_event)
             if not request.stream:
                 return completion
             return StreamingResponse(_completion_events(completion), media_type=_EVENT_STREAM)
@@ -1268,15 +1553,15 @@ class InferenceServer:
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
             return await _fetch_tokens(inference_context, request)
 
-        @app.post(GENERATE_PATH)
-        async def generate_binary(request: HttpRequest) -> Response:
-            return await _generate_binary(inference_context, request)
-
         return app
 
     def unload(self):
         """Unload the inference model to free up resources."""
         self.inference_context.unload()
+
+    def publish(self, restore: WeightSource, *, expected_version: int, policy_id: str) -> int:
+        """Prepare and install a complete policy snapshot."""
+        return self.inference_context.publish(restore, expected_version=expected_version, policy_id=policy_id)
 
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
