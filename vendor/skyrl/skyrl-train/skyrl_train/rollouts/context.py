@@ -234,6 +234,7 @@ class TrainingContext:
                 dataset,
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
+                minimum_pool_size=buffer_config.max_untrained_groups + 1,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
@@ -437,15 +438,7 @@ class TrainingContext:
                 with self._wait("prompt"):
                     async with self._uids_released:
                         prompt = await self._uids_released.wait_for(
-                            lambda: self.loader.next_prompt(
-                                self._live_uids,
-                                lease.family,
-                                batches_ahead=(
-                                    lease.batch_id - self._policy_step
-                                    if self.config.batch_policy is BatchPolicy.FULL_BATCH
-                                    else 0
-                                ),
-                            )
+                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
                         )
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the

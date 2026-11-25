@@ -446,8 +446,8 @@ class RolloutBuffer(Section):
     prompt waits until the prompt order offers it again."""
     max_unusable_groups: PositiveInt = field(3)
     """How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
-    prompt may produce before it sits out 10 completed batches. When the pool has reached its minimum number of
-    eligible prompts, the failing prompt stays in rotation and one quarantined prompt can get an early retry."""
+    prompt may produce before it sits out 10 training steps. Each pool keeps enough eligible prompts to fill its
+    open batches and one spare."""
     max_in_flight: PositiveInt | None = field(None)
     """Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up. Elsewhere null
     bounds generation only by staleness."""
