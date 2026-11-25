@@ -275,8 +275,8 @@ retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
-Snowball and Mochi use `snowball-100k@2026.11.25.1` and
-`eval-lite@2026.11.25.1`. These manifests use catalog source IDs for training
+Ungated Snowball presets and Mochi use `snowball-100k@2026.11.25.1`
+and `eval-lite@2026.11.25.1`. These manifests use catalog source IDs for training
 and evaluation subsets. The selection summaries record the parent versions.
 
 `recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
