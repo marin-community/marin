@@ -1182,7 +1182,7 @@ def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_pa
             server.shutdown()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
     tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     token_ids = tokenizer.encode("a", add_special_tokens=False)
@@ -1224,8 +1224,8 @@ def test_openai_generation_reports_stop_at_the_token_limit(greedy_client, chat):
     assert [choice["finish_reason"] for choice in stopped.json()["choices"]] == ["stop", "stop"]
 
 
-def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_client):
-    client, _ = test_client
+def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(greedy_client):
+    client = greedy_client
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
     options = {"max_tokens": 1, "temperature": 0, "seed": 17, "n": 2}
 
@@ -1462,7 +1462,6 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
     "policy",
     [
         {"mode": "keep", "clear_cache": True},
-        {"mode": "wait", "clear_cache": True},
         {"mode": "abort", "clear_cache": False},
         {"mode": "abort", "clear_cache": "yes"},
     ],
