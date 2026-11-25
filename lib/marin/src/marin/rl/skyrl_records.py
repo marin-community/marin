@@ -9,6 +9,7 @@ import yaml
 from finestore.rl.run_records import (
     AttemptRecord,
     LaunchReceipt,
+    RunIndexIdentity,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
@@ -156,7 +157,11 @@ def read_stored_skyrl_attempt(run_output: str) -> AttemptRecord | None:
         return None
     if record.run_id != config["run"]["id"]:
         raise ValueError(f"Stored attempt {attempt_id} belongs to a different native run")
-    return record.model_copy(update={"config": record.config if record.config is not None else config})
+    config = record.config if record.config is not None else config
+    index = record.index
+    if index is None and (raw_index := config["run"].get("index")) is not None:
+        index = RunIndexIdentity.model_validate(raw_index)
+    return record.model_copy(update={"config": config, "index": index})
 
 
 def read_skyrl_attempt_config(run_output: str, record: AttemptRecord | None) -> dict | None:

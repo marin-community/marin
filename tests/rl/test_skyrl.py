@@ -1042,6 +1042,13 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     )
     (tmp_path / "terminal.json").write_text(receipt.native.model_dump_json())
     assert read_stored_skyrl_attempt(str(tmp_path)) == attempts["earlier-failed-attempt"]
+    earlier = attempts["earlier-failed-attempt"]
+    (tmp_path / "terminal.json").write_text(earlier.native.model_dump_json())
+    with monkeypatch.context() as missing_attempt:
+        missing_attempt.setattr("marin.rl.skyrl_records.read_attempt", lambda *_args: None)
+        recovered = read_stored_skyrl_attempt(str(tmp_path))
+    assert recovered is not None and recovered.native == earlier.native
+    assert recovered.index_run_id == earlier.index_run_id == "indexed-native-writers"
     (tmp_path / "resolved-launch.yaml").unlink()
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (

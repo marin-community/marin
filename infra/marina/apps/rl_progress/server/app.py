@@ -97,6 +97,8 @@ def create_api(services):
                             "record": summary.model_dump_json(),
                         },
                     )
+                if "preset_version" not in record:
+                    return {key: normalized[key] for key in record}
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
