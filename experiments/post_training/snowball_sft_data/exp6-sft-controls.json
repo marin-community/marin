@@ -93,6 +93,10 @@
     "special_token_lr_multiplier": 5.656854249492381
   },
   "source_artifact": "long-loop-exp6/round6/sft@2026.11.24.157:3babee46",
+  "source_cooldown": {
+    "fraction": 0.15,
+    "min_lr_ratio": 0.1
+  },
   "source_revision": "ad16b4832d32733879d5ca22a368b3b3e5ff643f",
   "tensorstore_cache_bytes": 100000000,
   "token_weighted_accumulation": true,

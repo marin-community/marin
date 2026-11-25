@@ -76,7 +76,8 @@ Use the existing model command's `--sft` path for a complete arm. Add an
 immutable `--sft-data-mix NAME@VERSION`, its regional URI, relative JSON manifest
 file and tokenizer. `PreparedData` supplies an `LmDataConfig` to either SFT
 recipe while retaining optimizer settings, context, batch and allocation.
-The manifest owns component weights, packing and data-validation splits.
+The manifest owns component weights and data-validation splits. Packing also comes
+from the manifest unless a preset declares a prepared-data format view.
 Leave the manifest's `mixture_start_step` unset so the same mix serves both models;
 Mochi binds it to its native initializer step and rejects conflicting clocks.
 
@@ -131,7 +132,8 @@ Omit `--wait`, which reports RL results.
 The Snowball SFT preset `exp7-262k-32node` ports the resolved Exp6 SFT157
 recipe: 32 eight-H100 nodes, context parallelism 8 within each node and data
 parallelism 32 across nodes, batch 256 at 262,144 positions, MuonH with a
-constant learning rate after 30 warmup updates, FP32 parameters with BF16
+constant learning rate after 30 warmup updates, then linear cooldown over the
+final 15% of updates to a 0.1× floor, FP32 parameters with BF16
 compute, token-weighted accumulation, special-token initialization and update
 scaling, and the initial C4 reference check. It keeps the same staged Snowball
 base and tokenizer bindings. Its all-position view reads existing cached

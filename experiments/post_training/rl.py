@@ -936,7 +936,7 @@ def _run_command(
         if (coordinator := get_job_info()) is not None:
             if sft_only:
                 validate_coordinator_graph(handles, execution=context.meta["sft_execution"])
-                build_artifacts(context.meta["sft_handle"], max_concurrent=max_concurrent)
+                build_artifacts(*handles, max_concurrent=max_concurrent)
             else:
                 validate_coordinator_graph(handles)
                 _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
@@ -967,22 +967,21 @@ def _run_command(
                     "runs": [],
                 }
             )
-            cached_attempts: dict[str, str] = {}
         else:
             job, cached_attempts = _submit_from_launcher(
                 entry_module, argv, handles, rl_handles, max_concurrent, context, preset
             )
-        if options["wait"]:
-            _wait_for_run(
-                job,
-                rl_handles,
-                preset,
-                table=table,
-                service_url=options["url"],
-                has_following=len(handles) > count,
-                issue=options["issue"],
-                cached_attempts=cached_attempts,
-            )
+            if options["wait"]:
+                _wait_for_run(
+                    job,
+                    rl_handles,
+                    preset,
+                    table=table,
+                    service_url=options["url"],
+                    has_following=len(handles) > count,
+                    issue=options["issue"],
+                    cached_attempts=cached_attempts,
+                )
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -1224,7 +1223,6 @@ def command(
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
             export = initializer.step
-            click.get_current_context().meta["sft_handle"] = export
             export_config = export.build_config(StepContext.for_fingerprint(export.runtime_args, export.deps))
             if isinstance(export_config, dict) and (revision := export_config.get("source_revision")):
                 click.get_current_context().meta["sft_source_revision"] = revision
