@@ -50,7 +50,13 @@ def regional_cpu_command(name: str, *, memory: str = "8GB", cpu: str = "4") -> l
 
 
 def commands_for_phase(
-    phase: str, root: str, generation: str, manifest: str, sha: str, qualification: str
+    phase: str,
+    root: str,
+    generation: str,
+    manifest: str,
+    sha: str,
+    qualification: str,
+    solver_only: Solver | None = None,
 ) -> list[list[str]]:
     commands = []
     module = "experiments.post_training.task_curation.difficulty.tpu"
@@ -81,6 +87,8 @@ def commands_for_phase(
         )
     elif phase in {"pilot", "full"}:
         for solver, shape in SHAPES.items():
+            if solver_only is not None and solver != solver_only:
+                continue
             count = 1 if phase == "pilot" else shape.replicas
             command = regional_cpu_command(
                 f"atlas-difficulty-engines-{solver.value}-v4-{generation}-{phase}", cpu="2", memory="4GB"
@@ -113,8 +121,8 @@ def validate_gate(path: Path) -> None:
         raise ValueError("Local E2E gate is missing, failed or stale; validate all guards before submission")
 
 
-def validate_staging(root: str) -> None:
-    for solver in SHAPES:
+def validate_staging(root: str, solvers: tuple[Solver, ...] = tuple(SHAPES)) -> None:
+    for solver in solvers:
         receipt = json.loads((StoragePath(root) / "staging" / f"{solver.value}.json").read_text())
         if not receipt["weights"].startswith("gs://marin-us-central2/"):
             raise ValueError("Staged solver weights are outside the target region")
@@ -143,11 +151,14 @@ def main() -> None:
     parser.add_argument("--sealed-sha256", required=True)
     parser.add_argument("--judge-qualification", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--solver", type=Solver, choices=tuple(SHAPES))
     args = parser.parse_args()
+    if args.solver is not None and args.phase != "pilot":
+        parser.error("--solver selects only a staged pilot; full rollout always validates all solvers")
     root = REGIONAL_ROOT + "/" + digest(identity_bundle())
     validate_gate(args.gate)
     if args.phase != "stage":
-        validate_staging(root)
+        validate_staging(root, (args.solver,) if args.solver is not None else tuple(SHAPES))
     if args.phase == "full":
         validate_pilot(root)
     if args.phase == "controller":
@@ -167,7 +178,13 @@ def main() -> None:
         )
         return
     commands = commands_for_phase(
-        args.phase, root, args.generation, args.sealed_manifest, args.sealed_sha256, args.judge_qualification
+        args.phase,
+        root,
+        args.generation,
+        args.sealed_manifest,
+        args.sealed_sha256,
+        args.judge_qualification,
+        args.solver,
     )
     print(json.dumps({"phase": args.phase, "root": root, "commands": commands}, indent=2), flush=True)
     if args.dry_run:

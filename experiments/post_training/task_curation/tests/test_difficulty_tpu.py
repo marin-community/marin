@@ -5,9 +5,11 @@
 
 import asyncio
 import hashlib
+import importlib
 import json
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -33,9 +35,10 @@ from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation import difficulty_preparation
-from experiments.post_training.task_curation.difficulty import campaign, tpu, tpu_launch
+from experiments.post_training.task_curation.difficulty import campaign, remediate, tpu, tpu_launch
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision, receipt_row
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest, read_rows
+from experiments.post_training.task_curation.difficulty.planner import QualifyJudgeRoute
 from experiments.post_training.task_curation.difficulty.state import (
     CatalogSource,
     CellStatus,
@@ -295,3 +298,54 @@ def test_slice_router_balances_live_requests_preserves_stream_and_does_not_repla
         assert all("data: [DONE]" in response.text for response in responses if response.status_code == 200)
 
     asyncio.run(run())
+
+
+def test_staged_solver_can_qualify_while_other_regional_mirrors_finish():
+    commands = tpu_launch.commands_for_phase("pilot", tpu.REGIONAL_ROOT, "fixture", "seal", "sha", "judge", Solver.SMALL)
+    assert len(commands) == 1
+    assert commands[0][commands[0].index("--solver") + 1] == "small"
+    assert commands[0][commands[0].index("--replicas") + 1] == "1"
+
+
+def test_runtime_rejects_non_unit_reward_without_changing_raw_attempt(tmp_path, difficulty_source):
+    pytest.importorskip("harbor")
+    ledger_worker = importlib.import_module("experiments.post_training.task_curation.difficulty.ledger_worker")
+    source = difficulty_source(judged_task())
+    path = StoragePath(str(tmp_path / "attempt.json"))
+    raw = {"status": "scored", "task_id": "judge-task", "reward": 1.25}
+    path.write_text(json.dumps(raw))
+    meter = SimpleNamespace(finish=lambda key: 0.0, start=lambda key: None)
+    ledger_worker.record_attempt(
+        path,
+        source=source,
+        config=SimpleNamespace(solver=Solver.SMALL),
+        output=StoragePath(str(tmp_path / "run/trials")),
+        ledger=str(tmp_path / "ledger"),
+        meter=meter,
+        task_key="fixture",
+    )
+    (row,) = read_rows(str(tmp_path / "ledger"))
+    assert row.outcome == ledger_worker.Outcome.UNSCORED
+    assert row.reward is None and row.error_identity == "reward_outside_unit_interval"
+    assert row.reason == GapReason.GRADER_INFRASTRUCTURE_FAILURE
+    assert json.loads(path.read_text()) == raw
+
+
+def test_tpu_judge_remediation_never_attempts_a_gpu_fallback(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger"
+    identity = campaign.identity_bundle()
+    campaign.immutable_json(
+        StoragePath(str(ledger / "v1/campaign.json")), {"identity": identity, "campaign_id": digest(identity)}
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("A TPU judge repair must never launch a self-hosted GPU judge")
+
+    monkeypatch.setattr(remediate.subprocess, "run", forbidden)
+    result = remediate.repair_action(
+        QualifyJudgeRoute("MiniMaxAI/MiniMax-M3-MXFP8", (("source", Solver.SMALL),), ()),
+        tmp_path / "repair",
+        str(ledger),
+    )
+    assert result["status"] == "blocked"
+    assert result["reason"] == GapReason.JUDGE_ROUTE_UNQUALIFIED

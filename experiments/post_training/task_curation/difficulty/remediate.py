@@ -11,8 +11,10 @@ from pathlib import Path
 from finestore.rl.curation import QualifiedSourceDeclaration
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, DifficultyGap
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 
 from experiments.post_training.task_curation.admission_inventory import inventory_source
+from experiments.post_training.task_curation.difficulty.campaign import JUDGE_VERSION, campaign_record
 from experiments.post_training.task_curation.difficulty.importer import (
     declaration_population_revision,
     population_revision,
@@ -40,6 +42,11 @@ from experiments.post_training.task_curation.difficulty.state import (
     PanelReference,
     cell_state,
 )
+from experiments.post_training.task_curation.difficulty_config import (
+    SUBSTITUTE_JUDGE_MODEL,
+    SUBSTITUTE_JUDGE_PIN,
+    TOGETHER_API_KEY_ENV,
+)
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
 from experiments.post_training.task_curation.difficulty_samples import (
@@ -47,6 +54,7 @@ from experiments.post_training.task_curation.difficulty_samples import (
     prepare_sample,
     write_source_queue,
 )
+from experiments.post_training.task_curation.difficulty_serving_probe import probe_declared_judge_endpoint
 from experiments.post_training.task_curation.environment_artifacts import rebuild_artifact
 
 STATIC_ADMISSION_CAUSES = frozenset(
@@ -219,6 +227,32 @@ def repair_action(action: Action, local: Path, ledger: str) -> dict:
         )
         return json.loads(result.read_text())
     if isinstance(action, QualifyJudgeRoute):
+        if campaign_record(ledger) is not None:
+            if action.model != SUBSTITUTE_JUDGE_MODEL:
+                return {
+                    "status": "blocked",
+                    "reason": GapReason.JUDGE_ROUTE_UNQUALIFIED,
+                    "detail": (
+                        "The versioned TPU campaign serves only Together Flash; "
+                        "this source needs an explicit judge-contract repair"
+                    ),
+                }
+            probe = probe_declared_judge_endpoint(
+                "https://api.together.xyz/v1",
+                SUBSTITUTE_JUDGE_MODEL,
+                require_secret(TOGETHER_API_KEY_ENV),
+                PROTOCOLS[PROTOCOL_ID].temperature,
+                SUBSTITUTE_JUDGE_PIN,
+            )
+            return {
+                "status": "ready",
+                "model": action.model,
+                "served_model": SUBSTITUTE_JUDGE_MODEL,
+                "judge_version": JUDGE_VERSION,
+                "probe": probe,
+                "requested_temperature": action.requested_temperature,
+                "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+            }
         command = [
             "python",
             "-m",

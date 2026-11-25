@@ -87,6 +87,16 @@ def record_attempt(
         gpu_hours=hours,
         outcome=Outcome.OBSERVATION if row.reason == GapReason.PROVIDER_CAPACITY_WAIT else row.outcome,
     )
+    if row.outcome == Outcome.SCORED and (
+        isinstance(row.reward, bool) or not isinstance(row.reward, (int, float)) or not 0 <= row.reward <= 1
+    ):
+        row = replace(
+            row,
+            outcome=Outcome.UNSCORED,
+            reward=None,
+            reason=GapReason.GRADER_INFRASTRUCTURE_FAILURE,
+            error_identity="reward_outside_unit_interval",
+        )
     append_rows(ledger, [row])
     LOGGER.info(
         "Recorded %s/%s: %s, %s, %.6f GPU-h",
