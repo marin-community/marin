@@ -662,7 +662,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             replay = self.model.router_replay
             routes = None
             if replay is not None:
-                assert replay.num_moe_layers_total is not None and replay.topk is not None
+                if replay.num_moe_layers_total is None or replay.topk is None:
+                    raise ValueError("Synthetic sizing requires configured router replay geometry")
                 experts = get_model_config(self.actor_module[0]).num_moe_experts
                 routes = sizing_replay_routes(batch_size, tokens - 1, replay.num_moe_layers_total, experts, replay.topk).to(
                     device
