@@ -195,6 +195,9 @@ def run_problems(
         *differences(evaluation_identity(evaluation.identity.eval_ref), evaluation_identity(record.evaluation), "eval"),
         *differences(evaluation.identity.eval_runtime, record.provenance.eval_runtime, "eval_runtime"),
     ]
+    # The run ID also covers what no recorded field shows: the inference build, agent concurrency and release.
+    if not drift and record.run_id != evaluation.identity.run_id:
+        drift.append(f"run_id: ran {record.run_id}, policy gives {evaluation.identity.run_id}")
     faults = []
     if record.version != batch.version:
         faults.append(f"version {record.version!r}, not {batch.version!r}")

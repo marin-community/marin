@@ -3,11 +3,14 @@
 
 """Turn one candidate's resolved policy evaluations into launcher specs, normally one server per candidate."""
 
+import json
 from collections.abc import Collection
 from dataclasses import replace
 
-from marin.evaluation.hardware import default_platform
+from marin.evaluation.hardware import Platform, default_platform
+from marin.evaluation.model_config import ModelConfig, ServeBackend
 from marin.evaluation.serving_config import resolved_serve_config
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve, serving_window
@@ -33,6 +36,29 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[tuple[Re
     parts = list(keyed.values()) or [[]]
     parts[0] = [item for item in items if _judge_key(item) is None or item in parts[0]]
     return tuple(tuple(part) for part in parts if part)
+
+
+def _inference_build(model: ModelConfig, platform: Platform) -> str:
+    """The inference build a server for the model runs, which can change its outputs."""
+    if model.serve.backend is not ServeBackend.VLLM:
+        return model.serve.backend.value
+    if platform is Platform.GPU:
+        return VLLM_GPU_RELEASE.release_tag
+    return f"{VLLM_FORK_REQUIREMENT}; {TPU_INFERENCE_FORK_REQUIREMENT}"
+
+
+def run_key(policy: EvalPolicy, release_commit: str | None, model: ModelConfig, platform: Platform) -> str:
+    """The part of every run ID a policy launch sets: the version, a release's commit, and the server's
+    inference build and tensor parallelism, which the model's serving config leaves out of its identity."""
+    return json.dumps(
+        {
+            "policy": policy.version,
+            "release": release_commit,
+            "inference": _inference_build(model, platform),
+            "tensor_parallel": model.serve.tensor_parallel_size,
+        },
+        sort_keys=True,
+    )
 
 
 def launch_specs(
@@ -65,11 +91,12 @@ def launch_specs(
     if too_long := [item.evaluation.name for item in resolved if item.context > window]:
         raise ValueError(f"{candidate.name}: the checkpoint serves at most {window} tokens, too few for {too_long}")
     model = replace(candidate.model, serve=replace(serve, max_model_len=window))
+    platform = default_platform(model)
     return tuple(
         LaunchSpec(
             model=model,
             evals=tuple(item.selection for item in group),
-            platform=default_platform(model),
+            platform=platform,
             accelerator=None,
             limit=limit,
             records_prefix=None,
@@ -79,7 +106,7 @@ def launch_specs(
             default_seed=None,
             max_concurrent=EVALUATIONS_PER_SERVER,
             version=policy.version,
-            cache_key=policy.version if release_commit is None else f"{policy.version}@{release_commit}",
+            cache_key=run_key(policy, release_commit, model, platform),
             description=f"{policy.version} {'smoke' if limit is not None else 'full'} run of {candidate.name}",
         )
         for group in server_groups(resolved)
