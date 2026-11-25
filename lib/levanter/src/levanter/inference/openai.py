@@ -356,7 +356,6 @@ class InferenceContext:
             raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
-            # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
                 width = max(map(len, req.stop_tokens))
