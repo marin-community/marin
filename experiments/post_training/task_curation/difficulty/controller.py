@@ -12,7 +12,9 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import requests
+from connectrpc.errors import ConnectError
 from dotenv import dotenv_values
 from finestore.rl.difficulty import Solver
 from iris.client.client import iris_ctx
@@ -34,7 +36,7 @@ from experiments.post_training.task_curation.difficulty.iris_backend import Iris
 from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
-from experiments.post_training.task_curation.difficulty.runtime import solver_pool_record
+from experiments.post_training.task_curation.difficulty.runtime import solver_pool_connection, solver_pool_record
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason, Outcome, TerminalRuling
 from experiments.post_training.task_curation.difficulty.tpu import CHIP_BUDGET, REGION, SHAPES
 from experiments.post_training.task_curation.difficulty_config import (
@@ -168,6 +170,21 @@ def run_controller(
         time.sleep(CONTROLLER_INTERVAL)
 
 
+def _tpu_pool_is_live(pool: dict) -> bool:
+    """A retained qualification receipt can outlive its owner's registered endpoint."""
+    try:
+        connection = solver_pool_connection(pool)
+        response = httpx.get(connection.base_url.rstrip("/") + "/models", timeout=10)
+        response.raise_for_status()
+        if pool["model"] in {model["id"] for model in response.json()["data"]}:
+            return True
+        reason = "frozen_model_not_advertised"
+    except (ConnectError, httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+        reason = type(error).__name__
+    LOGGER.warning("DIFFICULTY_POOL_UNAVAILABLE solver=%s reason=%s", pool["solver"], reason)
+    return False
+
+
 def qualified_tpu_solvers(registry: str) -> frozenset[Solver]:
     """Admit each solver only after its complete allocation publishes measured readiness."""
     available = {Solver.HOSTED}
@@ -182,7 +199,7 @@ def qualified_tpu_solvers(registry: str) -> frozenset[Solver]:
         if pool["chip_count"] > target:
             raise ValueError(f"TPU solver pool exceeds its measured allocation: {solver}")
         chips += pool["chip_count"]
-        if pool["chip_count"] == target:
+        if pool["chip_count"] == target and _tpu_pool_is_live(pool):
             available.add(solver)
     if chips > CHIP_BUDGET:
         raise ValueError("TPU campaign exceeds the 256-chip allocation")

@@ -17,7 +17,7 @@ from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from iris.cli.job import run
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
@@ -32,7 +32,7 @@ from iris.testing.controller import MockController, make_controller_state
 from rigging.secrets import resolve_secret_spec
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
-from experiments.post_training.task_curation.difficulty import controller, iris_backend
+from experiments.post_training.task_curation.difficulty import controller, iris_backend, runtime
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.planner import (
     RebuildEnvironmentArtifact,
@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_payload,
 )
 from experiments.post_training.task_curation.difficulty.state import CatalogSource
+from experiments.post_training.task_curation.difficulty_protocol import PINS
 
 
 @pytest.fixture(autouse=True)
@@ -321,6 +322,7 @@ def test_tpu_controller_admits_ready_pools_then_large_after_its_full_receipt(tmp
     monkeypatch.setattr(controller, "require_secret", lambda name: "fixture-refresh")
     monkeypatch.setattr(controller, "campaign_record", lambda ledger: {"holds": []})
     monkeypatch.setattr(controller, "solver_pool_record", pool)
+    monkeypatch.setattr(controller, "_tpu_pool_is_live", lambda pool: True)
     monkeypatch.setattr(controller, "served_catalog", lambda *args, **kwargs: [])
     monkeypatch.setattr(controller, "read_rows", lambda ledger: [])
     monkeypatch.setattr(controller, "available_artifact_uris", lambda cells: frozenset())
@@ -331,6 +333,67 @@ def test_tpu_controller_admits_ready_pools_then_large_after_its_full_receipt(tmp
             str(tmp_path), "fixture", False, frozenset(), None, str(pools), excluded_sources=frozenset()
         )
     assert reconciled == [frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED}), frozenset(Solver)]
+
+
+@pytest.mark.parametrize("failure", ["withdrawn", "http503", "wrong-model"])
+def test_tpu_controller_withholds_stale_pool_and_readmits_it_after_recovery(
+    tmp_path, monkeypatch, review_server, failure
+):
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    receipt = {
+        "solver": Solver.SMALL.value,
+        "model": SOLVER_MODELS[Solver.SMALL],
+        "revision": PINS[Solver.SMALL].revision,
+        "platform": "tpu",
+        "region": "us-central2",
+        "chip_count": 64,
+        "endpoint_name": "/serve/frozen-small-generation",
+    }
+    path = pools / "small.json"
+    original = json.dumps(receipt)
+    path.write_text(original)
+    snowball = {
+        **receipt,
+        "solver": Solver.SNOWBALL.value,
+        "model": SOLVER_MODELS[Solver.SNOWBALL],
+        "revision": PINS[Solver.SNOWBALL].revision,
+        "endpoint_name": "/serve/frozen-snowball-generation",
+    }
+    snowball_path = pools / "snowball.json"
+    snowball_original = json.dumps(snowball)
+    snowball_path.write_text(snowball_original)
+    review_server.model_ids[:] = [receipt["model"], snowball["model"]]
+    broken = False
+    original_get = review_server.RequestHandlerClass.do_GET
+
+    def get(handler):
+        if broken and failure == "http503" and handler.path == "/small/v1/models":
+            handler.send_error(503)
+        else:
+            original_get(handler)
+
+    def resolve(name):
+        assert name in {receipt["endpoint_name"], snowball["endpoint_name"]}
+        if broken and failure == "withdrawn" and name == receipt["endpoint_name"]:
+            raise ConnectError(Code.NOT_FOUND, "Pool owner has withdrawn its endpoint")
+        solver = "small" if name == receipt["endpoint_name"] else "snowball"
+        return f"http://127.0.0.1:{review_server.server_port}/{solver}"
+
+    monkeypatch.setattr(review_server.RequestHandlerClass, "do_GET", get)
+    monkeypatch.setattr(runtime, "iris_ctx", lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=resolve)))
+    expected = frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED})
+    assert controller.qualified_tpu_solvers(str(pools)) == expected
+    broken = True
+    if failure == "wrong-model":
+        review_server.model_ids.remove(receipt["model"])
+    assert controller.qualified_tpu_solvers(str(pools)) == frozenset({Solver.SNOWBALL, Solver.HOSTED})
+    assert path.read_text() == original
+    assert snowball_path.read_text() == snowball_original
+    broken = False
+    review_server.model_ids[:] = [receipt["model"], snowball["model"]]
+    assert controller.qualified_tpu_solvers(str(pools)) == expected
+    assert path.read_text() == original
 
 
 def test_explicit_controller_handover_preserves_live_children_and_refuses_third_parent(tmp_path, monkeypatch):
