@@ -1139,6 +1139,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         still_prepared = CliRunner().invoke(snowball.rl_publication.command(table), [*saved_attempt, "--issue", "73"])
         assert still_prepared.exit_code == 1
         assert read_attempt(str(source / "exports"), "native-indexed").issue is None
+        assert snowball.rl_publication.lineage_issue(str(source / "exports")) is None
 
     @click.command()
     def follow():
