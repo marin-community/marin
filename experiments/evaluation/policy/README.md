@@ -18,7 +18,7 @@ protocol, which owns prompts, thinking mode, trials, output caps and metrics, an
 policy runs it with:
 
 ```python
-PolicyEvaluation("olympiadbench", judge=JUDGES["together"], seed=42)
+PolicyEvaluation("olympiadbench", judge="together", seed=42)
 PolicyEvaluation("mrcr", protocol="32k")
 PolicyEvaluation("swebench-verified", protocol="mini-swe-agent", concurrency=16)
 ```
@@ -33,7 +33,7 @@ An evaluation's context depends on what its benchmark declares:
 
 The requested context is the evaluation's `context`, else the policy's.
 
-Judges come from `evals.JUDGES`, the judges named in `configs/evaluations.yaml`. A
+An evaluation names its judge from the `judges:` entries of `configs/evaluations.yaml`. A
 `PolicyOverride` changes a candidate's context or output limit on one evaluation; a
 `PolicyExclusion` drops one. Each needs a reason.
 

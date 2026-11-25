@@ -51,8 +51,7 @@ def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
 
 
 def _judge_key(item: ResolvedPolicyEvaluation) -> tuple[str, ...] | None:
-    judge = item.evaluation.judge
-    return None if judge is None else judge.api_key
+    return item.selection.run.judge_api_key or None
 
 
 def _by_judge_key(members: list[ResolvedPolicyEvaluation]) -> list[list[ResolvedPolicyEvaluation]]:
