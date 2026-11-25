@@ -61,7 +61,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -135,6 +135,7 @@ class InferenceResponse:
     tokens: List[int]
     prompt_tokens: int
     completion_tokens: int
+    finish_reason: FinishReason
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -421,7 +422,7 @@ class InferenceContext:
         stop_ids = None
         if request.stop_tokens:
             width = max(map(len, request.stop_tokens))
-            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            padded = [[INVALID] * (width - len(seq)) + seq for seq in request.stop_tokens]
             stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
         seed = request.seed
         if seed is None:
@@ -496,6 +497,7 @@ class InferenceContext:
                     tokens=tokens,
                     prompt_tokens=len(request.prompt_tokens),
                     completion_tokens=len(tokens),
+                    finish_reason=result.finish_reasons[index],
                     logprobs=result.logprobs[index] if result.logprobs is not None else None,
                     model_version=self._model_version,
                     policy_id=self._policy_id,
@@ -725,7 +727,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
                         logprobs=logprobs,
                     )
                 )
@@ -868,7 +870,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop",
+                    finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
                     logprobs=logprobs,
                 )
             )
@@ -956,6 +958,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
     for choice, output in enumerate(outputs):
         metadata: dict[str, int | str] = {
             "completion_tokens": output.completion_tokens,
+            "finish_reason": output.finish_reason.name.lower(),
             "model_version": output.model_version,
         }
         if output.policy_id is not None:

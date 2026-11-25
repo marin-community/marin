@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.kv_cache import KvPageCache
 from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.models.lm_model import LmExample
@@ -32,6 +33,7 @@ try:
         InferenceEngineConfig,
         score_token_sequence_logprobs,
     )
+    from levanter.inference.jit_scheduler import FinishReason
     from levanter.inference.openai import (
         InferenceResponse,
         InferenceServer,
@@ -369,6 +371,7 @@ class _FakeCompletionContext:
                     tokens=[3],
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
+                    finish_reason=FinishReason.LENGTH,
                     logprobs=[-123.0],
                     echo_token_ids=echo_token_ids,
                     echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
@@ -631,6 +634,7 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
 
     np.testing.assert_array_equal(tensors["prompt_token_ids"], prompt)
     assert metadata["choices"][0]["completion_tokens"] == 2
+    assert metadata["choices"][0]["finish_reason"] == "length"
     assert tensors["choice.0.token_ids"].shape == (2,)
     assert tensors["choice.0.token_ids"].dtype == np.int32
     assert tensors["choice.0.behavior_logprobs"].shape == (2,)
@@ -780,3 +784,81 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
         choice_expert_routes(tensors, 0, wrong_inputs)
+
+
+class _GreedyServingModel(eqx.Module):
+    Vocab: hax.Axis = eqx.field(static=True)
+    token_id: int = eqx.field(static=True)
+
+    def initial_cache(self, spec, *, dtype):
+        return KvPageCache.init(spec, hax.Axis("kv_head", jax.device_count()), hax.Axis("embed", 1), dtype=dtype)
+
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids):
+        logits = hax.nn.one_hot(self.token_id, self.Vocab, dtype=jnp.float32)
+        return logits.broadcast_axis(input_ids.resolve_axis("position")), kv_cache
+
+
+@pytest.fixture(scope="module")
+def greedy_client(inference_server_config, local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+    token_ids = tokenizer.encode("a", add_special_tokens=False)
+    assert len(token_ids) == 1
+    model = _GreedyServingModel(hax.Axis("vocab", len(tokenizer)), token_ids[0])
+    service = dataclasses.replace(inference_server_config.service, max_pages=32)
+    config = dataclasses.replace(inference_server_config, service=service)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
+    with TestClient(server.app) as client:
+        yield client
+
+
+@pytest.mark.parametrize("chat", [False, True])
+def test_openai_generation_reports_stop_at_the_token_limit(greedy_client, chat):
+    client = greedy_client
+    path = "/v1/chat/completions" if chat else "/v1/completions"
+    payload = {
+        "model": TEST_MODEL_NAME,
+        "max_tokens": 1,
+        "temperature": 0,
+        "seed": 17,
+        "n": 2,
+    }
+    if chat:
+        payload["messages"] = [{"role": "user", "content": "Hello, my name is"}]
+    else:
+        payload["prompt"] = "Hello, my name is"
+
+    response = client.post(path, json=payload)
+    assert response.status_code == 200, response.text
+    assert [choice["finish_reason"] for choice in response.json()["choices"]] == ["length", "length"]
+
+    stopped = client.post(path, json={**payload, "stop": ["A B", "a"]})
+    assert stopped.status_code == 200, stopped.text
+    assert [choice["finish_reason"] for choice in stopped.json()["choices"]] == ["stop", "stop"]
+
+
+def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_client):
+    client, _ = test_client
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+    options = {"max_tokens": 1, "temperature": 0, "seed": 17, "n": 2}
+
+    def generate(metadata):
+        response = client.post(
+            GENERATE_PATH,
+            content=encode_frame(metadata, {"prompt_token_ids": prompt}),
+            headers={"content-type": MEDIA_TYPE},
+        )
+        assert response.status_code == 200, response.text
+        return decode_frame(response.content)
+
+    limited, limited_tensors = generate(options)
+    token = int(limited_tensors["choice.0.token_ids"][0])
+    other = (token + 1) % 19
+    stopped, stopped_tensors = generate({**options, "stop_tokens": [[other, other], [token]]})
+
+    assert [choice["finish_reason"] for choice in limited["choices"]] == ["length", "length"]
+    assert [choice["finish_reason"] for choice in stopped["choices"]] == ["stop", "stop"]
+    for i in range(2):
+        for name in ("token_ids", "behavior_logprobs"):
+            key = f"choice.{i}.{name}"
+            np.testing.assert_array_equal(stopped_tensors[key], limited_tensors[key])

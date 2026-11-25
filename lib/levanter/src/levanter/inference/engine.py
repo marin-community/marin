@@ -27,6 +27,7 @@ from jax.sharding import NamedSharding, PartitionSpec
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
+    FinishReason,
     SeqDecodingParams,
     TokenQueue,
     _CapturedRoutes,
@@ -40,6 +41,7 @@ from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -262,8 +264,12 @@ class DecodeResult:
     token_list: list[int]
     # Count of newly appended tokens (includes prompt tokens as extracted)
     tokens_decoded: int = 0
-    done: bool = False
+    finish_reason: FinishReason = FinishReason.RUNNING
     logprobs: list[float] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return self.finish_reason != FinishReason.RUNNING
 
 
 class GenState(eqx.Module):
@@ -509,7 +515,7 @@ def _prefill_kernel(
         max_seqs=decode_state.max_seqs,
         with_logprobs=True,
     )
-    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
@@ -706,7 +712,7 @@ def _handle_clones(
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
     # Append clone outputs
-    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
+    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons)
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
@@ -778,7 +784,7 @@ def _run_generation_loop(
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -813,6 +819,7 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    finish_reasons: list[FinishReason]
     expert_routes: list[GeneratedExpertRoutes] | None = None
 
 
@@ -885,7 +892,7 @@ class InferenceEngine:
         self,
         *,
         model: LmHeadModel,
-        tokenizer,
+        tokenizer: MarinTokenizer | None,
         cache: PageCache,
         decode_state: DecodeState,
         sampler: Sampler,
@@ -928,7 +935,7 @@ class InferenceEngine:
     def from_model_with_config(
         cls,
         model: LmHeadModel,
-        tokenizer,
+        tokenizer: MarinTokenizer | None,
         config: InferenceEngineConfig,
         axis_resources: ResourceMapping | None = None,
     ) -> "InferenceEngine":
@@ -947,6 +954,7 @@ class InferenceEngine:
         )
         decode_state = DecodeState.init(
             table,
+            eos_token_id=tokenizer.eos_token_id if tokenizer is not None else None,
             max_stop_seqs=config.max_stop_seqs,
             max_stop_tokens=config.max_stop_tokens,
             max_queued_tokens=config.max_queued_tokens,
@@ -1195,16 +1203,18 @@ class InferenceEngine:
         )
         tokens = []
         logprobs = []
+        finish_reasons: list[FinishReason] = []
         expert_routes = [] if capture_routes else None
         for request in requests:
             result = results[request.request_id]
             tokens.extend(result.tokens)
             assert result.logprobs is not None
             logprobs.extend(result.logprobs)
+            finish_reasons.extend(result.finish_reasons)
             if expert_routes is not None:
                 assert result.expert_routes is not None
                 expert_routes.extend(result.expert_routes)
-        return GenerationResult(tokens, logprobs, sum(map(len, tokens)), expert_routes)
+        return GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, expert_routes)
 
     def generate_continuously(
         self,
@@ -1268,7 +1278,8 @@ class InferenceEngine:
                     ]
                     for choice in range(request.n_generations):
                         route_chunks.pop((request_id, choice), None)
-                on_complete(request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), routes))
+                finish_reasons = [choices[i].finish_reason for i in range(request.n_generations)]
+                on_complete(request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), finish_reasons, routes))
 
         admit(requests)
         decode_iteration = 0
@@ -1416,7 +1427,8 @@ class InferenceEngine:
                 chunk = (routes.positions.array[:count][take], routes.experts.array[:count][take])
                 route_chunks.setdefault(request, []).append(chunk)
         n = int(pending_outputs.num_tokens)
-        fins = pending_outputs.finished.array
+        reasons = pending_outputs.finish_reasons.array
+        fins = reasons != FinishReason.RUNNING
         toks_arr = pending_outputs.tokens.array
         sids_arr = pending_outputs.slot_ids.array
 
@@ -1447,11 +1459,11 @@ class InferenceEngine:
                 continue
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.done = True
+            dr.finish_reason = FinishReason(int(reasons[local_slot]))
             del self.local_map[local_slot]
             released_slots.append(local_slot)
 
-            if logger.isEnabledFor(logging.DEBUG):
+            if self.tokenizer is not None and logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
                     logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")

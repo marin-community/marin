@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from enum import IntEnum, auto
 
 import equinox as eqx
 import haliax as hax
@@ -21,6 +22,14 @@ from levanter.inference.utils import (
     masked_set,
     purge,
 )
+
+
+class FinishReason(IntEnum):
+    """Per-choice termination state shared by device and host."""
+
+    RUNNING = 0
+    STOP = auto()
+    LENGTH = auto()
 
 
 class PackedSequence(eqx.Module):
@@ -555,6 +564,7 @@ class DecodeState(eqx.Module):
     page_table: PageTable
 
     pad_token_id: int
+    eos_token_id: int | None = eqx.field(static=True)
 
     # Per sequence sampling parameters
     max_num_tokens: ht.i32[NamedArray, "seq"]
@@ -574,13 +584,17 @@ class DecodeState(eqx.Module):
     tqueue: "TokenQueue"
     """token queue for pending decode work"""
 
-    # Cached finished flags per sequence (updated when tokens are enqueued)
-    finished: ht.bool_[NamedArray, "seq"]
+    finish_reasons: ht.i32[NamedArray, "seq"]
+
+    @property
+    def finished(self) -> ht.bool_[NamedArray, "seq"]:
+        return self.finish_reasons != FinishReason.RUNNING
 
     def reset(self):
         return DecodeState.init(
             page_table=self.page_table.reset(),
             pad_token_id=self.pad_token_id,
+            eos_token_id=self.eos_token_id,
             max_stop_seqs=self.stop_tokens.shape["stop_seq"] if self.stop_tokens is not None else 0,
             max_stop_tokens=self.stop_tokens.shape["position"] if self.stop_tokens is not None else 0,
             max_queued_tokens=self.tqueue.max_queued_tokens,
@@ -593,6 +607,8 @@ class DecodeState(eqx.Module):
         max_stop_seqs: int = 0,
         max_stop_tokens: int = 16,
         max_queued_tokens: int = 0,
+        *,
+        eos_token_id: int | None = None,
     ) -> "DecodeState":
         """
         Initialize a DecodeState with empty buffers.
@@ -609,6 +625,7 @@ class DecodeState(eqx.Module):
             page_size=page_size,
             page_table=page_table,
             pad_token_id=pad_token_id,
+            eos_token_id=eos_token_id,
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
             logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
@@ -625,7 +642,7 @@ class DecodeState(eqx.Module):
             top_p=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+            finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
         )
 
     @property
@@ -797,7 +814,7 @@ class DecodeState(eqx.Module):
                 if self.logprobs is not None
                 else None
             ),
-            finished=self.finished.at["seq", local_slot_id].set(False),
+            finish_reasons=self.finish_reasons.at["seq", local_slot_id].set(FinishReason.RUNNING),
         )
 
         if seq_params is not None:
@@ -849,7 +866,7 @@ class DecodeState(eqx.Module):
         logprobs = self.logprobs
         sequences = self.sequences
         counts = sequences.seq_lens
-        fins = self.finished
+        reasons = self.finish_reasons
 
         # We'll also compute per-token absolute position ids to feed into the TokenQueue.
         pos_ids = hax.full_like(new_tokens, INVALID)
@@ -868,14 +885,22 @@ class DecodeState(eqx.Module):
                 # completion checks
                 max_allowed = self.max_num_tokens["seq", sid].scalar()
                 len_done = (pos + 1) >= max_allowed
-                stop_done = False
+                stop_done = (
+                    new_tokens["position", i].scalar() == self.eos_token_id if self.eos_token_id is not None else False
+                )
                 if self.stop_tokens is not None:
                     stop_len = self.stop_tokens.axis_size("position")
                     row = tkns["seq", sid].array
                     padded = jnp.concatenate([jnp.full((stop_len,), INVALID, dtype=jnp.int32), row])
                     tail = jax.lax.dynamic_slice(padded, (pos + 1,), (stop_len,))
-                    stop_done = is_stop_signal(hax.named(tail, axis=("position",)), self.stop_tokens["seq", sid]).array
-                f = f.at["seq", sid].set(len_done | stop_done)
+                    stop_done = (
+                        stop_done
+                        | is_stop_signal(hax.named(tail, axis=("position",)), self.stop_tokens["seq", sid]).array
+                    )
+                reason = jnp.where(
+                    stop_done, FinishReason.STOP, jnp.where(len_done, FinishReason.LENGTH, FinishReason.RUNNING)
+                )
+                f = f.at["seq", sid].set(reason)
                 should_purge = should_purge.at["position", i].set(len_done | stop_done)
 
                 # record position id for this token in the outgoing queue payload
@@ -885,8 +910,8 @@ class DecodeState(eqx.Module):
 
             return jax.lax.cond(is_valid(sid), update, lambda s: s, state)
 
-        tokens, logprobs, counts, pos_ids, fins, should_purge = jax.lax.fori_loop(
-            0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids, fins, should_purge)
+        tokens, logprobs, counts, pos_ids, reasons, should_purge = jax.lax.fori_loop(
+            0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids, reasons, should_purge)
         )
 
         # TODO: we want to purge new_tokens of any sequences that have finished, to avoid re-processing them
@@ -904,7 +929,7 @@ class DecodeState(eqx.Module):
         new_sequences = dataclasses.replace(sequences, seq_lens=counts)
 
         return dataclasses.replace(
-            self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finished=fins
+            self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finish_reasons=reasons
         )
 
     def is_finished(self, slot_id: jnp.ndarray) -> jnp.ndarray:
@@ -1151,7 +1176,7 @@ class _DecodeOutputs(eqx.Module):
     A simple queue-like buffer for outputs emitted by the decode generation loop.
 
     Stores the flat stream of sampled token IDs and their corresponding local slot IDs, with an
-    optional logprob stream. Also carries a copy of the latest `finished` flags from `DecodeState`.
+    optional logprob stream. Also carries terminal reasons from `DecodeState`.
 
     This mirrors the behavior of `TokenQueue` but is for host-side consumption of outputs rather than
     feeding work to the device.
@@ -1161,7 +1186,7 @@ class _DecodeOutputs(eqx.Module):
     slot_ids: ht.i32[NamedArray, "position"]
     logprobs: ht.Float[NamedArray, "position"] | None
     num_tokens: jax.Array
-    finished: ht.bool_[NamedArray, "seq"]
+    finish_reasons: ht.i32[NamedArray, "seq"]
     routes: _CapturedRoutes | None = None
 
     @property
@@ -1179,7 +1204,7 @@ class _DecodeOutputs(eqx.Module):
             slot_ids=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
             logprobs=(hax.full({"position": max_tokens}, jnp.nan, dtype=jnp.float32) if with_logprobs else None),
             num_tokens=jnp.array(0, dtype=jnp.int32),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+            finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
         )
 
     def append(
@@ -1188,9 +1213,9 @@ class _DecodeOutputs(eqx.Module):
         new_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
         new_logprobs: ht.Float[NamedArray, " position"],  # type: ignore[name-defined]
         num_new_tokens: int,
-        finished_snapshot: ht.bool_[NamedArray, "seq"],  # type: ignore[name-defined]
+        finish_reasons: ht.i32[NamedArray, "seq"],  # type: ignore[name-defined]
     ) -> "_DecodeOutputs":
-        """Append a batch of outputs and update the finished flags snapshot."""
+        """Append outputs and retain each sequence's first terminal reason."""
 
         new_tok_buf = masked_set(self.tokens, "position", self.num_tokens, new_tokens, num_new_tokens)
         new_sid_buf = masked_set(self.slot_ids, "position", self.num_tokens, new_slot_ids, num_new_tokens)
@@ -1198,13 +1223,12 @@ class _DecodeOutputs(eqx.Module):
             new_lp_buf = masked_set(self.logprobs, "position", self.num_tokens, new_logprobs, num_new_tokens)
         else:
             new_lp_buf = None
-        # Keep finished flags monotonic (once finished, always finished)
-        new_finished = self.finished | finished_snapshot
+        reasons = hax.where(self.finish_reasons == FinishReason.RUNNING, finish_reasons, self.finish_reasons)
         return dataclasses.replace(
             self,
             tokens=new_tok_buf,
             slot_ids=new_sid_buf,
             logprobs=new_lp_buf,
             num_tokens=self.num_tokens + num_new_tokens,
-            finished=new_finished,
+            finish_reasons=reasons,
         )

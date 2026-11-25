@@ -12,8 +12,9 @@ from haliax import Axis
 
 import levanter.inference.engine as engine_module
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.page_table import PageTableSpec
+from levanter.inference.utils import INVALID
 from levanter.layers.kv_cache import KvPageCache
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
@@ -134,19 +135,47 @@ def test_generate_admits_waiting_requests_with_reused_pages():
                 max_prefill_size=4,
             ),
         )
+        stops = hax.named(jnp.array([[INVALID, 3], [4, 5]]), ("stop_seq", "position"))
         requests = [
             Request(
                 [1, 2, 4],
                 request_id=i,
-                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(3 + length)),
-                n_generations=1,
+                decode_params=replace(
+                    SeqDecodingParams.default(),
+                    max_num_tokens=jnp.asarray(3 + length),
+                    stop_tokens=stops if i == 0 else None,
+                ),
+                n_generations=2 if i == 0 else 1,
             )
             for i, length in enumerate(output_lengths)
         ]
         result = engine.generate(requests)
 
-    assert result.tokens == [[3] * length for length in output_lengths]
-    assert result.total_generated == sum(output_lengths)
+    assert result.tokens == [[3], *[[3] * length for length in output_lengths]]
+    assert result.finish_reasons == [FinishReason.STOP, FinishReason.STOP, *[FinishReason.LENGTH] * 4]
+    assert result.total_generated == 1 + sum(output_lengths)
+
+
+def test_generate_reports_eos_at_the_token_limit(local_gpt2_tokenizer):
+    eos = local_gpt2_tokenizer.eos_token_id
+    assert eos is not None
+    engine = InferenceEngine.from_model_with_config(
+        model=DummyModel(vocab_size=len(local_gpt2_tokenizer), eos_id=eos),  # type: ignore
+        tokenizer=local_gpt2_tokenizer,
+        config=InferenceEngineConfig(
+            max_seq_len=4,
+            max_pages=2,
+            page_size=4,
+            max_seqs=1,
+            max_seqs_in_prefill=1,
+            max_queued_tokens=4,
+        ),
+    )
+    params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(2))
+    result = engine.generate([Request([1], request_id=0, decode_params=params, n_generations=1)])
+
+    assert result.tokens == [[eos]]
+    assert result.finish_reasons == [FinishReason.STOP]
 
 
 def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_active():
