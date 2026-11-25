@@ -245,6 +245,52 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
     assert rows[second.info.id].assessment_key == "second"
 
 
+def test_a_source_without_a_declared_count_publishes_its_measured_input_rows(tmp_path):
+    """A source with no declared count publishes the measurement its COMPLETE attempt took at the pin."""
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    assert source.declaration.task_count is None
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [source])
+    row = selected_sources(root)[source.info.id]
+    assert row.declaration.task_count is None
+    assert row.input_row_count == 1
+
+
+def test_a_measurement_off_the_published_pin_or_recipe_is_not_published(tmp_path):
+    """A measurement describes one pin and recipe; a moved declaration does not inherit it."""
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [source])
+    moved_pin = replace(source, config=replace(source.config, dataset=replace(source.dataset, revision="new-pin")))
+    record_attempt(root, source, "second", "2026-10-16T11:00:00Z", "key-b")
+    publish_catalog(root, "second", [moved_pin])
+    row = selected_sources(root)[source.info.id]
+    assert row.declaration.dataset_revision == "new-pin"
+    assert row.assessment_key == "key-b"
+    assert row.input_row_count is None
+    bumped = replace(source, config=replace(source.config, version="2"))
+    record_attempt(root, source, "third", "2026-10-16T12:00:00Z", "key-c")
+    publish_catalog(root, "third", [bumped])
+    row = selected_sources(root)[source.info.id]
+    assert row.declaration.pipeline.version == "2"
+    assert row.input_row_count is None
+
+
+def test_a_failed_attempt_keeps_the_measured_input_rows_at_its_pin(tmp_path):
+    """A failed attempt supersedes the assessment but not the pin's measured input rows."""
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [source])
+    record_attempt(root, source, "failed", "2026-10-16T11:00:00Z", "key-b", AssessmentStatus.FAILED)
+    publish_catalog(root, "failed", [source])
+    row = selected_sources(root)[source.info.id]
+    assert row.assessment_key is None
+    assert row.input_row_count == 1
+
+
 def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
     root = str(tmp_path / "production")
     runnable = number_source(tmp_path / "input")

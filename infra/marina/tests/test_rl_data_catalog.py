@@ -195,6 +195,105 @@ class CatalogServices:
         return self.database_engine
 
 
+def count_declaration(source_id: str) -> SourceDeclaration:
+    return SourceDeclaration(
+        id=source_id,
+        name=source_id,
+        display_name=source_id.title(),
+        origin="native",
+        family="count",
+        tags=[],
+        task_count=9,
+        notes="",
+        dataset_id=None,
+        dataset_revision=None,
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        kind="Dataset",
+        status="Available",
+        pipeline=None,
+    )
+
+
+def count_curation(population: int | None) -> CurationSummary:
+    return CurationSummary(
+        status="completed",
+        mode="full",
+        source_revision=None,
+        recipe_revision="1",
+        raw_population_count=population,
+        raw_sample_count=population,
+        processed_rows=population,
+        unprocessed_rows=0,
+        admission_counts={"admitted": population or 0},
+        verification=None,
+    )
+
+
+def publish_count_rows(root: str, rows: list[SnapshotSource]) -> None:
+    """Store an assessment-free snapshot whose rows carry distinct count sources."""
+    with DataStore.open(root, writer_id="counts") as store:
+        register_catalog(store)
+        store.flush()
+        with store.transaction() as tx:
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="counts", created_at="2026-10-13T00:00:00Z", source_count=len(rows)
+                ).model_dump()
+            )
+            tx.table(INVENTORY).extend(row.model_dump(mode="json") for row in rows)
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="counts").model_dump())
+
+
+def test_source_task_count_prefers_the_pin_checked_measurement(catalog_database, catalog_query, tmp_path):
+    """A published row's task count prefers its pin-checked measured input rows, then the
+    attempt's measured population, then the declared count."""
+    declaration = count_declaration("measured")
+    publish_count_rows(
+        str(tmp_path / "catalog"),
+        [
+            SnapshotSource(
+                snapshot_id="counts",
+                id="measured",
+                declaration=declaration,
+                assessment_key=None,
+                latest_attempt_key=None,
+                latest_attempt_status="skipped",
+                reason=None,
+                curation=count_curation(3),
+                input_row_count=7,
+            ),
+            SnapshotSource(
+                snapshot_id="counts",
+                id="assessed",
+                declaration=declaration.model_copy(update={"id": "assessed", "name": "assessed"}),
+                assessment_key=None,
+                latest_attempt_key=None,
+                latest_attempt_status="skipped",
+                reason=None,
+                curation=count_curation(3),
+            ),
+            SnapshotSource(
+                snapshot_id="counts",
+                id="declared",
+                declaration=declaration.model_copy(update={"id": "declared", "name": "declared"}),
+                assessment_key=None,
+                latest_attempt_key=None,
+                latest_attempt_status="skipped",
+                reason=None,
+            ),
+        ],
+    )
+    load_catalog(CurationCatalog(str(tmp_path / "catalog")), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        assert sources["measured"]["task_count"] == 7
+        assert sources["assessed"]["task_count"] == 3
+        assert sources["declared"]["task_count"] == 9
+
+
 def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_context") -> Path:
     declarations = [
         SourceDeclaration(

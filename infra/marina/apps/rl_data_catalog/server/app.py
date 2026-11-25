@@ -119,7 +119,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 text(
                     """
                 SELECT s.*, a.scope, a.model, summary.cohorts,
-                    COALESCE((s.curation->>'raw_population_count')::bigint,
+                    COALESCE(s.input_row_count, (s.curation->>'raw_population_count')::bigint,
                         (s.declaration->>'task_count')::bigint) AS task_count
                 FROM atlas_sources s
                 LEFT JOIN atlas_assessments a

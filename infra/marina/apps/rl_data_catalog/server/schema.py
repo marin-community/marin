@@ -60,9 +60,10 @@ CREATE TABLE IF NOT EXISTS curriculum_statistics (
 CREATE TABLE IF NOT EXISTS atlas_sources (
     load_id TEXT NOT NULL, id TEXT NOT NULL, declaration JSONB NOT NULL,
     assessment_key TEXT, latest_attempt_key TEXT, latest_attempt_status TEXT NOT NULL,
-    reason TEXT, curation JSONB, diagnostics JSONB NOT NULL,
+    reason TEXT, curation JSONB, input_row_count BIGINT, diagnostics JSONB NOT NULL,
     PRIMARY KEY (load_id, id)
 );
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS input_row_count BIGINT;
 CREATE TABLE IF NOT EXISTS atlas_assessments (
     load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, source_id TEXT NOT NULL,
     scope TEXT NOT NULL, model JSONB NOT NULL, rubric TEXT NOT NULL,
