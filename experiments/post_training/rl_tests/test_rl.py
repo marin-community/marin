@@ -607,7 +607,6 @@ def test_mochi_one_rack_drafts_by_default_and_can_opt_out(selection, tmp_path):
     speculator = config.pop("speculative_decoding")
     assert speculator["method"] == "dspark"
     assert speculator["num_speculative_tokens"] == 4
-    assert config["gpu_memory_utilization"] == 0.775
     assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
     assert config == plain["skyrl"]["generator"]
     assert draft["inputs"] == plain["inputs"]

@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 
 from datasets import Dataset
 from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
+from marin.training.drafting import activation_store
 from marin.training.drafting.activation_store import activation_path, get_or_build_activation_cache
 from marin.training.drafting.dspark_data import ARROW_DATASET_DIR, PREPARED_DIR, SPLITS_FILE, PreparedSplits
 from marin.training.drafting.dspark_distillation import DSparkExport
@@ -53,7 +54,7 @@ def test_mochi_checkpoint_fits_from_a_completed_cache(tmp_path, monkeypatch):
     recipe = config.training_recipe()
     draft = mochi.checkpoint_step(teacher, "", prepared, recipe, "2026.11.24", mochi.Sample.ALL)
     key = mochi.activation_cache_key(artifact_identity(teacher), prepared, recipe, mochi.Sample.ALL)
-    monkeypatch.setattr(mochi, "_activation_cache_root", lambda key, prefix: StoragePath(str(tmp_path / key)))
+    monkeypatch.setattr(mochi, "_activation_cache_root", lambda key, _prefix: StoragePath(str(tmp_path / key)))
     root = StoragePath(str(tmp_path / key))
 
     def fit(*, scratch, hidden_states, split, **_):
@@ -64,12 +65,15 @@ def test_mochi_checkpoint_fits_from_a_completed_cache(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mochi, "train_cached_and_export", fit)
 
+    reusable_for = Duration.from_hours(48)
+    now = 0.0
+    monkeypatch.setattr(activation_store, "time", lambda: now)
     get_or_build_activation_cache(
         root,
-        reusable_for=Duration.from_hours(48),
+        reusable_for=reusable_for,
         populate=lambda path: activation_path(path, 0).write_bytes(b"row 0"),
     )
     assert resolve(draft).steps == 3
 
-    (tmp_path / key / "complete.json").unlink()
+    now += reusable_for.to_seconds()
     assert resolve(draft).steps == 3

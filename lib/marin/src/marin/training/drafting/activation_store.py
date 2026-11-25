@@ -15,6 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 
 OBJECT_STORE_BACKEND = "object-store"
+_COMPLETE_MARKER = "complete.json"
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ def _reusable_path(root: StoragePath, entry: VersionedBytes | None, reusable_for
 
 def read_activation_cache(root: StoragePath, *, reusable_for: Duration) -> StoragePath | None:
     """Return the current complete generation while it is eligible for reuse."""
-    entry = conditional_object(str(root / "complete.json")).read()
+    entry = conditional_object(str(root / _COMPLETE_MARKER)).read()
     return _reusable_path(root, entry, reusable_for)
 
 
@@ -47,7 +48,7 @@ def get_or_build_activation_cache(
     root: StoragePath, *, reusable_for: Duration, populate: Callable[[StoragePath], None]
 ) -> StoragePath:
     """Reuse a complete generation for `reusable_for` from the start of its build."""
-    marker = conditional_object(str(root / "complete.json"))
+    marker = conditional_object(str(root / _COMPLETE_MARKER))
 
     if path := _reusable_path(root, marker.read(), reusable_for):
         return path

@@ -72,13 +72,13 @@ def test_follower_uses_the_leaders_startup_decision(monkeypatch, start):
     follower = replace(leader, task_index=1)
     monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: coordinator)
 
-    def resolve_cache(_delay):
+    def publish_startup_decision(_delay):
         if start:
             iris_vllm.start_iris_vllm_followers(leader)
         else:
             coordinator.request_shutdown()
 
-    monkeypatch.setattr("time.sleep", resolve_cache)
+    monkeypatch.setattr("time.sleep", publish_startup_decision)
     assert iris_vllm.wait_for_iris_vllm_start(follower) is start
 
 

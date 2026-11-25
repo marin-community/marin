@@ -29,14 +29,14 @@ def mix_sources(tmp_path):
     return tuple(sources)
 
 
-def _build_mix(output, sources):
+def _build_and_read_mix(output, sources):
     _write_mix(output=str(output), sources=sources, seed=42)
     return tuple(pq.read_table(output / split).to_pylist() for split in ("train", "validation"))
 
 
 def test_mochi_mix_samples_each_source_throughout_training(tmp_path, mix_sources):
-    train, validation = _build_mix(tmp_path / "mix", mix_sources)
-    assert (train, validation) == _build_mix(tmp_path / "rebuild", mix_sources)
+    train, validation = _build_and_read_mix(tmp_path / "mix", mix_sources)
+    assert (train, validation) == _build_and_read_mix(tmp_path / "rebuild", mix_sources)
     for name, _, quota in mix_sources:
         selected = [row for row in train + validation if row["source"] == name]
         assert len({row["id"] for row in selected}) == len(selected) == quota
@@ -46,7 +46,7 @@ def test_mochi_mix_samples_each_source_throughout_training(tmp_path, mix_sources
 
 
 def test_mochi_mix_keeps_prompt_groups_together(tmp_path, mix_sources):
-    train, validation = _build_mix(tmp_path / "mix", mix_sources)
+    train, validation = _build_and_read_mix(tmp_path / "mix", mix_sources)
     prompts = [{row["messages"][0]["content"][0]["text"] for row in split} for split in (train, validation)]
     assert sum(map(len, prompts)) < len(train) + len(validation)
     assert prompts[0].isdisjoint(prompts[1])

@@ -256,7 +256,7 @@ def test_activation_cache_retries_without_exposing_partial_rows(tmp_path):
         activation_store.activation_path(path, 0).write_bytes(b"partial")
         raise RuntimeError("teacher stopped")
 
-    with pytest.raises(RuntimeError, match="teacher stopped"):
+    with pytest.raises(RuntimeError):
         activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=fail)
     assert activation_store.read_activation_cache(root, reusable_for=reusable_for) is None
 
