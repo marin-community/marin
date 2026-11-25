@@ -19,8 +19,11 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +75,8 @@ class CensusInputs:
     output_root: str
     region_prefix: str
     expected_sources: int
+    # Explicit per-source worker count, sized by the graph from StageResources.
+    workers: int
     slice_output_root: str | None = None
 
     def validate(self) -> None:
@@ -82,6 +87,8 @@ class CensusInputs:
             raise ValueError("output_root and region_prefix are required")
         if self.expected_sources <= 0:
             raise ValueError(f"expected_sources must be positive, got {self.expected_sources}")
+        if self.workers <= 0:
+            raise ValueError(f"workers must be positive, got {self.workers}")
         if not self.region_prefix.endswith("/"):
             raise ValueError("region_prefix must end with '/' so the pin check is unambiguous")
 
@@ -329,6 +336,50 @@ def _resources(total_tasks: int) -> StageResources:
     return census_sizing(total_tasks)
 
 
+def _measure_all(
+    rows: list[CensusSourceRow],
+    output_root: str,
+    revision: str,
+    region_prefix: str,
+    *,
+    workers: int,
+    sources_fn: Callable[[], dict] = all_sources,
+    inventory_fn: Callable[..., Any] = inventory_source,
+) -> list[dict]:
+    """Measure every row, fanned out across ``workers`` child processes.
+
+    The declared row order is the receipt order: ``pool.map`` preserves it. Each
+    child measures whole sources independently — the per-source seals land at
+    source-keyed paths, so a parallel run writes exactly what a serial run writes.
+    Custom ``sources_fn``/``inventory_fn`` injections must be picklable; a serial
+    run (``workers=1``) is the path for unpicklable test doubles.
+    """
+    if workers == 1:
+        return [
+            measure_source(
+                row,
+                output_root,
+                revision,
+                region_prefix,
+                sources_fn=sources_fn,
+                inventory_fn=inventory_fn,
+            )
+            for row in rows
+        ]
+    target = partial(
+        measure_source,
+        output_root=output_root,
+        revision=revision,
+        region_prefix=region_prefix,
+        sources_fn=sources_fn,
+        inventory_fn=inventory_fn,
+    )
+    # One source per dispatch: the per-source cost is heavy-tailed (the largest
+    # source dominates any larger chunk), so single-source dispatches balance the tail.
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        return list(pool.map(target, rows, chunksize=1))
+
+
 def run_census(
     inputs: CensusInputs,
     *,
@@ -360,17 +411,15 @@ def run_census(
             if len(rows) != inputs.expected_sources:
                 raise ValueError(f"census inputs carry {len(rows)} rows, expected {inputs.expected_sources}")
             output_root = inputs.output_root
-        measured = [
-            measure_source(
-                row,
-                output_root,
-                inputs.source_revision,
-                inputs.region_prefix,
-                sources_fn=sources_fn,
-                inventory_fn=inventory_fn,
-            )
-            for row in rows
-        ]
+        measured = _measure_all(
+            rows,
+            output_root,
+            inputs.source_revision,
+            inputs.region_prefix,
+            workers=inputs.workers,
+            sources_fn=sources_fn,
+            inventory_fn=inventory_fn,
+        )
         proof: dict[str, Any] = {
             "kind": f"atlas-{inputs.release_id}-{RECEIPT_SUFFIX}",
             "release_id": inputs.release_id,

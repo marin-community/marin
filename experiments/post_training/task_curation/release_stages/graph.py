@@ -1281,6 +1281,8 @@ def _census_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep
             "output_root": stage_output_root(plan, "census"),
             "region_prefix": plan.region_prefix,
             "expected_sources": plan.expected_source_count,
+            # The per-source fan-out rides the job's measured core count.
+            "workers": census_sizing(plan.expected_population_tasks).cpu,
             "slice_output_root": plan.slice_output_root or None,
         }
 
@@ -1312,6 +1314,8 @@ def _corpus_assembly_step(
             "census_receipt": _resolved_receipt(ctx, census),
             "output_root": stage_output_root(plan, "corpus"),
             "expected_sources": plan.expected_source_count,
+            # Per-source preparation rides the same measured core count as the census.
+            "workers": census_sizing(plan.expected_population_tasks).cpu,
             "slice_output_root": plan.slice_output_root or None,
             "workers": sizing.workers,
         }

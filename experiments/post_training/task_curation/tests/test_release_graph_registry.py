@@ -662,8 +662,10 @@ def test_typed_inputs_coerce_reference_fields():
         "output_root": "/fixture/census",
         "region_prefix": "s3://bucket-region/",
         "expected_sources": 2,
+        "workers": 4,
         "slice_output_root": None,
     }
     inputs = typed_inputs(census_stage.CensusInputs, config)
     assert isinstance(inputs.inputs, ArtifactRef)
     assert inputs.expected_sources == 2
+    assert inputs.workers == 4

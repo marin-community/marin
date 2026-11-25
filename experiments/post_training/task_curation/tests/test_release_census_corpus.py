@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.release_stages import census as cen
 from experiments.post_training.task_curation.release_stages import corpus_assembly as corpus_stage
 from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.tests import census_parallel_fixtures as census_fixtures
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 FIXTURE_IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
@@ -78,10 +79,10 @@ def _task_spec(task_id: str) -> TaskSpec:
     )
 
 
-def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceTextPopulation, str]:
-    """A frozen population artifact over ``tasks``; returns the artifact and its scan sha."""
-    population_dir = tmp_path / "population"
-    specs_dir = tmp_path / "specs"
+def _population_at(root: Path, source_id: str, tasks: list[TaskSpec]) -> tuple[SourceTextPopulation, str]:
+    """A frozen population artifact under ``root`` for ``source_id``; returns it and its scan sha."""
+    population_dir = root / "population"
+    specs_dir = root / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
     population_dir.mkdir(parents=True, exist_ok=True)
     encoded = [json.dumps(task.model_dump(mode="json")) for task in tasks]
@@ -90,7 +91,7 @@ def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceText
     pq.write_table(pa.Table.from_pylist(rows), specs_dir / "part-00000.parquet", compression="zstd")
     population = SourceTextPopulation(
         path=str(population_dir),
-        source_id=SOURCE_ID,
+        source_id=source_id,
         dataset_id="fixture",
         dataset_revision="1",
         source_version="1",
@@ -99,7 +100,7 @@ def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceText
         task_count=len(tasks),
         text_sha256=scan_sha,
         task_specs_sha256=scan_sha,
-        main_output_dir=str(tmp_path / "main"),
+        main_output_dir=str(root / "main"),
         specs_output_dir=str(specs_dir),
         converter_rejections={},
         admission_rejections={},
@@ -114,19 +115,26 @@ def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceText
     return population, scan_sha
 
 
-def _declaration(tmp_path: Path, scan_sha: str, measured_tasks: int = 2) -> QualifiedSourceDeclaration:
+def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceTextPopulation, str]:
+    """A frozen population artifact over ``tasks``; returns the artifact and its scan sha."""
+    return _population_at(tmp_path, SOURCE_ID, tasks)
+
+
+def _declaration_at(
+    root: Path, scan_sha: str, *, measured_tasks: int = 2, dataset: str = "fixture"
+) -> QualifiedSourceDeclaration:
     return QualifiedSourceDeclaration(
-        id=source_identifier(SourceOrigin.MARIN, "fixture", None, None),
-        display_name="Marin · fixture",
+        id=source_identifier(SourceOrigin.MARIN, dataset, None, None),
+        display_name=f"Marin · {dataset}",
         origin="Marin",
-        build_path="fixture",
-        upstream_dataset="fixture",
-        upstream_name="fixture",
+        build_path=dataset,
+        upstream_dataset=dataset,
+        upstream_name=dataset,
         current_release={"repo": "fixture", "revision": "1", "url": "https://example.org/pin"},
         family="fixture",
         tags=[],
         task_count=measured_tasks,
-        within_source_dedup=deduplication_evidence("fixture", "1", "1", count=measured_tasks),
+        within_source_dedup=deduplication_evidence(dataset, "1", "1", count=measured_tasks),
         notes="",
         dataset_id="fixture",
         dataset_revision="1",
@@ -150,9 +158,13 @@ def _declaration(tmp_path: Path, scan_sha: str, measured_tasks: int = 2) -> Qual
             converter_revision="1",
             measured_tasks=measured_tasks,
             task_specs_sha256=scan_sha,
-            evidence_url=str(tmp_path / "population" / ".artifact.json"),
+            evidence_url=str(root / "population" / ".artifact.json"),
         ),
     )
+
+
+def _declaration(tmp_path: Path, scan_sha: str, measured_tasks: int = 2) -> QualifiedSourceDeclaration:
+    return _declaration_at(tmp_path, scan_sha, measured_tasks=measured_tasks)
 
 
 def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
@@ -186,6 +198,7 @@ def _census_inputs(tmp_path: Path, declaration, revision: str) -> census_stage.C
         output_root=str(tmp_path / "release" / "census"),
         region_prefix=str(tmp_path) + "/",
         expected_sources=1,
+        workers=1,
         slice_output_root=str(tmp_path / "slice" / "census"),
     )
 
@@ -272,6 +285,7 @@ def test_census_preflight_requires_slice_and_slice_root(tmp_path):
         output_root=inputs.output_root,
         region_prefix=inputs.region_prefix,
         expected_sources=1,
+        workers=1,
     )
     with pytest.raises(ValueError, match="slice_output_root"):
         census_stage.run_census(
@@ -298,6 +312,7 @@ def test_census_refuses_bad_region_pin_count_and_inputs(tmp_path):
             output_root=inputs.output_root,
             region_prefix=inputs.region_prefix,
             expected_sources=inputs.expected_sources,
+            workers=inputs.workers,
             slice_output_root=inputs.slice_output_root,
         )
         fields.update(overrides)
@@ -361,6 +376,7 @@ def test_census_refuses_declaration_drift(tmp_path):
         output_root=str(tmp_path / "release" / "census"),
         region_prefix=str(tmp_path) + "/",
         expected_sources=1,
+        workers=1,
         slice_output_root=str(tmp_path / "slice" / "census"),
     )
     with pytest.raises(ValueError, match="does not match the current declaration"):
@@ -382,6 +398,92 @@ def test_census_refuses_declared_count_drift(tmp_path):
             sources_fn=_source_registry(declaration),
             feeds=_feeds(tmp_path),
         )
+
+
+def _relativize(value, root: Path):
+    """Replace absolute ``root``-prefixed strings so two output roots compare equal."""
+    if isinstance(value, str):
+        prefix = str(root)
+        if value.startswith(prefix):
+            return "<root>" + value[len(prefix) :]
+        return value
+    if isinstance(value, dict):
+        return {key: _relativize(item, root) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_relativize(item, root) for item in value]
+    return value
+
+
+def test_census_fans_out_across_workers_with_identical_rows(tmp_path, monkeypatch):
+    """The worker fan-out writes the same per-source rows as a serial run, in order.
+
+    Both runs share one population tree (the frozen inputs bind absolute paths and
+    their content-addressed shas) and differ only in the census output root. The
+    rows compare equal after relativizing that root and dropping the references
+    whose digests cover the root itself (the run's own result/inventory seals).
+    """
+    tree = tmp_path / "tree"
+    _, scan_sha = _population_at(tree, SOURCE_ID, [_task_spec("fixture-task-one"), _task_spec("fixture-task-two")])
+    declaration = _declaration_at(tree, scan_sha)
+    document = {
+        "kind": census_stage.INPUTS_KIND,
+        "source_revision": "a" * 40,
+        "rows": [
+            {
+                "source_id": SOURCE_ID,
+                "declaration": declaration.model_dump(mode="json"),
+                "population_path": str(tree / "population"),
+            }
+        ],
+    }
+
+    def inputs(root: Path, workers: int) -> census_stage.CensusInputs:
+        return census_stage.CensusInputs(
+            release_id="testrelease",
+            source_revision="a" * 40,
+            inputs=_seal_json(tmp_path, f"census-inputs-{workers}.json", document),
+            output_root=str(root / "census"),
+            region_prefix=str(tmp_path) + "/",
+            expected_sources=1,
+            workers=workers,
+        )
+
+    monkeypatch.setenv(census_fixtures.DECLARATIONS_ENV, json.dumps({SOURCE_ID: declaration.model_dump(mode="json")}))
+    parallel_root, serial_root = tmp_path / "parallel", tmp_path / "serial"
+    parallel = census_stage.run_census(
+        inputs(parallel_root, workers=2),
+        dry_run=False,
+        sources_fn=census_fixtures.spawned_registry,
+        feeds=_feeds(tmp_path),
+    )
+    serial = census_stage.run_census(
+        inputs(serial_root, workers=1),
+        dry_run=False,
+        sources_fn=_source_registry(declaration),
+        feeds=_feeds(tmp_path),
+    )
+
+    def comparable(proof: dict, root: Path) -> list[dict]:
+        rows = [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in ("result_ref", "inventory_reference", "public_preparation")
+            }
+            for row in proof["results"]
+        ]
+        return _relativize(rows, root)
+
+    assert [row["source_id"] for row in parallel["results"]] == [row["source_id"] for row in serial["results"]]
+    assert comparable(parallel, parallel_root) == comparable(serial, serial_root)
+    for parallel_row, serial_row in zip(parallel["results"], serial["results"], strict=True):
+        # The preparation manifest's content is root-free, so its digest must match.
+        assert (
+            parallel_row["public_preparation"]["manifest"]["sha256"]
+            == serial_row["public_preparation"]["manifest"]["sha256"]
+        )
+    for field in ("kind", "release_id", "source_revision", "sources", "tasks", "oracle_tasks", "sql_writes"):
+        assert parallel[field] == serial[field], field
 
 
 def _corpus_inputs(
@@ -437,6 +539,57 @@ def test_corpus_assembly_end_to_end_after_census(tmp_path):
     assert sum(row["task_count"] for row in corpus["inventory"]) == 2
     with pytest.raises(ValueError, match="already exists"):
         corpus_stage.run_corpus_assembly(inputs, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
+
+
+def test_corpus_assembly_fans_out_with_identical_corpus(tmp_path):
+    """The preparation worker fan-out assembles the same corpus as a serial run."""
+    tasks = [_task_spec("fixture-task-one"), _task_spec("fixture-task-two")]
+    _, scan_sha = _write_population(tmp_path, tasks)
+    declaration = _declaration(tmp_path, scan_sha)
+    revision = "a" * 40
+    census_proof = census_stage.run_census(
+        _census_inputs(tmp_path, declaration, revision),
+        dry_run=False,
+        sources_fn=_source_registry(declaration),
+        feeds=_feeds(tmp_path),
+    )
+    receipt = ArtifactRef(uri=census_proof["receipt"]["uri"], sha256=census_proof["receipt"]["sha256"])
+    document = {
+        "kind": census_stage.INPUTS_KIND,
+        "source_revision": revision,
+        "rows": [
+            {
+                "source_id": SOURCE_ID,
+                "declaration": declaration.model_dump(mode="json"),
+                "population_path": str(tmp_path / "population"),
+            }
+        ],
+    }
+
+    def inputs(root: Path, workers: int) -> corpus_stage.CorpusAssemblyInputs:
+        return corpus_stage.CorpusAssemblyInputs(
+            release_id="testrelease",
+            source_revision=revision,
+            inputs=_seal_json(tmp_path, f"corpus-inputs-{workers}.json", document),
+            census_receipt=receipt,
+            output_root=str(root / "corpus"),
+            expected_sources=1,
+            workers=workers,
+        )
+
+    parallel_root, serial_root = tmp_path / "parallel", tmp_path / "serial"
+    registry = _source_registry(declaration)
+    parallel = corpus_stage.run_corpus_assembly(
+        inputs(parallel_root, workers=2), dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path)
+    )
+    serial = corpus_stage.run_corpus_assembly(
+        inputs(serial_root, workers=1), dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path)
+    )
+    assert parallel["tasks"] == serial["tasks"] == 2
+    assert parallel["sources"] == serial["sources"] == 1
+    parallel_corpus = json.loads((parallel_root / "corpus" / "corpus.json").read_text())
+    serial_corpus = json.loads((serial_root / "corpus" / "corpus.json").read_text())
+    assert _relativize(parallel_corpus, parallel_root) == _relativize(serial_corpus, serial_root)
 
 
 def test_corpus_assembly_refuses_stale_census_receipt(tmp_path):
@@ -557,6 +710,7 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
         output_root=str(tmp_path / "release" / "census"),
         region_prefix=str(tmp_path) + "/",
         expected_sources=2,
+        workers=1,
         slice_output_root=str(tmp_path / "slice" / "census"),
     )
     census_proof = census_stage.run_census(
