@@ -205,5 +205,5 @@ ServingGeometry(
 
 This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
-`ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
-Single-task serving also supports local weight staging.
+`ServedModelConfig.object_store_load_mode` defaults to `STREAM`. With `STAGE_LOCAL`, every task stages its
+own local copy of the weights before vLLM starts.

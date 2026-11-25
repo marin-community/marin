@@ -538,7 +538,7 @@ class IrisConfig:
 class RemoteInferenceConfig:
     """Remote serving; ``instances`` counts independent servers.
 
-    Multi-task geometry uses one coordinated vLLM group and stream loading.
+    Multi-task geometry uses one coordinated vLLM group; with local staging, each task stages its own copy.
     Session routing requires ``instances=1``, ``broker=None``.
     """
 
