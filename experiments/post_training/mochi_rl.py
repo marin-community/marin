@@ -205,7 +205,6 @@ _TRAIN_LONG = Preset(
     tasks_input="optional",
     accepts_settings=True,
     accepts_init=True,
-    control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
@@ -234,7 +233,6 @@ _UPDATE_SECONDS = Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM
 _SPEED_MEDIUM = replace(
     _TRAIN_MEDIUM.with_updates(10),
     name="speed-medium",
-    control_preset="speed-medium",
     measured=range(2, 11),
     tasks_input="forbidden",
     temporary_output=False,
@@ -245,7 +243,6 @@ _LEARNING_SCORE = Metric(f"{_EVALUATION.name}/family_mean", True)
 _LEARNING_MEDIUM = replace(
     _TRAIN_LONG.with_updates(10),
     name="learning-medium",
-    control_preset="learning-medium",
     evaluations=(replace(_EVALUATION, every=None, at_start=True),),
     temporary_output=False,
     guards=(_LEARNING_SCORE,),
@@ -266,7 +263,6 @@ MOCHI = ModelPresets(
         agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
-    control_pins={},
     needs_completed_default_export=True,
 )
 

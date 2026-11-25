@@ -7,11 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
-import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
-from urllib.parse import urlencode
 
 import click
 from finestore.rl.rl_progress import (
@@ -20,7 +17,6 @@ from finestore.rl.rl_progress import (
     AttemptSummary,
     Comparison,
     ComparisonRole,
-    ControlReplicate,
     GateResult,
     GraderReport,
 )
@@ -49,6 +45,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url
+from experiments.post_training.rl_index import publish_result
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
@@ -59,27 +56,8 @@ from experiments.post_training.rl_measurements import (
     training_invariants,
 )
 
-APPLET_ID = tomllib.loads(
-    (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
-)["applet_id"]
 ISSUE_FILENAME = "issue.json"
 logger = logging.getLogger(__name__)
-
-
-def publish_result(summary: AttemptSummary, service_url: str | None = None) -> str:
-    """Upsert one native attempt and return its verified dashboard URL."""
-    from marina import client  # noqa: PLC0415
-
-    service_url = service_url or client.DEFAULT_MARINA_URL
-    details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
-    origin = client.applet_origin(service_url, details["authenticated_url"])
-    served = client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json"))
-    if not isinstance(served, dict) or (served.get("run_id"), served.get("attempt_id")) != (
-        summary.run_id,
-        summary.attempt_id,
-    ):
-        raise RuntimeError(f"Published attempt {summary.run_id}/{summary.attempt_id} has a different returned identity")
-    return details["authenticated_url"] + "#" + urlencode({"run": summary.run_id, "attempt": summary.attempt_id})
 
 
 class PublicationOutcome(BaseModel):
@@ -191,7 +169,6 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
-        control_commit=report.control.commit,
         control_version=report.control.version,
     )
 
@@ -220,7 +197,6 @@ def build_record(
     gate_name: str | None = None,
     evaldash_run_ids: tuple[str, ...] | None = None,
     gate_failure: bool = False,
-    control: ControlReplicate | None = None,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
@@ -263,10 +239,8 @@ def build_record(
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=bool(control or inputs.control or (index and index.is_control)),
+        is_control=index.is_control if index is not None else False,
         base_preset_version=index.base_preset_version if index is not None else None,
-        control=control or inputs.control,
-        control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
         evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
@@ -456,7 +430,6 @@ def publish_runs(
     evaldash_run_ids: tuple[str, ...] | None = None,
     issue: int | None = None,
     failed_coordinator: str | None = None,
-    controls: Mapping[str, ControlReplicate] | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
@@ -517,7 +490,6 @@ def publish_runs(
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
                     gate_failure=missing_gate,
-                    control=controls.get(path) if controls is not None else None,
                 )
                 if issue is not None:
                     record = record.model_copy(
@@ -537,76 +509,37 @@ def publish_runs(
     return result
 
 
-def publish_controls(
-    table: presets.ModelPresets, preset_name: str, *, service_url: str | None = None
-) -> PublicationOutcome:
-    """Publish the exact pinned controls from their stored native outputs."""
-    preset = table.by_name.get(preset_name)
-    if preset is None or not preset.gated:
-        raise click.BadParameter("Choose a dashboard preset with controls", param_hint="--preset")
-    try:
-        pin = gate.control_pin(preset, table=table)
-    except InvalidComparison as error:
-        raise click.UsageError(str(error)) from error
-    configure_coreweave_s3()
-    controls = {
-        gate.control_path(preset, pin, index, table=table): ControlReplicate(
-            commit=pin.commit, version=pin.version, replicate=index
-        )
-        for index in range(pin.replicates)
-    }
-    result = publish_runs(
-        tuple(controls),
-        table.by_name[pin.preset],
-        table=table,
-        service_url=service_url,
-        controls=controls,
-    )
-    if result.unserved_records:
-        result.retry = "Repeat the control publication command."
-    return result
-
-
 def command(table: presets.ModelPresets) -> click.Command:
-    """Build stored-attempt and pinned-control publication commands for a model table."""
+    """Build the stored-attempt publication command for a model table."""
 
     @click.command()
     @click.option("--preset", "preset_name", type=click.Choice(tuple(table.by_name)), required=True)
     @click.option("--marina-url", "url", help="Marina origin (defaults to the Marina service).")
-    @click.option("--run-output", "run_output", help="Stored native run output; requires --attempt.")
-    @click.option("--attempt", help="Publish this stored attempt from --run-output, without native execution.")
+    @click.option("--run-output", required=True, help="Stored native run output.")
+    @click.option("--attempt", required=True, help="Attempt ID within the stored native run.")
     @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
     @click.option("--issue", type=click.IntRange(min=1), help="Associate an existing native attempt with an issue.")
     def command(
         preset_name: str,
         url: str | None,
-        run_output: str | None,
-        attempt: str | None,
+        run_output: str,
+        attempt: str,
         evaldash_run_id: tuple[str, ...],
         issue: int | None,
     ) -> None:
-        """Publish pinned controls or one stored native attempt."""
-        if (run_output is None) != (attempt is None):
-            raise click.UsageError("--run-output and --attempt are required together")
-        if evaldash_run_id and attempt is None:
-            raise click.UsageError("--evaldash-run-id requires --run-output and --attempt")
-        if issue is not None and attempt is None:
-            raise click.UsageError("--issue requires --run-output and --attempt")
-        if run_output is not None:
-            configure_coreweave_s3()
-            result = publish_runs(
-                [run_output],
-                table.by_name[preset_name],
-                table=table,
-                service_url=url,
-                attempt_id=attempt,
-                evaldash_run_ids=evaldash_run_id or None,
-                issue=issue,
-            )
-            if result.unserved_records:
-                result.retry = "Repeat this publication command with --run-output and --attempt."
-        else:
-            result = publish_controls(table, preset_name, service_url=url)
+        """Publish one stored native attempt."""
+        configure_coreweave_s3()
+        result = publish_runs(
+            [run_output],
+            table.by_name[preset_name],
+            table=table,
+            service_url=url,
+            attempt_id=attempt,
+            evaldash_run_ids=evaldash_run_id or None,
+            issue=issue,
+        )
+        if result.unserved_records:
+            result.retry = "Repeat this publication command with --run-output and --attempt."
         click.echo(json.dumps(result.to_dict()))
         if result.unserved_records:
             raise click.exceptions.Exit(1)

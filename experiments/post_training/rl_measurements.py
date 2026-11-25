@@ -18,7 +18,7 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.rl_progress import Comparison, ComparisonRole, ControlReplicate, Invariant
+from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
 from finestore.rl.strata import TaskStrata
 from marin.rl.skyrl import read_skyrl_attempt
@@ -231,7 +231,6 @@ class RunOptions(BaseModel, frozen=True):
 
 class RunInputs(BaseModel, frozen=True):
     preset_name: str
-    control: ControlReplicate | None = None
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: presets.StoredInitializer | None = None

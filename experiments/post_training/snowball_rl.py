@@ -38,7 +38,6 @@ from experiments.post_training.rl_presets import (
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
     UPDATE_SECONDS_METRIC,
-    ControlPin,
     Evaluation,
     Generation,
     Layout,
@@ -274,7 +273,6 @@ _LEARNING_MEDIUM = _snowball(
     measured=range(21, 26),
     checkpoint_every=26,
     accepts_init=True,
-    control_preset="learning-medium",
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
@@ -418,7 +416,6 @@ _PRESETS = (
         ),
         updates=0,
         measured=range(1),
-        control_preset="speed-short",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
         guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
@@ -434,7 +431,6 @@ _PRESETS = (
         measured=range(1),
         tasks_input="required",
         accepts_settings=False,
-        control_preset="data-short",
         owned_keys=_OWNED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["screen_256x4"],),
         guards=(Metric("screen_256x4/mixed_fraction", True),),
@@ -456,7 +452,6 @@ _PRESETS = (
         ),
         updates=10,
         measured=range(2, 11),
-        control_preset="speed-medium",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -470,7 +465,6 @@ _PRESETS = (
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
-        control_preset="speed-long",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -484,7 +478,6 @@ _PRESETS = (
         tasks_input="required",
         accepts_settings=False,
         accepts_init=False,
-        control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
     _TRAIN_LONG,
@@ -515,16 +508,6 @@ SNOWBALL = ModelPresets(
     model="snowball",
     presets=_PRESETS,
     namespace="snowball-rl",
-    control_pins={
-        name: ControlPin(name, "648b5687f0", "2026.11.06.1", tuple((index, 0) for index in range(count)))
-        for name, count in (
-            ("speed-short", 5),
-            ("data-short", 4),
-            ("speed-medium", 4),
-            ("learning-medium", 4),
-            ("speed-long", 4),
-        )
-    },
 )
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 
 """Read and write stored attempt summaries through the RL Progress applet."""
 
+import json
 import tomllib
 from pathlib import Path
 from urllib.parse import urlencode
@@ -32,7 +33,7 @@ def list_attempts(service_url: str | None = None) -> list[AttemptSummary]:
 
     origin, _ = _app(service_url)
     response = client.marina_request(origin, "GET", _RUNS_PATH)
-    return _ATTEMPTS.validate_python(response["runs"], strict=False)
+    return _ATTEMPTS.validate_json(json.dumps(response["runs"]))
 
 
 def publish_result(summary: AttemptSummary, service_url: str | None = None) -> str:

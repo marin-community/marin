@@ -58,6 +58,7 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    cohort_from_fixtures,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -101,23 +102,29 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, cache_native_compositions):
+def test_compare_writes_the_report_for_the_five_newest_base_version_controls(recorded_runs, cache_native_compositions):
     cache_native_compositions()
-    controls(recorded_runs, "speed-medium")
-    report = compare("speed-medium", "--leave-out", "r0")
+    preset = "speed-medium"
+    controls(recorded_runs, preset)
+    extra = recorded_runs(preset, "controls/extra", control=True, attempt_id="newest", speed=102)
+    recorded_runs(preset, "users/test/baseline", speed=102)
+    report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    assert [attempt["attempt_id"] for attempt in report["control"]["attempts"]] == [
+        "control-r4", "control-r3", "control-r2", "control-r1", "control-r0",
+    ]
+    assert str(extra) not in {attempt["path"] for attempt in report["control"]["attempts"]}
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
-    assert all(row["comparator"] is not None for row in report["invariants"])
     for name, speed, kl, verdict, effect in (
         ("improvement", 90, 0.1, "pass", "improves"),
         ("regression", 150, 0.1, "fail", "regression"),
         ("trade-off", 90, 0.2, "fail", "trade-off"),
     ):
         candidate = "users/test/" + name
-        recorded_runs("speed-medium", candidate, speed=speed, metrics={KL: kl})
-        result = compare("speed-medium", "--candidate", candidate)
+        recorded_runs(preset, candidate, speed=speed, metrics={KL: kl})
+        result = compare(preset, "--candidate", candidate)
         assert (result["verdict"], result["effect"]) == (verdict, effect), result
 
 
@@ -176,20 +183,15 @@ def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
-    pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
-    control_roots = []
-    for index in range(len(pin.members)):
-        root = recorded_runs(
-            preset.name,
-            gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL),
-            speed=100 + index,
-            metrics={key: 100 + index},
-        )
-        control_roots.append(root)
+    control_roots = controls(recorded_runs, preset.name)
+    for index, root in enumerate(control_roots):
+        edit_metrics(root, lambda row: row.update({key: 100 + index}))
     candidates = []
+    roots = []
     for index, value in enumerate((0, 0.01)):
         name = f"users/test/requirements-{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
+        roots.append(root)
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
     report = run(
         gate.gate_step(
@@ -204,33 +206,35 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
                     "speed/update_seconds<=control",
                 ),
             ),
-            table=snowball_model.SNOWBALL,
+            cohort=cohort_from_fixtures(roots[0]),
         )
     )[0]
     assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
-    assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(0.75))
+    assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 4) * math.sqrt(2.5) * math.sqrt(0.7))
     requirement = report.rows(ComparisonRole.REQUIREMENT)
     assert len(requirement) == 1 and requirement[0].passes
-    assert requirement[0].tolerance == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) * math.sqrt(0.5 + 0.25))
+    assert requirement[0].tolerance == pytest.approx(t.ppf(0.975, 4) * math.sqrt(2.5) * math.sqrt(0.7))
     assert [(row.replicate, row.holds) for row in report.invariants if row.name == "require/" + key] == [
         (0, True),
         (1, False),
     ]
 
-    for root in control_roots:
-        with edit_receipt(root) as receipt:
-            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
-    stale = run(
+    cohort = cohort_from_fixtures(roots[0])
+    member = cohort.attempts[0]
+    original = read_attempt(str(Path(member.path) / "exports"), member.attempt_id)
+    assert original is not None and original.index is not None
+    with edit_receipt(Path(member.path)) as receipt:
+        receipt["config"]["run"]["attempt_id"] = "later-control-retry"
+        receipt["result"]["state"] = "failed"
+    same_cohort = run(
         gate.gate_step(
-            preset,
-            tuple(candidates),
-            table=snowball_model.SNOWBALL,
+            preset, tuple(candidates), cohort=cohort,
             inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
         )
     )[0]
-    assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
+    assert "failed" not in (same_cohort.reason or "") and same_cohort.control.attempts == cohort.attempts
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
@@ -596,44 +600,18 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
-@pytest.mark.timeout(15)
-@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
-def test_native_failure_stops_build_child(tmp_path, exit_early):
-    lock = tmp_path / "build.lock"
-    lock.touch()
-    worker = Path(__file__).with_name("native_build_child.py")
-    failure = "exited with status 7" if exit_early else "timed out after 2 s"
-    deadline = monotonic() + 6
-    with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
-        gate._native_command_json(
-            "Prepare test environment",
-            [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)],
-            env=gate.skyrl_cpu_environment(),
-            timeout=2,
-        )
-    with lock.open("r+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-    assert monotonic() < deadline, "native failure waited for the build child to finish"
-
-
 @pytest.mark.parametrize(
     "case",
     [
         "initializer",
         "initializer-hf",
         "priority",
-        "stale-default",
-        "control-commit",
         "unbound-data",
         "allocation",
         "cached-default",
         "zero-spread",
         "missing-guard",
-        "omitted-default",
-        "omitted-current-nondefault",
-        "omitted-schema-nondefault",
         "omitted-candidate-default",
-        "schema-timeout",
         "protocol-temperature",
         "evaluation-cadence",
         "malformed-seed",
@@ -644,21 +622,7 @@ def test_gate_compares_recorded_configuration_and_defaults(
 ):
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
-    settings = (
-        ()
-        if case
-        in (
-            "stale-default",
-            "cached-default",
-            "zero-spread",
-            "omitted-default",
-            "omitted-current-nondefault",
-            "omitted-schema-nondefault",
-            "omitted-candidate-default",
-            "schema-timeout",
-        )
-        else (setting,)
-    )
+    settings = () if case in {"cached-default", "zero-spread", "omitted-candidate-default"} else (setting,)
     inputs = RunInputs(preset_name=preset.name, settings=settings)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
@@ -684,24 +648,14 @@ def test_gate_compares_recorded_configuration_and_defaults(
             )
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
-    control_roots = controls(recorded_runs, preset.name)
-    if case == "zero-spread":
-        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
-        control_roots = [
-            recorded_runs(preset.name, gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL), score=0.5)
-            for index in range(len(pin.members))
-        ]
-    if case in ("stale-default", "omitted-current-nondefault"):
-        changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
-        preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((changed,))))
-        preset_table(preset)
+    controls(recorded_runs, preset.name, score=0.5 if case == "zero-spread" else None)
     name = "users/test/config-" + case
     if case == "initializer-hf":
         with monkeypatch.context() as planning:
             planning.setattr(
                 skyrl_api, "discover_hf_checkpoints", lambda *_: pytest.fail("gate planning read the initializer export")
             )
-            planned = gate.validate_candidate(preset, inputs, table=snowball_model.SNOWBALL)
+            planned = gate.compose_candidate(preset, inputs)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
     if case == "priority":
@@ -710,96 +664,24 @@ def test_gate_compares_recorded_configuration_and_defaults(
             recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
         )
         inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})
-        gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
+        gate.compose_candidate(override, inputs)
         table = snowball_model.SNOWBALL
         with monkeypatch.context() as altered:
-            pin = gate.control_pin(override, table=table)
-            single = replace(table, presets=(override,), control_pins={pin.preset: pin})
+            single = replace(table, presets=(override,))
             altered.setattr(snowball_model, "SNOWBALL", single)
             candidate = recorded_runs(preset.name, name, inputs=inputs)
         assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
         candidate = recorded_runs(preset.name, name, inputs=inputs)
-    omissions = {
-        "omitted-default": {
-            "config.skyrl.generator.chat_template_kwargs": {},
-            "config.inputs.starting_checkpoint": None,
-            "config.iris.role_topology": None,
-        },
-        "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
-        "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "schema-timeout": {"config.skyrl.generator.chat_template_kwargs": {}},
-    }.get(case, {})
-    if omissions:
-        omitted = [candidate] if case == "omitted-candidate-default" else control_roots
-        for old in omitted:
-            with edit_receipt(old) as receipt:
-                for path, original in omissions.items():
-                    parent, key = path.rsplit(".", 1)
-                    assert get_path(receipt, parent).pop(key) == original
-    if case == "schema-timeout":
-        cache_native_compositions()
-        secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
-        run_native = gate._run_native_process
-        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
-            with monkeypatch.context() as unavailable:
-                unavailable.setattr(
-                    Provenance,
-                    "capture",
-                    lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
-                )
-
-                def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if diagnostic == "bootstrap" and command[-1] == "--version":
-                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-                    if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
-                        if diagnostic == "timeout":
-                            interrupted_secret = secret.replace("sk-", "sk\x1b-")
-                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
-                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
-                        if diagnostic == "last-phase":
-                            stderr = (
-                                f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
-                                f"{gate._NATIVE_PHASE}Read native schema defaults\n"
-                            )
-                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
-                        if diagnostic == "oserror":
-                            raise FileNotFoundError("native composer executable missing")
-                        if diagnostic == "empty-stderr":
-                            raise subprocess.CalledProcessError(1, command, "", "")
-                        return "not JSON" if diagnostic == "invalid-json" else ""
-                    return run_native(command, *args, **kwargs)
-
-                unavailable.setattr(gate, "_run_native_process", unavailable_defaults)
-                report = compare(preset.name, "--candidate", name)
-                assert (
-                    report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
-                ), report
-                if diagnostic == "timeout":
-                    assert "timed out after 120 s" in report["reason"]
-                    assert "Import native modules" in report["reason"]
-                    assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
-                if diagnostic == "last-phase":
-                    assert report["reason"].endswith(". Read native schema defaults timed out after 120 s")
-                if diagnostic == "empty":
-                    assert report["reason"].endswith("Read native schema defaults returned no output")
-                if diagnostic == "invalid-json":
-                    assert report["reason"].endswith("Read native schema defaults returned invalid JSON")
-                if diagnostic == "bootstrap":
-                    assert "Prepare SkyRL CPU environment" in report["reason"]
-                    assert "timed out after 300 s" in report["reason"]
-        return
+    if case == "omitted-candidate-default":
+        with edit_receipt(candidate) as receipt:
+            assert receipt["config"]["skyrl"]["generator"].pop("chat_template_kwargs") == {}
     reasons = {
-        "stale-default": ("control config differs",),
         "zero-spread": ("variation is zero",),
         "missing-guard": ("missing or non-finite guard metric",),
-        "omitted-current-nondefault": ("control config differs",),
-        "omitted-schema-nondefault": ("control config differs",),
         "omitted-candidate-default": ("skyrl.generator.chat_template_kwargs",),
     }.get(case, ())
     mutation = {
-        "control-commit": (control_roots[0], "result.provenance.base_commit", "wrong-commit", "does not match its pin"),
         "unbound-data": (candidate, "config.skyrl.data.train_data", ["/unbound/train.parquet"], "skyrl.data.train_data"),
         "allocation": (
             candidate,
@@ -915,257 +797,6 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
             pq.write_table(pa.Table.from_pylist(pool), copied / filename)
     report = compare(preset, "--candidate", "users/test/task-content-edited")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
-
-
-@pytest.mark.parametrize(
-    "shared, reason",
-    (
-        (set(range(10)), "10 of 20 control tasks shared"),
-        (set(range(1, 20)), "family/small: 0 of 1 control tasks shared"),
-    ),
-)
-def test_link_requires_overall_and_family_task_overlap(shared, reason):
-    labels = {str(index): TaskStrata(family="small" if index == 0 else "large") for index in range(20)}
-    table = snowball_model.SNOWBALL
-    pin = table.control_pins["learning-medium"]
-    preset = table.by_name[pin.preset]
-    metadata = gate.RunMetadata(preset_name=preset.name, replicates=2)
-    with gate._report_scope(preset, metadata, pin, len(pin.members)) as report:
-        gate._require_shared_overlap("eval_lite", {str(index) for index in shared}, labels)
-    assert report.verdict == "invalid" and report.reason and reason in report.reason
-    coverage = {fact.name: fact for fact in report.invariants}
-    assert coverage[f"eval_lite/{SHARED_TASKS_INVARIANT}"].value == len(shared)
-    assert coverage[f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"].value == len(shared) / len(labels)
-    assert not report.invariants[-1].holds
-
-
-@pytest.mark.parametrize(
-    "case, replaced, extra, shared",
-    (
-        ("different-content", (19,), 0, 19),
-        ("additional-tasks", (), 1, 20),
-        ("relabeled-family", (), 0, 20),
-    ),
-)
-def test_control_link_scores_shared_evaluation(
-    recorded_runs, preset_table, monkeypatch, tmp_path, cache_native_compositions, case, replaced, extra, shared
-):
-    cache_native_compositions()
-    preset = replace(
-        snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3), checkpoint_every=3
-    )
-    table = preset_table(preset)
-    previous = replace(gate.control_pin(preset, table=table), members=((0, 0), (1, 0)))
-    table = replace(table, control_pins={**table.control_pins, preset.name: previous})
-    monkeypatch.setattr(snowball_model, "SNOWBALL", table)
-    baseline_roots = controls(recorded_runs, preset.name)
-    if case in ("different-content", "relabeled-family"):
-        for control, score in zip(baseline_roots, (0.1, 0.9), strict=True):
-            export = str(control / "exports")
-            rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
-            selected = "task-19" if case == "different-content" else "task-0"
-            write_evaluations(
-                export,
-                [
-                    row.model_copy(
-                        update={
-                            "answers": [answer.model_copy(update={"verifier_score": score}) for answer in row.answers],
-                        }
-                    )
-                    for row in rows
-                    if row.task_id == selected
-                ],
-            )
-    old_binding = preset.held_out_tasks
-    assert old_binding is not None
-    new_binding = old_binding.split("@")[0] + "@2026.11.24.1"
-    old_panel = Path(recipe.selection_artifact(old_binding).path())
-    panel = Path(recipe.selection_artifact(new_binding).path())
-    panel.mkdir(parents=True)
-    old_tasks = pq.read_table(old_panel / FULL_VALIDATION_FILENAME).to_pylist()
-    count = len(old_tasks)
-    assert count == 20
-    annotations = pq.read_table(old_panel / TASK_MANIFEST_FILENAME).to_pylist()[:count]
-    if case == "relabeled-family":
-        annotations[0]["family"] = "large"
-    for index in replaced:
-        task = json.loads(old_tasks[index]["task_spec"])
-        task["context"]["events"][0]["content"] = f"Updated question {index}"
-        old_tasks[index]["task_spec"] = json.dumps(task)
-        annotations[index]["task_digest"] = canonical_sha256(task)
-    for index in range(count, count + extra):
-        task = json.loads(old_tasks[-1]["task_spec"])
-        task["id"] = f"task-{index}"
-        old_tasks.append({"task_spec": json.dumps(task)})
-        annotations.append({**annotations[-1], "task_id": task["id"], "task_digest": canonical_sha256(task)})
-    for name in (VALIDATION_FILENAME, FULL_VALIDATION_FILENAME):
-        pq.write_table(pa.Table.from_pylist(old_tasks), panel / name)
-    pq.write_table(
-        pa.Table.from_pylist(annotations, schema=arrow_schema(SelectionTaskRow)), panel / TASK_MANIFEST_FILENAME
-    )
-    summary = json.loads((old_panel / "summary.json").read_text())
-    summary.update(validation_rows=count + extra, full_validation_rows=count + extra)
-    summary["selection_strata"]["version"] = "2026.11.24.1"
-    _json(panel / "summary.json", summary)
-
-    fresh = replace(previous, commit="next-main", revision="2026.11.24.1")
-    preset = replace(preset, revision=fresh.revision, held_out_tasks=new_binding)
-    table = preset_table(preset)
-    table = replace(table, control_pins={**table.control_pins, preset.name: fresh})
-    monkeypatch.setattr(snowball_model, "SNOWBALL", table)
-    changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
-    fresh_roots = []
-    for index in range(len(fresh.members)):
-        candidate = recorded_runs(
-            preset.name, gate.control_name(preset.name, fresh.commit, index, table=table), attempt_id=f"fresh-{index}"
-        )
-        fresh_roots.append(candidate)
-        if changed_ids:
-            export = str(candidate / "exports")
-            rows = read_evaluations(export, attempt_id=f"fresh-{index}", evaluation="eval/", step=preset.updates)
-            write_evaluations(
-                export,
-                [
-                    row.model_copy(
-                        update={"answers": [answer.model_copy(update={"verifier_score": 1.0}) for answer in row.answers]}
-                    )
-                    for row in rows
-                    if row.task_id in changed_ids
-                ],
-            )
-    [link] = run(gate.control_link_step(preset, fresh, previous, table=table))
-    report = link.model_dump(mode="json")
-    facts = {fact["name"]: fact for fact in report["invariants"]}
-    assert facts[f"eval_lite/{SHARED_TASKS_INVARIANT}"]["value"] == shared
-    assert facts[f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"]["value"] == shared / count
-    assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
-    assert report["control"]["held_out_tasks"] == old_binding
-    assert report["run"]["held_out_tasks"] == new_binding
-    results = comparisons(report)
-    family_mean = results["eval_lite/family_mean"]
-    assert family_mean["tasks"] == shared and family_mean["run"] == pytest.approx(0.5)
-    # With the relabeled task all 20 tasks share one family. The two edited final answers
-    # average 0.5, and the remaining 19 tasks average 0.495 across the old controls.
-    assert family_mean["control"] == pytest.approx(0.49525 if case == "relabeled-family" else 0.495)
-    if case == "different-content":
-        assert family_mean["sd"] == pytest.approx(0.01 / math.sqrt(2))
-        gate_report = gate._write_gate(
-            preset,
-            (str(fresh_roots[0]),),
-            tuple(map(str, baseline_roots)),
-            replace(previous, revision=fresh.revision),
-            RunInputs(preset_name=preset.name),
-            str(tmp_path / "candidate-gate"),
-        )
-        assert gate_report.verdict == "invalid"
-        assert gate_report.reason == "evaluation protocol or held-out TaskSpec content differs"
-
-        with pytest.raises(ValueError, match="distinct cohorts"):
-            gate.control_link_step(preset, fresh, fresh, table=table)
-        with pytest.raises(ValueError, match="current control pin must match"):
-            gate.control_link_step(preset, previous, fresh, table=table)
-
-        with pytest.raises(ValueError, match="expected two complete control pins"):
-            gate.control_link_step(preset, fresh, replace(previous, members=previous.members[:1]), table=table)
-
-        def rejected_link(expected_reason):
-            report = gate._write_control_link(
-                preset,
-                fresh,
-                previous,
-                tuple(map(str, fresh_roots)),
-                tuple(map(str, baseline_roots)),
-                str(tmp_path / "incompatible-link"),
-            )
-            assert report.verdict == "invalid" and report.reason == expected_reason
-            assert report.run.attempt_ids == ("fresh-0", "fresh-1")
-
-        with edit_receipt(fresh_roots[1]) as receipt:
-            receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates + 1
-        rejected_link("recorded control update budget differs from its preset revision")
-        with edit_receipt(fresh_roots[1]) as receipt:
-            receipt["config"]["skyrl"]["trainer"]["max_steps"] = preset.updates
-
-        baseline = baseline_roots[1]
-        unavailable = baseline.rename(baseline.with_name("unavailable"))
-        rejected_link(f"no terminal attempt record at {baseline}")
-        unavailable.rename(baseline)
-        with edit_receipt(baseline) as receipt:
-            receipt["result"]["provenance"]["dirty"] = True
-        rejected_link(f"control does not match its pin: {baseline}")
-        with edit_receipt(baseline) as receipt:
-            receipt["result"]["provenance"]["dirty"] = False
-            native = deepcopy(receipt["config"])
-        validation = native["inputs"]["validation_data"]
-        mutations = (
-            ("inputs.train_data", [], "recorded control workload differs from the link preset"),
-            ("inputs.evaluation_data", {"retired_evaluation": validation}, EVALUATION_PROTOCOL_DIFFERS),
-            (
-                "skyrl.generator.eval_sampling_params.temperature",
-                0.5,
-                "control cohort contains different evaluation protocols",
-            ),
-            (
-                "inputs.validation_data",
-                [{**validation[0], "identity": "selection/other-panel@2026.11.24.2:fixture"}],
-                "control cohort contains different held-out selections or TaskSpec sets",
-            ),
-        )
-        for key, value, expected_reason in mutations:
-            with edit_receipt(baseline) as receipt:
-                receipt["config"] = deepcopy(native)
-                set_path(receipt["config"], key, value)
-            rejected_link(expected_reason)
-        with edit_receipt(baseline) as receipt:
-            receipt["config"] = native
-
-        export = str(baseline / "exports")
-        original_rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
-        write_evaluations(
-            export,
-            [
-                row.model_copy(
-                    update={
-                        "answers": [
-                            answer.model_copy(update={"error_treatment": "passthrough"}) for answer in row.answers
-                        ]
-                    }
-                )
-                for row in original_rows
-            ],
-        )
-        rejected_link(f"previous control has incomplete evaluation coverage: {baseline}")
-        write_evaluations(export, original_rows)
-
-        export = str(fresh_roots[0] / "exports")
-        [answer_row, *_] = read_evaluations(export, attempt_id="fresh-0", evaluation="eval/")
-        write_evaluations(export, [answer_row.model_copy(update={"task_digest": "0" * 64})])
-        rejected_link(f"recorded held-out TaskSpec content differs for {answer_row.task_id}")
-        write_evaluations(export, [answer_row])
-
-        for root in fresh_roots:
-            with edit_receipt(root) as receipt:
-                receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
-        rejected_link(EVALUATION_PROTOCOL_DIFFERS)
-    if changed_ids:
-        unshared = results["eval_lite/unshared/mean"]
-        assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)
-    else:
-        assert "eval_lite/unshared/mean" not in results
-        assert "eval_lite/family/small/mean" not in results
-        assert results["eval_lite/family/large/mean"]["tasks"] == 20
-        # The edited task's initial scores average 0.50. The other 19 start
-        # at 0.30, giving (0.50 + 19 * 0.30) / 20 = 0.31 and a gain of 0.18525.
-        assert results["eval_lite/family/large/mean/initial"]["control"] == pytest.approx(0.31)
-        assert results["eval_lite/family/large/mean/gain"]["control"] == pytest.approx(0.18525)
-    gain = "eval_lite/family_mean/gain_per_gpu_hour"
-    if extra:
-        assert results[gain]["run"] is results[gain]["control"] is None
-    else:
-        assert results[gain]["run"] == pytest.approx(0.2 / 40)
-        # Without the relabeled task the shared controls go from 0.30 to 0.495.
-        expected_control_gain = 0.18525 if case == "relabeled-family" else 0.195
-        assert results[gain]["control"] == pytest.approx(expected_control_gain / 40)
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])

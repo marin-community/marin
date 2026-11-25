@@ -93,7 +93,7 @@ uv run python -m experiments.post_training.mochi_rl \
 
 Use `--sft PRESET` on the RL command to build the SFT export and initialize RL from its weights
 and tokenizer. Replace `--plan` with `--run` to launch both stages. Use one of `--sft`, `--init`,
-or `--resume` to select the initial weights. Gated presets use pinned controls and refuse `--sft`.
+or `--resume` to select the initial weights. Gated presets compare with indexed controls and refuse `--sft`.
 
 ```bash
 MARIN_PREFIX=s3://marin-us-east-02a/marin \
@@ -154,10 +154,9 @@ Plans and host-side submissions run the native driver checks on CPU before Iris 
 The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
 Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
 no inference rollout pool.
-A plan without `--require` uses the declared control pin. With `--require`, planning also checks that
-control r0 recorded the requested metric. Gated execution and comparison validate the stored controls
-against the current preset defaults. A mismatch returns exit 4 before submission or INVALID during
-gate execution. Controls are collected after merge. `--control` and `train-long` need no pin.
+A gated submission needs five completed controls for the preset and base version. The launcher
+checks requested metric keys against a stored control before submitting. A plan composes the
+candidate and prints its version without an Iris submission.
 
 The command invokes the shared runner through the Snowball model entry. Track or stage source files
 under `experiments/`, `lib/` and `vendor/`. The full tracked working-tree hash forms part of the run
@@ -168,14 +167,13 @@ The run's artifact version identifies its storage format.
 - **Plan and status.** The default mode and `--plan` run the SkyRL driver's configuration checks on CPU
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
-  For gated presets, `--plan` compares the current defaults with stored control receipts before opening an issue.
-  A gated candidate's status names the control pin and whether the stored configuration matches the preset.
-  For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
+  A saved attempt's status can include its job ID, completed update and evaluations.
+  Use `compare` to check its verdict against the indexed controls.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` to keep
   the terminal report in the current shell. A detached launch prints the path to its publication log.
   Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
-  Open an approved issue after confirming the plan and control pin. Retries of the same native output
+  Open an approved issue after confirming the plan. Retries of the same native output
   inherit the issue stored for that output.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
   The executor reuses successful artifacts. When training resumes, either train-long preset loads its
@@ -239,16 +237,9 @@ Errors identify the affected native attempt; missing credentials suggest `iris l
 Publication errors preserve the experiment verdict and exit code. A current successful gated attempt
 requires a report for exactly the current native attempts.
 
-Publish learning-medium or data-medium controls from their stored paths:
-
-```bash
-uv run python -m experiments.post_training.snowball_rl publish --preset learning-medium --marina-url "$MARINA_ORIGIN"
-```
-
-The pins in `snowball_rl.SNOWBALL.control_pins` identify the exact stored runs. Unavailable receipts
-are reported as unserved. Speed presets and data-short publish nothing. See the
-[dashboard and record contract](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_progress/README.md) for native identity,
-recorded measurements and stored gate facts.
+Publish a single stored native attempt with `publish --preset PRESET --run-output PATH --attempt ID`.
+The attempt's run index identity carries its control flag. The same command republishes controls and
+candidates. See the [dashboard and record contract](../../infra/marina/apps/rl_progress/README.md).
 
 ## Change one input
 
@@ -314,10 +305,11 @@ JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `sl
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
 explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
 
-Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, artifact version and
-replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
-candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
-must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
+A candidate uses the latest five completed main controls from the Marina run index at the version
+of its preset at the branch's main merge base. Submission freezes the exact five native attempt IDs.
+If the index has fewer than five, the command reports the base version and available count.
+The saved candidate must match its recorded launch inputs. All runs in a comparison use the same
+held-out TaskSpec content and evaluation protocol.
 
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
 guards and `sd` is the controls' sample standard deviation. A worse change beyond tolerance fails the guard.
@@ -334,13 +326,11 @@ Run stored comparisons on CPU:
 ```bash
 uv run python -m experiments.post_training.snowball_rl compare \
   --preset learning-medium --candidate "$CANDIDATE" --require 'eval_lite/aai_category/coding/mean>=control'
-uv run python -m experiments.post_training.snowball_rl compare \
-  --preset speed-medium --leave-out r0
 ```
 
-Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares one control
-replicate against the remaining controls with fixed default inputs.
-Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
+Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Pass `--marina-url ORIGIN` for a local
+index. The report records the control version and exact attempts. Reports use the caller's namespace
+under the preset's output root.
 
 ## Change a preset's default
 
@@ -354,12 +344,11 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
 
-3. Controls are collected by CI after the default change merges, once per changed default.
-   That CI workflow is planned separately; control collection is not a merge gate.
-   The manual `--control` command remains available for an explicitly authorized calibration.
-   Source, artifact version and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
-4. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
-   Every leave-one-out verdict must PASS.
+3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
+   with fewer than five completed controls gets enough runs to reach five. Otherwise the workflow
+   starts one run per preset. Dispatch the workflow with `controls=true` and optional `model` and
+   `preset` filters to run a subset. Snowball uses H100s and the Mochi speed and learning presets
+   each use one GB200 rack.
 
 ## Tasks and evaluation
 
@@ -504,10 +493,10 @@ IDs and TaskSpec digests against the saved per-task results.
 The shared `experiments/post_training/rl.py` builds the CLI and executes a `ModelPresets` value.
 `rl_presets.py` defines the types and `rl_compose.py` composes launch specifications. `rl_measurements.py`
 reads a stored run's metrics, scores and invariants. `rl_scoring.py` computes scores from answers,
-and `rl_gate.py` compares a candidate's measurements with pinned controls.
+and `rl_gate.py` compares a candidate's measurements with indexed controls.
 
 `snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
-`p40` and `e8` layouts, immutable model and task references, evaluation selections and control pins.
+`p40` and `e8` layouts, immutable model and task references, and evaluation selections.
 The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines; their role plans
 supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.

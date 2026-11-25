@@ -423,7 +423,6 @@ class Preset:
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
@@ -451,8 +450,6 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
-        if self.gated and not self.guards:
-            raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
         cadence = self.checkpoint_every
@@ -488,7 +485,7 @@ class Preset:
 
     @property
     def gated(self) -> bool:
-        return self.control_preset is not None
+        return bool(self.guards)
 
     @property
     def output_ttl_days(self) -> int | None:
@@ -511,19 +508,10 @@ class Preset:
 
 
 @dataclass(frozen=True)
-class ControlPin:
-    preset: str
-    commit: str
-    version: str
-    replicates: int
-
-
-@dataclass(frozen=True)
 class ModelPresets:
     model: str
     presets: tuple[Preset, ...]
     namespace: str
-    control_pins: Mapping[str, ControlPin]
     needs_completed_default_export: bool = False
 
     def __post_init__(self) -> None:

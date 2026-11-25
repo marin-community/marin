@@ -50,6 +50,7 @@ from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
     cache_native_compositions,
+    cohort_from_fixtures,
     controls,
     copy_evaluations,
     edit_receipt,
@@ -108,10 +109,6 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
         status = printed_status(result.stdout.partition("\nStepSpec(")[0])
-        if preset.gated:
-            pin = table.control_pins[preset.control_preset]
-            assert status["control_pin"]["commit"] == pin.commit
-            assert status["control_pin"]["version"] == pin.version
         if preset.name == "eval-short":
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
@@ -153,18 +150,21 @@ def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
 
 
 @pytest.mark.parametrize(("mode", "exit_code"), [("--plan", 0), ("--run", 4)])
-def test_missing_control_pin(selection, mode, exit_code):
-    table = replace(snowball_model.SNOWBALL, control_pins={})
+def test_insufficient_controls_restates_the_exact_base_version(recorded_runs, mode, exit_code, monkeypatch):
+    table = snowball_model.SNOWBALL
+    expected_version = "missing-base-version"
+    monkeypatch.setattr(snowball, "_base_preset_version", lambda *_: expected_version)
+
     preset = table.by_name["learning-medium"]
     args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, mode]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(args), entry_module="experiments.post_training.snowball_rl"), args)
     assert result.exit_code == exit_code, (result.output, result.exception)
     if mode == "--plan":
         status = printed_status(result.stdout.partition("\nStepSpec(")[0])
         assert len(status["runs"]) == 1
-        assert status["control_pin_error"].startswith(f"no control pin for {preset.name}")
+        assert status["preset_version"]
     else:
-        assert f"no control pin for {preset.name}" in result.output
+        assert f"at base version {expected_version}: 0/5 completed main controls" in result.output
 
 
 @pytest.mark.parametrize(
@@ -637,7 +637,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
             {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
         ]
         summary_path.write_text(json.dumps(summary))
-        assert snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL).gate is not None
+        assert snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL).runs
         summary["recipe"]["exclusions"] = original_exclusions
         summary_path.write_text(json.dumps(summary))
     summary["recipe"]["exclusions"] = []
@@ -659,9 +659,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         ("native-failed", 2),
         ("child", 0),
         ("changed-source", 0),
-        ("stale-control", 4),
         ("candidate-compose", 4),
-        ("malformed-control", 4),
         ("mixed-native-failed", 2),
         ("control-missing-receipt", 3),
         ("partial-retry", 0),
@@ -701,13 +699,14 @@ def test_submission_exit_codes_and_publication_retries(
     preset_table(preset)
     if case == "child":
         fake_s3(monkeypatch, "marin-test/models/python-init", "marin-test/models/child-model")
-    roots = controls(recorded_runs, preset.name) if preset.gated else []
+    if preset.gated:
+        controls(recorded_runs, preset.name)
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
     built = snowball.build_experiment(
         preset,
         table=snowball_model.SNOWBALL,
-        control=control,
+        control="test-batch" if control else None,
         replicates=replicas,
         tasks=selection if case == "data-short" else None,
     )
@@ -728,6 +727,8 @@ def test_submission_exit_codes_and_publication_retries(
         ]
     )
     source = sources[0] if sources else None
+    if source is not None and preset.gated and not control:
+        built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort_from_fixtures(source)))
     for index, root in enumerate(sources):
         native = read_attempt(str(root / "exports"), f"native-{index}")
         write_attempt(str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73))
@@ -747,8 +748,6 @@ def test_submission_exit_codes_and_publication_retries(
         )
     mutation = {
         "native-failed": (source, "result.state", "failed"),
-        "malformed-control": (roots[0], "config.skyrl.trainer.seed", None),
-        "stale-control": (roots[-1], "config.skyrl.trainer.policy.optimizer_config.lr", 5e-06),
     }.get(case)
     if mutation is not None:
         root, field, value = mutation
@@ -822,7 +821,7 @@ def test_submission_exit_codes_and_publication_retries(
 
     client, job = fake_iris(monkeypatch, "dashboard-coordinator")
     client.job.return_value.state_only.side_effect = lambda: finish().state
-    if case in {"malformed-control", "stale-control", "candidate-compose"}:
+    if case == "candidate-compose":
         client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     published = []
     unavailable = {"value": case in {"partial-retry"}}
@@ -848,7 +847,7 @@ def test_submission_exit_codes_and_publication_retries(
     if "candidate-compose" in case:
         arguments.extend(["--set", "trainer.algorithm.policy_loss_type=gspo"])
     if control:
-        arguments.append("--control")
+        arguments.extend(("--control", "test-batch"))
     if case == "data-short":
         arguments.extend(["--tasks", SELECTION_IDENTITY])
     if replicas == 2:
@@ -880,10 +879,6 @@ def test_submission_exit_codes_and_publication_retries(
     set_job_info(None)
     result = CliRunner().invoke(selected, invoked)
     assert result.exit_code == expected, (result.output, result.exception)
-    if case.startswith("malformed-"):
-        assert "malformed recorded configuration" in result.output and "seed" in result.output
-    if case.startswith("stale-control"):
-        assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
     if case == "unexpected":
@@ -1172,7 +1167,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         )
     with pytest.raises(click.BadParameter, match="stage source" if fault == "untracked" else "clean checkout"):
         snowball.build_experiment(
-            snowball_model.SNOWBALL.by_name["speed-medium"], control=True, table=snowball_model.SNOWBALL
+            snowball_model.SNOWBALL.by_name["speed-medium"], control="test-batch", table=snowball_model.SNOWBALL
         )
 
 
@@ -1206,9 +1201,8 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         arguments = ("--init", f"{name}@{version}")
     if arguments == ("--require", "typo>=0"):
         record = request.getfixturevalue("recorded_runs")
-        table = snowball_model.SNOWBALL
-        pin = gate.control_pin(table.by_name[preset_name], table=table)
-        record(preset_name, gate.control_name(pin.preset, pin.commit, 0, table=table))
+        controls(record, preset_name)
+        arguments = (*arguments, "--run")
     result = CliRunner().invoke(
         snowball.command(
             snowball_model.SNOWBALL,
@@ -1221,7 +1215,7 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
     assert result.exit_code == 4, (result.output, result.exception)
     if initializer is not None:
         assert "Python init and --init" in result.output
-    if arguments == ("--require", "typo>=0"):
+    if "--require" in arguments:
         assert "does not compute" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output

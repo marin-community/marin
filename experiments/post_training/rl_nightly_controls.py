@@ -9,14 +9,13 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from finestore.rl.rl_progress import completed_controls
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl_compose, rl_gate, rl_index
 from experiments.post_training.mochi_rl import MOCHI
-from experiments.post_training.rl_measurements import RunInputs
 from experiments.post_training.rl_presets import ModelPresets, Preset
 from experiments.post_training.snowball_rl import SNOWBALL
 
@@ -27,7 +26,7 @@ _MODELS = {
 
 
 def _run_control(module: str, table: ModelPresets, preset: Preset, batch: str, *, proof: bool) -> int:
-    launch = rl_gate.validate_candidate(preset, RunInputs(preset_name=preset.name))
+    launch = rl_gate.compose_preset(preset)
     version = rl_gate.config_version(launch)
     cohort = (
         []
@@ -37,7 +36,7 @@ def _run_control(module: str, table: ModelPresets, preset: Preset, batch: str, *
     count = max(1, rl_gate.CONTROL_COUNT - len(cohort))
     command = [
         sys.executable, "-m", module, "--preset", preset.name, "--control", batch, "--replicates", str(count),
-        "--run", "--wait",
+        "--version", rl_compose.RUN_ARTIFACT_VERSION, "--run", "--wait",
     ]
     print(json.dumps({"model": table.model, "preset": preset.name, "version": version, "requested": count}), flush=True)
     return subprocess.run(command, check=False).returncode
@@ -64,6 +63,7 @@ def main() -> int:
     ]
     if not jobs:
         parser.error("the filters must select at least one gated preset")
+    configure_coreweave_s3()
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         submitted = [
             (table.model, preset.name, pool.submit(_run_control, module, table, preset, args.batch, proof=proof))

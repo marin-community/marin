@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare stored RL runs with the selected preset table's pinned controls."""
+"""Compare stored RL runs with completed main controls."""
 
 from __future__ import annotations
 
@@ -14,12 +14,11 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
-from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 import click
-from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
-from finestore.rl.run_records import AttemptRecord
+from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict, completed_controls
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -37,8 +36,8 @@ from marin.rl.skyrl import (
     skyrl_execution,
     skyrl_step,
 )
-from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
-from pydantic import BaseModel
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt, read_stored_skyrl_attempts
+from pydantic import BaseModel, Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
@@ -48,6 +47,7 @@ from tabulate import tabulate
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
+from experiments.post_training import rl_index
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
@@ -57,10 +57,11 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     read_run_inputs,
 )
-from experiments.post_training.rl_presets import ControlPin, ModelPresets
+from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
-GATE_REVISION = "2026.11.24"
+GATE_REVISION = "2026.11.25"
+CONTROL_COUNT = 5
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 
@@ -118,36 +119,92 @@ def with_requirements(candidate: RunMeasurements, requirements: Sequence[str]) -
     return replace(candidate, invariants=tuple(invariants))
 
 
+class ControlAttempt(BaseModel, frozen=True):
+    run_id: str
+    attempt_id: str
+    path: str
+
+
+class ControlCohort(BaseModel, frozen=True):
+    model: str
+    preset: str
+    version: str
+    branch: str
+    attempts: tuple[ControlAttempt, ...] = Field(min_length=CONTROL_COUNT, max_length=CONTROL_COUNT)
+
+
+def select_controls(
+    index: RunIndexIdentity, *, service_url: str | None = None, branch: str = "main"
+) -> ControlCohort:
+    """Freeze the latest five indexed controls at the candidate's base version."""
+    version = index.base_preset_version
+    if version is None:
+        raise InvalidComparison(
+            f"{index.model}/{index.preset}: base preset version unavailable, 0/{CONTROL_COUNT} controls"
+        )
+    try:
+        attempts = completed_controls(
+            rl_index.list_attempts(service_url),
+            model=index.model,
+            preset=index.preset,
+            version=version,
+            limit=CONTROL_COUNT,
+            branch=branch,
+        )
+    except (OSError, ValueError, RuntimeError) as error:
+        raise InvalidComparison(f"could not read controls for {index.model}/{index.preset} at version {version}: {error}") from error
+    if len(attempts) != CONTROL_COUNT:
+        raise InvalidComparison(
+            f"{index.model}/{index.preset} at base version {version}: "
+            f"{len(attempts)}/{CONTROL_COUNT} completed {branch} controls"
+        )
+    members = []
+    for row in attempts:
+        if row.artifact_uri is None:
+            raise InvalidComparison(f"indexed control has no output: {row.run_id}/{row.attempt_id}")
+        members.append(ControlAttempt(run_id=row.run_id, attempt_id=row.attempt_id, path=row.artifact_uri))
+    return ControlCohort(
+        model=index.model, preset=index.preset, version=version, branch=branch, attempts=tuple(members)
+    )
+
+
+def _control_measurements(preset: presets.Preset, cohort: ControlCohort, member: ControlAttempt) -> RunMeasurements:
+    _, attempts = read_stored_skyrl_attempts(member.path)
+    attempt = attempts.get(member.attempt_id)
+    identity = attempt.index if attempt is not None else None
+    if (
+        identity is None
+        or identity.run_id != member.run_id
+        or identity.model != cohort.model
+        or identity.preset != cohort.preset
+        or identity.preset_version != cohort.version
+        or identity.branch != cohort.branch
+        or not identity.is_control
+        or identity.dirty
+    ):
+        raise InvalidComparison(f"stored control disagrees with the run index: {member.path}/{member.attempt_id}")
+    data = with_objectives(read_measurements(member.path, preset, attempt=attempt), preset)
+    if any(not row.holds for row in data.invariants):
+        raise InvalidComparison(f"control has failed invariants: {member.path}/{member.attempt_id}")
+    return data
+
+
 def validate_requirements(
-    preset: presets.Preset, requirements: Sequence[str], *, table: ModelPresets, control: bool
+    preset: presets.Preset, requirements: Sequence[str], cohort: ControlCohort
 ) -> None:
-    """Validate a candidate's control pin and user requirements before GPU submission."""
+    """Check declared requirement keys against a stored control before submission."""
     if not requirements:
         return
-    if control or not preset.gated:
-        raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
-    pin = control_pin(preset, table=table)
-    reference = with_objectives(read_measurements(control_path(preset, pin, 0, table=table), preset), preset)
+    reference = _control_measurements(preset, cohort, cohort.attempts[0])
     missing = [key for key in keys if key not in reference.values]
     if missing:
-        raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
+        raise click.BadParameter(f"requirement metrics that the gate does not compute for the controls: {missing}")
 
 
-def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: ModelPresets, control: bool = False) -> dict:
-    """Return the composed candidate after checking gated controls against current defaults."""
-    if control or not preset.gated:
-        (candidate,) = _compose_plans(preset, (inputs,))
-        return candidate
-    defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
-    pin = control_pin(preset, table=table)
-    for index in range(pin.replicates):
-        path = control_path(preset, pin, index, table=table)
-        receipt = read_stored_skyrl_attempt(path)
-        if receipt is None:
-            raise InvalidComparison(f"control receipt is unavailable: {path}")
-        launch = read_recorded_launch(receipt)
-        _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+def compose_candidate(preset: presets.Preset, inputs: RunInputs) -> dict:
+    """Compose a candidate with its recorded inputs."""
+    (candidate,) = _compose_plans(preset, (inputs,))
     return candidate
 
 
@@ -163,9 +220,8 @@ class RunMetadata(RunInputs):
 
 
 class ControlMetadata(BaseModel):
-    commit: str
-    version: str | None = None
-    replicates: int
+    version: str
+    attempts: tuple[ControlAttempt, ...]
     gate_revision: str = GATE_REVISION
     engines: tuple[dict, ...] = ()
     held_out_tasks: str | None = None
@@ -275,13 +331,6 @@ def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison])
         else Effect.IMPROVES if better else Effect.REGRESSION if worse else Effect.NO_CHANGE
     )
     return verdict, effect
-
-
-def _check_control(run: RunMeasurements, pin: ControlPin) -> None:
-    if run.provenance["base_commit"] != pin.commit or run.provenance["dirty"]:
-        raise InvalidComparison(f"control does not match its pin: {run.path}")
-    if any(not row.holds for row in run.invariants):
-        raise InvalidComparison(f"control has failed invariants: {run.path}")
 
 
 def _compare(
@@ -737,59 +786,16 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
     return allowed
 
 
-@lru_cache(maxsize=16)
-def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        native_project,
-        "schema-defaults",
-        json.dumps(dict(groups)),
-    )
-
-
-def _check_control_config(
-    config: dict, current_config: dict, recorded: RecordedLaunch | None = None, *, preset: presets.Preset
-) -> None:
-    observed = _gate_config(config, recorded, expected_launch=current_config)
-    current = _gate_config(current_config)
-    differences = _changed_config_keys(observed, current)
-    missing = {key for key in differences if key not in observed}
-    if missing:
-        groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(
-            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
-        )
-        for key in missing:
-            value = get_path(defaults, key)
-            if value is MISSING:
-                continue
-            projected = deepcopy(current_config)
-            set_path(projected, key, value)
-            try:
-                default_value = _gate_config(projected).get(key, MISSING)
-            except InvalidComparison:
-                continue
-            if default_value == current[key]:
-                differences.discard(key)
-    if differences:
-        raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
-
-
 def _write_gate(
     preset: presets.Preset,
     run_paths: tuple[str, ...],
-    control_paths: tuple[str, ...],
-    control_pin: ControlPin,
+    cohort: ControlCohort,
     inputs: RunInputs,
     output: str,
 ) -> GateReport:
     preset_name = preset.name
     metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
-    control = ControlMetadata(commit=control_pin.commit, version=control_pin.version, replicates=len(control_paths))
+    control = ControlMetadata(version=cohort.version, attempts=cohort.attempts)
     invariants, comparisons = [], []
     verdict, effect, reason = Verdict.INVALID, None, None
     try:
@@ -816,14 +822,10 @@ def _write_gate(
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
-        controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
-        if not runs or not controls:
-            raise InvalidComparison("comparison needs recorded runs and control replicates")
+        controls = [_control_measurements(preset, cohort, member) for member in cohort.attempts]
         control = control.model_copy(
             update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
         )
-        for candidate in controls:
-            _check_control(candidate, control_pin)
         if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
             raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         model = runs[0].config["inputs"]["model"]
@@ -844,8 +846,6 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
-        for candidate in controls:
-            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
         comparisons = _compare(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -874,47 +874,20 @@ def _write_gate(
     return report
 
 
-def control_name(preset: str, commit: str, replicate: int, *, table: ModelPresets) -> str:
-    return f"checkpoints/{table.namespace}/control/{preset}-{commit}-r{replicate}"
-
-
-def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
-    pin = table.control_pins.get(preset.control_preset)
-    if pin is None:
-        raise InvalidComparison(
-            f"no control pin for {preset.name}; collect current controls with --preset {preset.control_preset} "
-            "--version dev --control --replicates 4 --run"
-        )
-    return pin
-
-
-def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.version)
-
-
 def _gate_artifact(
     name: str,
     preset: presets.Preset,
     candidates: tuple[str, ...],
     inputs: RunInputs,
-    leave_out: int | None = None,
     *,
-    table: ModelPresets,
     run_paths: tuple[str, ...],
-    pin: ControlPin,
+    cohort: ControlCohort,
 ) -> ArtifactStep[GateReport]:
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
         canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(recipe.REPO_ROOT).tree_hash))
     )
-    controls = tuple(
-        (
-            f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.version}",
-            control_path(preset, pin, index, table=table),
-        )
-        for index in range(pin.replicates)
-        if index != leave_out
-    )
+    name += "-controls-" + fingerprint_hash(canonical_json(cohort.model_dump(mode="json")))
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     step = apply(
         name,
@@ -923,8 +896,7 @@ def _gate_artifact(
         artifact_type=GateReport,
         preset=preset,
         run_paths=candidates,
-        control_paths=tuple(identity for identity, _ in controls),
-        control_pin=pin,
+        cohort=cohort,
         inputs=inputs,
         output=OUT,
     )
@@ -941,10 +913,7 @@ def _gate_artifact(
             build_config=build_config,
             runtime_args={
                 "name": name,
-                "paths": {
-                    "run_paths": run_paths,
-                    "control_paths": tuple(path for _, path in controls),
-                },
+                "paths": {"run_paths": run_paths},
             },
         )
     )
@@ -1000,93 +969,70 @@ def _gate_attempt_digest(
 
 
 def gate_step(
-    preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: RunInputs
+    preset: presets.Preset,
+    runs: tuple[ArtifactStep[SkyRLRun], ...],
+    *,
+    inputs: RunInputs,
+    cohort: ControlCohort,
 ) -> ArtifactStep[GateReport]:
-    pin = control_pin(preset, table=table)
-    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
+    name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
-    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)
+    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, cohort=cohort), deps=runs)
+
+
+def compare_attempt(
+    preset: presets.Preset,
+    source: str,
+    cohort: ControlCohort,
+    requirements: tuple[str, ...] = (),
+) -> GateReport:
+    """Run a comparison for a saved candidate using the supplied control cohort."""
+    recorded = read_run_inputs(source)
+    if recorded.preset_name != preset.name:
+        raise InvalidComparison(f"recorded preset is {recorded.preset_name}, expected {preset.name}")
+    inputs = recorded.model_copy(
+        update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))}
+    )
+    for text in inputs.requirements:
+        parse_requirement(text)
+    name = user_owned_name(
+        f"checkpoints/{cohort.model}-rl/compare/{preset.name}-{fingerprint_hash(canonical_json(source))}"
+    )
+    step = _gate_artifact(name, preset, (source,), inputs, run_paths=(source,), cohort=cohort)
+    return run(replace(step, output_path_prefix=recipe.run_prefix(preset)))[0]
 
 
 def command(table: ModelPresets) -> click.Command:
     @click.command(cls=RLCommand, help=__doc__)
     @click.option(
-        "--preset",
-        "preset_name",
+        "--preset", "preset_name", required=True,
         type=click.Choice(sorted(name for name, preset in table.by_name.items() if preset.gated)),
-        required=True,
-        help="Gated preset whose pinned controls to compare with.",
+        help="Gated preset to compare.",
     )
     @click.option(
-        "--candidate",
-        "candidate_name",
-        metavar="NAME[@VERSION]",
-        help="Saved run to compare, by the name and artifact version the status block prints for it. "
-        "Give this or --leave-out.",
+        "--candidate", required=True, metavar="NAME[@VERSION]",
+        help="Saved candidate name and optional artifact version.",
     )
+    @click.option("--marina-url", help="Marina origin for the run index.")
     @click.option(
-        "--leave-out",
-        "leave_out",
-        metavar="rN",
-        help="Compare control replicate N against the remaining controls. Each replicate should PASS; use it "
-        "after pinning new controls. Give this or --candidate.",
+        "--require", "requirements", multiple=True, metavar="KEY<=|>=BOUND",
+        help="Add a condition to those recorded at launch. Repeatable.",
     )
-    @click.option(
-        "--require",
-        "requirements",
-        multiple=True,
-        metavar="KEY<=|>=BOUND",
-        help="Add a condition, as in rl --require, to those the run recorded at launch. Repeatable.",
-    )
-    def main(
-        preset_name: str,
-        candidate_name: str | None,
-        leave_out: str | None,
-        requirements: tuple[str, ...],
-    ) -> None:
-        if (candidate_name is None) == (leave_out is None):
-            raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
+    def main(preset_name: str, candidate: str, marina_url: str | None, requirements: tuple[str, ...]) -> None:
         preset = table.by_name[preset_name]
-        pin = control_pin(preset, table=table)
-        index = None
-        if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
-                raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
-            index = int(leave_out[1:])
-            candidate_name = control_name(pin.preset, pin.commit, index, table=table)
-        name, separator, version = candidate_name.partition("@")
-        if not separator:
-            version = pin.version if index is not None else recipe.RUN_ARTIFACT_VERSION
-        source = recipe.run_path(preset, name, version)
-        namespace = user_owned_name(
-            f"checkpoints/{table.namespace}/compare/"
-            f"{preset_name}-{fingerprint_hash(canonical_json((source, pin, index)))}"
-        )
-        recorded = RunInputs(preset_name=pin.preset) if index is not None else read_run_inputs(source)
-        if index is None and recorded.preset_name != preset_name:
-            raise InvalidComparison(f"recorded preset is {recorded.preset_name}, not {preset_name}")
-        inputs = recorded.model_copy(
-            update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))}
-        )
-        for text in inputs.requirements:
-            parse_requirement(text)
-        step = _gate_artifact(
-            f"{namespace}/gate-n1-{pin.commit}",
-            preset,
-            (f"{name}@{version}",),
-            inputs,
-            index,
-            run_paths=(source,),
-            table=table,
-            pin=pin,
-        )
-        report = run(step)[0]
-        payload = {
+        name, separator, version = candidate.partition("@")
+        source = recipe.run_path(preset, name, version if separator else recipe.RUN_ARTIFACT_VERSION)
+        attempt = read_stored_skyrl_attempt(source)
+        index = attempt.index if attempt is not None else None
+        if index is None or index.preset != preset_name or index.model != table.model or index.is_control:
+            raise InvalidComparison("candidate requires a matching non-control run index identity")
+        cohort = select_controls(index, service_url=marina_url)
+        report = compare_attempt(preset, source, cohort, requirements)
+        click.echo(json.dumps({
             "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
             **report.model_dump(mode="json", exclude={"path"}),
-        }
-        click.echo(json.dumps(payload))
+        }))
         raise click.exceptions.Exit(EXIT_CODES[report.verdict])
 
     return main

@@ -250,7 +250,7 @@ def test_resume_inherits_the_source_runs_initializer(
         return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
 
     preset = replace(preset, then=collect)
-    table = replace(table, presets=(preset,), control_pins={})
+    table = replace(table, presets=(preset,))
     started = plan(table, preset.name, *start_args)
     assert started.exit_code == 0, (started.output, started.exception)
     (source,) = runs
@@ -474,8 +474,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         (
             "snowball",
             "learning-medium",
-            ("--control", "--priority", "production"),
-            "controls use only the preset's pinned run options",
+            ("--control", "test-batch", "--priority", "production"),
+            "controls use only the preset's default run options",
             None,
         ),
         ("snowball", "train-long", ("--checkpoint-every", "3"), "fall on checkpoint steps", None),

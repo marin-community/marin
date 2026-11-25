@@ -40,6 +40,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
+from experiments.post_training.rl_index import APPLET_ID
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
 from experiments.post_training.rl_tests.fixtures import (
@@ -52,7 +53,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_receipt,
     write_skyrl_run_record,
 )
-from experiments.post_training.rl_tests.fixtures import controls as write_controls
+from experiments.post_training.rl_tests.fixtures import cohort_from_fixtures, controls as write_controls
 from experiments.post_training.skyrl_test_support import selection_summary
 from infra.marina.tests.rl_progress_fixtures import grader_report
 
@@ -290,18 +291,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     table = preset_table(preset)
     monkeypatch.setattr(publication, "configure_coreweave_s3", lambda: None)
-    pin = gate.control_pin(preset, table=table)
-
-    def write_control(name, artifact_name, **kwargs):
-        return recorded_runs(
-            name,
-            artifact_name,
-            attempt_id="pinned-" + artifact_name.rsplit("-r", 1)[1],
-            metrics={"policy/entropy": kwargs["score"]},
-            **kwargs,
-        )
-
-    controls = write_controls(write_control, preset.name)
+    controls = write_controls(recorded_runs, preset.name)
+    for index, root in enumerate(controls):
+        metrics = read_skyrl_metrics(str(root))
+        for row in metrics.values():
+            row["policy/entropy"] = 0.48 + index * 0.01
+        append_metrics(root, metrics)
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"
@@ -314,7 +309,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
 
     def stored():
-        return {row["attempt_id"]: row for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]}
+        return {row["attempt_id"]: row for row in client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]}
 
     def publish(gate_path):
         return publication.publish_runs(
@@ -328,7 +323,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
-                preset, handles, table=table, inputs=RunInputs(preset_name=preset.name, requirements=requirements)
+                preset, handles, cohort=cohort_from_fixtures(sources[1]),
+                inputs=RunInputs(preset_name=preset.name, requirements=requirements)
             )
         )[0]
         return report, str(report.path)
@@ -406,7 +402,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     monkeypatch.setattr("marina.client.marina_request", unavailable_catalog)
     repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
-    payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
+    payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-0"]["evaldash_run_ids"] == automatic_links
@@ -442,8 +438,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
-        "control_commit": pin.commit,
-        "control_version": pin.version,
+        "control_version": report.control.version,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
@@ -588,7 +583,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert guard_result.unserved_records == [] and guard_result.errors == []
     guard_rows = [
         row
-        for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
+        for row in client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"] in {"native-retry", "native-1"}
     ]
     assert len(guard_rows) == 2
@@ -673,30 +668,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
     for root in controls:
-        (root / RUN_INPUTS_FILENAME).unlink()
-    command = CliRunner().invoke(
-        publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
-    )
-    assert command.exit_code == 0, (command.output, command.exception)
-    assert json.loads(command.output)["unserved_records"] == []
-    served_controls = [
-        row
-        for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-        if row["attempt_id"].startswith("pinned-")
-    ]
-    assert len(served_controls) == pin.replicates
-    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
-    assert all(row["control"]["commit"] == pin.commit for row in served_controls)
+        attempt = read_stored_skyrl_attempts(str(root))[0]
+        command = CliRunner().invoke(
+            publication.command(table),
+            ["--preset", preset.name, "--marina-url", "http://localhost",
+             "--run-output", str(root), "--attempt", attempt],
+        )
+        assert command.exit_code == 0, (command.output, command.exception)
+    served_controls = [row for row in stored().values() if row["is_control"]]
+    assert len(served_controls) == gate.CONTROL_COUNT
     assert all(
-        row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
+        row["branch"] == "main" and row["preset_version"] == report.control.version and row["gate_result"] is None
+        for row in served_controls
     )
-    before_ids = {
-        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-    }
-    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
-    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
-    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
-    after_ids = {
-        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-    }
-    assert after_ids == before_ids

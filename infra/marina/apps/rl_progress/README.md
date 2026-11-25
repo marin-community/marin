@@ -54,7 +54,7 @@ measurements unknown; a missing window leaves elapsed time unknown with a timing
 record. `GET /api/runs` returns stored summaries with `has_grader_report` and lists malformed historical rows
 in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
-for record semantics, retries and publishing pinned controls.
+for record semantics and publication retries.
 
 ## Validate and release
 

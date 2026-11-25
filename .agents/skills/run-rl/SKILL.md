@@ -1,6 +1,6 @@
 ---
 name: run-rl
-description: Choose, run and read a Snowball RL preset through experiments/post_training/snowball_rl.py, compare it with pinned controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
+description: Choose, run and read a Snowball RL preset through experiments/post_training/snowball_rl.py, compare it with indexed controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
 ---
 
 # Run the RL runner
@@ -23,9 +23,8 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
    They need an immutable recipe, the same development panel, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
-3. A default plan uses the declared control pin. Gated execution compares stored control receipts
-   with the current preset defaults. Controls are collected after merge. `--control`
-   and train-long need no pin. Print the plan:
+3. A gated launch selects the five newest completed main controls at its base preset version.
+   The nightly control runs supply that cohort. Print the plan:
 
    ```bash
    uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan
@@ -46,7 +45,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    Record the finishing status's `rl_progress_url` with its result. The launcher publishes the
    running and terminal attempt with the caller's Marina login. Follow the recipe's
    [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
-   for retries and pinned controls.
+   for publication retries.
    Use `--marina-url ORIGIN` when publication targets a local Marina stack.
    Repeat the original `--run --wait` invocation with the same source and inputs to resume
    either train-long preset from its latest retained checkpoint.
@@ -63,7 +62,7 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 
 ## Record the experiment
 
-Open an issue through `file-issue` after the plan and control-pin check pass and the experimenter
+Open an issue through `file-issue` after checking the plan and the experimenter
 approves the issue text.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
 state the expected result and the measure that would confirm it. Put the relevant PR or source in
@@ -73,9 +72,8 @@ to associate a stored attempt with its issue.
 
 ## Inspect saved answers
 
-Read existing answers before launching another run. Controls are named by preset, `commit`
-and artifact version in `snowball_rl.SNOWBALL.control_pins`. Use their configured output paths. Candidate status
-prints its output. Read the configured export root from the native resolved launch to locate answers.
+Read existing answers before launching another run. Use the exact control attempt paths in the gate
+report. Candidate status prints its output path. Read the configured export root from the native resolved launch to locate answers.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries
 its TaskSpec ID, prompt, output, tokens and verification.
@@ -99,7 +97,7 @@ in order:
 ## Never
 
 - Stop or restart an Iris cluster, or cancel/resubmit unrelated jobs without authorization.
-- Collect controls or edit pins or `GATE_REVISION` unless asked in the current thread.
+- Launch manual controls or edit `GATE_REVISION` unless asked in the current thread.
 - Edit a preset, guard or tolerance to make a candidate pass.
 - Set `generator.enforce_eager=true` without a request; CUDA graphs affect speed measurement.
 - Claim a speed gain from speed-short alone, or a learning gain from a speed preset.
