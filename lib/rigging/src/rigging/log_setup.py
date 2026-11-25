@@ -12,7 +12,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
 
 LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)s %(name)s %(message)s"
 LOG_DATEFMT = "%Y%m%d %H:%M:%S"
@@ -29,9 +28,6 @@ _LEVEL_PREFIX = {
 
 # Reverse map: single-letter prefix -> canonical level name.
 _PREFIX_TO_LEVEL = {v: k for k, v in _LEVEL_PREFIX.items()}
-
-# Canonical level names, derived from _LEVEL_PREFIX keys.
-LOG_LEVEL_NAMES = tuple(_LEVEL_PREFIX.keys())
 
 
 def parse_log_level(line: str) -> str | None:
@@ -77,12 +73,6 @@ class BufferedLogRecord:
     level: str
     logger_name: str
     message: str
-
-
-class LogBuffer(Protocol):
-    def append(self, record: BufferedLogRecord) -> None: ...
-    def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
-    def query_since(self, last_seq: int, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
 
 
 class LogRingBuffer:
@@ -135,6 +125,14 @@ class RingBufferHandler(logging.Handler):
         )
 
 
+class LiveStderrHandler(logging.StreamHandler):
+    """Write each record to the current stderr after capture swaps streams."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
 @contextmanager
 def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> Iterator[None]:
     """Log a WARNING if the enclosed block takes longer than threshold_ms.
@@ -149,10 +147,6 @@ def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> It
 
 
 _global_buffer = LogRingBuffer()
-
-
-def get_global_buffer() -> LogRingBuffer:
-    return _global_buffer
 
 
 _configured = False
@@ -243,7 +237,7 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
 
     formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
-    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler = LiveStderrHandler()
     stderr_handler.setLevel(level)
     stderr_handler.setFormatter(formatter)
     root.addHandler(stderr_handler)

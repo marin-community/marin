@@ -13,6 +13,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict
 
+from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,13 @@ def manifest_path(checkpoint_root: str) -> str:
 
 
 def write_manifest(checkpoint_root: str, manifest: CheckpointManifest) -> None:
-    StoragePath(manifest_path(checkpoint_root)).write_text(manifest.model_dump_json(indent=2))
+    path = StoragePath(manifest_path(checkpoint_root))
+    data = manifest.model_dump_json(indent=2)
+    if path.is_remote:
+        path.write_text(data)
+        return
+    with atomic_rename(str(path)) as temporary_path:
+        StoragePath(temporary_path).write_text(data)
 
 
 def read_manifest(checkpoint_root: str) -> CheckpointManifest | None:

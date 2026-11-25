@@ -14,6 +14,7 @@ use clap::{Parser, ValueEnum};
 use finelog::indices::cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
+use finelog::read_executor::ReadExecutor;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
@@ -254,7 +255,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(forwarder) => config.with_forwarding(forwarder.config().clone()),
         None => config,
     };
-    let app = build_app_with_config(Arc::clone(&store), config);
+    let reads = Arc::new(ReadExecutor::for_process()?);
+    let app = build_app_with_config(Arc::clone(&store), config, reads);
 
     // Cross-cluster forwarding starts before the listener binds so an existing
     // backlog drains immediately. Keep the sender alive while serving; shutdown

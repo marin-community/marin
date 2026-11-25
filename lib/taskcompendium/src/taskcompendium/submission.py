@@ -28,6 +28,7 @@ from taskcompendium.models import (
     ANSWER_FIELD,
     ActionSubmission,
     AnswerCall,
+    AnswerType,
     AssistantToolCalls,
     BaseAnswerFormat,
     Boxed,
@@ -86,7 +87,9 @@ def has_ejection(event: ConversationEvent) -> bool:
     return isinstance(event, AssistantToolCalls) and any(call.name == EJECT_CALL_NAME for call in event.calls)
 
 
-def extract_submission(answer_format: BaseAnswerFormat, attempt: GradingAttempt, *, context_length: int) -> Submission:
+def extract_submission(
+    answer_format: BaseAnswerFormat, attempt: GradingAttempt, *, answer_type: AnswerType, context_length: int
+) -> Submission:
     """Dispatch terminal ejection before normal extraction, without private grading data."""
     # Completed calls in source history are input, not the current submission.
     for event in attempt.conversation.events[context_length:-1]:
@@ -94,7 +97,7 @@ def extract_submission(answer_format: BaseAnswerFormat, attempt: GradingAttempt,
             raise SubmissionFailure("The interaction continued after eject_button")
     final = attempt.conversation.events[-1]
     if not has_ejection(final):
-        return answer_format.extract(attempt)
+        return answer_format.extract(attempt, answer_type)
     assert isinstance(final, AssistantToolCalls)
     if len(final.calls) != 1:
         raise SubmissionFailure("Ejection requires a single terminal call")

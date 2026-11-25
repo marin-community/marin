@@ -63,7 +63,7 @@ SMOKE_SPEC = SFTSpec(
     name="checkpoints/smoke-sft-tpu-qwen3-0p6b",
     version="2026.07.15-dev",  # -dev = always rebuild (no cache reuse)
     # tiny public Qwen3, used verbatim -> initialize_from_hf; Qwen3 eos = <|endoftext|> + <|im_end|>.
-    model=HFModel("Qwen/Qwen3-0.6B", eos_token_ids=(151643, 151645)),
+    model=HFModel("Qwen/Qwen3-0.6B@c1899de289a04d12100db370d81485cdf75e47ca", eos_token_ids=(151643, 151645)),
     chat_template=QWEN3_SMOKE_CHAT_TEMPLATE,
     datasets=[_SMOKE_DATA],
     optimizer=AdamConfig(

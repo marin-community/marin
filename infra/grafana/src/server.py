@@ -110,6 +110,7 @@ from config import (
     GITHUB_REPO,
     HERO_OPERATOR_BEHAVIOR,
     K8S_CLUSTERS,
+    STORAGE_OPERATOR_BEHAVIOR,
     BridgeConfig,
     ClusterTarget,
 )
@@ -205,6 +206,42 @@ HERO_OPERATOR_INSTRUCTIONS = (
     "warning/error levels, and other abnormal output without relying on a fixed error-signature list or assuming the "
     "first query is exhaustive. Compare ranks and tasks to distinguish the first causal failure from expected "
     "gang-scheduling fallout, and gather additional live evidence as needed before concluding."
+)
+
+STORAGE_OPERATOR_INSTRUCTIONS = (
+    "Investigate the affected zone and storage class now. Read scripts/ops/storage/README.md, query recent "
+    "storage.usage samples in Finelog, and compare the Storage dashboard with the viewer linked in the alert. "
+    "Check the viewer's scan timestamp before using its bucket and prefix sizes "
+    "or over-time growth. Identify prefixes responsible for the recent increase, then cross-check their job, "
+    "experiment, or dataset paths against current Iris tasks and repository records to infer who initiated the "
+    "writes. Do not treat a shared bucket name or a path alone as proof of a person. If evidence supports an "
+    "individual owner, verify their Slack user ID from a reliable directory or Slack profile and mention them "
+    "in this alert thread with <@USER_ID>, asking them to review or clean up their data. If ownership or the "
+    "Slack ID cannot be verified, explain the likely source and uncertainty without tagging anyone. Report "
+    "current bytes, quota, growth over a stated window, data freshness, and the evidence behind any attribution."
+)
+
+OPERATOR_BEHAVIORS = (
+    OperatorBehavior(
+        name=DEFAULT_OPERATOR_BEHAVIOR,
+        channel="operator",
+        session_title="Grafana operator",
+        operator_name="Marin Grafana operator",
+    ),
+    OperatorBehavior(
+        name=HERO_OPERATOR_BEHAVIOR,
+        channel="operator:hero",
+        session_title="Hero run operator",
+        operator_name="Marin hero-run operator",
+        instructions=HERO_OPERATOR_INSTRUCTIONS,
+    ),
+    OperatorBehavior(
+        name=STORAGE_OPERATOR_BEHAVIOR,
+        channel="operator",
+        session_title="CoreWeave storage operator",
+        operator_name="Marin storage operator",
+        instructions=STORAGE_OPERATOR_INSTRUCTIONS,
+    ),
 )
 
 # Window macros a panel writes into its SQL, substituted with tz-naive UTC
@@ -1532,21 +1569,7 @@ def main() -> None:
     if config.loom_alerts is not None:
         loom_alerts = LoomAlertClient(
             config.loom_alerts,
-            behaviors=(
-                OperatorBehavior(
-                    name=DEFAULT_OPERATOR_BEHAVIOR,
-                    channel="operator",
-                    session_title="Grafana operator",
-                    operator_name="Marin Grafana operator",
-                ),
-                OperatorBehavior(
-                    name=HERO_OPERATOR_BEHAVIOR,
-                    channel="operator:hero",
-                    session_title="Hero run operator",
-                    operator_name="Marin hero-run operator",
-                    instructions=HERO_OPERATOR_INSTRUCTIONS,
-                ),
-            ),
+            behaviors=OPERATOR_BEHAVIORS,
         )
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.

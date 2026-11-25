@@ -114,5 +114,6 @@ def test_bootstrap_names_the_local_cluster_only_when_configured() -> None:
     named = render_bootstrap_for(FinelogConfig(**base, cluster="marin"), "ghcr.io/example/finelog@sha256:abc")
     unnamed = render_bootstrap_for(FinelogConfig(**base), "ghcr.io/example/finelog@sha256:abc")
 
-    assert "-e FINELOG_CLUSTER=marin " in named
+    # The server reads its cluster name from FINELOG_CLUSTER.
+    assert "FINELOG_CLUSTER=marin" in named
     assert "FINELOG_CLUSTER" not in unnamed

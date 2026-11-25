@@ -231,10 +231,13 @@ class DaytonaEnvironment(BaseEnvironment):
             targets = self._mount_targets(writable_only=True)
             if targets:
                 result = await self.exec(
-                    self._ensure_dirs_command(targets, chmod=True), cwd="/"
+                    self._ensure_dirs_command(targets, chmod=True), cwd="/", user="root"
                 )
                 if result.return_code:
-                    raise RuntimeError("Failed to prepare Daytona artifact paths")
+                    raise RuntimeError(
+                        f"Failed to prepare Daytona artifact paths (exit {result.return_code}): "
+                        f"{result.stderr or result.stdout}"
+                    )
             await self._upload_environment_dir_after_start()
         except BaseException as error:
             try:

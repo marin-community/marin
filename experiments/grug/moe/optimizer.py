@@ -12,6 +12,8 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization
+from experiments.grug.moe_hero_ep.optimizer import scale_with_grug_muonh as scale_with_hero_muonh
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -71,19 +73,27 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             return None
         if not hasattr(param, "ndim"):
             return update
+        # Run the step and the re-projection in float32. With BF16 parameters the
+        # parameter-space norms otherwise round to BF16 while the post-step norms
+        # stay float32, which biases the Frobenius re-projection at every learning
+        # rate, not only at zero.
+        param_f32 = param.astype(jnp.float32)
+        update_f32 = update.astype(jnp.float32)
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            param_norm = jnp.linalg.norm(param_f32)
+            update_norm = jnp.linalg.norm(update_f32)
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.linalg.norm(new_param)
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-
-        axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        else:
+            axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32), axis=axes, keepdims=True))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+        # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw step
+        # yields an exactly zero update without a special case.
+        ratio = jnp.maximum(param_norm, 1e-10) / jnp.maximum(new_param_norm, 1e-10)
+        return (new_param * ratio - param_f32).astype(param.dtype)
 
     return jax.tree.map(
         scale_invariant_update,
@@ -117,6 +127,13 @@ def scale_with_grug_muonh(
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+        for leaf in jax.tree.leaves(params):
+            if getattr(leaf, "ndim", 0) >= 4:
+                raise ValueError(
+                    "scale_with_grug_muonh only supports 2-D and 3-D arrays; "
+                    "use GrugMoeMuonHConfig or experiments.grug.moe_hero_ep.optimizer.scale_with_grug_muonh "
+                    "for 4-D expert banks"
+                )
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
@@ -214,12 +231,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     Three LR groups:
     - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
       Newton-Schulz orthogonalisation + Frobenius hyperball scale-invariant step.
+      Four-dimensional expert banks use hero-EP's backend and configured
+      ``expert_normalization``; two- and three-dimensional leaves use the
+      original generic backend.
     - ``adamh``: ``lm_head`` / ``output_proj``.
     - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate``
-      / 1-D norm weights.
+      / norm weights.
 
-    ``max_grad_norm`` defaults to ``None`` here (no clipping) for the 1pct-noclip
-    schedule used by the May Recipe baseline.
+    ``max_grad_norm`` clips each group separately. ``global_grad_norm`` clips
+    the entire tree before grouping; the two settings are mutually exclusive.
     """
 
     adam_lr: float = 6e-4
@@ -232,6 +252,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    use_syrk: bool = False
+    expert_normalization: ExpertNormalization = ExpertNormalization.PER_EXPERT
+    global_grad_norm: float | None = None
+
+    def __post_init__(self):
+        if self.global_grad_norm is not None and self.max_grad_norm is not None:
+            raise ValueError("global_grad_norm and per-group max_grad_norm cannot both be set")
+        if self.global_grad_norm is not None and self.global_grad_norm <= 0:
+            raise ValueError(f"global_grad_norm must be positive, got {self.global_grad_norm}")
+        if self.max_grad_norm is not None and self.max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be positive, got {self.max_grad_norm}")
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -242,16 +273,49 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_with_grug_muonh(
-                        momentum=self.momentum,
-                        nesterov=self.nesterov,
-                        steps=self.backend_steps,
-                        muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
-                        coefficient_type=self.coefficient_type,
-                    )
+                common = dict(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    learning_rate=learning_rate,
+                    coefficient_type=self.coefficient_type,
                 )
+                generic = scale_with_grug_muonh(**common)
+                hero = scale_with_hero_muonh(
+                    **common, use_syrk=self.use_syrk, expert_normalization=self.expert_normalization
+                )
+
+                def update_fn(updates, state, params=None):
+                    if params is None:
+                        raise ValueError("MuonH requires params for norm-preserving updates")
+
+                    def select(tree, four_dimensional):
+                        return jax.tree.map(
+                            lambda x: x if (getattr(x, "ndim", None) == 4) == four_dimensional else None,
+                            tree,
+                            is_leaf=lambda x: x is None,
+                        )
+
+                    def apply(transform, four_dimensional):
+                        substate = state._replace(momentum_buffer=select(state.momentum_buffer, four_dimensional))
+                        return transform.update(
+                            select(updates, four_dimensional), substate, select(params, four_dimensional)
+                        )
+
+                    generic_updates, generic_state = apply(generic, False)
+                    hero_updates, hero_state = apply(hero, True)
+
+                    def merge(a, b):
+                        return a if a is not None else b
+
+                    result = jax.tree.map(merge, generic_updates, hero_updates, is_leaf=lambda x: x is None)
+                    momentum = jax.tree.map(
+                        merge, generic_state.momentum_buffer, hero_state.momentum_buffer, is_leaf=lambda x: x is None
+                    )
+                    return result, state._replace(momentum_buffer=momentum)
+
+                components.append(optax.GradientTransformation(generic.init, update_fn))
                 components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
@@ -277,10 +341,19 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             }
             return optax.multi_transform(transforms, self.create_mask)
 
-        return optax.inject_hyperparams(optimizer)(
+        inner = optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
         )
+        if self.global_grad_norm is None:
+            return inner
+        clip = optax.clip_by_global_norm(self.global_grad_norm)
+
+        def update_fn(updates, state, params=None):
+            clipped, _ = clip.update(updates, optax.EmptyState())
+            return inner.update(clipped, state, params)
+
+        return optax.GradientTransformation(inner.init, update_fn)
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -300,7 +373,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            if path_lower.endswith(".weight"):
+                return "adam"
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 

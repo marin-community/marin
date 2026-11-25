@@ -13,6 +13,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import math_answer_task, numeric_answer_task, source_defect, unsupported
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
@@ -22,7 +23,7 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -30,6 +31,10 @@ ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
 NUMINA_PROOF_REQUEST = re.compile(r"\b(?:prove|show)\s+that\b", re.IGNORECASE)
 NUMINA_INEQUALITY = re.compile(r"[<>≤≥]|\\(?:leqslant|geqslant|leq|geq|le|ge|lt|gt)\b")
 ASDIV_UNITS = re.compile(r"\s*\([^)]*\)\s*$")
+HARDMATH_SYMBOLIC_SOURCE = "poly1_train"
+HARDMATH_SYMBOLIC_TYPE = "nondimensionalization_symbolic"
+HARDMATH_SYMBOLIC_COEFFICIENTS = ("a_1", "a_2", "a_3")
+HARDMATH_POSITIVE_PREMISE = "Assume $a_1$, $a_2$, and $a_3$ are positive."
 
 REFERENCE_CHECK = (
     "Check that the reference answer solves the complete public problem. Difficulty alone is not a quality defect."
@@ -207,6 +212,21 @@ def convert_gsm8k(row: RawRow, _context: ConversionContext) -> TaskSpec | Import
 
 
 def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    if row.data.get("question_type") == HARDMATH_SYMBOLIC_TYPE and row.data.get("source") == HARDMATH_SYMBOLIC_SOURCE:
+        question = row.data.get("question")
+        answer = row.data.get("ground_truths")
+        if not isinstance(question, str) or not all(name in question for name in ("a_{1}", "a_{2}", "a_{3}")):
+            return source_defect("invalid_question", "Symbolic nondimensionalization requires the three coefficients")
+        boxed = extract_boxed(answer) if isinstance(answer, str) else None
+        if not boxed or not boxed.startswith(r"\epsilon="):
+            return source_defect("invalid_reference", "Symbolic nondimensionalization requires an epsilon equation")
+        return math_answer_task(
+            row,
+            prompt=f"{question}\n\n{HARDMATH_POSITIVE_PREMISE}",
+            answer=boxed.removeprefix(r"\epsilon="),
+            evidence=_fields(row, ("question", *SOLUTION_FIELDS)),
+            positive_symbols=HARDMATH_SYMBOLIC_COEFFICIENTS,
+        )
     return math_answer_task(
         row,
         prompt=row.data.get("question"),
@@ -295,9 +315,12 @@ SOURCES = (
         AIME24_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:aime24",
-            title="HuggingFaceH4/aime_2024",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="aime24",
+            upstream_name="HuggingFaceH4/aime_2024",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
         ),
@@ -314,9 +337,12 @@ SOURCES = (
         IntendedUse.EVAL,
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:aime_1983_2024",
-            title="di-zhang-fdu/AIME_1983_2024",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="aime_1983_2024",
+            upstream_name="di-zhang-fdu/AIME_1983_2024",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.DI_ZHANG_FDU,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
         ),
@@ -334,9 +360,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:asdiv",
-            title="chaochun/nlu-asdiv-dataset",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="asdiv",
+            upstream_name="chaochun/nlu-asdiv-dataset",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ASDIV,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
         ),
@@ -353,9 +382,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:dapo_math",
-            title="BytedTsinghua-SIA/DAPO-Math-17k",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="dapo_math",
+            upstream_name="BytedTsinghua-SIA/DAPO-Math-17k",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.BYTEDTSINGHUA_SIA,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
         ),
@@ -372,9 +404,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:deepscaler",
-            title="agentica-org/DeepScaleR-Preview-Dataset",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="deepscaler",
+            upstream_name="agentica-org/DeepScaleR-Preview-Dataset",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.AGENTICA_ORG,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
@@ -391,9 +426,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:gsm8k",
-            title="openai/gsm8k",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="gsm8k",
+            upstream_name="openai/gsm8k",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.OPENAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/gsm8k"),
         ),
@@ -410,9 +448,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hardmath",
-            title="pafitis/HARDMath_processed_training",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="hardmath",
+            upstream_name="pafitis/HARDMath_processed_training",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
         ),
@@ -429,9 +470,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hendrycks_math",
-            title="EleutherAI/hendrycks_math",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="hendrycks_math",
+            upstream_name="EleutherAI/hendrycks_math",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ELEUTHERAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
@@ -445,9 +489,12 @@ SOURCES = (
         IntendedUse.EVAL,
         MATH500_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:math500",
-            title="HuggingFaceH4/MATH-500",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="math500",
+            upstream_name="HuggingFaceH4/MATH-500",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
         ),
@@ -464,9 +511,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:numina_math",
-            title="AI-MO/NuminaMath-CoT",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="numina_math",
+            upstream_name="AI-MO/NuminaMath-CoT",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.AI_MO,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
         ),
@@ -483,9 +533,12 @@ SOURCES = (
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:rlvr_math",
-            title="allenai/RLVR-MATH",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="rlvr_math",
+            upstream_name="allenai/RLVR-MATH",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ALLENAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
         ),
@@ -500,9 +553,12 @@ SOURCES = (
         SVAMP_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:svamp",
-            title="ChilleD/SVAMP",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="svamp",
+            upstream_name="ChilleD/SVAMP",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.CHILLED,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),

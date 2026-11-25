@@ -60,6 +60,10 @@ long layers.
   - `adam` (token_embed, router, attn_gate, biases, 1-D norm weights).
 - **No gradient clipping** (`max_grad_norm = None`).
 - **1% warmup**, linear decay to 0, `min_lr_ratio = 0`.
+- **Zero-LR exactness**: at `learning_rate = 0` (with `adam_lr = 0`) every
+  parameter stays bit-identical under both BF16 and FP32 parameter policies;
+  the scale-invariant re-projections return an exact zero step instead of a
+  rounding-noise update.
 - LR scaling (fit on the May Recipe sweep, issue #5951, R²=0.996):
   `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
   (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
@@ -190,6 +194,6 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
   lazy `Checkpoint`, and `StepRunner` wiring.
 - [`launch_cw_scale.py`](./launch_cw_scale.py) — CoreWeave scale-test launcher.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
-- [`test_optimizer.py`](./test_optimizer.py) — unit tests for the AdamH
-  parameter-group mask.
+- [`test_optimizer.py`](./test_optimizer.py) — unit tests for the parameter-group
+  masks and for zero/positive learning-rate update behavior.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

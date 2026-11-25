@@ -2,8 +2,6 @@
 
 import contextlib
 from collections.abc import Mapping
-from dataclasses import dataclass
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,7 +9,7 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 
-from marinskyrl.environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
+from .environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
 
 TOKENIZER_CONFIG_NAME = "tokenizer_config.json"
 TOKENIZER_JSON_NAME = "tokenizer.json"
@@ -83,17 +81,6 @@ def write_generation_config(directory: str, config: Mapping[str, Any]) -> Path:
     return path
 
 
-@dataclass(frozen=True)
-class HuggingFaceModelCache:
-    """CPU mirror bound to an immutable commit and its requested ref alias."""
-
-    model_id: str
-    revision: str
-    uri: str
-    identity: str
-    resolved_revision: str
-
-
 def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_json: bool, source: str) -> bytes:
     """Rewrite Transformers 5 fast-tokenizer metadata for Transformers 4."""
     config = json.loads(payload)
@@ -103,11 +90,6 @@ def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_jso
         raise ValueError(f"TokenizersBackend export is missing {TOKENIZER_JSON_NAME}: {source}")
     config["tokenizer_class"] = "PreTrainedTokenizerFast"
     return (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode()
-
-
-def immutable_model_cache_key(source: str, identity: str) -> str:
-    """Return a stable cache key for one immutable model source."""
-    return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
 
 
 @contextlib.contextmanager

@@ -219,6 +219,46 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class MachineResourceExhausted(MachineTerminated):
+    """The machine exhausted its resource budget; recreating it cannot repair the task."""
+
+
+class MachineOutputLimitExceeded(MachineResourceExhausted):
+    """The machine exhausted its cumulative output budget."""
+
+
+class MachineUnavailable(ConnectionError):
+    """The machine's controller stayed unreachable through its bounded retry budget."""
+
+
+class CommandOutcomeUnknown(MachineUnavailable):
+    """The controller accepted the command, or may have, but its result was lost; rerunning it may repeat it."""
+
+
+class GuestPathError(OSError):
+    """The guest reported ``errno`` for the caller's path, never a failure on the host side of a transfer."""
+
+
+class GuestHelperFailed(RuntimeError):
+    """A guest utility that a transfer relies on is missing or failed; the caller's path is not at fault."""
+
+
+class MachineCancelled(RuntimeError):
+    """The machine or the job that owns it was cancelled before the operation completed."""
+
+
+class ExecSetupFailed(RuntimeError):
+    """A helper exec's transport reported a setup failure; Kubernetes also reports one after a lost upgrade reply."""
+
+
+class MachineDiskFull(RuntimeError):
+    """The machine's filesystem has no space left for the files that start a command."""
+
+
+class CommandOutputLost(RuntimeError):
+    """A process inside the machine removed a command's captured output before it was read."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -229,6 +269,17 @@ class Machine(Protocol):
     async def download(self, source: str, target: Path) -> None: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ResettableMachine(Protocol):
+    """A machine that can clear task files and processes between uses while keeping its runtime.
+
+    Call ``reset`` before the first use to record the baseline, then between uses. A failed reset
+    closes the machine; machines without this capability are closed and recreated instead.
+    """
+
+    async def reset(self) -> None: ...
 
 
 class ProcessScope(Protocol):

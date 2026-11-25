@@ -16,6 +16,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from finestore.rl.licenses import license_verdict
 from huggingface_hub import HfApi
 from levanter.tokenizers import MarinTokenizer
 from marin.datakit.sources import all_sources
@@ -29,7 +30,6 @@ from experiments.data_belay.intake import (
     RungNeed,
     SampleStats,
     card_licenses,
-    license_verdict,
     rung_needs,
     sample_stats,
 )

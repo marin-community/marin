@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mode reasoning-gym: score the answer file with the reasoning-gym dataset's own scorer.
+"""Mode reasoning-gym: score with the pinned scorer and targeted repairs.
 
 The task ships the generated entry (its reference answer or null and metadata) as JSON under tests/; the spec
 names the dataset it came from. ``score_answer`` returns a float in [0, 1], which becomes the
-reward directly -- several reasoning-gym datasets award partial credit. A dataset name the library
-does not know, or an entry file that is missing or not an entry, is a task defect.
+reward directly -- several reasoning-gym datasets award partial credit. A reply the scorer raises on
+while parsing it scores 0.0, provided the scorer accepts the entry's own answer. A dataset name the
+library does not know, or an entry file that is missing or not an entry, is a task defect.
 """
 
 import json
@@ -21,10 +22,16 @@ from verifyit.file_ops.read import read_text
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.json_objects import unique_object
 from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.reasoning_gym_scorers import score_reasoning_gym_reply
 from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200
 PRIME_FACTORIZATION = "prime_factorization"
+# What the pinned scorers raise while parsing a reply: TypeError and AttributeError (boxnet, JSON that is
+# not a list of plans), KeyError (game_of_life, an empty object), OverflowError (coin_flip,
+# calendar_arithmetic and time_intervals, a number too large for a float), RecursionError
+# (propositional_logic, 5,000 nested parentheses) and ValueError (prime_factorization, prose).
+MALFORMED_REPLY_ERRORS = (AttributeError, KeyError, OverflowError, RecursionError, TypeError, ValueError)
 
 
 def load_entry(path: Path) -> dict:
@@ -113,18 +120,25 @@ def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Calla
         except ValueError as error:
             raise InvalidTask("prime_factorization reference answer is malformed") from error
     try:
-        score = score_answer(answer, entry)
-    except ValueError:
-        if dataset != PRIME_FACTORIZATION:
-            raise
+        score = score_reasoning_gym_reply(dataset, answer, entry, score_answer)
+    except MALFORMED_REPLY_ERRORS:
+        # A broken entry raises the same types and stays an error: the scorer must accept the entry's own
+        # answer with a valid reward. An entry without an answer (boxnet, propositional_logic) cannot be
+        # checked this way.
+        if entry["answer"] is not None:
+            scored(_checked_score(dataset, score_answer(entry["answer"], entry)))
         return 0.0
+    return _checked_score(dataset, score)
+
+
+def _checked_score(dataset: str, score: object) -> float:
     if isinstance(score, bool) or not isinstance(score, int | float):
         raise TypeError(f"reasoning-gym scorer for {dataset} returned {type(score).__name__}")
     return float(score)
 
 
 def score_reasoning_gym_answer(dataset: str, entry: dict, answer: str) -> float:
-    """Score a raw answer while treating malformed prime factors as an incorrect candidate."""
+    """Score a raw answer, with 0.0 for a reply the scorer cannot parse."""
     spec = ReasoningGymSpec(dataset=dataset)
     score_answer = _score_answer(dataset, None)
     _validate_entry(spec, entry)

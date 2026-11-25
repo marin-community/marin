@@ -58,6 +58,13 @@ A controller restart deploys the current working tree, including uncommitted
 files, and leaves workers running. A full `iris cluster restart` destroys
 workers and jobs; never run it without express approval.
 
+For GCE controller rollouts, the operator needs the `marinInfra` project role
+alongside `marindev`, Token Creator on `iris-controller`, and Service Account
+User on the default Compute service account attached to the hub VM. The
+`marinInfra` role covers VM metadata writes, administrator OS Login, and IAP
+tunnels. Image pushes use GHCR credentials with `write:packages`; GCP IAM does
+not grant GHCR access. See [image deployment](docs/image-push.md#authentication).
+
 ```bash
 uv run --package marin-iris --extra controller iris \
   --cluster=<name> cluster controller restart
@@ -120,20 +127,20 @@ Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job
 state alone does not prove process death.
 
-To list root jobs active for more than a week, with owner and the resources
-their active tasks hold, run the report that the `old-iris-jobs` Loom watch
-posts to Slack:
+The `old-iris-jobs` Loom watch lists root jobs active for more than a week in a
+Google Sheet, with owner and the resources their active tasks hold, and cancels
+the jobs that owners mark `Kill` there (see the
+[watch description](../../infra/loom/README.md#scheduled-watches)). To print the
+rows of the next run without a change to the sheet or to a job:
 
 ```bash
-WORK=$(mktemp -d)
 uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
-  --state $WORK/state.json --messages-dir $WORK/messages
-cat $WORK/messages/*
+  --sheet-id <sheet-id> --impersonate <service-account-with-sheet-access> --dry-run
 ```
 
 The `marin` hub covers the jobs it federates. For jobs submitted directly to a
 CoreWeave controller, use `--cluster <cw-cluster>`; this needs CoreWeave
-kubeconfig access. The script omits the jobs that the `--state` file names.
+kubeconfig access.
 
 ### Submitting a GPU gang from a workstation
 
@@ -371,6 +378,7 @@ schemas and bound the time window before querying; see [query-finelog](../../.ag
 | `iris.task` | Per-attempt resource samples; Kubernetes CPU needs consecutive samples, memory peaks reset with the agent, and disk usage is unavailable |
 | `iris.task_event` | Backend verdicts and controller actions, retained up to 30 days; use `task events` first |
 | `iris.task_state` | Task counts and wait ages per root job every 30 seconds; empty `root_job_id` is the cluster rollup, emitted even when idle |
+| `iris.controller_db__jobs`, `__job_config`, `__tasks`, `__task_attempts` | Durable copies of the controller DB tables of the same names; keys, `cluster` values, which columns are copied, joins, their cost to the controller and how to turn them off (`finelog.controller_rows: false`) are in [observability rows](docs/observability-rows.md) |
 | `iris.admission_probe` | Kubernetes admission canary outcomes every 60 seconds; failure or silence can identify webhook outages |
 | `iris.profile` | CPU/memory/thread captures; filter by `source`, `type`, and time; retention target is seven days |
 | `telemetry_v1.node_agent` | Physical-node gauges, including runtime-filesystem capacity |
@@ -550,72 +558,7 @@ PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris
 
 The deployment preflight reads the RuntimeClass before creating the controller
 Deployment. A 403 on this GET raises a `KubectlError` with the API status and
-reason; only a 404 is reported as a missing class. On 02a, include the
-RuntimeClass target in the same preview and apply as shown below.
-
-### 02a sandbox runtime rollout
-
-The 02a sandbox RuntimeClass requests CoreWeave's `cw-gvisor-cpu` handler and
-selects `cpu-genoa` nodes labelled for gVisor and that handler. It does not
-install the handler. Require CoreWeave to enable it on the 02a CPU nodes.
-First apply [the CPU topology resources](https://github.com/marin-community/marin/pull/11515)
-for 02a so Kueue can admit CPU work through `iris-cpu`. Apply the RuntimeClass
-before deploying an Iris controller that selects it.
-
-Review a targeted Pulumi preview for the RuntimeClass and the controller
-ClusterRole's RuntimeClass `get` permission. Require only those two changes,
-with no NodePool, ClusterQueue, controller, or unrelated resource change. After
-approval for that exact preview, run the same command with `up`:
-
-```bash
-runtime_urn='urn:pulumi:cw-us-east-02a::marin-iac::kubernetes:node.k8s.io/v1:RuntimeClass::sandbox-runtime-class'
-role_urn='urn:pulumi:cw-us-east-02a::marin-iac::marin:coreweave:IrisRbac$kubernetes:rbac.authorization.k8s.io/v1:ClusterRole::cluster-role'
-PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
-  pulumi -C infra/pulumi preview --stack cw-us-east-02a \
-    --target "$runtime_urn" --target "$role_urn"
-```
-
-Check the installed handler and eligible nodes with the configured 02a context:
-
-```bash
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get runtimeclass iris-gvisor-cpu \
-  -o jsonpath='{.handler}{"\n"}{.scheduling.nodeSelector}{"\n"}'
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get nodes -l 'iris-cw-use02a-scale-group=cpu-genoa,node.coreweave.cloud/gvisor=true,node.coreweave.cloud/container-runtime.cw-gvisor-cpu=true' \
-  -o custom-columns='NODE:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
-```
-
-Before changing the Iris controller, start one bounded public-image sandbox Pod
-with `runtimeClassName: iris-gvisor-cpu` and a hostname selector on each eligible
-CPU node. The 02a pool has four `cpu-genoa` nodes; verify all four carry the
-handler label and pass the canary. Require each Pod to reach Running within
-600 seconds. Read Pod events and the kubelet, containerd, `cw-gvisor-cpu`, and
-`runsc` logs on any failed node;
-the `FailedCreatePodSandBox` event alone does not identify the cause. If the
-direct handler fails, repair it with CoreWeave before routing Iris sandbox work.
-
-After every node passes, deploy the Iris controller through its normal rollout
-procedure. Run an Iris CPU `SANDBOX` canary and confirm its Kueue assignment,
-RuntimeClass, selected node, and process exit. Check a 1 GiB sandbox disk limit
-with a 1152 MiB write: require eviction and Iris `RESOURCE_LIMIT_DISK` rather
-than a generic process failure. Record the expected peak Taskforge sandbox
-concurrency and compare its CPU and memory requests with the allocatable capacity
-and existing reservations on these four nodes. Run a bounded batch at that peak
-only if it fits with headroom. Require every admitted Pod to reach Running within
-600 seconds, without `FailedCreatePodSandBox` events. Runtime shim and cgroup
-counts must return to baseline after teardown.
-
-Fill the CPU pool with bounded canaries, then submit one more Iris `SANDBOX` task.
-Require the Workload to remain gated without an H100 assignment. Inspect its
-Kueue flavor and TAS hostname assignment. If `cw-tas`
-admits it to an H100 hostname, the RuntimeClass selector will keep the Pod
-unschedulable while it holds quota. Block normal sandbox traffic until admission
-prevents this spill. Release the filler canaries after the check. Record
-allocatable CPU and memory, Kueue quota, and each result in
-[#10090](https://github.com/marin-community/marin/issues/10090)
-and [#11343](https://github.com/marin-community/marin/issues/11343) before
-resuming normal 02a sandbox traffic.
+reason; only a 404 is reported as a missing class.
 
 ### Public LoadBalancer reachability
 

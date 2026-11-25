@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 import click
-from evalrecords.records import RECORD_FILE, read_record
+from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -143,9 +143,18 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         eval_ref = evaluation.identity.eval_ref
         tasks = [task.name for task in eval_ref.tasks]
         harbor = eval_ref.harbor
+        curated = eval_ref.curated
         agent_context = ""
         if harbor is not None:
             agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
+        elif curated is not None and curated.agent is not None:
+            assert curated.settings.task_machine is not None
+            agent_context = (
+                f"agent={curated.agent.harness}@{curated.agent.revision}  "
+                f"task_machine={curated.settings.task_machine.backend.value}  "
+                f"max_input_tokens={curated.agent.max_input_tokens}  "
+                f"max_output_tokens={curated.agent.max_output_tokens}  "
+            )
         click.echo(
             f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
@@ -228,6 +237,21 @@ def cli() -> None:
     "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
 )
 @click.option(
+    "--task-machine-backend",
+    type=click.Choice([backend.value for backend in TaskMachineBackend]),
+    default=None,
+    help="Run curated agent benchmarks' task machines on this backend. Default: each selection's, else daytona.",
+)
+@click.option(
+    "--task-evidence",
+    type=click.Choice([mode.value for mode in TaskEvidence]),
+    default=None,
+    help=(
+        "What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests. "
+        "Default: what the benchmark declares, embedded unless it declares reference."
+    ),
+)
+@click.option(
     "--version",
     "version",
     default=None,
@@ -288,6 +312,8 @@ def launch(
     max_concurrent: int,
     instances: int,
     seed: int | None,
+    task_machine_backend: str | None,
+    task_evidence: str | None,
     version: str | None,
     description: str | None,
     resume_results_path: str | None,
@@ -332,6 +358,8 @@ def launch(
         max_concurrent=max_concurrent,
         instances=instances,
         seed=seed,
+        task_machine_backend=TaskMachineBackend(task_machine_backend) if task_machine_backend is not None else None,
+        task_evidence=TaskEvidence(task_evidence) if task_evidence is not None else None,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,

@@ -34,6 +34,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     InlineFile,
     PlainText,
     ResourceGroups,
@@ -492,7 +493,7 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> LoweredSpec:
         grader=ScriptGrader(
             argv=("bash", "/tests/test.sh"),
             cwd=workdir,
-            environment=requirements,
+            placement=GraderMachine(environment=requirements),
             reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         ),
         source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),

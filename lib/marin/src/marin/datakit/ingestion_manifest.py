@@ -1,22 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed source manifests for small ingestion registries and sidecar metadata."""
+"""Typed source manifests for ingestion registries."""
 
 import hashlib
 import json
-import posixpath
 from enum import StrEnum, auto
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
 
 JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
-INGESTION_METADATA_SCHEMA_VERSION = 1
 
 
 class ManifestModel(BaseModel):
@@ -84,8 +79,6 @@ class StagingMetadata(ManifestModel):
 
     This block is the source -> text projection contract. Keep only fields
     that affect or meaningfully describe the emitted text surface here.
-    Filesystem plumbing and runtime output details belong in
-    ``MaterializedOutputMetadata`` instead.
     """
 
     transform_name: str
@@ -115,12 +108,6 @@ class IngestionSourceManifest(ManifestModel):
     rough_tokens_b: float | None = None
     source_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = self.model_dump(mode="json")
-        payload["policy"]["training_allowed"] = self.policy.training_allowed
-        payload["policy"]["eval_only"] = self.policy.eval_only
-        return payload
-
     def content_fingerprint_payload(self) -> dict[str, Any]:
         """Return the subset of manifest fields that can affect staged bytes.
 
@@ -149,68 +136,3 @@ class IngestionSourceManifest(ManifestModel):
         """Return the content hash used for cache keys and config validation."""
         blob = json.dumps(self.content_fingerprint_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-    def provenance_fingerprint(self) -> str:
-        """Return an exact hash over the full manifest payload."""
-        blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def verify_content_fingerprint(manifest: IngestionSourceManifest | None, content_fingerprint: str) -> None:
-    """Reject a staging config whose recorded fingerprint no longer matches its source manifest."""
-    if manifest is None or not content_fingerprint:
-        return
-    expected = manifest.fingerprint()
-    if content_fingerprint != expected:
-        raise ValueError(
-            f"content_fingerprint mismatch: config has {content_fingerprint}, source manifest has {expected}"
-        )
-
-
-class MaterializedOutputMetadata(ManifestModel):
-    """Runtime output metadata for a concrete staging or extraction run."""
-
-    input_path: str
-    output_path: str
-    output_file: str
-    record_count: int
-    bytes_written: int
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-
-def render_ingestion_metadata(
-    manifest: IngestionSourceManifest,
-    materialized_output: MaterializedOutputMetadata,
-) -> dict[str, Any]:
-    """Render the sidecar payload for a materialized source."""
-
-    return {
-        "schema_version": INGESTION_METADATA_SCHEMA_VERSION,
-        "manifest_fingerprint": manifest.provenance_fingerprint(),
-        "content_fingerprint": manifest.fingerprint(),
-        "source_manifest": manifest.to_dict(),
-        "materialized_output": materialized_output.to_dict(),
-    }
-
-
-def write_ingestion_metadata_json(
-    *,
-    manifest: IngestionSourceManifest,
-    materialized_output: MaterializedOutputMetadata,
-    metadata_filename: str = "metadata.json",
-) -> str:
-    """Write ``metadata.json`` for a materialized source and return its path."""
-
-    StoragePath(materialized_output.output_path).mkdirs(exist_ok=True)
-    metadata_path = posixpath.join(materialized_output.output_path, metadata_filename)
-    payload = render_ingestion_metadata(manifest, materialized_output)
-
-    with atomic_rename(metadata_path) as temp_path:
-        with open_url(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-
-    return metadata_path

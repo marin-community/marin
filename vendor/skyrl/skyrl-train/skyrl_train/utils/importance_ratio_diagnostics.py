@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
+from skyrl_train.metric_reduction import MetricReduction, LocalReduction
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
@@ -101,7 +102,12 @@ def ratio_statistics(delta: torch.Tensor, *, eps_clip_low: float = 0.2, eps_clip
     return result
 
 
-def _grouped_moments(values: torch.Tensor, groups: torch.Tensor, n_groups: int) -> dict[str, torch.Tensor]:
+def _grouped_moments(
+    values: torch.Tensor,
+    groups: torch.Tensor,
+    n_groups: int,
+    clip_bounds: tuple[float, float] | None = None,
+) -> dict[str, torch.Tensor]:
     """Per-group token counts and finite-token sums of delta, |delta| and the 2x indicator."""
 
     def total(weights: torch.Tensor | None = None) -> torch.Tensor:
@@ -110,16 +116,24 @@ def _grouped_moments(values: torch.Tensor, groups: torch.Tensor, n_groups: int) 
     finite = torch.isfinite(values)
     finite_values = torch.where(finite, values, 0)
     absolute = finite_values.abs()
-    return {
+    result = {
         "selected": total(),
         "finite": total(finite.double()),
         "sum": total(finite_values),
         "abs_sum": total(absolute),
         "outside": total((absolute > LOG_RATIO_DOUBLING).double()),
     }
+    if clip_bounds is not None:
+        lower, upper = clip_bounds
+        result.update(
+            square_sum=total(finite_values.square()),
+            lower_clip=total((finite & (values < lower)).double()),
+            upper_clip=total((finite & (values > upper)).double()),
+        )
+    return result
 
 
-def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
+def _moment_metrics(totals: dict[str, float], *, include_extras: bool) -> dict[str, float]:
     selected, finite = totals["selected"], totals["finite"]
     result = {"selected_tokens": selected, "finite_tokens": finite}
     if selected:
@@ -130,6 +144,12 @@ def _moment_metrics(totals: dict[str, float]) -> dict[str, float]:
             log_ratio_abs_mean=totals["abs_sum"] / finite,
             frac_outside_0_5_2=totals["outside"] / finite,
         )
+        if include_extras:
+            result.update(
+                log_ratio_mean_squared=totals["square_sum"] / finite,
+                lower_clip_pressure=totals["lower_clip"] / finite,
+                upper_clip_pressure=totals["upper_clip"] / finite,
+            )
     return result
 
 
@@ -141,8 +161,10 @@ def mismatch_ratio_metrics(
     *,
     eps_clip_low: float = 0.2,
     eps_clip_high: float = 0.2,
+    reduction: MetricReduction = LocalReduction(),
 ) -> dict[str, float]:
     """Trainer-minus-vLLM log-ratio statistics by per-token staleness bucket and response position."""
+    exact = reduction.exact_order_statistics
     mask = loss_mask.detach().cpu() > 0
     staleness = rollout_staleness.detach().cpu()
     bucket = torch.zeros(mask.shape, dtype=torch.uint8)
@@ -157,30 +179,53 @@ def mismatch_ratio_metrics(
         torch.masked_select(learner_logprobs.detach().cpu(), mask).double()
         - torch.masked_select(rollout_logprobs.detach().cpu(), mask).double()
     )
+    clip_bounds = (math.log1p(-eps_clip_low) if eps_clip_low < 1 else -math.inf, math.log1p(eps_clip_high))
     grid = {
         key: total.view(len(MISMATCH_STALENESS_BUCKETS), 4)
-        for key, total in _grouped_moments(values, groups, 4 * len(MISMATCH_STALENESS_BUCKETS)).items()
+        for key, total in _grouped_moments(
+            values,
+            groups,
+            4 * len(MISMATCH_STALENESS_BUCKETS),
+            clip_bounds if not exact else None,
+        ).items()
     }
+    maxima = None
+    if not exact:
+        grid = {key: reduction.combine(total, "sum") for key, total in grid.items()}
+        finite = torch.isfinite(values)
+        maxima = values.new_full((4 * len(MISMATCH_STALENESS_BUCKETS),), -math.inf)
+        maxima.scatter_reduce_(0, groups[finite], values[finite].abs(), reduce="amax")
+        maxima = reduction.combine(maxima.view(len(MISMATCH_STALENESS_BUCKETS), 4), "max")
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
-    # Only these two buckets get the sorted statistics; the others take moments from the grid.
-    staleness0 = groups < 4
-    pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
-    full_statistics = {
-        "pooled": pooled,
-        "staleness0": pooled
-        if bool(staleness0.all())
-        else ratio_statistics(values[staleness0], eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high),
-    }
+    full_statistics = {}
+    if exact:
+        # Only these two buckets get the sorted statistics; the others take moments from the grid.
+        staleness0 = groups < 4
+        pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
+        full_statistics = {
+            "pooled": pooled,
+            "staleness0": pooled
+            if bool(staleness0.all())
+            else ratio_statistics(values[staleness0], eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high),
+        }
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
-    def moments(rows: slice, classes: list[int]) -> dict[str, float]:
-        return _moment_metrics({key: total[rows][:, classes].sum().item() for key, total in grid.items()})
+    def moments(rows: slice, classes: list[int], *, include_extras: bool = False) -> dict[str, float]:
+        result = _moment_metrics(
+            {key: total[rows][:, classes].sum().item() for key, total in grid.items()}, include_extras=include_extras
+        )
+        if include_extras and maxima is not None and result["finite_tokens"]:
+            result["log_ratio_abs_max"] = maxima[rows][:, classes].max().item()
+        return result
 
     result = {}
     for name, rows in bucket_rows.items():
         prefix = f"policy/mismatch/{name}/"
-        metrics = {**(full_statistics.get(name) or moments(rows, [0, 1, 2, 3])), "missing_behavior": 0.0}
+        stats = full_statistics.get(name) or moments(
+            rows, [0, 1, 2, 3], include_extras=not exact and name in ("pooled", "staleness0")
+        )
+        metrics = {**stats, "missing_behavior": 0.0}
         result.update({prefix + key: value for key, value in metrics.items()})
         for position, classes in position_classes.items():
             stats = moments(rows, classes)

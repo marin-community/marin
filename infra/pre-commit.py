@@ -51,13 +51,15 @@ EXCLUDE_PATTERNS = [
     # Vendored runtimes retain upstream formatting and license notices.
     "vendor/skyrl/**",
     "vendor/harbor/**",
-    # Canonical instruction checkers retain upstream style and license notices.
-    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    # Vendored IFBench checkers retain upstream style and license notices.
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     # Benchmark prompts retain source whitespace byte for byte.
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
+    "lib/rolloutengine/src/rolloutengine/agents/terminus/templates/*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
+    # Harbor package fixtures retain their source bytes, which a dataset's package edits must match.
+    "experiments/evaluation/fixtures/harbor/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",

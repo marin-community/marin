@@ -46,6 +46,8 @@ current base images, so every update rebuilds the image, even for an unchanged
 commit. When preview skips that build, it shows the VM image as unknown.
 `pulumi up` builds and pushes the image, places the provider-produced digest in
 VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
+The image entrypoint sets the Claude and Codex CLI and ACP adapter versions
+and selects the Codex executable for ACP sessions.
 
 ```sh
 cd /path/to/marin
@@ -225,6 +227,10 @@ key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
 to every CoreWeave job, so this key's access policy bounds what Belay runs can
 read and write. Replies on the intake issue use Loom's GitHub App token.
 
+Idle archiving has a 15-minute minimum (five for completed watches) and waits
+for active turns to finish. Suspended sessions still count toward concurrency
+limits. Profile edits apply to new sessions.
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
@@ -359,14 +365,43 @@ The `belay` watch runs the `belay` profile every 10 minutes
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
-The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
-([prompt](watches/old-iris-jobs.md)). It runs
+The [PR review reminder watch](watches/pr-review-reminders.md) runs at 10:00
+Pacific each weekday. Loom posts a digest to `#marin-eng`. Each entry links the PR, gives its title,
+and shows how long since its last update and how long each reviewer has been
+waiting. Ages show elapsed calendar time. A request is due
+when it predates the same time on the previous weekday and the reviewer has
+had no activity since then. A new request, discussion or inline comment,
+review, or commit by that reviewer restarts the clock. Weekends are excluded
+and holidays count as weekdays. Drafts, PRs last updated over seven days ago,
+and PRs by bots or people without repository write access are skipped.
+
+Preview the messages locally with an authenticated `gh` CLI:
+
+```sh
+uv run --no-project python scripts/ops/pr_review_reminders.py --as-of "$(date -u +%FT%TZ)"
+```
+
+The `old-iris-jobs` watch runs the `ops-report` profile
+([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
+([prompt](watches/old-iris-jobs.md)). The profile runs Claude: the sandbox of a Codex
+profile makes the uv cache read-only and permits network access only to Loom. The watch runs
 [`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
-`marin` hub and posts the Iris root jobs older than the prompt's
-`--min-age-days` to `#marin-alerts`, once per job while the job keeps running.
-Loom has no CoreWeave kubeconfig, so the report has the jobs the hub federates
-to CoreWeave but not the jobs submitted directly to a CoreWeave controller. The
-watch does not cancel jobs.
+`marin` hub. The script keeps a Google Sheet with one tab per job owner and one
+row per Iris root job older than the prompt's `--min-age-days`. An owner sets
+the Decision cell of a row. `Kill` makes the next run cancel the job. `Revisit in
+30 days` or `Revisit in 365 days` leaves the job alone until the Revisit on date, then
+the run clears the decision and the owner decides again. A job with no decision stays in the sheet, and a job that stops
+running leaves it. The watch posts to `#marin-alerts` only when the script
+fails, which includes a cancel that Iris rejects. It needs:
+
+- the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an
+  editor. Every person with edit access to the sheet can make the watch cancel
+  a job, so share it only with job owners and operators;
+- the `marin` IAM stack applied, for the `loom-vm` token-creator grant on
+  itself that mints a spreadsheets-scoped token.
+
+Loom has no CoreWeave kubeconfig, so the sheet has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
