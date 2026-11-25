@@ -10,12 +10,16 @@ attributing the release to a newer raw converter.
 """
 
 import json
+from collections.abc import Mapping
 from functools import cache
+from types import MappingProxyType
 
-from finestore.rl.curation import ActorCensusInput, SourceUse, require_lexical_qualification
+from finestore.rl.curation import ActorCensusInput, SourceUse
 from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from experiments.post_training.task_curation.admission import require_lexical_qualification
+from experiments.post_training.task_curation.datasets.skyrl.hardmath_lineage import LICENSE_RECEIPT
 from experiments.post_training.task_curation.frozen_atlas import FrozenAtlasConversion, import_frozen_atlas
 from experiments.post_training.task_curation.retained_release import RetainedCohort, import_retained
 from experiments.post_training.task_curation.source import PENDING_TAG, RlDataSource, SourceInfo
@@ -93,7 +97,7 @@ class AtlasEvaluation(BaseModel):
 
 
 @cache
-def publication_catalog() -> tuple[dict[str, AtlasPublication | AtlasEvaluation], frozenset[str]]:
+def publication_catalog() -> tuple[Mapping[str, AtlasPublication | AtlasEvaluation], frozenset[str]]:
     """Read and validate the frozen publication and retirement cut."""
     document = json.loads(read_pinned_hf_file(PUBLICATIONS_REFERENCE))
     publications: dict[str, AtlasPublication | AtlasEvaluation] = {
@@ -105,17 +109,20 @@ def publication_catalog() -> tuple[dict[str, AtlasPublication | AtlasEvaluation]
     for source_id, record in publications.items():
         if record.info.id != source_id:
             raise ValueError(f"Publication key differs from its generated identity: {source_id}")
-    return publications, frozenset(document["excluded_or_deprecated"])
+    return MappingProxyType(publications), frozenset(document["excluded_or_deprecated"])
 
 
 def bind_publications(sources: list[RlDataSource]) -> list[RlDataSource]:
-    """Select sealed final populations and omit Atlas-excluded or deprecated IDs."""
+    """Select sealed populations; hold the MIT-derived raw HARDMath pin as Pending."""
     identifiers = [source.info.id for source in sources]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("Duplicate RL source identifiers before Atlas publication binding")
     publications, retired = publication_catalog()
     selected = {
-        source.info.id: source for source in sources if source.info.id not in retired or PENDING_TAG in source.info.tags
+        source.info.id: source
+        for source in sources
+        if source.info.id not in retired
+        or (source.info.id == LICENSE_RECEIPT.source_id and PENDING_TAG in source.info.tags)
     }
     selected.update({source_id: publication.source() for source_id, publication in publications.items()})
     return list(selected.values())

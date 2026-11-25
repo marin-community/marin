@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import tarfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,6 +18,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.frozen_atlas_protocol import FrozenAtlasRequest
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
 FROZEN_IMPORT_VERSION = "2026.11.25.1"
@@ -49,19 +50,19 @@ class FrozenAtlasRun:
 def run_frozen_atlas(invocation: FrozenAtlasRun) -> CampaignArtifact:
     """Execute the original converter and reject any difference in its declared pin."""
     config = invocation.conversion
-    request = {
-        "source_id": config.source_id,
-        "name": config.name,
-        "version": config.version,
-        "repo": config.dataset.name,
-        "revision": config.dataset.revision,
-        "files": config.files,
-        "output_path": invocation.output_path,
-        "mode": invocation.mode,
-        "input_root": invocation.input_root,
-        "input_files": invocation.input_files,
-        "auxiliary": invocation.auxiliary,
-    }
+    request = FrozenAtlasRequest(
+        config.source_id,
+        config.name,
+        config.version,
+        config.dataset.name,
+        config.dataset.revision,
+        list(config.files),
+        invocation.output_path,
+        invocation.mode,
+        invocation.input_root,
+        invocation.input_files,
+        invocation.auxiliary,
+    )
     with TemporaryDirectory(prefix="atlas-converter-") as temporary:
         root = Path(temporary)
         checkout = root / "checkout"
@@ -69,7 +70,9 @@ def run_frozen_atlas(invocation: FrozenAtlasRun) -> CampaignArtifact:
         with tarfile.open(fileobj=io.BytesIO(read_pinned_hf_file(config.archive)), mode="r:gz") as archive:
             archive.extractall(checkout, filter="data")
         request_path, result_path = root / "request.json", root / "result.json"
-        request_path.write_text(json.dumps(request))
+        request_path.write_text(json.dumps(asdict(request)))
+        protocol = Path(__file__).with_name("frozen_atlas_protocol.py")
+        (checkout / "experiments/post_training/task_curation" / protocol.name).write_bytes(protocol.read_bytes())
         worker = Path(__file__).with_name("frozen_atlas_worker.py").read_text()
         environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "VIRTUAL_ENV"}}
         environment["MARIN_PREFIX"] = str(root / "artifacts")

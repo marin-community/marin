@@ -3,9 +3,8 @@
 
 """Main declares every Atlas-admitted source at the Atlas pin.
 
-The fixture pins one Atlas cut (origin/atlas-env-audit revision and the R40 admit
-set); its ``atlas_revision`` and ``r40_plan`` fields record where each value came
-from. The fixture's bytes live in the pinned public Hugging Face dataset
+The fixture records one Atlas commit and its admitted populations. Its bytes
+live in the pinned public Hugging Face dataset
 ``open-athena/atlas-source-pins``; the repository commits only the immutable
 reference (revision, sha256, byte size), and the Atlas release step on
 ``atlas-env-audit`` republishes a refreshed cut as a new revision.
@@ -81,7 +80,7 @@ def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked(
 
 
 def test_a_declaration_blocker_expires_when_main_declares_the_source():
-    """The ingestion PR that lands the import removes the source's blocker entry."""
+    """A declared source cannot retain a missing-import blocker."""
     fixture = read_atlas_source_pins()
     blockers = fixture["declaration_blockers"]
     sources = {canonical_source_id(source.info.id): source for source in all_sources().values()}

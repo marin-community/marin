@@ -23,7 +23,6 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     OversightEvidence,
     SourceUse,
-    require_lexical_qualification,
 )
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
@@ -35,6 +34,7 @@ from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
+from experiments.post_training.task_curation.admission import require_lexical_qualification
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
@@ -44,6 +44,8 @@ RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""
 RETAINED_PART_FILE = "part-000000.parquet"
 """The single-shard output basename shared by the retained views."""
+FINAL_VIEW = "final"
+
 RETAINED_MANIFEST_FILE = "manifest.json"
 """The import manifest the writer publishes and the evidence pointer names."""
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
@@ -98,7 +100,7 @@ def _write_evidence_views(
     carry no rows, so the assessment contract still holds and its excluded cohort
     samples zero. QUICK writes an empty final view, matching its admitted count.
     """
-    final_view = output / "final"
+    final_view = output / FINAL_VIEW
     final_view.mkdirs(exist_ok=True)
     outputs: dict[str, str] = {}
     admitted = mode is not SourceProcessingMode.QUICK
@@ -106,7 +108,7 @@ def _write_evidence_views(
         final = final_view / RETAINED_PART_FILE
         with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
             shutil.copyfileobj(source, destination)
-        outputs["final"] = str(final.parent)
+        outputs[FINAL_VIEW] = str(final.parent)
     else:
         with (final_view / RETAINED_PART_FILE).open("wb") as stream:
             pq.write_table(RETAINED_SCHEMA.empty_table(), stream)
@@ -117,7 +119,7 @@ def _write_evidence_views(
         with (view_dir / RETAINED_PART_FILE).open("wb") as stream:
             pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
         views[view] = str(view_dir)
-    return outputs, {"normalize": str(normalized.parent), **views, "final": str(final_view)}
+    return outputs, {"normalize": str(normalized.parent), **views, FINAL_VIEW: str(final_view)}
 
 
 def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str, str]) -> dict[str, object]:

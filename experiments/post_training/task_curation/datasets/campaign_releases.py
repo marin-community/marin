@@ -23,6 +23,7 @@ from finestore.rl.curation import (
     Verdict,
 )
 from finestore.rl.status_taxonomy import DataRestriction
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REVISION
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
@@ -181,6 +182,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="calibforge-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
@@ -232,6 +234,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="nl2bash-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
@@ -273,6 +276,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="codeforces-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
@@ -315,6 +319,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="competitive-coding-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
@@ -358,6 +363,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="curriculum-easy-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
@@ -397,6 +403,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="curriculum-medium-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
@@ -436,6 +443,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="e2egit-v2-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
@@ -481,6 +489,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="e2egit-large-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
@@ -519,6 +528,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="multifile-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
@@ -557,6 +567,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="pymethods2test-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112",
@@ -596,6 +607,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="pymethods2test-large-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112",
@@ -635,6 +647,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="stack-pytest-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
@@ -674,6 +687,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="unitsyn-python-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-unitsyn-python-v1-taskcompendium-20261112",
@@ -713,6 +727,7 @@ def sources() -> list[RlDataSource]:
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
+                intended_use=IntendedUse.TRAIN,
                 name="unitsyn-python-large-v1-rebuilt",
                 version="2026.11.12.1",
                 repo="open-athena/tasktrove-unitsyn-python-large-v1-taskcompendium-20261112",

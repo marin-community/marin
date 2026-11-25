@@ -27,6 +27,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation import prebuilt
@@ -77,7 +78,14 @@ def _write(tmp_path, rows: list[dict]):
 
 
 def _cohort(rows: int):
-    return prebuilt.PrebuiltCohort(name="c", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=rows)
+    return prebuilt.PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
+        name="c",
+        version="2026.11.12.1",
+        repo="org/repo",
+        revision="rev",
+        expected_rows=rows,
+    )
 
 
 def test_a_published_cohort_is_downloaded_and_validated(tmp_path, monkeypatch):

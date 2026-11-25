@@ -169,7 +169,7 @@ def test_full_retained_import_prepares_an_admitted_assessment(
 
 
 def test_row_count_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:
-    """A published release that differs from its receipt refuses to import."""
+    """A release with a different row count refuses to import."""
     cohort = _cohort(published_tasks, expected_rows=2)
     invocation = RetainedImport(cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None)
     with pytest.raises(ValueError):

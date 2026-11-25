@@ -8,6 +8,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+TEST_OUTPUT_INJECTION_GAP = "Candidate-produced test-output injection"
+
 PROTECTED_ROOT = "/opt/taskcompendium-shared"
 BOOTSTRAP_DIRECTORY = f"{PROTECTED_ROOT}-bootstrap"
 BOOTSTRAP_CONTROLLER = f"{BOOTSTRAP_DIRECTORY}/control.py"
@@ -38,15 +40,7 @@ class DeliveredVerifierFile(BaseModel):
 
 
 class MultiSweDeliveryContract(BaseModel):
-    """The typed SHARED integrity contract for Multi-SWE delivered-pipeline sources.
-
-    Same original-root delivery semantics as the root-delivery contract, with
-    the captured ``/home`` artifacts restored verbatim (the archive itself
-    carries modes and mtimes) and the reward parsed host-side by the pinned
-    upstream parser from the copied artifacts. ``archive_sha256`` pins the
-    delivered capture archive bytes; ``undeclared_deadline`` records sources
-    with no verifier deadline.
-    """
+    """The recorded shared-root capture contract for a Multi-SWE pipeline."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -58,26 +52,12 @@ class MultiSweDeliveryContract(BaseModel):
     undeclared_deadline: bool = False
     known_open_gaps: tuple[str, ...] = (
         "Agent-installed build tools and imports in the shared image environment",
-        "Candidate-produced test-output injection",
+        TEST_OUTPUT_INJECTION_GAP,
     )
 
 
 class RootDeliveryContract(BaseModel):
-    """The typed SHARED integrity contract for original-root delivery sources.
-
-    Sources graded by delivery (RST family) keep the original root actor: no UID
-    demotion and no in-container protected root. The agent phase is untouched;
-    at grading time, trusted root collect commands quiesce the container, deliver
-    the private verifier files (never present during the actor phase), and run
-    the source's original verifier script verbatim, which writes its own reward.
-    Copied artifacts carry the reward to the grading machine; the container is
-    never trusted to score beyond the source's own script.
-
-    ``verifier_files`` records the delivered per-package verifier material with
-    its original modes; ``undeclared_deadline`` records that the source declares
-    no verifier deadline, so the grading command waits unbounded under the same
-    outer enforcement the source runs under.
-    """
+    """The recorded verifier files, modes and deadlines of a root-delivery task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -90,7 +70,7 @@ class RootDeliveryContract(BaseModel):
     undeclared_deadline: bool = False
     known_open_gaps: tuple[str, ...] = (
         "Agent-installed pytest plugins and imports in the shared image environment",
-        "Candidate-produced test-output injection",
+        TEST_OUTPUT_INJECTION_GAP,
     )
 
 

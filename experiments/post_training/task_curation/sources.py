@@ -78,9 +78,6 @@ def all_sources() -> dict[str, RlDataSource]:
         *unconverted.sources(),
     ]
     sources = atlas_publications.bind_publications(sources)
-    identifiers = [source.info.id for source in sources]
-    if len(set(identifiers)) != len(identifiers):
-        raise ValueError("Duplicate RL source identifiers")
     return {source.info.id: source for source in sources}
 
 

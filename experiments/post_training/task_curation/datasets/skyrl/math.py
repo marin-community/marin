@@ -22,7 +22,11 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.datasets.skyrl.hardmath_lineage import LICENSE_RECEIPT, LINEAGE_NOTES
+from experiments.post_training.task_curation.datasets.skyrl.hardmath_lineage import (
+    LICENSE_RECEIPT,
+    LINEAGE_NOTES,
+    PROCESSED_REVISION,
+)
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.source import PENDING_TAG, RlDataSource, SourceInfo, SourceOrigin
 
@@ -441,7 +445,7 @@ SOURCES = (
         "hardmath",
         HfSource(
             "pafitis/HARDMath_processed_training",
-            "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+            PROCESSED_REVISION,
             ("data/train-00000-of-00001.parquet",),
             SourceFormat.PARQUET,
         ),

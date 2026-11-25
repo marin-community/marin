@@ -16,28 +16,29 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.frozen_atlas_protocol import FrozenAtlasRequest
 from experiments.post_training.task_curation.sources import all_sources
 
 
 def main() -> None:
-    request = json.loads(Path(sys.argv[1]).read_text())
-    source = all_sources()[request["source_id"]]
+    request = FrozenAtlasRequest(**json.loads(Path(sys.argv[1]).read_text()))
+    source = all_sources()[request.source_id]
     dataset = source.dataset
     assert dataset is not None and source.pipeline is not None
-    expected = (request["name"], request["version"], request["repo"], request["revision"], request["files"])
+    expected = (request.name, request.version, request.repo, request.revision, request.files)
     actual = (source.name, source.version, dataset.name, dataset.revision, list(source.files))
     if actual != expected:
         raise ValueError(f"Frozen converter differs from the Atlas pin: {source.info.id}")
     source.require_license()
     runtime = CampaignRuntime()
     options = PipelineOptions(
-        mode=SourceProcessingMode(request["mode"]),
+        mode=SourceProcessingMode(request.mode),
         runtime=runtime,
         declared_task_format=source.info.task_format,
         inputs=InputOverrides(
-            root=request["input_root"],
-            files={name: Path(path) for name, path in request["input_files"].items()},
-            auxiliary=request["auxiliary"],
+            root=request.input_root,
+            files={name: Path(path) for name, path in request.input_files.items()},
+            auxiliary=request.auxiliary,
         ),
     )
     client = LocalClient()
@@ -48,10 +49,10 @@ def main() -> None:
             runtime.activate(context),
         ):
             step = source.pipeline(source, options)
-            StepRunner().run([replace(step.lower(), override_output_path=request["output_path"])], max_concurrent=1)
+            StepRunner().run([replace(step.lower(), override_output_path=request.output_path)], max_concurrent=1)
     finally:
         client.shutdown()
-    artifact = CampaignArtifact.raw_load(request["output_path"])
+    artifact = CampaignArtifact.raw_load(request.output_path)
     Path(sys.argv[2]).write_text(artifact.model_dump_json())
 
 

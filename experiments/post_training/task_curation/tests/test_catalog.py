@@ -28,7 +28,9 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
         parquet_counts(snapshot, "another-revision", "*.parquet")
 
 
-def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(tmp_path, monkeypatch, review_server):
+def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(
+    tmp_path, monkeypatch, review_server, raw_math_catalog
+):
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
     staged.mkdir()

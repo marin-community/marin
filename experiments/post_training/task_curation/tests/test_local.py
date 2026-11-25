@@ -139,7 +139,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert successful["verification_status"] is None
 
 
-def test_local_eval_plan_schedules_missing_grader_under_cache(tmp_path):
+def test_local_eval_plan_schedules_missing_grader_under_cache(tmp_path, raw_math_catalog):
     cache = tmp_path / "cache"
     result = CliRunner().invoke(
         curation_main,
