@@ -119,6 +119,9 @@ def create_api(services: AppletServices) -> FastAPI:
                 text(
                     """
                 SELECT s.*, a.scope, a.model, summary.cohorts,
+                    -- input_row_count is the measurement publication checked against this
+                    -- row's pin; older rows published before it existed keep their attempt's
+                    -- measured population, then the declared count.
                     COALESCE(s.input_row_count, (s.curation->>'raw_population_count')::bigint,
                         (s.declaration->>'task_count')::bigint) AS task_count
                 FROM atlas_sources s

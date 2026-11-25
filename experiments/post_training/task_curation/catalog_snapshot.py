@@ -94,6 +94,27 @@ def measured_input_row_count(declaration: SourceDeclaration, summary: CurationSu
     return summary.raw_population_count
 
 
+def published_input_row_count(
+    declaration: SourceDeclaration,
+    summary: CurationSummary | None,
+    attempt: AssessmentAttempt | None,
+    prior: SnapshotSource | None,
+    unchanged: bool,
+) -> int | None:
+    """The published row's measured input rows, when a measurement identifies the published declaration.
+
+    A COMPLETE attempt publishes its own measurement when its document names the
+    declaration's pin and recipe; a failed or skipped attempt keeps the prior
+    row's measurement while the pin and recipe are unchanged, as does a complete
+    attempt whose document describes another pin.
+    """
+    if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
+        measured = measured_input_row_count(declaration, summary)
+        if measured is not None:
+            return measured
+    return prior.input_row_count if unchanged else None
+
+
 def archive_files(store: DataStore, root: str, prefix: str, patterns: tuple[str, ...]) -> list[ArchivedFile]:
     files = []
     directory = StoragePath(root)
@@ -305,14 +326,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
-                measured = None
-                if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
-                    measured = measured_input_row_count(declaration, summary)
-                if measured is None and unchanged:
-                    # A failed or skipped attempt keeps the prior row's measurement while
-                    # the pin and recipe are unchanged; a complete attempt whose document
-                    # describes another pin falls back to it as well.
-                    measured = prior.input_row_count
+                measured = published_input_row_count(declaration, summary, attempt, prior, unchanged)
                 rows.append(
                     SnapshotSource(
                         snapshot_id=run_id,
