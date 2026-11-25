@@ -4,12 +4,15 @@
 """Show, launch and check eval policies."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
+from evalrecords.records import EvalRunRecord
 from iris.cli.connect import open_iris_client
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
+from marin.evaluation.model_config import load_model_config
 from marin.evaluation.runner import EvaluationBatch
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 from rigging.config_discovery import find_project_root
@@ -18,8 +21,9 @@ from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
+from experiments.evaluation.models import models
 from experiments.evaluation.policies import POLICIES
-from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs
+from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs, model_candidate
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
@@ -29,6 +33,8 @@ from experiments.evaluation.policy.runs import (
     expected_record,
     expected_runs,
     find_record,
+    record_candidate,
+    succeeded_runs,
 )
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 
@@ -157,11 +163,54 @@ def _candidate(policy: EvalPolicy, name: str) -> PolicyCandidate:
     return candidates[name]
 
 
-def _print_launch(policy: EvalPolicy, candidate: PolicyCandidate, batches: list[EvaluationBatch]) -> None:
-    model = candidate.model
-    click.echo(f"policy {policy.version} @ {batches[0].provenance.git_sha[:10]}  candidate {candidate.name}")
+@dataclass(frozen=True)
+class _LaunchPlan:
+    """One candidate's servers to submit, and the evaluations left out because their runs already succeeded."""
+
+    candidate: PolicyCandidate
+    git_sha: str
+    batches: tuple[EvaluationBatch, ...]
+    succeeded: Mapping[str, EvalRunRecord]
+
+
+def _batches(
+    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **launch
+) -> tuple[EvaluationBatch, ...]:
+    return tuple(
+        prepare_evaluation_batch(spec) for spec in launch_specs(policy, candidate, evaluations=evaluations, **launch)
+    )
+
+
+def _launch_plan(
+    policy: EvalPolicy, candidate: PolicyCandidate, evaluations: Collection[str] | None, **launch
+) -> _LaunchPlan:
+    """Resolve a candidate's launch, leaving out evaluations whose run at its path already succeeded.
+
+    Run IDs depend only on each evaluation, so the evaluations left still group onto the same servers
+    under the same IDs.
+    """
+    try:
+        batches = _batches(policy, candidate, evaluations, **launch)
+        git_sha = batches[0].provenance.git_sha
+        runs = [ExpectedRun(batch=batch, evaluation=evaluation) for batch in batches for evaluation in batch.evaluations]
+        succeeded = succeeded_runs(runs)
+        if succeeded:
+            remaining = [run.name for run in runs if run.name not in succeeded]
+            batches = _batches(policy, candidate, remaining, **launch) if remaining else ()
+    except ValueError as error:
+        raise click.ClickException(f"{candidate.name}: {error}") from error
+    return _LaunchPlan(candidate=candidate, git_sha=git_sha, batches=batches, succeeded=succeeded)
+
+
+def _print_launch(policy: EvalPolicy, plan: _LaunchPlan) -> None:
+    model = plan.candidate.model
+    click.echo(f"policy {policy.version} @ {plan.git_sha[:10]}  candidate {plan.candidate.name}")
     click.echo(f"  model {model.location}@{model.revision}")
-    for index, batch in enumerate(batches, start=1):
+    for name, record in sorted(plan.succeeded.items()):
+        click.echo(f"  skip {name}: succeeded @{record.provenance.git_sha[:7]}")
+    if not plan.batches:
+        click.echo("  nothing to submit")
+    for index, batch in enumerate(plan.batches, start=1):
         location = batch.accelerator.target_cluster or batch.accelerator.region
         click.echo(
             f"server {index}: {batch.accelerator.label} on {location}  "
@@ -183,6 +232,58 @@ def _print_launch(policy: EvalPolicy, candidate: PolicyCandidate, batches: list[
                 f"seed={settings.seed}{budget}  "
                 f"results={evaluation.identity.output_dir}"
             )
+
+
+def _target_options(command: Callable) -> Callable:
+    """The options naming which models a command runs: policy candidates, or one model outside them."""
+    options = (
+        click.option("--candidate", "candidate_names", multiple=True, help="A candidate; repeat for several."),
+        click.option("--all-candidates", is_flag=True, help="Every candidate of the policy."),
+        click.option(
+            "--model", "model_key", default=None, help="A model catalog key to run in place of the candidates."
+        ),
+        click.option(
+            "--model-config",
+            type=click.Path(exists=True, dir_okay=False, path_type=Path),
+            default=None,
+            help="A model YAML, such as a training checkpoint's, to run in place of the candidates.",
+        ),
+    )
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+def _targets(
+    policy: EvalPolicy,
+    candidate_names: tuple[str, ...],
+    all_candidates: bool,
+    model_key: str | None,
+    model_config: Path | None,
+    *,
+    default_all: bool,
+) -> tuple[PolicyCandidate, ...]:
+    """The candidates a command runs: named ones, every one, or a model outside the policy."""
+    if model_key is not None and model_config is not None:
+        raise click.UsageError("--model and --model-config are mutually exclusive")
+    model_given = model_key is not None or model_config is not None
+    chosen = bool(candidate_names) + all_candidates + model_given
+    if chosen > 1 or (chosen == 0 and not default_all):
+        raise click.UsageError("name --candidate, --all-candidates, or one of --model and --model-config")
+    if model_given:
+        if model_config is not None:
+            model = load_model_config(model_config)
+        elif model_key in (catalog := models()):
+            model = catalog[model_key]
+        else:
+            raise click.BadParameter(f"not in the model catalog: {model_key}", param_hint="--model")
+        try:
+            return (model_candidate(model),)
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+    if candidate_names:
+        return tuple(_candidate(policy, name) for name in dict.fromkeys(candidate_names))
+    return policy.candidates
 
 
 @cli.command()
@@ -234,7 +335,7 @@ def _check_checkout(policy: EvalPolicy, *, recorded: str, smoke: bool) -> None:
 
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
-@click.option("--candidate", "candidate_name", required=True, help="Candidate to evaluate.")
+@_target_options
 @click.option(
     "--priority",
     required=True,
@@ -247,57 +348,72 @@ def _check_checkout(policy: EvalPolicy, *, recorded: str, smoke: bool) -> None:
 @click.option("--dry-run", is_flag=True, help="Resolve and print each server's launch without submitting.")
 def launch(
     version: str,
-    candidate_name: str,
+    candidate_names: tuple[str, ...],
+    all_candidates: bool,
+    model_key: str | None,
+    model_config: Path | None,
     priority: str,
     evaluations: str | None,
     limit: int | None,
     federated_cluster: str | None,
     dry_run: bool,
 ) -> None:
-    """Submit one candidate's policy evaluations, one job per server, without waiting for results.
+    """Submit the policy's evaluations for each chosen model, one job per server, without waiting for results.
 
-    A full run (no --limit), and any run of a released policy, must launch from a clean checkout so its
-    records name the code that ran; a released policy launches only from its tag.
+    Every launch resolves before any job is submitted. Evaluations whose run already succeeded are left out,
+    and a server with none left is not started. A full run (no --limit), and any run of a released policy,
+    must launch from a clean checkout so its records name the code that ran; a released policy launches only
+    from its tag.
     """
     policy = POLICIES[version]
-    candidate = _candidate(policy, candidate_name)
+    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config, default_all=False)
     names = None if evaluations is None else {name.strip() for name in evaluations.split(",") if name.strip()}
-    try:
-        specs = launch_specs(
+    configure_coreweave_s3()
+    plans = [
+        _launch_plan(
             policy,
             candidate,
-            evaluations=names,
+            names,
             limit=limit,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
         )
-        batches = [prepare_evaluation_batch(spec) for spec in specs]
-    except ValueError as error:
-        raise click.ClickException(str(error)) from error
+        for candidate in candidates
+    ]
     if not dry_run:
-        _check_checkout(policy, recorded=batches[0].provenance.git_sha, smoke=limit is not None)
-    for batch in batches:
-        require_coreweave_credentials(batch)
-    _print_launch(policy, candidate, batches)
-    if dry_run:
+        _check_checkout(policy, recorded=plans[0].git_sha, smoke=limit is not None)
+    for plan in plans:
+        for batch in plan.batches:
+            require_coreweave_credentials(batch)
+        _print_launch(policy, plan)
+    if dry_run or not any(plan.batches for plan in plans):
         return
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
-        for batch in batches:
-            group = launch_group(batch, client)
-            click.echo(f"submitted {group.group_id}  job {group.job.job_id}  records {group.records_prefix}")
+        for plan in plans:
+            for batch in plan.batches:
+                group = launch_group(batch, client)
+                click.echo(f"submitted {group.group_id}  job {group.job.job_id}  records {group.records_prefix}")
 
 
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
-@click.option("--candidate", "candidate_name", help="One candidate; default all.")
+@_target_options
 @click.option("--limit", type=click.IntRange(min=1), default=20, show_default=True, help="Item limit of smoke runs.")
-def status(version: str, candidate_name: str | None, limit: int) -> None:
+def status(
+    version: str,
+    candidate_names: tuple[str, ...],
+    all_candidates: bool,
+    model_key: str | None,
+    model_config: Path | None,
+    limit: int,
+) -> None:
     """Print each evaluation's full and smoke run, found where a launch from this checkout puts them.
 
-    Runs at other paths, such as ones launched another way or with other inputs, are not shown; verify checks those.
+    Shows every candidate unless others are chosen. Runs at other paths, such as ones launched another way
+    or with other inputs, are not shown; verify checks those.
     """
     policy = POLICIES[version]
-    candidates = policy.candidates if candidate_name is None else (_candidate(policy, candidate_name),)
+    candidates = _targets(policy, candidate_names, all_candidates, model_key, model_config, default_all=True)
     release = _release_commit(policy)
     configure_coreweave_s3()
     for candidate in candidates:
@@ -324,17 +440,10 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
     invalid = False
     for run_id in run_ids:
         record = find_record(run_id)
-        # Records launched outside the policy carry ad-hoc model names, so match the location and use the
-        # name only to tell apart candidates that share one.
-        matches = [candidate for candidate in policy.candidates if candidate.model.location == record.model.location]
-        if len(matches) > 1:
-            matches = [candidate for candidate in matches if candidate.name == record.model.name]
-        if len(matches) != 1 or record.evaluation.curated is None:
-            raise click.ClickException(
-                f"{run_id}: {record.model.location} / {record.evaluation.name} is not one curated {version} run"
-            )
-        (candidate,) = matches
+        if record.evaluation.curated is None:
+            raise click.ClickException(f"{run_id}: {record.evaluation.name} is not a curated evaluation")
         try:
+            candidate = record_candidate(policy, record)
             (expected,) = expected_runs(
                 policy,
                 candidate,

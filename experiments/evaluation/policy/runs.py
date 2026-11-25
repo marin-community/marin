@@ -4,15 +4,17 @@
 """Check eval records against the runs a policy launch from the current checkout would make."""
 
 import json
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+import draccus
 from evalrecords.records import EvalRunRecord, RunStatus, TaskCoverage, read_record, record_path
 from evalrecords.rollout_attempts import RUN_OBJECT
 from evalrecords.rollout_results import score_curated_record, terminal_attempts
 from finestore.reader import ReadView
 from iris.rpc import job_pb2
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import Evaluation, EvaluationBatch
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
@@ -24,7 +26,7 @@ from experiments.evaluation.launch import (
     model_identity,
     prepare_evaluation_batch,
 )
-from experiments.evaluation.policy.launch import launch_specs
+from experiments.evaluation.policy.launch import launch_specs, model_candidate
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 
 _MAX_VALUE_CHARS = 60
@@ -214,6 +216,23 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun, *, release_commit: s
     return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 
 
+def record_candidate(policy: EvalPolicy, record: EvalRunRecord) -> PolicyCandidate:
+    """The candidate a record ran: the policy's candidate at its location, else its model as recorded.
+
+    Records launched outside the policy carry ad-hoc model names, so the location decides and the name only
+    tells apart candidates that share one.
+    """
+    matches = [candidate for candidate in policy.candidates if candidate.model.location == record.model.location]
+    if len(matches) > 1:
+        matches = [candidate for candidate in matches if candidate.name == record.model.name]
+    if len(matches) == 1:
+        return matches[0]
+    config = record.model.source_config or record.model.config
+    if matches or config is None:
+        raise ValueError(f"cannot tell which model {record.model.location} ran as")
+    return model_candidate(draccus.decode(ModelConfig, config.model_dump(mode="json")))
+
+
 def find_record(run_id: str) -> EvalRunRecord:
     """Read a run's record from whichever policy record root holds it."""
     for prefix in POLICY_RECORDS_PREFIXES:
@@ -222,6 +241,15 @@ def find_record(run_id: str) -> EvalRunRecord:
         except FileNotFoundError:
             continue
     raise FileNotFoundError(f"no record for {run_id} under {POLICY_RECORDS_PREFIXES}")
+
+
+def succeeded_runs(runs: Iterable[ExpectedRun]) -> dict[str, EvalRunRecord]:
+    """The records of ``runs`` that succeeded, by evaluation name; a launch would skip these."""
+    return {
+        run.name: record
+        for run in runs
+        if (record := expected_record(run)) is not None and record.status is RunStatus.SUCCEEDED
+    }
 
 
 def expected_record(expected: ExpectedRun) -> EvalRunRecord | None:

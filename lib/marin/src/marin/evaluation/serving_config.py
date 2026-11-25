@@ -84,9 +84,6 @@ def _auto_serve_overrides_from_config(
     architectures = " ".join(config.get("architectures") or ()).lower()
     model_lower = model.lower()
     is_qwen_next = any(marker in model_lower for marker in _QWEN_NEXT_MODEL_MARKERS)
-    text_config = config.get("text_config")
-    if not isinstance(text_config, dict):
-        text_config = config
 
     derived: tuple[tuple[str, str], ...] = ()
     if (
@@ -107,10 +104,34 @@ def _auto_serve_overrides_from_config(
         if not has_vllm_option(existing_extra_args, option):
             merged.extend((option, value))
 
-    native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if max_model_len is not None and isinstance(native_max_model_len, int | float):
-        max_model_len = min(max_model_len, int(native_max_model_len))
+    native_max_model_len = _native_window(config)
+    if max_model_len is not None and native_max_model_len is not None:
+        max_model_len = min(max_model_len, native_max_model_len)
     return tuple(merged), max_model_len
+
+
+def _native_window(config: dict) -> int | None:
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = config
+    window = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
+    return int(window) if isinstance(window, int | float) else None
+
+
+def _checkpoint_config(model: str, revision: str | None) -> dict:
+    """The checkpoint's config.json, from object storage, a local directory or the Hugging Face Hub."""
+    if "://" in model:
+        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
+    elif Path(model).is_dir():
+        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
+    else:
+        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
+    return json.loads(config_path.read_text())
+
+
+def native_context_window(model: str, revision: str | None = None) -> int | None:
+    """The context window the checkpoint's config declares, or None if it declares none."""
+    return _native_window(_checkpoint_config(model, revision))
 
 
 def auto_serve_overrides(
@@ -121,13 +142,7 @@ def auto_serve_overrides(
     revision: str | None = None,
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect a model's config.json and fill portable vLLM defaults."""
-    if "://" in model:
-        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
-    elif Path(model).is_dir():
-        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
-    else:
-        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
-    config = json.loads(config_path.read_text())
+    config = _checkpoint_config(model, revision)
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 

@@ -14,14 +14,17 @@ from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, Sel
 
 from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY, QWEN
+from experiments.evaluation.policy.launch import model_candidate
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunEvidence,
     RunState,
     expected_runs,
+    record_candidate,
     run_evidence,
     run_problems,
     run_warnings,
+    succeeded_runs,
 )
 
 EVALUATIONS = {"aime24", "mrcr-32k"}
@@ -60,6 +63,34 @@ def test_a_relaunch_finds_each_run_at_the_same_path_and_smoke_runs_elsewhere():
         name: run.record_path for name, run in second.items()
     }
     assert not {run.record_path for run in first.values()} & {run.record_path for run in smoke.values()}
+
+
+def test_a_launch_finds_succeeded_runs_and_the_rest_keep_their_ids(tmp_path):
+    runs = _expected(None)
+    _write(tmp_path, runs["aime24"])
+    _write(tmp_path, runs["mrcr-32k"], RunStatus.INFRA_FAILED)
+    at_tmp = [replace(run, batch=replace(run.batch, records_prefix=str(tmp_path))) for run in runs.values()]
+    assert set(succeeded_runs(at_tmp)) == {"aime24"}
+    # A relaunch leaves the succeeded run out; the failed one keeps its path, so it resumes there.
+    (rerun,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"mrcr-32k"})
+    assert rerun.record_path == runs["mrcr-32k"].record_path
+
+
+def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_model(tmp_path):
+    checkpoint = replace(
+        QWEN.model,
+        name="qwen-step-100",
+        location="s3://marin-us-east-02a/checkpoints/qwen-step-100",
+        revision=None,
+        tokenizer=QWEN.model.location,
+        tokenizer_revision=QWEN.model.revision,
+        serve=replace(QWEN.model.serve, auto_overrides=False),
+    )
+    (run,) = expected_runs(POLICY, model_candidate(checkpoint), limit=None, evaluations={"aime24"})
+    record = _write(tmp_path, run)
+    (expected,) = expected_runs(POLICY, record_candidate(POLICY, record), limit=None, evaluations={"aime24"})
+    assert expected.evaluation.identity.run_id == run.evaluation.identity.run_id
+    assert run_problems(record, _evidence(expected), expected) == (RunState.VALID, ())
 
 
 def test_a_run_of_the_policy_is_valid(tmp_path):

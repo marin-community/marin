@@ -16,18 +16,28 @@ uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-2
 
 ```bash
 uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
-  --candidate qwen3.6-35b-a3b --priority batch [--limit 20] [--dry-run]
+  --candidate qwen3.6-35b-a3b --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
 uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
 uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
 ```
 
-- `launch` submits a candidate's evaluations. Re-running the same launch skips runs whose record
-  succeeded and reruns ones that failed, so a run that succeeded but is invalid (for example, another
+`launch` and `status` take the models to run in one of three ways:
+
+| Option | Runs |
+| --- | --- |
+| `--candidate NAME`, repeatable | the named candidates |
+| `--all-candidates` | every candidate (the default for `status`) |
+| `--model KEY` or `--model-config FILE` | a model outside the policy, such as a training checkpoint, on every evaluation; its window is its `serve.max_model_len`, else its checkpoint's |
+
+- `launch` resolves every model's launch before submitting any job. It leaves out evaluations whose
+  record already succeeded, and starts no server for a group with none left; the dry run lists them.
+  Failed runs rerun at their old paths. A run that succeeded but is invalid (for example, another
   server window) is not rerun; `status` says so for each such run.
 - `status` shows each evaluation's full and smoke run: valid, invalid, not run, or differing from
   this checkout (run at another commit with other inputs). A ⚠ marks a run
   whose replies often hit their output cap or whose attempts often went unscored.
-- `verify` checks any run against the policy and names each field that differs.
+- `verify` checks any run against the policy and names each field that differs. A run of a model
+  outside the policy is checked against the model its record names.
 
 A policy marked `released` launches only from a clean checkout of its tag, `eval-policy-<version>`,
 and `status` and `verify` mark its runs from any other commit invalid. A fix to a released policy is

@@ -39,10 +39,9 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
     """Return every evaluation the candidate runs under the policy.
 
     Excluded evaluations are left out. Each setting comes from the candidate's override, else the
-    evaluation. A context larger than the candidate's window needs an override.
+    evaluation. A context larger than the candidate's window needs an override. A model outside the
+    policy's candidates, such as a training checkpoint, has no exceptions and runs every evaluation.
     """
-    if candidate not in policy.candidates:
-        raise ValueError(f"{candidate.name} is not a candidate in policy {policy.version}")
     excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
     overrides = {item.evaluation.name: item for item in policy.overrides if item.candidate == candidate}
     resolved = []

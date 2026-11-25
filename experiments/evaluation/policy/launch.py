@@ -8,9 +8,10 @@ from dataclasses import dataclass, replace
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
-from marin.evaluation.serving_config import resolved_serve_config
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.serving_config import native_context_window, resolved_serve_config
 
-from experiments.evaluation.curated import resolve_selection, runs_agent, selection_dataset
+from experiments.evaluation.curated import pinned_model, resolve_selection, runs_agent, selection_dataset
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec, prompt_format
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
@@ -75,6 +76,22 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | Non
         ServerGroup(window=window, agentic=agentic, evaluations=tuple(members))
         for (window, agentic), members in groups.items()
     )
+
+
+def model_candidate(model: ModelConfig) -> PolicyCandidate:
+    """A model outside the policy's candidates, such as a training checkpoint, as a candidate.
+
+    Its revision is pinned, and its largest context is the window it is served at. A model that sets no
+    window is served at the one its checkpoint declares, stated in its config so records name it.
+    """
+    model = pinned_model(model)
+    window = resolved_serve_config(model).max_model_len
+    if window is None:
+        window = native_context_window(model.location, model.revision)
+        if window is None:
+            raise ValueError(f"{model.name}: set serve.max_model_len; its checkpoint declares no context window")
+        model = replace(model, serve=replace(model.serve, max_model_len=window))
+    return PolicyCandidate(model=model, max_context=window)
 
 
 def policy_selection(item: ResolvedPolicyEvaluation) -> EvaluationSelection:
