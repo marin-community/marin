@@ -5,12 +5,10 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-import os
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
-from uuid import uuid4
 
 import ray
 from loguru import logger
@@ -18,7 +16,7 @@ from omegaconf import DictConfig
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
+from marinskyrl.environment_contract import TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.config.rollout_validation import (
