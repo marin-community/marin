@@ -288,6 +288,7 @@ def run_workers(
     gpus = gpu_count if gpu_count is not None else visible_gpus(config.embed_python)
     logger.info("Embedding %d corpus shards across %d %s workers", len(shards), gpus, device)
     workers = []
+    worker_logs = []
     for worker in range(min(gpus, len(shards))):
         plan = work / f"plan-{worker}.json"
         # Round-robin shard assignment keeps part naming derived from the corpus
@@ -303,6 +304,8 @@ def run_workers(
                 }
             )
         )
+        # The worker log handle lives as long as the subprocess; closed after wait().
+        worker_logs.append(open(work / f"worker-{worker}.log", "wb"))
         workers.append(
             subprocess.Popen(
                 [
@@ -324,7 +327,7 @@ def run_workers(
                     "HF_HUB_OFFLINE": "1",
                     "TRANSFORMERS_OFFLINE": "1",
                 },
-                stdout=open(work / f"worker-{worker}.log", "wb"),
+                stdout=worker_logs[-1],
                 stderr=subprocess.STDOUT,
             )
         )
@@ -339,9 +342,13 @@ def run_workers(
 
     uploader = threading.Thread(target=upload_until_done, daemon=True)
     uploader.start()
-    failures = [number for number, worker in enumerate(workers) if worker.wait() != 0]
-    stop.set()
-    uploader.join()
+    try:
+        failures = [number for number, worker in enumerate(workers) if worker.wait() != 0]
+        stop.set()
+        uploader.join()
+    finally:
+        for handle in worker_logs:
+            handle.close()
     if uploader_error:
         raise RuntimeError(f"Regional part upload failed: {uploader_error[0]!r}") from uploader_error[0]
     if failures:
