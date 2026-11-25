@@ -68,6 +68,7 @@ def sampler_preset(
     *,
     layout: Layout,
     revision: str,
+    evaluation_interval: int,
     additional_evaluations: tuple[Evaluation, ...] = (),
 ) -> Preset:
     verifier = TASK_MACHINES[CommandSemantics.SHELL_SIMULATOR]
@@ -118,14 +119,14 @@ def sampler_preset(
         tasks=TASKS,
         model=QWEN,
         recipe=Recipe(
-            replace(layout, job_timeout_seconds=2700) if updates == 32 else layout,
+            layout,
             fixed_reply_tokens=None,
             config=config,
         ),
         updates=updates,
         measured=range(1, updates + 1),
         seed=seed,
-        evaluations=(replace(EVAL, every=8 if updates == 32 else updates), *additional_evaluations),
+        evaluations=(replace(EVAL, every=evaluation_interval), *additional_evaluations),
         held_out_tasks=TASKS,
         checkpoints="none",
         sample_namespace="datasets/qwen-sampler",
@@ -168,8 +169,9 @@ def layout_presets(
             kind,
             epsilon,
             seed,
-            layout=layout,
+            layout=replace(layout, job_timeout_seconds=2700) if stage == "pilot" else layout,
             revision=revision,
+            evaluation_interval=8 if stage == "pilot" else updates,
             additional_evaluations=additional,
         )
         for stage, updates, seed, suffix, revision, arms, additional in (
@@ -195,6 +197,21 @@ QWEN_SAMPLER = ModelPresets(
             confirmation=(FULL_VALIDATION,),
         ),
         *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
+        # Dense control checkpoints allow comparison at the contextual arms' actual generation cost.
+        *(
+            sampler_preset(
+                f"rno-pair-calibrate-{arm}",
+                26,
+                kind,
+                epsilon,
+                17,
+                layout=replace(RNO_PAIR_LAYOUT, job_timeout_seconds=3600),
+                revision="2026.11.25.7",
+                evaluation_interval=1,
+            )
+            for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
+            if arm in {"fixed", "thompson", "source-only", "source-only-eps05"}
+        ),
     ),
     control_pins={},
 )

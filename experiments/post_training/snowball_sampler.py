@@ -14,6 +14,7 @@ from experiments.post_training.task_curation.snowball_sampler_selection import E
 
 REVISION = "2026.11.25.2"
 SECOND_SEED = 20261021
+SMOKE_UPDATES = 4
 PROMPT_EXPLORATION = 0.05
 MATCHED_ARMS = (
     ("fixed", "adaptive-source", 1.0),
@@ -41,7 +42,11 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int
         data=sections.Data(sampling=sampling),
         trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_in_flight=32)),
     )
-    recipe = replace(base.recipe, config=base.recipe.config.merge(settings))
+    layout = base.recipe.layout
+    if updates == SMOKE_UPDATES:
+        # Completed Datakit P40 runs reached 957 GiB of sampled learner memory.
+        layout = replace(layout, host_memory="1280GB")
+    recipe = replace(base.recipe, layout=layout, config=base.recipe.config.merge(settings))
     # All arms score the same EvalLite100 prompts at fixed optimizer steps.
     cadence = updates // 2
     return replace(
@@ -68,7 +73,7 @@ SAMPLER = ModelPresets(
     presets=tuple(
         sampler_preset(f"{stage}-{arm}{suffix}", updates, kind, epsilon, seed)
         for stage, updates, seed, suffix, arms in (
-            ("smoke", 4, SEED, "", (*MATCHED_ARMS, SOURCE_ADAPTIVE)),
+            ("smoke", SMOKE_UPDATES, SEED, "", (*MATCHED_ARMS, SOURCE_ADAPTIVE)),
             ("pilot", 20, SEED, "", (*MATCHED_ARMS, SOURCE_ADAPTIVE, SOURCE_THOMPSON)),
             ("pilot", 20, SECOND_SEED, f"-seed{SECOND_SEED}", MATCHED_ARMS),
         )
