@@ -185,7 +185,7 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
 
         try:
             metadata = load_policy_model_config(cfg, local_files_only=not check_runtime_resources)
-        except Exception as error:
+        except (OSError, ValueError) as error:
             if cfg.trainer.batch_builder != BatchBuilder.AUTO:
                 raise
             logger.warning("Could not read the policy model configuration for automatic batch assembly ({!r})", error)
