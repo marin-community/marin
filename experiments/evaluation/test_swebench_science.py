@@ -102,7 +102,7 @@ def test_unexpected_patch_artifact_is_rejected(swebench_science_package):
     package = swebench_science_package
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
-    with pytest.raises(ValueError, match="sole SWE-bench Science artifact"):
+    with pytest.raises(ValueError, match=r"/logs/artifacts/model\.patch"):
         swebench_science.lower_package(package, ROW)
 
 
