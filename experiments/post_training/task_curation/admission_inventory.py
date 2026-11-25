@@ -22,7 +22,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
-from experiments.post_training.task_curation.lexical_artifacts import population_for_census
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation, population_for_census
 from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SampleInventory
 
 LOGGER = logging.getLogger(__name__)
@@ -40,9 +40,6 @@ def inventory_source(
     ``binding`` overrides the declaration's own actor census input: the census stage
     resolves retained-release sources through their retained lineage's census.
     """
-    root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
-    if root.exists():
-        raise FileExistsError(f"Preserve previous inventory and use a new version: {root}")
     binding = binding if binding is not None else declaration.actor_census_input
     if binding is None:
         raise ValueError(f"Current source lacks its exact input census: {declaration.id}")
@@ -56,8 +53,19 @@ def inventory_source(
         or population.task_count != declaration.within_source_dedup.unique_count
     ):
         raise ValueError(f"Population differs from the current declaration: {declaration.id}")
+    return inventory_population(population, output_root, resume_root)
+
+
+def inventory_population(population: SourceTextPopulation, output_root: str, resume_root: str | None) -> SampleInventory:
+    """Freeze a seed-zero panel from a measured population before admission binding."""
+    if SourceTextPopulation.raw_load(population.path) != population:
+        raise ValueError("Panel population manifest changed")
+    root = StoragePath(output_root) / canonical_sha256(population.source_id)[:20]
+    if root.exists():
+        raise FileExistsError(f"Preserve previous inventory and use a new version: {root}")
+    expected = (population.source_id, population.dataset_id, population.dataset_revision, population.source_version)
     if resume_root is not None:
-        previous = StoragePath(resume_root) / canonical_sha256(declaration.id)[:20] / "summary.json"
+        previous = StoragePath(resume_root) / canonical_sha256(population.source_id)[:20] / "summary.json"
         if previous.exists():
             result = SampleInventory.model_validate_json(previous.read_text())
             if (
@@ -67,17 +75,19 @@ def inventory_source(
                 result.converter_version,
                 result.task_specs_sha256,
                 result.retained_tasks,
-            ) != (*expected, binding.task_specs_sha256, binding.measured_tasks):
-                raise ValueError(f"Completed panel belongs to another current input: {declaration.id}")
+            ) != (*expected, population.task_specs_sha256, population.task_count):
+                raise ValueError(f"Completed panel belongs to another current input: {population.source_id}")
             if (
                 result.input_artifact != population.path
                 or result.sample_seed != SAMPLE_SEED
                 or result.sample_size != min(population.task_count, SAMPLE_SIZE)
             ):
-                raise ValueError(f"Completed panel belongs to another population or sample design: {declaration.id}")
+                raise ValueError(
+                    f"Completed panel belongs to another population or sample design: {population.source_id}"
+                )
             if file_sha256(StoragePath(result.panel_path)) != result.panel_sha256:
-                raise ValueError(f"Completed sample panel changed: {declaration.id}")
-            LOGGER.info("Reused frozen content panel: %s", declaration.id)
+                raise ValueError(f"Completed sample panel changed: {population.source_id}")
+            LOGGER.info("Reused frozen content panel: %s", population.source_id)
             return result
     digest = hashlib.sha256()
     seen = set()
@@ -100,15 +110,15 @@ def inventory_source(
 
     count, panel = seeded_sample(rows(), size=SAMPLE_SIZE, key=lambda row: seeded_order(row["task_id"], SAMPLE_SEED))
     if count != population.task_count:
-        raise ValueError(f"Current task count differs from the frozen population: {declaration.id}")
+        raise ValueError(f"Current task count differs from the frozen population: {population.source_id}")
     panel_path = root / "panel.parquet"
     with panel_path.open("wb", auto_mkdir=True) as stream:
         pq.write_table(pa.Table.from_pylist(panel, schema=PANEL_SCHEMA), stream, compression="zstd")
     result = SampleInventory(
-        source_id=declaration.id,
-        dataset_id=declaration.dataset_id,
-        dataset_revision=declaration.dataset_revision,
-        converter_version=declaration.pipeline.version,
+        source_id=population.source_id,
+        dataset_id=population.dataset_id,
+        dataset_revision=population.dataset_revision,
+        converter_version=population.source_version,
         input_artifact=population.path,
         task_specs_sha256=population.task_specs_sha256,
         scanned_task_specs_sha256=digest.hexdigest(),
@@ -122,7 +132,7 @@ def inventory_source(
         evidence_url=str(root / "summary.json"),
     )
     (root / "summary.json").write_text(result.model_dump_json(indent=2, exclude_none=True) + "\n")
-    LOGGER.info("%s: %d tasks, %d selected", declaration.id, count, len(panel))
+    LOGGER.info("%s: %d tasks, %d selected", population.source_id, count, len(panel))
     return result
 
 
