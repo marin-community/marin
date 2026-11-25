@@ -82,6 +82,7 @@ from levanter.trainer import TrainerConfig
 logger = logging.getLogger(__name__)
 
 POLICY_MISMATCH = "The requested policy is no longer active"
+CONTROL_SUCCESS = {"status": "ok"}
 
 
 DEFAULT_MODEL_NAME = "levanter"
@@ -1192,17 +1193,17 @@ class InferenceServer:
             if request.mode != "abort" or not request.clear_cache:
                 raise HTTPException(status_code=400, detail="Native serving requires mode=abort and clear_cache=true")
             await asyncio.to_thread(inference_context.pause_generation)
-            return {"status": "ok"}
+            return CONTROL_SUCCESS
 
         @app.post("/resume_generation")
         async def resume_generation():
             await asyncio.to_thread(inference_context.resume_generation)
-            return {"status": "ok"}
+            return CONTROL_SUCCESS
 
         @app.post("/abort")
         async def abort(request: AbortRequest):
             inference_context.abort(request.request_ids)
-            return {"status": "ok"}
+            return CONTROL_SUCCESS
 
         @app.get("/v1/models")
         async def list_models() -> dict:

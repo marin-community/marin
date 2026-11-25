@@ -932,27 +932,28 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
             release.set()
 
 
+def _generate_policy_zero(client, ids, request_id, max_tokens=4):
+    response = client.post(
+        GENERATE_PATH,
+        content=encode_frame(
+            {"max_tokens": max_tokens, "temperature": 0, "expected_policy_id": "policy-0"},
+            {PROMPT_TOKEN_IDS: ids},
+        ),
+        headers={"content-type": MEDIA_TYPE, "x-request-id": request_id},
+    )
+    assert response.status_code == 200, response.text
+    return decode_frame(response.content)
+
+
 def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gated_binary_server):
     client, started, release, registered, _, _ = gated_binary_server
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
 
-    def generate(request_id, ids=prompt, max_tokens=4):
-        response = client.post(
-            GENERATE_PATH,
-            content=encode_frame(
-                {"max_tokens": max_tokens, "temperature": 0, "expected_policy_id": "policy-0"},
-                {PROMPT_TOKEN_IDS: ids},
-            ),
-            headers={"content-type": MEDIA_TYPE, "x-request-id": request_id},
-        )
-        assert response.status_code == 200, response.text
-        return decode_frame(response.content)
-
     with ThreadPoolExecutor(max_workers=2) as pool:
         try:
-            running = pool.submit(generate, "running")
+            running = pool.submit(_generate_policy_zero, client, prompt, "running")
             assert started.wait(30)
-            queued = pool.submit(generate, "queued")
+            queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
             assert registered["queued"].wait(5)
             abort = client.post("/abort", json={"request_ids": ["running", "queued"]})
             assert abort.status_code == 200
@@ -970,8 +971,8 @@ def test_binary_abort_preserves_exact_running_output_and_cancels_queued_work(gat
         {"finish_reason": "abort", "completion_tokens": 1, "policy_id": "policy-0", "model_version": 0}
     ]
     ids_key, score_key = "choice.0.token_ids", "choice.0.behavior_logprobs"
-    _, resumed = generate("resumed", np.concatenate((prompt, partial[ids_key])), max_tokens=3)
-    _, uninterrupted = generate("uninterrupted")
+    _, resumed = _generate_policy_zero(client, np.concatenate((prompt, partial[ids_key])), "resumed", max_tokens=3)
+    _, uninterrupted = _generate_policy_zero(client, prompt, "uninterrupted")
     for key in (ids_key, score_key):
         np.testing.assert_array_equal(np.concatenate((partial[key], resumed[key])), uninterrupted[key])
 
@@ -1045,30 +1046,18 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
     client, started, release, registered, _, _ = gated_binary_server
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
 
-    def generate(request_id, ids=prompt, max_tokens=4):
-        response = client.post(
-            GENERATE_PATH,
-            content=encode_frame(
-                {"max_tokens": max_tokens, "temperature": 0, "expected_policy_id": "policy-0"},
-                {PROMPT_TOKEN_IDS: ids},
-            ),
-            headers={"content-type": MEDIA_TYPE, "x-request-id": request_id},
-        )
-        assert response.status_code == 200, response.text
-        return decode_frame(response.content)
-
     with ThreadPoolExecutor(max_workers=4) as pool:
         try:
-            running = pool.submit(generate, "running")
+            running = pool.submit(_generate_policy_zero, client, prompt, "running")
             assert started.wait(30)
-            queued = pool.submit(generate, "queued")
+            queued = pool.submit(_generate_policy_zero, client, prompt, "queued")
             assert registered["queued"].wait(5)
             pause = pool.submit(client.post, "/pause_generation", json={"mode": "abort", "clear_cache": True})
             queued_metadata, queued_tensors = queued.result(timeout=5)
             assert queued_metadata["choices"][0]["finish_reason"] == "abort"
             assert not queued_tensors["choice.0.token_ids"].size
             assert not queued_tensors["choice.0.behavior_logprobs"].size
-            during_pause, _ = generate("during-pause")
+            during_pause, _ = _generate_policy_zero(client, prompt, "during-pause")
             assert during_pause["choices"][0]["finish_reason"] == "abort"
             assert during_pause["choices"][0]["completion_tokens"] == 0
             assert not pause.done()
@@ -1083,8 +1072,8 @@ def test_pause_discards_queued_work_and_resumes_from_exact_partial_ids(gated_bin
     assert partial_metadata["choices"][0]["policy_id"] == "policy-0"
     ids_key, score_key = "choice.0.token_ids", "choice.0.behavior_logprobs"
     assert partial[ids_key].tolist() == [3]
-    _, resumed = generate("resumed", np.concatenate((prompt, partial[ids_key])), max_tokens=3)
-    uninterrupted_metadata, uninterrupted = generate("uninterrupted")
+    _, resumed = _generate_policy_zero(client, np.concatenate((prompt, partial[ids_key])), "resumed", max_tokens=3)
+    uninterrupted_metadata, uninterrupted = _generate_policy_zero(client, prompt, "uninterrupted")
     assert uninterrupted_metadata["choices"][0]["finish_reason"] == "length"
     for key in (ids_key, score_key):
         np.testing.assert_array_equal(np.concatenate((partial[key], resumed[key])), uninterrupted[key])
