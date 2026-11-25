@@ -65,7 +65,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
-    selection = item.evaluation.selection
+    selection = item.selection
     config = evaluation_dataset(item)
     protocol = config.protocol
     sampling = protocol.sampling
@@ -270,6 +270,7 @@ def launch(
             limit=limit,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
+            release_commit=_release_commit(policy),
         )
         batches = [prepare_evaluation_batch(spec) for spec in specs]
     except ValueError as error:
@@ -301,10 +302,10 @@ def status(version: str, candidate_name: str | None, limit: int) -> None:
     release = _release_commit(policy)
     configure_coreweave_s3()
     for candidate in candidates:
-        smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit)}
+        smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit, release_commit=release)}
         rows = tuple(
             (run.name, _expected_summary(run, release), _expected_summary(smoke[run.name], release))
-            for run in expected_runs(policy, candidate, limit=None)
+            for run in expected_runs(policy, candidate, limit=None, release_commit=release)
         )
         click.echo(f"\n{policy.version}  candidate {candidate.name}")
         _print_table(("evaluation", "full run", f"smoke run (limit {limit})"), rows)
@@ -340,6 +341,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
                 candidate,
                 limit=record.evaluation.curated.settings.source_limit,
                 evaluations={record.evaluation.name},
+                release_commit=release,
             )
         except ValueError as error:
             raise click.ClickException(f"{run_id}: {error}") from error
