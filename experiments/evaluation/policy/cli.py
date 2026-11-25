@@ -18,8 +18,8 @@ from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
-from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.policy.launch import launch_specs
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, resolve
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunCheck,
@@ -66,7 +66,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
     selection = item.selection
-    config = evaluation_dataset(item)
+    config = catalog_variant(item.evaluation, item.candidate)
     protocol = config.protocol
     sampling = protocol.sampling
     generation = item.candidate.model.generation

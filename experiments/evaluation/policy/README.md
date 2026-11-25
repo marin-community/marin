@@ -23,13 +23,15 @@ PolicyEvaluation("mrcr", protocol="32k")
 PolicyEvaluation("swebench-verified", protocol="mini-swe-agent", concurrency=16)
 ```
 
-An evaluation's context is the window its benchmark declares, else the policy's `context`:
+An evaluation's context depends on what its benchmark declares:
 
 | Benchmark declares | Context |
 | --- | --- |
 | a protocol window, such as MRCR-32k's 32,704 | exactly that window; a candidate served below it must be excluded |
-| an agent input limit, such as SWE-bench's 32,768 | that limit, or less through an override, since the agent gets the smaller of it and the served window |
-| nothing | the policy's `context`, or the evaluation's own |
+| an agent input limit, such as SWE-bench's 32,768 | the smallest of that limit, the requested context and the candidate's served window |
+| nothing | the smaller of the requested context and the candidate's served window |
+
+The requested context is the evaluation's `context`, else the policy's.
 
 Judges come from `evals.JUDGES`, the judges named in `configs/evaluations.yaml`. A
 `PolicyOverride` changes a candidate's context or output limit on one evaluation; a
