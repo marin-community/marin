@@ -490,6 +490,54 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
     assert {int(value[0]) for value in writes} == {0, 100}
 
 
+def _ocdbt_version_count(checkpoint_dir) -> int:
+    """Manifest commits since the database was created.
+
+    Old versions move out of the manifest into version tree nodes, so count generations instead
+    of the inline ``versions`` list.
+    """
+    base = ts.KvStore.open({"driver": "file", "path": str(checkpoint_dir)}).result()
+    manifest = ts.ocdbt.dump(base).result()
+    return manifest["versions"][-1]["generation_number"]
+
+
+def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
+    """A save that spills the budget commits once per wave.
+
+    Three waves are four generations: the empty database, then one per wave. A non-atomic
+    transaction would add two generations per wave.
+    """
+    arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
+    one_array = next(iter(arrays.values())).nbytes
+    batched = tmp_path / "batched"
+    batched.mkdir()
+
+    tree_serialize_leaves_tensorstore(
+        str(batched),
+        arrays,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * 2, file_io_locking="lockfile"),
+    )
+
+    assert _ocdbt_version_count(batched) == 4
+    restored = tree_deserialize_leaves_tensorstore(
+        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+    )
+    for name, value in arrays.items():
+        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+
+
+def test_a_spilling_lock_file_save_of_a_bare_array_restores(tmp_path):
+    """A PyTree that is one array and spills the budget stays at the OCDBT root."""
+    values = np.arange(16, dtype=np.float32)
+    tree_serialize_leaves_tensorstore(
+        str(tmp_path),
+        values,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=8, file_io_locking="lockfile"),
+    )
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), jnp.zeros_like(values))
+    np.testing.assert_array_equal(np.asarray(restored), values)
+
+
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
     """Peak host memory follows the budget. The checkpoint that comes back is still complete."""
     with use_test_mesh():
@@ -570,6 +618,16 @@ def test_replica_aware_restore_broadcasts_across_processes():
 def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
     """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
     assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+
+
+def test_ranks_on_opposite_sides_of_the_budget_finish_one_save():
+    """Two processes on different commit paths must both reach the metadata barrier and finish."""
+    results = eight_device_checkpoints.uneven_staged_bytes_save_across_processes()
+    shared = np.arange(eight_device_checkpoints._UNEVEN_SHARED, dtype=np.float32)
+    host = np.arange(eight_device_checkpoints._UNEVEN_HOST, dtype=np.float32)
+    for restored_shared, restored_host in results:
+        np.testing.assert_array_equal(restored_shared, shared)
+        np.testing.assert_array_equal(restored_host, host)
 
 
 def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():

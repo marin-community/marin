@@ -62,6 +62,8 @@ class HarnessContext:
     events: EventSink
     cleanup: HarnessCleanup
     run_id: str
+    begin_turn_budget: Callable[[], None]
+    """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
 
 
 class ModelSession(Protocol):

@@ -22,6 +22,8 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     PackageSpec,
+    ProcessMachine,
+    ProcessSession,
     Result,
     UnsupportedMachineSpec,
 )
@@ -41,8 +43,11 @@ class _UserMachine:
     machine: Machine
     user: str
 
-    async def run(self, command: Command):
-        return await self.machine.run(replace(command, user=self.user) if command.user is None else command)
+    def _command(self, command: Command) -> Command:
+        return replace(command, user=self.user) if command.user is None else command
+
+    async def run(self, command: Command) -> Result:
+        return await self.machine.run(self._command(command))
 
     async def upload(self, source: Path, target: str) -> None:
         await self.machine.upload(source, target)
@@ -52,6 +57,19 @@ class _UserMachine:
 
     async def close(self) -> None:
         await self.machine.close()
+
+
+@dataclass(frozen=True)
+class _UserProcessMachine(_UserMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        return await self.machine.open_process(self._command(command))
+
+
+def _verifier_view(machine: Machine) -> Machine:
+    """Remove the agent's user override for the trusted verifier in a shared machine."""
+    return machine.machine if isinstance(machine, _UserMachine) else machine
 
 
 async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...]) -> None:
@@ -88,14 +106,12 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
             source = PackageSpec()
         else:
             raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
-        image = isinstance(source, RegistryImage | DockerfileSource)
+        workdir = requirements.working_directory
+        if workdir is None:
+            workdir = "" if isinstance(source, RegistryImage | DockerfileSource) else "/workspace"
         yield MachineSpec(
             source=source,
-            workdir=(
-                requirements.working_directory
-                if requirements.working_directory is not None
-                else "" if image else "/workspace"
-            ),
+            workdir=workdir,
             network=runtime.network,
             memory_mb=runtime.memory_mb,
             cpus=runtime.cpus,
@@ -129,15 +145,38 @@ async def _acquire_machine(
         _retain_task(asyncio.create_task(_discard_machine(creation, machine_cleanup)))
         raise
     owned.push_async_callback(machine_cleanup.run, "machine_close", machine.close)
-    return machine if runtime.user is None else _UserMachine(machine, runtime.user)
+    if runtime.user is None:
+        return machine
+    if isinstance(machine, ProcessMachine):
+        return _UserProcessMachine(machine, runtime.user)
+    return _UserMachine(machine, runtime.user)
 
 
 def _output_tail(output: bytes) -> str:
     """The last ``SETUP_OUTPUT_CHARS`` characters of a command's output, for an error message."""
     text = output.decode(errors="replace").strip()
     if len(text) <= SETUP_OUTPUT_CHARS:
-        return repr(text)
-    return repr(f"...{text[-SETUP_OUTPUT_CHARS:]}")
+        return text
+    return f"...{text[-SETUP_OUTPUT_CHARS:]}"
+
+
+class MachineSetupError(RuntimeError):
+    """An authored setup command returned without completing successfully."""
+
+    def __init__(self, command: str, result: Result):
+        self.command = command
+        self.reason = result.reason
+        self.exit_code = result.exit_code
+        self.stdout = _output_tail(result.stdout)
+        self.stderr = _output_tail(result.stderr)
+        super().__init__(
+            f"Environment setup command failed: {self.reason}, exit={self.exit_code}; "
+            f"command: {self.command!r}; stdout: {self.stdout!r}; stderr: {self.stderr!r}"
+        )
+
+
+class MachineSetupTimeout(MachineSetupError, TimeoutError):
+    """An authored setup command reported a timeout."""
 
 
 async def _prepare_machine(
@@ -162,12 +201,9 @@ async def _prepare_machine(
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
             if result.reason == ExitReason.TIMED_OUT:
-                raise TimeoutError("Environment setup command timed out")
+                raise MachineSetupTimeout(command, result)
             if result.exit_code != 0:
-                raise RuntimeError(
-                    f"Environment setup command failed: {result.reason}, exit={result.exit_code}; "
-                    f"command: {command!r}; stdout: {_output_tail(result.stdout)}; stderr: {_output_tail(result.stderr)}"
-                )
+                raise MachineSetupError(command, result)
         if runtime.user is not None:
             result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
             if result.reason == ExitReason.TIMED_OUT:
@@ -197,6 +233,14 @@ class _OwnedMachine:
 
 
 @dataclass(frozen=True)
+class _OwnedProcessMachine(_OwnedMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        return await self.machine.open_process(command)
+
+
+@dataclass(frozen=True)
 class _AttemptMachineFactory:
     """Create grading machines under the attempt's startup deadline, user, and cleanup."""
 
@@ -216,8 +260,11 @@ class _AttemptMachineFactory:
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
             if self.verifier is not None:
-                return _OwnedMachine(await self.verifier(spec))
-            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+                machine = await self.verifier(spec)
+            else:
+                machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+        if isinstance(machine, ProcessMachine):
+            return _OwnedProcessMachine(machine)
         return _OwnedMachine(machine)
 
 
