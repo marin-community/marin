@@ -233,13 +233,12 @@ def _reasoning_span_evidence(
 
 
 def loop_credit_without_markers(output: TrajectoryBatch) -> list[list[float]]:
-    """Return the loop credit used for metrics, with marker charges removed."""
+    """Subtract marker charges for metrics, preserving floating-point residuals."""
     rows = list(output.get("loop_advantages") or ())
     if not rows:
         return rows
-    tokens = output.get("reasoning_span_violation_tokens") or ()
-    penalties = output.get("reasoning_span_token_penalties") or ()
-    for index, (positions, penalty) in enumerate(zip(tokens, penalties)):
+    _, tokens, penalties = _reasoning_span_evidence(output, len(rows))
+    for index, (positions, penalty) in enumerate(zip(tokens, penalties, strict=True)):
         if positions and penalty:
             row = rows[index] = list(rows[index])
             for position in positions:
@@ -319,7 +318,7 @@ def reward_shaping_metrics(
     trajectory_outcomes: Sequence[float],
     trajectory_loop_advantages: Sequence[float],
     trajectory_loop_token_counts: Sequence[float],
-    charged_loop_advantages: Sequence[float],
+    charged_loop_advantages: Sequence[float] | np.ndarray,
     loop_incidence: Sequence[bool],
     reasoning_span_token_penalties: Sequence[float],
     reasoning_span_incidence: Sequence[bool],
@@ -359,7 +358,7 @@ def reward_shaping_metrics(
         ),
         f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean": float(np.mean(trajectory_loop_advantages)),
         f"{SHAPING_METRIC_PREFIX}/loop_advantage_per_token_mean": float(
-            np.mean(charged_loop_advantages) if charged_loop_advantages else 0.0
+            np.mean(charged_loop_advantages) if len(charged_loop_advantages) else 0.0
         ),
         f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean": float(np.mean(trajectory_loop_token_counts)),
         f"{SHAPING_METRIC_PREFIX}/non_termination_incidence": float(

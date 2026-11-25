@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from itertools import repeat
+from itertools import groupby, repeat
 from typing import Protocol
 
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
@@ -152,7 +152,7 @@ class RowFacts:
     fields: BatchFields
     rewards: GroupRewards
     loop_credit_totals: tuple[float, ...]
-    charged_loop_credit: tuple[tuple[float, ...], ...]
+    charged_loop_credit_runs: tuple[tuple[tuple[float, int], ...], ...]
     shaping_components: tuple[RewardShapingComponents, ...] | None
     shaping_response_tokens: tuple[int, ...]
     loop_incidence: tuple[bool, ...]
@@ -209,7 +209,10 @@ class RowFacts:
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
             loop_credit_totals=tuple(sum(row) for row in loop_credit) or (0.0,) * count,
-            charged_loop_credit=tuple(tuple(value for value in row if value < 0) for row in loop_credit)
+            charged_loop_credit_runs=tuple(
+                tuple((value, sum(1 for _ in run)) for value, run in groupby(value for value in row if value < 0))
+                for row in loop_credit
+            )
             or ((),) * count,
             shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
             if batch.get("reward_shaping_components") is not None

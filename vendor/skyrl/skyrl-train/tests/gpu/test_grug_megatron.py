@@ -1089,7 +1089,8 @@ def test_megatron_worker_batches_match_driver_update(tmp_path, pp):
             results[builder] = result
         required = {"policy/policy_loss", "policy/policy_entropy", "policy/raw_grad_norm"}
         required.update(key for key in results["driver"]["metrics"] if key.startswith(f"{SHAPING_METRIC_PREFIX}/"))
-        assert results["worker"]["metrics"][f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean"] > 0
+        assert results["worker"]["metrics"][f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean"] < -1e-6
+        assert results["worker"]["metrics"][f"{SHAPING_METRIC_PREFIX}/reasoning_span_penalty_mean"] < 0
         assert results["worker"]["parameters"] == results["driver"]["parameters"]
         assert_metric_parity(
             results["worker"]["metrics"],

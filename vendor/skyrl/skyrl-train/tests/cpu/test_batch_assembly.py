@@ -203,10 +203,10 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
         "reasoning_span": {"target": "marker", "penalty": 0.1},
     }
     batches = []
-    for counts, tokens, responses, excluded in (
-        ([1, 3, 6], [[0], [0, 1, 2], list(range(6))], [list(range(8))] * 3, [False] * 3),
-        ([1, 0], [[], []], [[8] * 8, [9] * 8], [False, True]),
-        ([0], [[]], [list(range(8))], [False]),
+    for counts, tokens, responses, excluded, last in (
+        ([1, 3, 6], [[0], [0, 1, 2], list(range(6))], [list(range(8))] * 3, [False] * 3, [True, False, True]),
+        ([1, 0], [[], []], [[8] * 8, [9] * 8], [False, True], [True, True]),
+        ([0], [[]], [list(range(8))], [False], [True]),
     ):
         batch = {
             "prompt_token_ids": [[10]] * len(counts),
@@ -216,6 +216,7 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
             "reasoning_span_violations": counts,
             "reasoning_span_violation_tokens": tokens,
             "exclude_from_baseline": excluded,
+            "is_last_step": last,
         }
         shape_trajectory_rewards(batch, config)
         batches.append(batch)
@@ -228,7 +229,7 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
         key: value for key, value in expected.items() if key.startswith(shaping)
     }
     # Five loop tokens plus six negative marker roundoff values.
-    assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 6
+    assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 5
 
 
 @pytest.mark.parametrize("dp_size", [1, 3, 8])
@@ -263,7 +264,9 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             "stop_reasons": ["stop", "length", None, "stop"],
         }
         if loop_channel is True or (loop_channel == "first" and index == 0) or (loop_channel == "last" and index == 5):
-            batch["loop_advantages"] = [[-marker_penalty] + [-0.1] * (length - 1) if length else [] for length in lengths]
+            batch["loop_advantages"] = [
+                [-marker_penalty] + [-0.1] * (length - 1) if length else [] for length in lengths
+            ]
             batch["reasoning_span_violations"] = [int(length > 0) for length in lengths]
             batch["reasoning_span_violation_tokens"] = [[0] if length else [] for length in lengths]
             batch["reasoning_span_token_penalties"] = [marker_penalty if length else 0.0 for length in lengths]

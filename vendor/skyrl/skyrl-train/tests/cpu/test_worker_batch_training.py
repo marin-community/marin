@@ -133,10 +133,10 @@ def test_worker_batches_match_two_driver_updates(
     assert all(row["policy/raw_grad_norm"] > 0 for row in steps)
     required = {"policy/policy_loss", "policy/raw_grad_norm"}
     if config_builder is _worker_batch_config:
-        assert any(row[f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean"] > 0 for row in steps)
-        required.update(key for key in baseline[0] if key.startswith(f"{SHAPING_METRIC_PREFIX}/"))
+        assert any(row[f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean"] < -1e-6 for row in steps)
     for actual, expected in zip(steps, baseline, strict=True):
-        assert_metric_parity(actual, expected, required=required)
+        shaping_keys = {key for key in expected if key.startswith(f"{SHAPING_METRIC_PREFIX}/")}
+        assert_metric_parity(actual, expected, required=required | shaping_keys)
     assert all(row["generate/avg_num_tokens"] > 0 for row in steps)
 
 
