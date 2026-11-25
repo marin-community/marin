@@ -218,6 +218,12 @@ created that day, in the controller DB and in Finelog:
   job took its id (`job_removed` in the controller log), or a federation
   hand-off replaced it.
 
+Each day checked costs eight queries: four on the controller DB and four on the
+Finelog hub, one at a time. Run it for one cluster at a time. On 2026-11-25 a
+one-day check of `marin` (about 11,000 jobs, tasks and attempts) took 16.5 s.
+A query that hits the hub's 30 s deadline, or returns more than a million rows,
+stops the run with an error; the script never reports a partial result.
+
 Forwarding that lags by more than an hour also shows as `missing` or
 `no finish row`; a rerun after it catches up clears it. The script exits 1 on
 any `missing` or `no finish row` key and lists up to 20 of them per line
