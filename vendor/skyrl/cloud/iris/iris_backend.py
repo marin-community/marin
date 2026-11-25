@@ -41,6 +41,7 @@ from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
+    LocalRaySpillTarget,
     RaySpillBackend,
     resolve_ray_spill_target,
 )
@@ -553,8 +554,6 @@ def resolve_node_resource_requests(
     return resolved
 
 
-
-
 @dataclass(frozen=True)
 class BundledLaunchConfig:
     """Task path and environment payload for one resolved launch config."""
@@ -724,7 +723,7 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
-        spill.location if args.ray_spill_backend is RaySpillBackend.LOCAL else "",
+        spill.location if isinstance(spill, LocalRaySpillTarget) else "",
         f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
         *([] if _is_checkpoint_export(args) else ["--pynccl-init"]),
     ]

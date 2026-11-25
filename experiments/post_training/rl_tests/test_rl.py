@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-import importlib.util
 import json
 import os
-import runpy
 import shutil
 import subprocess
 import sys
 from dataclasses import replace
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -38,6 +37,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -55,7 +55,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import native_json
+from experiments.post_training.skyrl_test_support import run_native_test
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
@@ -418,142 +418,8 @@ def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
                 del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
         path.write_text(yaml.safe_dump(document))
         paths.append(str(path))
-    selected = native_json("--isolated", "--group", "harbor-test")(
-        """
-import asyncio, json, os, sys
-from pathlib import Path
-from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
-from harbor.models.job.config import JobConfig
-from omegaconf import OmegaConf
-from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
-from skyrl_train.evaluation_pool import EvaluationPool
-
-config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:3]))
-try:
-    load_launch_config(Path(sys.argv[3]))
-except ValueError as error:
-    assert "Harbor output tokens must leave room for input" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted a reply cap equal to the serving window")
-
-windows = []
-for launch in (config, changed):
-    window = launch.skyrl.generator.engine_init_kwargs.max_model_len
-    windows.append(window)
-    harbor = next(row for row in launch.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort in harbor.cohorts:
-        job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
-        model_info = job.agents[0].kwargs["model_info"]
-        assert model_info["max_input_tokens"] == window, model_info
-        assert model_info.get("max_output_tokens", 0) < window, (model_info, window)
-        agent = job.agents[0]
-        verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
-        assert verifier_budget is not None
-        agent_budget = agent.override_setup_timeout_sec + agent.override_timeout_sec
-        assert agent_budget + verifier_budget < job.trial_attempt_timeout_sec
-        attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
-        assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
-assert windows[0] != windows[1]
-
-changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
-try:
-    create_callbacks_from_config(changed.skyrl)
-except ValueError as error:
-    assert "unrecognized-build" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted an unknown Daytona image build")
-
-selected = []
-for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
-    directory = Path(sys.argv[1]).parent / f"coverage-{index}"
-    config.skyrl.trainer.ckpt_path = str(directory)
-    metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
-    harbor = next(row for row in config.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
-        prefix = f"eval/harbor/{cohort.name}/"
-        metrics.update({prefix + "num_attempted": 30, prefix + "num_scored": scored, prefix + "reward_sum": scored / 2})
-    handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
-    state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
-    asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
-                                       trainer=SimpleNamespace(cfg=config.skyrl)))
-    selected.append((directory / "best_checkpoint.json").exists())
-
-worker = r'''
-import json, socket, sys, traceback
-from harbor.models.job.config import JobConfig
-expected = json.loads(sys.argv[2])
-connection = socket.socket(fileno=int(sys.argv[1]))
-with connection.makefile("rwb") as stream:
-    for line in stream:
-        message = json.loads(line)
-        try:
-            job = JobConfig.model_validate(message["cohort"]["job"])
-            if expected is None:
-                assert job.telemetry is None
-            else:
-                assert job.telemetry is not None
-                actual = {
-                    "endpoint": job.telemetry.endpoint.get_secret_value(),
-                    "root_run_uid": job.telemetry.root_run_uid,
-                    "execution_uid": job.telemetry.execution_uid,
-                    "serving_job_id": job.telemetry.serving_job_id,
-                }
-                assert actual == expected, (actual, expected)
-            response = {"id": message["id"], "metrics": {"num_attempted": 1, "num_scored": 1, "reward_sum": 1}}
-        except Exception:
-            response = {"id": message["id"], "error": traceback.format_exc()}
-        stream.write((json.dumps(response) + "\\n").encode())
-        stream.flush()
-'''
-
-async def check_runtime_handoff():
-    callback = next(item for item in create_callbacks_from_config(config.skyrl)
-                    if isinstance(item, HarborEvaluationCallback))
-    trainer = SimpleNamespace(
-        cfg=config.skyrl,
-        inference_engine_client=SimpleNamespace(
-            enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
-        ),
-    )
-    original_exec = asyncio.create_subprocess_exec
-    expected = None
-
-    async def start_worker(*args, **kwargs):
-        return await original_exec(sys.executable, "-c", worker, args[-1], json.dumps(expected), **kwargs)
-
-    asyncio.create_subprocess_exec = start_worker
-    try:
-        endpoint = "http://127.0.0.1:4318/iris-capability/v1/telemetry"
-        os.environ.update(
-            SKYRL_RUN_ID=str(config.run.id),
-            SKYRL_EXECUTION_UID="iris:uid-native",
-            IRIS_TASK_ID="/test/native/0:1",
-        )
-        for enabled in (True, False):
-            if enabled:
-                os.environ["SKYRL_TELEMETRY_ENDPOINT"] = endpoint
-            else:
-                os.environ.pop("SKYRL_TELEMETRY_ENDPOINT", None)
-            expected = {
-                "endpoint": endpoint,
-                "root_run_uid": str(config.run.id),
-                "execution_uid": "iris:uid-native",
-                "serving_job_id": "/test/native",
-            } if enabled else None
-            async with EvaluationPool(3) as pool:
-                metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
-            assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
-                       for cohort in callback.cohorts), metrics
-    finally:
-        asyncio.create_subprocess_exec = original_exec
-os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
-asyncio.run(check_runtime_handoff())
-print(json.dumps(selected))
-""",
-        paths,
+    selected = run_native_test(
+        "cloud.iris.tests.native_harbor", paths, uv_options=("--isolated", "--group", "harbor-test")
     )
     assert selected == [True, False, False]
 
@@ -984,6 +850,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
+        assert "Compose document 1/1" in result.output
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
@@ -1152,14 +1019,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     native_calls = []
 
     def native(command, *, env_vars=None):
-        inspection = native_json()(
-            "import json,sys\nfrom cloud.iris import launch\n"
-            "args=launch.create_parser().parse_args(sys.argv[1:])\n"
-            "config=launch.load_launch_config(args.config)\n"
-            "print(json.dumps({'forward_env':args.forward_env,'disk':config.iris.allocation.disk,"
-            "'tokenizer':config.inputs.model.tokenizer_uri,'model':config.run.model,"
-            "'attempt':config.run.attempt_id,'export':config.artifacts.export_root}))\n",
-            command[command.index("marinskyrl") + 1 :],
+        inspection = run_native_test(
+            "cloud.iris.tests.native_inspect_launch", command[command.index("marinskyrl") + 1 :]
         )
         assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
             ["HF_TEST_KEY"],
@@ -1210,6 +1071,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
     mode, coordinator_module = "valid", "first_model_entry"
+    entries = {}
+
+    def invoke_entry(name, patch):
+        patch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(name, loader=None))
+        return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
         assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
@@ -1223,15 +1089,14 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             for key, value in environment.items():
                 child.setenv(key, value)
             child.setenv("IRIS_TASK_ID", "/test-user/train-coordinator/0")
-            child.setattr(sys, "argv", [coordinator_module, *arguments])
             child.setattr(
                 "experiments.post_training.rl_publication.publish_result",
                 lambda *args: pytest.fail("Coordinator contacted Marina"),
             )
             info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
-            with iris_ctx_scope(IrisContext.from_job_info(info)), pytest.raises(SystemExit) as completed:
-                runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
-            assert completed.value.code == {"valid": 0, "failed-following": 3}.get(mode, 4)
+            with iris_ctx_scope(IrisContext.from_job_info(info)):
+                code = invoke_entry(coordinator_module, child)
+            assert code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
         return SimpleNamespace(job_id=job)
 
@@ -1246,48 +1111,23 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
     def module(
-        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following="None"
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following=False
     ):
-        path = tmp_path / (name + ".py")
-        dependency = ""
-        if policy_forward is not None:
-            dependency = (
-                f"producer=rl.build_experiment(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
-                f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
-                f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
-                f"directory=Path({str(policy_path)!r});directory.mkdir(parents=True,exist_ok=True)\n"
-                "record=ArtifactRecord(name=producer.name,version=producer.version,fingerprint=producer.fingerprint(),"
-                "result_type=result_type_name(SkyRLRun),result=result.result_payload())\n"
-                "(directory/RECORD_FILENAME).write_text(record.model_dump_json())\n"
-                f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
-            )
-        path.write_text(
-            "from dataclasses import replace\nfrom pathlib import Path\n"
-            "from marin.execution.lazy import ArtifactStep, apply\n"
-            "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
-            "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
-            "from experiments.post_training import rl, snowball_rl\n"
-            "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
-            "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
-            "def fail_following():\n    raise RuntimeError('following stage failed')\n"
-            + dependency
-            + f"following={following}\n"
-            "table=snowball_rl.SNOWBALL\n"
-            "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
-            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
-            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
-        )
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None
-        monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))
+        entries[name] = {
+            "entry_module": entry_module,
+            "use_init": use_init,
+            "policy_forward": policy_forward,
+            "forward_env": forward_env,
+            "source": str(source),
+            "policy_path": str(policy_path),
+            "policy_uri": policy_uri,
+            "following": following,
+        }
 
     @click.command()
     def entry():
-        monkeypatch.setattr(sys, "argv", ["first_model_entry", *arguments])
-        with pytest.raises(SystemExit) as completed:
-            runpy.run_module("first_model_entry", run_name="__main__", alter_sys=True)
-        raise click.exceptions.Exit(completed.value.code)
+        with monkeypatch.context() as driver:
+            raise click.exceptions.Exit(invoke_entry("first_model_entry", driver))
 
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
@@ -1338,7 +1178,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     mode, coordinator_module = "failed-following", "first_model_entry"
-    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
+    module(coordinator_module, following=True)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output

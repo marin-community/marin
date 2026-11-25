@@ -117,6 +117,7 @@ def test_policy_bootstrap_rejects_runtime_without_flash_attention_extension(
     (site_packages / missing_module).unlink()
     _write_module(site_packages, "sitecustomize.py", FIXTURES / "sitecustomize.py")
     process_environment["FIXTURE_ARCHITECTURE"] = architecture
+    # Give the architecture shim precedence over a system sitecustomize module.
     process_environment["PYTHONPATH"] = str(site_packages)
 
     result = _run_bootstrap(environment, process_environment, "megatron")
@@ -150,10 +151,23 @@ def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path,
     if publisher_installed:
         _write_module(site_packages, "skyrl_train/hf_publisher.py", FIXTURES / "dependency.py")
 
-    result = _run_bootstrap(environment, process_environment, "hub-publish")
+    project = tmp_path / "skyrl"
+    scripts = project / "cloud/iris"
+    scripts.mkdir(parents=True)
+    for name in ("setup_task_runtime.sh", "bootstrap_runtime.sh", "load_runtime_environment.sh", "runtime_checks.py"):
+        (scripts / name).symlink_to(BOOTSTRAP_SCRIPT.with_name(name))
+    (project / ".uv-version").symlink_to(REPOSITORY_ROOT / ".uv-version")
+    result = subprocess.run(
+        ["bash", scripts / "setup_task_runtime.sh", "hub-publish", "printenv", "PATH"],
+        env=process_environment | {"IRIS_VENV": str(environment)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
 
     if publisher_installed:
         assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"{environment / 'bin'}{os.pathsep}{process_environment['PATH']}"
         assert not (environment / "lib/libcudart.so").exists()
     else:
         assert result.returncode != 0
@@ -189,8 +203,9 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    binary, libraries = activation.stdout.splitlines()
+    binary, libraries, path = activation.stdout.splitlines()
     assert binary == str(ninja)
+    assert path == f"{environment / 'bin'}{os.pathsep}{process_environment['PATH']}"
     assert libraries.split(os.pathsep)[-1] == process_environment["LD_LIBRARY_PATH"]
 
 

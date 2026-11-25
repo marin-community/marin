@@ -8,7 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from time import monotonic, sleep
+from time import monotonic
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -612,6 +612,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
+@pytest.mark.timeout(15)
 @pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
 def test_native_failure_stops_build_child(tmp_path, exit_early):
     lock = tmp_path / "build.lock"
@@ -627,13 +628,7 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
             timeout=2,
         )
     with lock.open("r+") as stream:
-        while True:
-            try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                assert monotonic() < deadline, "native build child still holds the lock"
-                sleep(0.02)
+        fcntl.flock(stream, fcntl.LOCK_EX)
     assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
@@ -761,7 +756,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         cache_native_compositions(monkeypatch)
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
         run_native = gate._run_native_process
-        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "whitespace", "oserror", "bootstrap"):
+        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -775,20 +770,18 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
                         if diagnostic == "timeout":
                             interrupted_secret = secret.replace("sk-", "sk\x1b-")
-                            stderr = (
-                                f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
-                            ).encode()
+                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
                             raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "last-phase":
                             stderr = (
                                 f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
                                 f"{gate._NATIVE_PHASE}Read native schema defaults\n"
-                            ).encode()
+                            )
                             raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
-                        if diagnostic == "whitespace":
-                            raise subprocess.CalledProcessError(1, command, "", "\n")
+                        if diagnostic == "empty-stderr":
+                            raise subprocess.CalledProcessError(1, command, "", "")
                         return "not JSON" if diagnostic == "invalid-json" else ""
                     return run_native(command, *args, **kwargs)
 

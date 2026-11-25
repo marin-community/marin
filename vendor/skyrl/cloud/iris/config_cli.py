@@ -26,7 +26,7 @@ def main() -> None:
     parser.add_argument(
         "--checkout",
         type=Path,
-        default=Path(__file__).resolve().parents[2],
+        required=True,
         help="checkout that supplies native modules",
     )
     commands = parser.add_subparsers(dest="command", required=True)

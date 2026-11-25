@@ -663,8 +663,6 @@ def _native_diagnostic(error: OSError | subprocess.CalledProcessError | subproce
         cause = error.strerror or str(error)
     else:
         stderr = error.stderr or ""
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode(errors="replace")
         for line in reversed(stderr.splitlines()):
             line = line.strip()
             if line.startswith(_NATIVE_PHASE):
@@ -732,8 +730,6 @@ def _native_json(operation: str, *args: str, timeout: int = 120):
     # Sync the frozen project and verify its interpreter within the preparation deadline.
     probe = skyrl_cpu_command(str(interpreter), "-I", "--version")
     _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
-    env["VIRTUAL_ENV"] = str(venv)
-    env["PATH"] = os.pathsep.join((str(interpreter.parent), env.get("PATH", os.defpath)))
     return _native_command_json(operation, [str(interpreter), "-I", *args], env=env, timeout=timeout)
 
 

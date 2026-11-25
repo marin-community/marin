@@ -739,8 +739,10 @@ def wandb_launch_environment(*, entity: str | None, environ: Mapping[str, str] |
 def _main(argv: list[str]) -> None:
     if len(argv) == 3 and argv[1] == "write-frozen-cuda-runtime":
         manager = EnvVarManager.for_frozen_cuda_runtime(site.getsitepackages())
-        values = {"PATH": str(Path(sys.executable).parent), **manager.environment_for(EnvVarScope.TASK_RUNTIME)}
-        Path(argv[2]).write_bytes(b"".join(os.fsencode(f"{name}={value}") + b"\0" for name, value in values.items()))
+        values = manager.environment_for(EnvVarScope.TASK_RUNTIME)
+        with Path(argv[2]).open("ab") as stream:
+            for name, value in values.items():
+                stream.write(os.fsencode(f"{name}={value}") + b"\0")
         return
     if len(argv) >= 5 and argv[1] == "run-grug-gpu-gate" and argv[3] == "--":
         environment = dict(os.environ)

@@ -67,8 +67,8 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
 
 python="$environment/bin/python"
 checks="$project_root/cloud/iris/runtime_checks.py"
+printf 'PATH=%s\0' "$environment/bin" > "$runtime_file"
 if [[ "$profile" == hub-publish ]]; then
-  printf 'PATH=%s\0' "$environment/bin" > "$runtime_file"
   "$python" "$checks" hub-publish
   exit 0
 fi

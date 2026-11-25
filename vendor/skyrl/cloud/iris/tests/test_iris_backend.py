@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
-import hashlib
 import json
 import os
 import subprocess
@@ -19,21 +17,21 @@ from omegaconf import OmegaConf
 from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.rl_config_translation import RL_CONFIG_PAYLOAD_ENV, RL_CONFIG_TASK_DIR
+from cloud.iris.rl_config_translation import RL_CONFIG_TASK_DIR
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
 from skyrl_train.hf_export_schema import HFExportRequest
 
 
 @pytest.mark.parametrize(
-    "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups",
+    "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups,spill_backend",
     [
-        ("cw-rno2a", "marin.yaml", None, "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        (None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, ()),
-        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8)),
+        ("cw-rno2a", "marin.yaml", None, "records", "skyrl_train.entrypoints.main_base", 0, (), "local"),
+        (None, "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (), "local"),
+        (None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, (), "r2"),
+        ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, (), "local"),
+        (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, (), "local"),
+        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8), "local"),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
@@ -47,6 +45,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     entrypoint,
     preemption_retries,
     groups,
+    spill_backend,
 ):
     requests = []
     monkeypatch.setenv("HF_TEST_KEY", "test-extra-credential")
@@ -69,7 +68,9 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     document = raw_launch_config()
     spill = tmp_path / "spill path '$literal'"
-    document["ray"]["spill_dir"] = str(spill)
+    document["ray"]["spill_backend"] = spill_backend
+    if spill_backend == "local":
+        document["ray"]["spill_dir"] = str(spill)
     document["run"].update(submission="detach", export_hf=False)
     document["runtime"]["task_env"] = {} if interface is None else {"NCCL_SOCKET_IFNAME": interface}
     document["iris"].update(
@@ -175,15 +176,23 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     ]
     process = subprocess.run(argv, env=os.environ, check=True, capture_output=True, text=True, timeout=15)
     transport, controller = map(json.loads, process.stdout.splitlines())
-    assert spill.is_dir()
+    assert spill.is_dir() == (spill_backend == "local")
     assert transport["cwd"] == controller["cwd"] == str(skyrl)
-    assert transport["max_jobs"] == controller["max_jobs"] == "4"
+    for process_env in (transport, controller):
+        assert process_env["max_jobs"] == "4"
+        assert process_env["skyrl_home"] == str(skyrl)
+        assert process_env["vllm_use_v1"] == "1"
+        assert process_env["python_path"].split(os.pathsep)[:3] == [
+            str(app),
+            str(skyrl),
+            str(skyrl / "skyrl-train"),
+        ]
     assert transport["argv"][:4] == ["--mode", "gate", "--gate-coverage", "all-gpus"]
     assert transport["argv"][4:6] == ["--gate-report-prefix", f"{config.ray.rendezvous_dir}/interconnect-gate"]
     assert ("--pynccl-init" in transport["argv"]) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
-    bundled = base64.b64decode(request.environment.env_vars[RL_CONFIG_PAYLOAD_ENV])
-    config_key = hashlib.sha256(bundled).hexdigest()[:16]
-    assert controller["argv"] == ["--config", f"{RL_CONFIG_TASK_DIR}/{config_key}.yaml"]
+    flag, config_path = controller["argv"]
+    assert flag == "--config"
+    assert Path(config_path).parent == Path(RL_CONFIG_TASK_DIR)
     if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT:
         failed = subprocess.run(
             argv, env=os.environ | {"EXIT_TRANSPORT_FIXTURE": "1"}, capture_output=True, text=True, timeout=15

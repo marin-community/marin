@@ -43,4 +43,4 @@ def runtime_profile_for_strategy(
 
 def task_setup_command(profile: RuntimeProfile) -> str:
     """Return the Iris setup invocation for the selected frozen profile."""
-    return f"source {MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh {profile.value}"
+    return f"bash {MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh {profile.value}"
