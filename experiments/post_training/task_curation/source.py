@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     DatasetRelease,
     IndependentQC,
+    LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -201,6 +202,20 @@ class SourceInfo:
     ``executed`` runs the shipped oracle solutions; ``verifier_executed`` records
     a negative verdict on an untouched submission without certifying an oracle;
     ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
+    """
+
+    lexical_contamination: LexicalContaminationEvidence | None = None
+    """The lexical measurement the source's current pin was admitted on.
+
+    The retained-release binding carries the publication's evidence here, so the
+    import gate and the catalog show the measurement that qualifies this pin.
+    """
+
+    inherited_admission: DatasetRelease | None = None
+    """The release whose admission the source inherits through its subset lineage.
+
+    A retained population admits through the original source's admission chain;
+    the release records that lineage instead of claiming a fresh one.
     """
 
     oversight: OversightEvidence | None = None

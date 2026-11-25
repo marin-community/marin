@@ -37,12 +37,13 @@ import pytest
 from finestore.rl.source_identity import canonical_source_id
 from huggingface_hub import hf_hub_download
 
+from experiments.post_training.task_curation.retained_release import RetainedCohort, import_retained
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
-ATLAS_SOURCE_PINS_REVISION = "8b3736584f773f6c83caa4d177bbbb29eed73f08"
-ATLAS_SOURCE_PINS_SHA256 = "166f869834973f58359be5b8f7a44924b87fe6d43f6a31558b236ec947596497"
-ATLAS_SOURCE_PINS_BYTES = 177059
+ATLAS_SOURCE_PINS_REVISION = "bc56c4bee9721bf5ef497384607a89d17457db98"
+ATLAS_SOURCE_PINS_SHA256 = "7eb5938b9c68735caa82a319f6f3741bec283ac4711c609ce326117ee28d7d03"
+ATLAS_SOURCE_PINS_BYTES = 138035
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,32 @@ def test_main_pins_match_the_atlas_admitted_pins():
 
     assert stale_waivers == [], f"parity landed; drop the waivers: {stale_waivers}"
     assert unwaived == [], f"pins differ from the Atlas admitted pins with no waiver: {unwaived}"
+
+
+@pytest.mark.data_integration
+def test_dapo_math_binds_to_its_retained_release():
+    """The proof case: main's DAPO declaration selects the Atlas's deduplicated release.
+
+    The raw pin (BytedTsinghua-SIA/DAPO-Math-17k, 1,791,700 raw rows) is superseded by
+    the retained release the Atlas admitted (16,901 retained of the deduplicated
+    population), and the durable reference, recipe and count follow it.
+    """
+    source = all_sources()["BytedTsinghua-SIA:dapo_math"]
+    assert isinstance(source.config, RetainedCohort)
+    assert source.pipeline is import_retained
+    dataset = source.dataset
+    assert (dataset.name, dataset.revision) == (
+        "open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1",
+        "36fa57456e941732aa805200cda98389734b5399",
+    )
+    assert (source.name, source.version, list(source.files)) == (
+        "dapo_math-retained",
+        "2026.11.13.1",
+        ["tasks.parquet"],
+    )
+    assert source.info.count == 16901
+    assert source.declaration.status == "Available"
+    source.require_license()
 
 
 if __name__ == "__main__":
