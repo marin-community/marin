@@ -6,7 +6,7 @@
 import json
 import tomllib
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,8 +15,8 @@ import pyarrow.parquet as pq
 import tomli_w
 from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
-from taskcompendium.importers.harbor.config import read_task_config
-from taskcompendium.importers.harbor.package import JobSettings, PackageTests, lower_package
+from taskcompendium.importers.harbor.config import HarborTaskConfig, read_task_config
+from taskcompendium.importers.harbor.package import HarborTask, JobSettings, PackageTests, lower_package
 from taskcompendium.models import ScriptGrader, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import JudgeSpec
@@ -48,21 +48,15 @@ def bind_script_judge(grader: ScriptGrader, model: str, request_timeout: float) 
     )
 
 
-def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mapping[str, str]) -> TaskRolloutSpec:
-    """Lower a frozen package without selecting new tasks or changing its verifier."""
-    task = rollout.task
-    if rollout.harness != "harbor_trial":
-        grader = task.grader
-        assert isinstance(grader, ScriptGrader)
-        # Only equivalence-judged rows need a provider connection. The task's script retains its rubric.
-        if any(resource.path == "config.json" for resource in task.resources.verifier):
-            grader = bind_script_judge(
-                grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
-            )
-            task = task.model_copy(update={"grader": grader})
-        return rollout.model_copy(update={"task": task})
+@dataclass(frozen=True)
+class NativePackage:
+    lowered: HarborTask
+    settings: HarborTaskConfig
+    judge_required: bool
 
-    harbor = policy["evaluation"]["config"]["terminal_bench"]["harbor"]
+
+def lower_frozen_package(task: TaskSpec, agent_timeout: float, image_digests: Mapping[str, str]) -> NativePackage:
+    """Stage the archived package and replace its host credential references with a runtime judge binding."""
     with TemporaryDirectory(prefix="micro210-native-") as directory:
         package = Path(directory)
         for resource in task.resources.verifier:
@@ -89,12 +83,32 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
             source=task.source,
             rule=PackageTests(),
             image_digests=image_digests,
-            job=JobSettings(agent_timeout=harbor["override_timeout_sec"]),
+            job=JobSettings(agent_timeout=agent_timeout),
         )
+    return NativePackage(lowered, settings, needs_judge)
+
+
+def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mapping[str, str]) -> TaskRolloutSpec:
+    """Lower a frozen package without selecting new tasks or changing its verifier."""
+    task = rollout.task
+    if rollout.harness != "harbor_trial":
+        grader = task.grader
+        assert isinstance(grader, ScriptGrader)
+        # Only equivalence-judged rows need a provider connection. The task's script retains its rubric.
+        if any(resource.path == "config.json" for resource in task.resources.verifier):
+            grader = bind_script_judge(
+                grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
+            )
+            task = task.model_copy(update={"grader": grader})
+        return rollout.model_copy(update={"task": task})
+
+    harbor = policy["evaluation"]["config"]["terminal_bench"]["harbor"]
+    package = lower_frozen_package(task, harbor["override_timeout_sec"], image_digests)
+    lowered, settings = package.lowered, package.settings
     native, episode = lowered.task, lowered.episode
     grader = native.grader
     assert isinstance(grader, ScriptGrader)
-    if needs_judge:
+    if package.judge_required:
         grader = bind_script_judge(
             grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["bixbench_request_timeout"]
         )
