@@ -40,11 +40,12 @@ def _update_prepared_prompt(dataset, row, update):
     dataset.dataframe = dataframe.remove_columns("prompt").add_column("prompt", prompts)
 
 
-def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluation_overlap(tmp_path):
+@pytest.mark.parametrize("kind", ["prompt-thompson-contextual", "prompt-thompson-within-source-cost-aware"])
+def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluation_overlap(tmp_path, kind):
     config = get_default_config()
     config.trainer.train_batch_size = 3
     config.generator.n_samples_per_prompt = 2
-    config.data.sampling.kind = "prompt-thompson-contextual"
+    config.data.sampling.kind = kind
     configs = OmegaConf.to_container(config.environment.task_sessions)
 
     def dataset(name, tasks):

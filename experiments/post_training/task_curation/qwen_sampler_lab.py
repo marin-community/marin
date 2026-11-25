@@ -48,8 +48,14 @@ from experiments.post_training.task_curation.selection import (
 NAME = "qwen-sampler-lab"
 VERSION = "2026.11.25.1"
 ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection" / NAME / VERSION)
+SOURCE_EVAL_NAME = "qwen-sampler-source-eval"
+SOURCE_EVAL_VERSION = "2026.11.25.1"
+SOURCE_EVAL_ROOT = str(
+    StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection" / SOURCE_EVAL_NAME / SOURCE_EVAL_VERSION
+)
 TRAIN_SEED, EVAL_SEED = 20261125, 20261126
 TRAIN_PER_CELL, FULL_DEV_PER_CELL, FAST_DEV_PER_CELL = 512, 16, 4
+SOURCE_EVAL_SEED, SOURCE_EVAL_PER_CELL = 20261127, 32
 _PLACEMENT = GraderMachine(
     environment=EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec())
 )
@@ -121,37 +127,55 @@ class Example:
     fast_dev: bool
 
 
-def lab_examples() -> list[Example]:
-    seen = set()
+def _examples(
+    name: str, version: str, seed: int, per_cell: int, split: str, active_per_cell: int, seen: set[str]
+) -> list[Example]:
     rows = []
-    for split, seed, size in (("train", TRAIN_SEED, TRAIN_PER_CELL), ("dev", EVAL_SEED, FULL_DEV_PER_CELL)):
-        for family, generator in FAMILIES.items():
-            for difficulty in Difficulty:
-                rng = random.Random(f"{seed}/{family}/{difficulty}")
-                strata = TaskStrata(family=family, source=f"{NAME}/{family}", difficulty=difficulty)
-                for index in range(size):
+    for family, generator in FAMILIES.items():
+        for difficulty in Difficulty:
+            rng = random.Random(f"{seed}/{family}/{difficulty}")
+            strata = TaskStrata(family=family, source=f"{NAME}/{family}", difficulty=difficulty)
+            for index in range(per_cell):
+                prompt, answer = generator(rng, difficulty)
+                digest = hashlib.sha256(prompt.encode()).hexdigest()
+                while digest in seen:
                     prompt, answer = generator(rng, difficulty)
-                    while prompt in seen:
-                        prompt, answer = generator(rng, difficulty)
-                    seen.add(prompt)
                     digest = hashlib.sha256(prompt.encode()).hexdigest()
-                    source = Source(dataset=strata.source, revision=VERSION, row=digest, importer_revision=VERSION)
-                    task = TaskSpec(
-                        id=f"{NAME}-{digest}",
-                        context=ConversationInput(
-                            events=(
-                                TextMessage(role="user", content=prompt + r" Put your final answer inside \boxed{...}."),
-                            )
-                        ),
-                        environment_requirements=EnvironmentRequirements(),
-                        answer_type=AnswerType.TEXT,
-                        answer_format=Boxed(),
-                        grader=ScriptGrader(argv=("sh", "-c", _CHECK, "grade", answer), placement=_PLACEMENT, timeout=5),
-                        source=source,
-                    )
-                    rows.append(Example(task, strata, split, split == "dev" and index < FAST_DEV_PER_CELL))
+                seen.add(digest)
+                source = Source(dataset=strata.source, revision=version, row=digest, importer_revision=version)
+                task = TaskSpec(
+                    id=f"{name}-{digest}",
+                    context=ConversationInput(
+                        events=(
+                            TextMessage(role="user", content=prompt + r" Put your final answer inside \boxed{...}."),
+                        )
+                    ),
+                    environment_requirements=EnvironmentRequirements(),
+                    answer_type=AnswerType.TEXT,
+                    answer_format=Boxed(),
+                    grader=ScriptGrader(argv=("sh", "-c", _CHECK, "grade", answer), placement=_PLACEMENT, timeout=5),
+                    source=source,
+                )
+                rows.append(Example(task, strata, split, index < active_per_cell))
+    return rows
+
+
+def lab_examples() -> list[Example]:
+    seen: set[str] = set()
+    rows = _examples(NAME, VERSION, TRAIN_SEED, TRAIN_PER_CELL, "train", 0, seen)
+    rows.extend(_examples(NAME, VERSION, EVAL_SEED, FULL_DEV_PER_CELL, "dev", FAST_DEV_PER_CELL, seen))
     # Interleave strata so a prefix of the released parquet is independent of generation order.
     random.Random(TRAIN_SEED).shuffle(rows)
+    return rows
+
+
+def source_eval_examples() -> list[Example]:
+    """Draw the independent panel after excluding every v1 public prompt digest."""
+    seen = {example.task.source.row for example in lab_examples()}
+    rows = _examples(
+        SOURCE_EVAL_NAME, SOURCE_EVAL_VERSION, SOURCE_EVAL_SEED, SOURCE_EVAL_PER_CELL, "dev", SOURCE_EVAL_PER_CELL, seen
+    )
+    random.Random(SOURCE_EVAL_SEED).shuffle(rows)
     return rows
 
 
@@ -176,6 +200,28 @@ def selection_rows(examples: list[Example]) -> tuple[dict[str, list[dict]], list
     return files, manifests
 
 
+def _publish_selection(output: str, files: dict[str, list[dict]], manifests: list[dict], summary: dict) -> str:
+    with TemporaryDirectory(prefix="qwen-sampler-") as temporary:
+        directory = Path(temporary)
+        for name, rows in files.items():
+            write_parquet_file(rows, str(directory / name), schema=TASK_SCHEMA)
+        write_parquet_file(manifests, str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
+        contents = {name: (directory / name).read_bytes() for name in (*files, TASK_MANIFEST_FILENAME)}
+        summary_json = (
+            json.dumps(
+                {**summary, "file_sha256": {n: hashlib.sha256(data).hexdigest() for n, data in contents.items()}},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        contents[SUMMARY_FILENAME] = summary_json.encode()
+        (directory / SUMMARY_FILENAME).write_bytes(contents[SUMMARY_FILENAME])
+        read_selection_manifest(str(directory))
+        publish_once(StoragePath(output), contents)
+    return summary_json
+
+
 def publish(output: str) -> str:
     files, manifests = selection_rows(lab_examples())
     training, development, fast = files[TRAIN_FILENAME], files[FULL_VALIDATION_FILENAME], files[VALIDATION_FILENAME]
@@ -186,41 +232,56 @@ def publish(output: str) -> str:
         task_files=(TRAIN_FILENAME, FULL_VALIDATION_FILENAME),
         active_files=(TRAIN_FILENAME, VALIDATION_FILENAME),
     )
-    with TemporaryDirectory(prefix="qwen-sampler-") as temporary:
-        directory = Path(temporary)
-        for name, rows in files.items():
-            write_parquet_file(rows, str(directory / name), schema=TASK_SCHEMA)
-        write_parquet_file(manifests, str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
-        contents = {name: (directory / name).read_bytes() for name in (*files, TASK_MANIFEST_FILENAME)}
-        summary = {
-            "selection_strata": definition.model_dump(mode="json"),
-            "train_seed": TRAIN_SEED,
-            "dev_seed": EVAL_SEED,
-            "training_rows": len(training),
-            "validation_rows": len(fast),
-            "full_validation_rows": len(development),
-            "training_family_counts": dict(Counter(r["family"] for r in training)),
-            "validation_family_counts": dict(Counter(r["family"] for r in fast)),
-            "grader_kind_counts": {
-                name.removesuffix(".parquet"): {"package": len(rows)} for name, rows in files.items()
-            },
-            "file_sha256": {n: hashlib.sha256(data).hexdigest() for n, data in contents.items()},
-        }
-        summary_json = json.dumps(summary, indent=2, sort_keys=True) + "\n"
-        contents[SUMMARY_FILENAME] = summary_json.encode()
-        (directory / SUMMARY_FILENAME).write_bytes(contents[SUMMARY_FILENAME])
-        read_selection_manifest(str(directory))
-        publish_once(StoragePath(output), contents)
-    return summary_json
+    summary = {
+        "selection_strata": definition.model_dump(mode="json"),
+        "train_seed": TRAIN_SEED,
+        "dev_seed": EVAL_SEED,
+        "training_rows": len(training),
+        "validation_rows": len(fast),
+        "full_validation_rows": len(development),
+        "training_family_counts": dict(Counter(r["family"] for r in training)),
+        "validation_family_counts": dict(Counter(r["family"] for r in fast)),
+        "grader_kind_counts": {name.removesuffix(".parquet"): {"package": len(rows)} for name, rows in files.items()},
+    }
+    return _publish_selection(output, files, manifests, summary)
+
+
+def publish_source_eval(output: str) -> str:
+    """Publish a validation-only artifact for the prospective source-policy test."""
+    if str(StoragePath(output)) == ROOT:
+        raise ValueError("The source evaluation panel requires a separate artifact from Qwen sampler lab v1")
+    files, manifests = selection_rows(source_eval_examples())
+    rows = files[VALIDATION_FILENAME]
+    family_counts = dict(Counter(row["family"] for row in rows))
+    definition = SelectionDefinition(
+        name=SOURCE_EVAL_NAME,
+        version=SOURCE_EVAL_VERSION,
+        sampling="seeded equal family and difficulty quotas, excluding all lab v1 prompt digests",
+        task_files=(VALIDATION_FILENAME,),
+        active_files=(VALIDATION_FILENAME,),
+        family_quotas=family_counts,
+    )
+    summary = {
+        "selection_strata": definition.model_dump(mode="json"),
+        "eval_seed": SOURCE_EVAL_SEED,
+        "excluded_selection": f"{NAME}@{VERSION}",
+        "validation_rows": len(rows),
+        "validation_family_counts": family_counts,
+        "grader_kind_counts": {"validation": {"package": len(rows)}},
+    }
+    return _publish_selection(output, {VALIDATION_FILENAME: rows}, manifests, summary)
 
 
 @click.command(help=__doc__)
-@click.option("--output", default=ROOT, show_default=True)
+@click.option("--output", help="Override the selected panel's canonical output path.")
+@click.option("--source-eval", is_flag=True, help="Select the independent 288-task validation panel.")
 @click.option("--run", is_flag=True, help="Publish or verify identical existing bytes.")
-def main(output: str, run: bool) -> None:
+def main(output: str | None, source_eval: bool, run: bool) -> None:
+    output = output or (SOURCE_EVAL_ROOT if source_eval else ROOT)
     if run:
         configure_coreweave_s3()
-        click.echo(publish(output), nl=False)
+        publisher = publish_source_eval if source_eval else publish
+        click.echo(publisher(output), nl=False)
     else:
         click.echo(output)
 

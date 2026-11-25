@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from collections import Counter
 from dataclasses import replace
 
 import pytest
@@ -19,16 +20,16 @@ def prompts():
     ]
 
 
-def _order(prompts, acquisition, held_out=()):
+def _order(prompts, acquisition, held_out=(), *, reference=None, epsilon=0.2):
     return PromptThompsonOrder(
         prompts,
         set(held_out),
-        {},
+        reference or {},
         acquisition=acquisition,
         seed=22,
         window_size=12,
         decay=0.95,
-        epsilon=0.2,
+        epsilon=epsilon,
         reference_tokens=100,
     )
 
@@ -70,6 +71,55 @@ def test_cost_aware_acquisition_prefers_cheaper_unvisited_prompts(prompts):
     contextual_expensive = sum(contextual.next_index() >= 40 for _ in range(120))
     cost_aware_expensive = sum(cost_aware.next_index() >= 40 for _ in range(120))
     assert cost_aware_expensive < contextual_expensive - 25
+
+
+def test_within_source_uses_the_same_cost_acquisition_on_a_single_source(prompts):
+    original = _order(prompts, PromptAcquisition.COST_AWARE, epsilon=0.05)
+    stratified = _order(prompts, PromptAcquisition.WITHIN_SOURCE_COST_AWARE, epsilon=0.05)
+    for step in range(1, 5):
+        observations = [
+            _feedback(i, step, useful=i % 2 == 0, tokens=40 if i < 40 else 240)
+            for i in (*range(20), *range(40, 60))
+        ]
+        assert original.finish_step(step, observations) == stratified.finish_step(step, observations)
+        assert [original.next_index() for _ in range(12)] == [stratified.next_index() for _ in range(12)]
+    with pytest.raises(ValueError, match="another training catalog or policy"):
+        stratified.load_state_dict(original.state_dict())
+
+
+@pytest.mark.parametrize("reference", [{}, {"tiny": 1000, "rare": 1, "common": 17}])
+def test_within_source_preserves_reference_shares_and_pairs_source_windows(prompts, reference):
+    prompts = [
+        replace(prompt, source="tiny" if i < 2 else "rare" if i < 12 else "common")
+        for i, prompt in enumerate(prompts)
+    ]
+    acquisition = PromptAcquisition.WITHIN_SOURCE_COST_AWARE
+    ranked = _order(prompts, acquisition, reference=reference, epsilon=0.05)
+    uniform = _order(prompts, acquisition, reference=reference, epsilon=1.0)
+    ranked.finish_step(1, [_feedback(i, 1, useful=i < 12, tokens=20 if i < 12 else 200) for i in range(80)])
+
+    # Reference counts are 2/10/68. With the override, the tiny source exhausts its two
+    # rows first and the remaining ten slots divide in the ratio 1:17.
+    expected = {"tiny": 2, "rare": 10/18, "common": 170/18} if reference else {
+        "tiny": 12*2/80, "rare": 12*10/80, "common": 12*68/80,
+    }
+    totals = Counter()
+    for _ in range(120):
+        rows = [ranked.next_index() for _ in range(12)]
+        assert len(set(rows)) == len(rows)
+        sources = [prompts[i].source for i in rows]
+        assert sources == [prompts[uniform.next_index()].source for _ in range(12)]
+        counts = Counter(sources)
+        for source, target in expected.items():
+            assert abs(counts[source] - target) < 1
+        totals.update(counts)
+    for source, target in expected.items():
+        assert totals[source] / 120 == pytest.approx(target, abs=0.15)
+    for _ in range(5):
+        ranked.next_index()
+    restored = _order(prompts, acquisition, reference=reference, epsilon=0.05)
+    restored.load_state_dict(json.loads(json.dumps(ranked.state_dict())))
+    assert [ranked.next_index() for _ in range(48)] == [restored.next_index() for _ in range(48)]
 
 
 def test_resume_restores_pending_window_and_feedback_bookkeeping(prompts):

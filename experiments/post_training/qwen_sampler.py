@@ -153,8 +153,13 @@ RNO_PAIR_PILOT_ARMS = (
 )
 FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
 CONFIRMATION_ARMS = ("fixed", "thompson", "cost-aware-eps05")
-CONFIRMATION_SEEDS = (41, 53)
-CONFIRMATION_TOKEN_BUDGET = 3_000_000
+WITHIN_SOURCE = "prompt-thompson-within-source-cost-aware"
+SOURCE_ARMS = (
+    ("within-source", WITHIN_SOURCE, LOW_EXPLORATION),
+    ("within-source-random", WITHIN_SOURCE, 1.0),
+)
+SOURCE_EVAL_TASKS = f"{qwen_sampler_lab.SOURCE_EVAL_NAME}@{qwen_sampler_lab.SOURCE_EVAL_VERSION}"
+SOURCE_EVAL = replace(EVAL, name="qwen_source_eval")
 
 
 def with_rollout_token_budget(preset: Preset, tokens: int) -> Preset:
@@ -176,28 +181,30 @@ def token_budget_smoke(arm: str, kind: str, epsilon: float) -> Preset:
     return with_rollout_token_budget(replace(preset, evaluations=(replace(EVAL, at_start=False),)), 200_000)
 
 
-def confirmation_presets(arms: tuple[str, ...]) -> tuple[Preset, ...]:
-    """Build fresh, gross-token-matched runs for the selected discovery arms."""
-    sampler_by_arm = {arm: (kind, epsilon) for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS}
-    layout = replace(RNO_PAIR_LAYOUT, coordinator_timeout_hours=3, job_timeout_seconds=7200)
-    evaluation = replace(FULL_VALIDATION, at_start=True)
-    presets = []
-    for arm in arms:
-        kind, epsilon = sampler_by_arm[arm]
-        for seed in CONFIRMATION_SEEDS:
-            preset = sampler_preset(
-                f"rno-pair-budget-confirm-{arm}-seed{seed}",
-                160,
-                kind,
-                epsilon,
-                seed,
-                layout=layout,
-                revision="2026.11.25.9",
-                evaluation_interval=None,
-            )
-            preset = replace(preset, evaluations=(evaluation,))
-            presets.append(with_rollout_token_budget(preset, CONFIRMATION_TOKEN_BUDGET))
-    return tuple(presets)
+def budget_preset(
+    name: str,
+    kind: str,
+    epsilon: float,
+    seed: int,
+    *,
+    revision: str,
+    max_updates: int,
+    tokens: int,
+    evaluation: Evaluation,
+    held_out_tasks: str,
+) -> Preset:
+    """Evaluate at initialization and the first complete update that reaches the token budget."""
+    preset = sampler_preset(
+        name,
+        max_updates,
+        kind,
+        epsilon,
+        seed,
+        layout=replace(RNO_PAIR_LAYOUT, coordinator_timeout_hours=3, job_timeout_seconds=7200),
+        revision=revision,
+        evaluation_interval=None,
+    )
+    return with_rollout_token_budget(replace(preset, evaluations=(evaluation,), held_out_tasks=held_out_tasks), tokens)
 
 
 def layout_presets(
@@ -244,7 +251,51 @@ QWEN_SAMPLER = ModelPresets(
             confirmation=(FULL_VALIDATION,),
         ),
         *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
-        *confirmation_presets(CONFIRMATION_ARMS),
+        *(
+            budget_preset(
+                f"rno-pair-budget-confirm-{arm}-seed{seed}",
+                kind,
+                epsilon,
+                seed,
+                revision="2026.11.25.9",
+                max_updates=160,
+                tokens=3_000_000,
+                evaluation=replace(FULL_VALIDATION, at_start=True),
+                held_out_tasks=TASKS,
+            )
+            for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
+            if arm in CONFIRMATION_ARMS
+            for seed in (41, 53)
+        ),
+        *(
+            sampler_preset(
+                f"rno-pair-source-smoke-{arm}",
+                4,
+                kind,
+                epsilon,
+                67,
+                layout=RNO_PAIR_LAYOUT,
+                revision="2026.11.25.10",
+                evaluation_interval=4,
+            )
+            for arm, kind, epsilon in SOURCE_ARMS
+        ),
+        *(
+            budget_preset(
+                f"rno-pair-source-confirm-{arm}-seed{seed}",
+                kind,
+                epsilon,
+                seed,
+                revision="2026.11.25.11",
+                max_updates=220,
+                tokens=5_242_880,
+                evaluation=SOURCE_EVAL,
+                held_out_tasks=SOURCE_EVAL_TASKS,
+            )
+            for arm, kind, epsilon in (*RNO_PAIR_PILOT_ARMS, *SOURCE_ARMS)
+            if arm in {"thompson", "cost-aware-eps05", "within-source", "within-source-random"}
+            for seed in (67, 79)
+        ),
         *(
             token_budget_smoke(arm, kind, epsilon)
             for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS

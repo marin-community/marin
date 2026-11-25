@@ -43,6 +43,7 @@ class SamplingKind(StrEnum):
     PROMPT_THOMPSON_SOURCE = PromptAcquisition.SOURCE.value
     PROMPT_THOMPSON_CONTEXTUAL = PromptAcquisition.CONTEXTUAL.value
     PROMPT_THOMPSON_COST_AWARE = PromptAcquisition.COST_AWARE.value
+    PROMPT_THOMPSON_WITHIN_SOURCE_COST_AWARE = PromptAcquisition.WITHIN_SOURCE_COST_AWARE.value
     NAIVE = "naive"
     THOMPSON = "thompson"
     LEARNABILITY = "learnability"

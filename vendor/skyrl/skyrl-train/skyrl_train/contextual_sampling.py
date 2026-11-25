@@ -33,6 +33,7 @@ class PromptAcquisition(StrEnum):
     SOURCE = "prompt-thompson-source"
     CONTEXTUAL = "prompt-thompson-contextual"
     COST_AWARE = "prompt-thompson-cost-aware"
+    WITHIN_SOURCE_COST_AWARE = "prompt-thompson-within-source-cost-aware"
 
 
 @dataclass(frozen=True)
@@ -119,12 +120,32 @@ def _prompt_features(
     return np.column_stack((indicators, features))
 
 
+def _source_quota_boundaries(shares: NDArray[np.float64], capacities: NDArray, size: int) -> NDArray[np.float64]:
+    """Cumulative expected counts after redistributing shares that exceed a source's catalog."""
+    quotas = np.zeros(len(shares))
+    remaining = size
+    indices = np.arange(len(shares))
+    while len(indices):
+        weights = shares[indices] / shares[indices].max()
+        proposed = remaining * weights / weights.sum()
+        saturated = proposed > capacities[indices]
+        if not saturated.any():
+            quotas[indices] = proposed
+            break
+        full = indices[saturated]
+        quotas[full] = capacities[full]
+        remaining -= int(capacities[full].sum())
+        indices = indices[~saturated]
+    return quotas.cumsum()[:-1]
+
+
 class PromptThompsonOrder:
     """Rank distinct training prompts by sampled probability of useful optimizer input.
 
     Source-only ranks prompts from the same source equally. Contextual ranking also
     uses public prompt text. Cost-aware ranking gives additional weight to prompts
-    predicted to spend fewer generated tokens.
+    predicted to spend fewer generated tokens. Within-source cost-aware ranking
+    preserves the reference mixture in each window up to randomized rounding and pool capacity.
     """
 
     def __init__(
@@ -171,6 +192,15 @@ class PromptThompsonOrder:
         self._last_step = 0
         self._rng = np.random.default_rng(seed)
         self._exploration_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
+        if acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+            self._source_ids = np.searchsorted(self._sources, self._row_sources)
+            self._source_boundaries = _source_quota_boundaries(
+                np.array([shares[source] for source in self._sources], dtype=float),
+                np.array([counts[source] for source in self._sources]),
+                window_size,
+            )
+            # Keep the source schedule paired across epsilon settings and different optimizer feedback.
+            self._source_rng = np.random.default_rng(np.random.SeedSequence([seed, 2]))
         self._assigned: Counter[str] = Counter()
         self._seen: set[str] = set()
 
@@ -209,20 +239,27 @@ class PromptThompsonOrder:
         coefficients = np.linalg.solve(self._precision, self._info)
         draw = np.linalg.solve(np.linalg.cholesky(self._precision).T, self._rng.standard_normal(len(coefficients)))
         priority = self._probabilities(self._features @ (coefficients + draw))
-        if self._acquisition is PromptAcquisition.COST_AWARE:
+        if self._acquisition in (PromptAcquisition.COST_AWARE, PromptAcquisition.WITHIN_SOURCE_COST_AWARE):
             log_relative_cost = self._features @ np.linalg.solve(self._cost_precision, self._cost_info)
             priority *= np.exp(
                 np.clip(-_COST_EXPONENT * log_relative_cost, np.log(_MIN_COST_WEIGHT), np.log(_MAX_COST_WEIGHT))
             )
+        sources = None
+        if self._acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+            # A shifted unit lattice gives every source the floor or ceiling of its expected count.
+            positions = np.arange(self._window_size) + self._source_rng.random()
+            sources = np.searchsorted(self._source_boundaries, positions, side="right")
+            self._source_rng.shuffle(sources)
         available = np.ones(len(priority), dtype=bool)
         window: list[int] = []
-        for _ in range(self._window_size):
+        for slot in range(self._window_size):
+            eligible = available if sources is None else available & (self._source_ids == sources[slot])
             if self._exploration_rng.random() < self._epsilon:
-                weights = self._weights * available
+                weights = self._weights * eligible
                 row = int(self._exploration_rng.choice(len(priority), p=weights / weights.sum()))
             else:
-                peak = priority[available].max()
-                row = int(self._rng.choice(np.flatnonzero(available & (priority == peak))))
+                peak = priority[eligible].max()
+                row = int(self._rng.choice(np.flatnonzero(eligible & (priority == peak))))
             available[row] = False
             window.append(row)
         return window[::-1]
@@ -288,7 +325,7 @@ class PromptThompsonOrder:
         self._cost_info += features.T @ (weights * log_costs)
 
     def state_dict(self) -> dict[str, Any]:
-        return {
+        state = {
             "signature": self._signature,
             "rng": deepcopy(self._rng.bit_generator.state),
             "exploration_rng": deepcopy(self._exploration_rng.bit_generator.state),
@@ -301,10 +338,15 @@ class PromptThompsonOrder:
             "cost_precision": self._cost_precision.tolist(),
             "cost_info": self._cost_info.tolist(),
         }
+        if self._acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+            state["source_rng"] = deepcopy(self._source_rng.bit_generator.state)
+        return state
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state.get("signature") != self._signature:
             raise ValueError("Thompson checkpoint belongs to another training catalog or policy")
+        if self._acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+            self._source_rng.bit_generator.state = state["source_rng"]
         self._rng.bit_generator.state = state["rng"]
         self._exploration_rng.bit_generator.state = state["exploration_rng"]
         self._assigned = Counter(state["assigned"])

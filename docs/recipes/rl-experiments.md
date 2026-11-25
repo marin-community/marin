@@ -203,14 +203,35 @@ the usual Iris hub and W&B credentials.
 export MARIN_PREFIX=s3://marin-us-east-02a/marin
 uv run python -m experiments.post_training.task_curation.qwen_sampler_lab --run
 uv run python -m experiments.post_training.qwen_sampler --preset smoke-fixed \
-  --version 2026.11.25.2 --issue 12201 --priority interactive --plan
+  --version 2026.11.25.6 --issue 12201 --priority interactive --plan
 ```
 
 Replace `--plan` with `--run --wait` to execute. The `smoke-*` presets run four updates and the
-`pilot-*` presets run 32. Each update draws 16 groups of four completions. Greedy validation runs
-at the start and end. The pinned Qwen tokenizer template enables thinking, with up to 4,096 output
-tokens in a 4,608-token window. The presets skip native checkpoints, model exports, and trajectory
+`pilot-*` presets run 32. Each update draws 16 groups of four completions. The fast panel runs
+at initialization and after the last update, with intermediate evaluations every eight updates
+for the pilots. The pinned Qwen tokenizer template enables thinking, with up to 4,096 output
+tokens in a 4,608-token window. The presets skip native checkpoints, model exports and trajectory
 retention.
+
+On Reno, the partial-node presets request two H100s, 16 CPUs, 64 GiB of RAM and 200 GiB of disk
+per gang. Submit independent presets concurrently through the Iris hub. The
+`rno-pair-budget-confirm-*` presets evaluate at initialization and at the first completed optimizer
+update reaching three million gross training response tokens. Compare the actual spend recorded
+in `rollout/gross_response_tokens_total`. Rejected training groups count toward the budget.
+
+The `rno-pair-source-smoke-within-source` preset first allocates slots according to the prepared
+reference shares, then ranks distinct prompts within each source by predicted useful signal and
+cost. Its `-random` control uses the same source schedule and draws prompts uniformly within each
+source. Both use the 36-task fast panel for wiring checks.
+The `rno-pair-source-confirm-*` presets evaluate on 288 new instances from the same nine
+strata at initialization and after crossing 5,242,880 gross training response tokens. Publish this
+held-out artifact once with the following command.
+
+```bash
+uv run python -m experiments.post_training.task_curation.qwen_sampler_lab \
+    --source-eval --run
+```
+
 The model and tokenizer come from the regional Qwen artifact at revision `c1899de`. SkyRL caches
 the lowered and tokenized training rows across sampler policies with the same immutable data,
 tokenizer, task settings and preparation code. Compare elapsed time from submission, worker start
@@ -226,7 +247,7 @@ uv run python -m experiments.post_training.qwen_sampler_replay \
   --endpoint /serve/qwen-sampler-replay --cap 4096 --seed 20261127 --output qwen-replay
 ```
 
-The client writes scored responses and a manifest with the frozen weights, tokenizer and template
+The client writes scored responses and a manifest with the model URI and revision, tokenizer and template
 hashes, data version and sampling seeds. Use this bank to replay sampler decisions against fixed
 outcomes. Online RL generates fresh rollouts from the current policy.
 

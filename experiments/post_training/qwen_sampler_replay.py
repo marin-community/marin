@@ -215,7 +215,7 @@ async def collect(
     base_url: str,
     output: Path,
 ) -> tuple[int, int]:
-    """Write verified groups and return the gross generated token count and number of replies."""
+    """Write each scored reply and return the gross generated token count and number of replies."""
     factory = ShellSimMachineFactory()
     requests = ((prompt, cap, group) for cap in caps for prompt in panel for group in range(groups_per_prompt))
     output_tokens = reply_count = 0

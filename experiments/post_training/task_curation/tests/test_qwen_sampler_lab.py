@@ -4,13 +4,22 @@
 import re
 from collections import Counter
 
+import pyarrow.parquet as pq
 import pytest
+from finestore.rl.strata import read_selection_manifest
 from rolloutengine.test_support import ReplayModel, engine, machine_runtime, rollout_spec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.models import TextMessage
+from taskcompendium.models import TaskSpec, TextMessage
 
-from experiments.post_training.task_curation.qwen_sampler_lab import FAMILIES, Difficulty, lab_examples
+from experiments.post_training.task_curation.qwen_sampler_lab import (
+    FAMILIES,
+    SOURCE_EVAL_NAME,
+    SOURCE_EVAL_VERSION,
+    Difficulty,
+    lab_examples,
+    publish_source_eval,
+)
 
 
 @pytest.fixture(scope="module")
@@ -24,6 +33,26 @@ def test_qwen_sampler_pool_has_distinct_prompts_and_balanced_cells(examples):
     assert set(Counter((r.strata.family, r.strata.difficulty) for r in examples if r.split == "train").values()) == {512}
     assert set(Counter((r.strata.family, r.strata.difficulty) for r in examples if r.fast_dev).values()) == {4}
     assert set(Counter((r.strata.family, r.strata.difficulty) for r in examples if r.split == "dev").values()) == {16}
+
+
+def test_source_eval_release_is_balanced_and_disjoint_from_all_lab_examples(examples, tmp_path):
+    publish_source_eval(str(tmp_path))
+    manifest = read_selection_manifest(str(tmp_path))
+    assert manifest is not None
+    assert (manifest.definition.name, manifest.definition.version) == (SOURCE_EVAL_NAME, SOURCE_EVAL_VERSION)
+    assert manifest.definition.task_files == manifest.definition.active_files == ("validation.parquet",)
+    assert {path.name for path in tmp_path.iterdir()} == {"validation.parquet", "task_manifest.parquet", "summary.json"}
+    validation = pq.read_table(tmp_path / "validation.parquet").to_pylist()
+    assert Counter((row["family"], row["difficulty"]) for row in validation) == {
+        (family, difficulty): 32 for family in FAMILIES for difficulty in Difficulty
+    }
+    tasks = [TaskSpec.model_validate_json(row["task_spec"]) for row in validation]
+    assert len({task.id for task in tasks}) == len({task.source.row for task in tasks}) == 288
+    assert {task.id for task in tasks}.isdisjoint(example.task.id for example in examples)
+    assert {task.source.row for task in tasks}.isdisjoint(example.task.source.row for example in examples)
+    assert {task.context.events[0].content for task in tasks}.isdisjoint(
+        example.task.context.events[0].content for example in examples
+    )
 
 
 def reference_answer(prompt, family, difficulty):

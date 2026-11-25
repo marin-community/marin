@@ -16,6 +16,7 @@ data:
     source_column: data_source # adaptive source label on each prepared training row
     decay: 0.95 # per-step multiplicative decay of observations
     # adaptive-source and prompt-thompson reserve this fraction for reference shares.
+    # prompt-thompson-within-source-cost-aware preserves source shares and explores within each source.
     # adaptive-source-thompson, thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization.
     epsilon: 0.05
     reversion_mass: 0.0 # bin curriculum pseudo-evidence per step toward the weight-curve peak
