@@ -30,6 +30,7 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.step_status import STATUS_DEP_FAILED, STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.timing import Duration
 
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
@@ -473,6 +474,7 @@ def _submit_iris_job(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    timeout: Duration | None = None,
 ) -> None:
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
@@ -494,6 +496,7 @@ def _submit_iris_job(
         name=job_name,
         entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
         resources=resources,
+        timeout=timeout,
         environment=create_environment(
             extras=dependency_groups,
             pip_packages=pip_packages,
@@ -514,7 +517,8 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     assert step.resources is not None
     raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
     assert raw_fn is not None, f"Step {step.name} has no callable"
-    _submit_iris_job(step, output_path, raw_fn, step.resources)
+    timeout = step.fn.timeout if isinstance(step.fn, RemoteCallable) else None
+    _submit_iris_job(step, output_path, raw_fn, step.resources, timeout=timeout)
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
@@ -532,4 +536,5 @@ def _run_remote_step(step: StepSpec, output_path: str) -> None:
         env_vars=step.fn.env_vars,
         pip_dependency_groups=step.fn.pip_dependency_groups,
         pip_packages=step.fn.pip_packages,
+        timeout=step.fn.timeout,
     )
