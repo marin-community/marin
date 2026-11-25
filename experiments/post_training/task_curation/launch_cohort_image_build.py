@@ -56,11 +56,15 @@ def main() -> None:
     # The plan TSV: source_id, slug, context uri, dockerfile — one row per cohort.
     plan_uri = args.context_root.rstrip("/") + "/plan.tsv"
     tsv = "\n".join(
-        f"{entry['source_id']}\t{entry['slug']}\t{entry['context_uri']}\t{entry['dockerfile']}" for entry in contexts
+        f"{entry['source_id']}\t{entry['source_id'].partition(':')[2].replace('/', '-').replace('@', '-').lower()}"
+        f"\t{entry['context_uri']}\t{entry['dockerfile']}"
+        for entry in contexts
     )
+    plan_local = Path("build") / "cohort-build-plan.tsv"
+    plan_local.parent.mkdir(exist_ok=True)
+    plan_local.write_text(tsv)
     subprocess.run(
-        ["uv", "run", "--no-sync", "fsutil", "cp", "-", plan_uri],
-        input=tsv.encode(),
+        ["uv", "run", "--no-sync", "fsutil", "cp", str(plan_local), plan_uri],
         check=True,
         stdout=subprocess.DEVNULL,
     )
@@ -86,7 +90,7 @@ def main() -> None:
         "run",
         "--no-sync",
         "iris",
-        "--cluster=cw-us-east-02a",
+        "--cluster=marin",
         "job",
         "run",
         "--no-wait",
