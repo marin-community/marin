@@ -16,7 +16,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
@@ -130,23 +130,18 @@ def step_is_built(step: StepSpec) -> bool:
 
 
 def _record_output_mode(seen: dict[str, bool], step: StepSpec) -> None:
-    path = step.output_path
+    path = StoragePath.normalize(step.output_path)
     if seen.setdefault(path, step.read_only) != step.read_only:
         raise ValueError(f"{path} is both a read-only input and a step output")
 
 
-def validate_output_ownership(steps: Iterable[StepSpec]) -> None:
-    """Check output ownership for a fully lowered graph before starting any steps."""
-    seen: dict[str, bool] = {}
-    for step in steps:
-        _record_output_mode(seen, step)
-
-
 def _expand_unseen(
     step: StepSpec,
-    seen: dict[str, bool],
+    seen: set[str],
     is_built: Callable[[StepSpec], bool] = lambda _s: False,
     pruned: set[str] | None = None,
+    *,
+    output_modes: dict[str, bool] | None = None,
 ) -> list[StepSpec]:
     """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
@@ -166,8 +161,9 @@ def _expand_unseen(
 
     def visit(s: StepSpec) -> None:
         path = s.output_path
+        if output_modes is not None:
+            _record_output_mode(output_modes, s)
         if path in seen:
-            _record_output_mode(seen, s)
             return
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
@@ -178,7 +174,7 @@ def _expand_unseen(
             for dep in s.deps:
                 visit(dep)
         in_stack.remove(path)
-        seen[path] = s.read_only
+        seen.add(path)
         ordered.append(s)
 
     visit(step)
@@ -207,6 +203,8 @@ class StepRunner:
         scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
+        A sequence is checked for mixed read/write ownership before scheduling.
+        Iterable streams check ownership as their steps arrive.
         Submit at most ``max_concurrent`` steps (default 8). Keep other ready
         steps in graph order so newly ready dependents can use the next slot.
         """
@@ -222,6 +220,12 @@ class StepRunner:
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
+
+        output_modes: dict[str, bool] = {}
+        if isinstance(steps, Sequence):
+            seen: set[str] = set()
+            for root in steps:
+                _expand_unseen(root, seen, output_modes=output_modes)
 
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly. More robust than contextvars.copy_context()
@@ -329,9 +333,9 @@ class StepRunner:
                     )
                 )
 
-        scheduled: dict[str, bool] = {}
+        scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned, output_modes=output_modes):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()

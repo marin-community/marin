@@ -293,34 +293,35 @@ _LEARNING_MEDIUM = _snowball(
 # KV all-gather supports packed sliding windows with Grug's five KV heads.
 _TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
 
-_TRAIN_LONG = _snowball(
-    revision="2026.11.25.1",
-    held_out_tasks=_DEFAULT_EVAL_LITE,
-    retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
-    checkpoints="best",
-    export="best",
-    name="train-long",
-    recipe=replace(
-        _REPORTING_P40,
-        layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
-        config=_REPORTING_P40.config.merge(
-            RecipePatch(
-                trainer=sections.Trainer(
-                    use_sample_packing=True,
-                    policy=sections.Policy(
-                        megatron_config=sections.PolicyMegatronConfig(
-                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
-                        ),
+_PACKED_TRAIN_LONG_RECIPE = replace(
+    _REPORTING_P40,
+    layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
+    config=_REPORTING_P40.config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                use_sample_packing=True,
+                policy=sections.Policy(
+                    megatron_config=sections.PolicyMegatronConfig(
+                        transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
                     ),
-                    ref=sections.Ref(
-                        megatron_config=sections.RefMegatronConfig(
-                            transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
-                        ),
+                ),
+                ref=sections.Ref(
+                    megatron_config=sections.RefMegatronConfig(
+                        transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
                     ),
                 ),
             ),
         ),
     ),
+)
+
+_TRAIN_LONG = _snowball(
+    held_out_tasks=_DEFAULT_EVAL_LITE,
+    retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
+    checkpoints="best",
+    export="best",
+    name="train-long",
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),
@@ -377,8 +378,7 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision=_REPORTING_REVISION,
-        recipe=replace(_REPORTING_P40, layout=_AGENTIC_LAYOUT),
+        recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
@@ -409,7 +409,6 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
-        revision=_REPORTING_REVISION,
         recipe=replace(
             _REPORTING_P40,
             config=_REPORTING_P40.config.merge(
@@ -518,15 +517,13 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
-    _TRAIN_LONG,
+    replace(_TRAIN_LONG, revision="2026.11.25.1", recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
         name="train-long-checkpoint-eval",
-        revision=_REPORTING_REVISION,
-        recipe=_REPORTING_P40,
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),

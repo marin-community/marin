@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-import importlib.util
 import json
-import runpy
 import shutil
 import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import replace
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -38,6 +37,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -409,6 +409,7 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     results = native_json()(
         """
 import asyncio, json, sys
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
@@ -1125,6 +1126,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
     mode, coordinator_module = "valid", "first_model_entry"
+    entries = {}
+
+    def invoke_entry(name, patch):
+        patch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(name, loader=None))
+        return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
         assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
@@ -1138,15 +1144,14 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             for key, value in environment.items():
                 child.setenv(key, value)
             child.setenv("IRIS_TASK_ID", "/test-user/train-coordinator/0")
-            child.setattr(sys, "argv", [coordinator_module, *arguments])
             child.setattr(
                 "experiments.post_training.rl_publication.publish_result",
                 lambda *args: pytest.fail("Coordinator contacted Marina"),
             )
             info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
-            with iris_ctx_scope(IrisContext.from_job_info(info)), pytest.raises(SystemExit) as completed:
-                runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
-            assert completed.value.code == {"valid": 0, "failed-following": 3}.get(mode, 4)
+            with iris_ctx_scope(IrisContext.from_job_info(info)):
+                code = invoke_entry(coordinator_module, child)
+            assert code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
         return SimpleNamespace(job_id=job)
 
@@ -1161,50 +1166,23 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
     def module(
-        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following="None"
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following=False
     ):
-        path = tmp_path / (name + ".py")
-        dependency = ""
-        if policy_forward is not None:
-            dependency = (
-                f"producer=rl.build_experiment(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
-                f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
-                f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
-                f"directory=Path({str(policy_path)!r});directory.mkdir(parents=True,exist_ok=True)\n"
-                "record=ArtifactRecord(name=producer.name,version=producer.version,fingerprint=producer.fingerprint(),"
-                "result_type=result_type_name(SkyRLRun),result=result.result_payload())\n"
-                "(directory/RECORD_FILENAME).write_text(record.model_dump_json())\n"
-                f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
-            )
-        path.write_text(
-            "from dataclasses import replace\nfrom pathlib import Path\n"
-            "from marin.execution.lazy import ArtifactStep, apply\n"
-            "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
-            "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
-            "from experiments.post_training import rl, snowball_rl\n"
-            "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
-            "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
-            "def fail_following():\n    raise RuntimeError('following stage failed')\n"
-            + dependency
-            + f"following={following}\n"
-            "table=snowball_rl.SNOWBALL\n"
-            "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
-            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
-            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
-        )
-        # Same-size rewrites within one timestamp tick must load the new module.
-        Path(importlib.util.cache_from_source(str(path))).unlink(missing_ok=True)
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None
-        monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))
+        entries[name] = {
+            "entry_module": entry_module,
+            "use_init": use_init,
+            "policy_forward": policy_forward,
+            "forward_env": forward_env,
+            "source": str(source),
+            "policy_path": str(policy_path),
+            "policy_uri": policy_uri,
+            "following": following,
+        }
 
     @click.command()
     def entry():
-        monkeypatch.setattr(sys, "argv", ["first_model_entry", *arguments])
-        with pytest.raises(SystemExit) as completed:
-            runpy.run_module("first_model_entry", run_name="__main__", alter_sys=True)
-        raise click.exceptions.Exit(completed.value.code)
+        with monkeypatch.context() as driver:
+            raise click.exceptions.Exit(invoke_entry("first_model_entry", driver))
 
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
@@ -1256,7 +1234,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     mode, coordinator_module = "failed-following", "first_model_entry"
-    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
+    module(coordinator_module, following=True)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output
