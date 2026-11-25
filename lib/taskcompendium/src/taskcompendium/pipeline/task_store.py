@@ -20,8 +20,7 @@ import pyarrow as pa
 from finestore.history import CommitRecord, row_history
 from finestore.layout import CommitToken, OnConflict
 from finestore.reader import ReadView
-from finestore.store import DEFAULT_UPDATE_ATTEMPTS, DataStore, RowConflict
-from rigging.timing import ExponentialBackoff, retry_with_backoff
+from finestore.store import DataStore, Transaction
 
 from taskcompendium.models import TaskSpec
 
@@ -29,7 +28,6 @@ TASKS_TABLE = "tasks"
 TASK_ID = "task_id"
 SPEC = "spec"
 TASKS_SCHEMA = pa.schema([pa.field(TASK_ID, pa.string(), nullable=False), pa.field(SPEC, pa.string(), nullable=False)])
-_ADD_BACKOFF = ExponentialBackoff(initial=0.05, maximum=2.0, factor=2.0, jitter=0.25)
 
 
 @dataclass(frozen=True)
@@ -112,22 +110,13 @@ class TaskStore:
                 raise ValueError(f"task {task.id!r} appears more than once")
             rows[task.id] = _row(task)
 
-        def attempt() -> CommitToken | None:
-            transaction = self._store.unbounded_transaction(author=author, message=message)
+        def write(transaction: Transaction) -> bool:
             newest = transaction.read(TASKS_TABLE, [(task_id,) for task_id in rows])
             changed = [row for task_id, row in rows.items() if newest.get((task_id,)) != row]
-            if not changed:
-                return None
             transaction.table(TASKS_TABLE).extend(changed)
-            return transaction.commit()
+            return bool(changed)
 
-        return retry_with_backoff(
-            attempt,
-            retryable=lambda exc: isinstance(exc, RowConflict),
-            max_attempts=DEFAULT_UPDATE_ATTEMPTS,
-            backoff=_ADD_BACKOFF,
-            operation=f"task add at {self.root}",
-        )
+        return self._store.guarded_commit(write, author=author, message=message)
 
     def update(
         self, task_ids: Sequence[str], edit: Callable[[TaskSpec], TaskSpec], *, author: str, message: str

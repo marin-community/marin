@@ -448,16 +448,13 @@ class DataStore:
         key raises ``KeyError``, and an edit that changes the primary key raises ``ValueError``.
         The table must use ``OnConflict.SUPERSEDE``, since an update writes a newer row for a key.
         """
-        if attempts < 1:
-            raise ValueError("attempts must be positive")
         registered = self._tables.get(table)
         if registered is None:
             raise KeyError(f"table {table!r} must be registered before an update")
         if registered.on_conflict != OnConflict.SUPERSEDE:
             raise ValueError(f"update writes newer rows, so table {table!r} must use OnConflict.SUPERSEDE")
 
-        def attempt() -> CommitToken:
-            transaction = self.unbounded_transaction(message=message, author=author)
+        def write(transaction: Transaction) -> bool:
             rows = transaction.read(table, keys)
             missing = [key for key in keys if tuple(key) not in rows]
             if missing:
@@ -470,14 +467,41 @@ class DataStore:
                     raise ValueError(f"edit changed the primary key of {key!r} in table {table!r}")
                 edited.append(new)
             transaction.table(table).extend(edited)
-            return transaction.commit()
+            return True
+
+        token = self.guarded_commit(write, message=message, author=author, attempts=attempts)
+        assert token is not None
+        return token
+
+    def guarded_commit(
+        self,
+        write: Callable[[Transaction], bool],
+        *,
+        message: str,
+        author: str | None = None,
+        attempts: int = DEFAULT_UPDATE_ATTEMPTS,
+    ) -> CommitToken | None:
+        """Run ``write`` on a fresh unbounded transaction and commit it, again on ``RowConflict``.
+
+        ``write`` reads rows through the transaction, which guards them, adds the rows to commit,
+        and returns whether to commit; on ``False`` nothing is committed and the call returns
+        ``None``. When another writer commits a guarded key first, ``write`` runs again on a new
+        transaction after a backoff, so it must be safe to repeat. After ``attempts`` conflicting
+        attempts the last ``RowConflict`` is raised.
+        """
+        if attempts < 1:
+            raise ValueError("attempts must be positive")
+
+        def attempt() -> CommitToken | None:
+            transaction = self.unbounded_transaction(message=message, author=author)
+            return transaction.commit() if write(transaction) else None
 
         return retry_with_backoff(
             attempt,
             retryable=lambda exc: isinstance(exc, RowConflict),
             max_attempts=attempts,
             backoff=_UPDATE_BACKOFF,
-            operation=f"FineStore update of {table!r} at {self.root}",
+            operation=f"FineStore guarded commit at {self.root}",
         )
 
     def flush(self) -> CommitToken | None:

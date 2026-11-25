@@ -48,7 +48,9 @@ the newer row. A drop or replacement of the table raises `CommitConflict`. Rows 
 transaction writes without reading them are not checked. `store.update(table, keys, edit, message=...)`
 is the read-modify-write form for `OnConflict.SUPERSEDE` tables. It reads the rows,
 writes `edit(row)` for each, and on `RowConflict` backs off and runs `edit` again on the
-newer rows, so `edit` must be safe to repeat.
+newer rows, so `edit` must be safe to repeat. `store.guarded_commit(write, message=...)`
+is the general form: `write(transaction)` reads and adds rows and returns whether to
+commit, and runs again on a fresh transaction after a `RowConflict`.
 
 Appends to registered tables and named object writes retain their Arrow buffers
 in memory. Each appended table produces one level-zero Parquet shard. FineStore
