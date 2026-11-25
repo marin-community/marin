@@ -9,6 +9,7 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from finelog.client import DirectQuerySegment
 
 from scripts.ops.cross_region import TimeWindow, analyze, choose_log_segments, iter_log_rows
@@ -84,22 +85,25 @@ def test_analyze_report_is_independent_of_how_rows_split_across_segments(tmp_pat
     assert sample_times == sorted({row[1] for row in rows if EUROPE_BUCKET_PATH in row[2]}, reverse=True)[:50]
 
 
-def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_sources(tmp_path: Path) -> None:
-    in_window = (f"{TASK_ID}:0", WINDOW.start_ms + 1, f"Reading {EUROPE_BUCKET_PATH}")
-    pushed_with_empty_cluster = (f"{TASK_ID}:1", WINDOW.start_ms + 5, f"Reading {EUROPE_BUCKET_PATH}")
-    stamped_by_the_hub = (f"{TASK_ID}:2", WINDOW.start_ms + 6, f"Reading {EUROPE_BUCKET_PATH}")
+IN_WINDOW = (f"{TASK_ID}:0", WINDOW.start_ms + 1, f"Reading {EUROPE_BUCKET_PATH}")
+PUSHED_WITH_EMPTY_CLUSTER = (f"{TASK_ID}:1", WINDOW.start_ms + 5, f"Reading {EUROPE_BUCKET_PATH}")
+STAMPED_MARIN = (f"{TASK_ID}:2", WINDOW.start_ms + 6, f"Reading {EUROPE_BUCKET_PATH}")
+STAMPED_CW_RNO2A = (f"{TASK_ID}:0", WINDOW.start_ms + 4, f"Reading {EUROPE_BUCKET_PATH}")
+
+
+def _log_segments(tmp_path: Path) -> list[str]:
     sources = []
     for name, rows in {
         "seg-a": [
-            (*in_window, None),
+            (*IN_WINDOW, None),
             (f"{TASK_ID}:0", WINDOW.start_ms - 1, f"Reading {EUROPE_BUCKET_PATH}", None),
-            (f"{TASK_ID}:0", WINDOW.start_ms + 4, f"Reading {EUROPE_BUCKET_PATH}", "cw-rno2a"),
+            (*STAMPED_CW_RNO2A, "cw-rno2a"),
         ],
         "seg-b": [
             (f"{TASK_ID}:0", WINDOW.start_ms + 2, "no paths here", None),
             ("worker-log", WINDOW.start_ms + 3, "gs://x", None),
-            (*pushed_with_empty_cluster, ""),
-            (*stamped_by_the_hub, "marin"),
+            (*PUSHED_WITH_EMPTY_CLUSTER, ""),
+            (*STAMPED_MARIN, "marin"),
         ],
     }.items():
         path = tmp_path / f"{name}.parquet"
@@ -107,8 +111,23 @@ def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_so
         table = pa.table({"key": keys, "epoch_ms": times, "data": data, "cluster": pa.array(clusters, pa.string())})
         pq.write_table(table, path)
         sources.append(str(path))
+    return sources
 
+
+@pytest.mark.parametrize(
+    ("own_cluster", "stamped_own"),
+    [
+        pytest.param("marin", [STAMPED_MARIN], id="hub-named-marin"),
+        pytest.param(None, [], id="store-not-yet-named"),
+        pytest.param("cw-rno2a", [STAMPED_CW_RNO2A], id="store-named-otherwise"),
+    ],
+)
+def test_iter_log_rows_streams_the_stores_own_in_window_task_rows_that_mention_gs(
+    tmp_path: Path, own_cluster: str | None, stamped_own: list[tuple[str, int, str]]
+) -> None:
+    # A store's own rows are those left empty before it was named and those stamped
+    # with its configured name; rows naming any other cluster were forwarded to it.
     with duckdb.connect() as con:
-        streamed = list(iter_log_rows(con, sources, WINDOW))
+        streamed = list(iter_log_rows(con, _log_segments(tmp_path), WINDOW, own_cluster))
 
-    assert sorted(streamed) == [in_window, pushed_with_empty_cluster, stamped_by_the_hub]
+    assert sorted(streamed) == sorted([IN_WINDOW, PUSHED_WITH_EMPTY_CLUSTER, *stamped_own])
