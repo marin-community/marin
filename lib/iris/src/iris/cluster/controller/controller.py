@@ -92,7 +92,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.pruner import prune_old_data
+from iris.cluster.controller.pruner import JOB_RETENTION, prune_old_data
 from iris.cluster.controller.reconcile import ControllerEffects, dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
@@ -306,7 +306,7 @@ class ControllerConfig:
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
 
-    job_retention: Duration = field(default_factory=lambda: Duration.from_seconds(7 * 86400))
+    job_retention: Duration = field(default_factory=lambda: JOB_RETENTION)
     """Delete terminal jobs older than this (default: 7 days)."""
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
