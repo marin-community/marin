@@ -10,6 +10,7 @@ from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
+from finestore.rl.run_records import RL_WANDB_PROJECT
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactHfModel,
@@ -59,9 +60,9 @@ SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DEFAULT_SELECTION_VERSION = "2026.11.25.1"
+DEFAULT_SELECTION_VERSION = "2026.11.19.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
+DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
@@ -93,7 +94,7 @@ _DEFAULT_PATCH = RL_TRAINING_BASE.merge(
             epochs=50,
             eval_batch_size=256,
             eval_before_train=False,
-            project_name="marin-snowball-rl",
+            project_name=RL_WANDB_PROJECT,
             algorithm=sections.Algorithm(
                 off_policy_correction="none",
                 kl_estimator_type="k3_unbiased_gradient",

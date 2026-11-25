@@ -169,6 +169,7 @@ class TrainingContext:
         self._workers = workers
         self._rollout_spans = rollout_spans
         self._grader_report = grader_report
+        self._grader_report_task: asyncio.Task[None] | None = None
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -262,7 +263,11 @@ class TrainingContext:
         self._dispatcher = asyncio.create_task(self._dispatch())
 
     async def close(self) -> None:
-        tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
+        tasks = [
+            task
+            for task in (self._dispatcher, self._grader_report_task, *self._running)
+            if task is not None and not task.done()
+        ]
         for task in tasks:
             task.cancel()
         try:
@@ -281,8 +286,7 @@ class TrainingContext:
             logger.warning("Grader summary unavailable: {}", type(error).__name__)
             return
         if summary["subsets"]:
-            await asyncio.to_thread(
-                write_grader_report,
+            write_grader_report(
                 self._grader_report.directory,
                 self._grader_report.attempt_id,
                 {"training": summary["subsets"], "training_tasks": summary["tasks"]},
@@ -368,7 +372,10 @@ class TrainingContext:
                     raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
-                await self.write_grader_report()
+                if self._grader_report is not None and (
+                    self._grader_report_task is None or self._grader_report_task.done()
+                ):
+                    self._grader_report_task = asyncio.create_task(self.write_grader_report())
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),

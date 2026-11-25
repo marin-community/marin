@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import wandb
 from finestore.rl.run_records import RunIndexIdentity
-from finestore.rl.run_records import AttemptRecord, read_attempt, write_attempt
+from finestore.rl.run_records import read_attempt
 from loguru import logger
 from omegaconf import OmegaConf
 
@@ -16,6 +16,7 @@ from omegaconf import OmegaConf
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 import ray
+from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.utils.tracking import Tracking
 
@@ -93,16 +94,19 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
         source_revision="commit",
         dirty=False,
     )
-    write_attempt(str(tmp_path), AttemptRecord(run_id="native-run", attempt_id="native-attempt", index=index))
 
     def workload():
         config = OmegaConf.create(
             {
                 "trainer": {"export_path": str(tmp_path)},
-                "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
+                "runtime": {
+                    "run_id": "native-run",
+                    "attempt_id": "native-attempt",
+                    "run_index": index.model_dump(mode="json"),
+                },
             }
         )
-        with Tracking("project", "experiment", backends=("wandb",), config=config) as tracker:
+        with Tracking("marin-rl", "experiment", backends=("wandb",), config=config) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:
                 raise training_error
@@ -137,7 +141,9 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert len(warnings) == int(slow_role is not None)
 
 
-def test_failed_training_keeps_attempt_timing(tmp_path):
+def test_failed_training_keeps_attempt_timing(tmp_path, monkeypatch):
+    times = iter((100.0, 125.0))
+    monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
 
     async def train():
@@ -146,7 +152,7 @@ def test_failed_training_keeps_attempt_timing(tmp_path):
     async def shutdown():
         pass
 
-    trainer = SimpleNamespace(train=train, shutdown=shutdown, evaluation_wall_time=0.0)
+    trainer = SimpleNamespace(train=train, shutdown=shutdown, evaluation_wall_time=7.0)
     config = OmegaConf.create(
         {
             "trainer": {"export_path": str(tmp_path)},
@@ -158,4 +164,4 @@ def test_failed_training_keeps_attempt_timing(tmp_path):
         BasePPOExp._run(experiment)
     assert raised.value is failure
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
-    assert attempt.elapsed_excluding_eval_seconds > 0
+    assert attempt.elapsed_excluding_eval_seconds == 18.0

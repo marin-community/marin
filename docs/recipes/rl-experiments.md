@@ -246,7 +246,7 @@ uv run python -m experiments.post_training.snowball_rl publish --preset learning
 ```
 
 The pins in `snowball_rl.SNOWBALL.control_pins` identify the exact stored runs. Unavailable receipts
-are reported as unserved. Speed presets and data-short publish nothing. See the
+are reported as unserved. The explicit pin command accepts trained-panel presets. See the
 [dashboard and record contract](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_progress/README.md) for native identity,
 recorded measurements and stored gate facts.
 

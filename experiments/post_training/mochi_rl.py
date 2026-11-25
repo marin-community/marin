@@ -6,6 +6,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+from finestore.rl.run_records import RL_WANDB_PROJECT
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
@@ -90,7 +91,7 @@ _ONE_TURN = RL_TRAINING_BASE.merge(
             use_sample_packing=True,
             epochs=10_000,
             eval_batch_size=120,
-            project_name="marin-mochi-rl",
+            project_name=RL_WANDB_PROJECT,
             algorithm=sections.Algorithm(
                 off_policy_correction="tis",
             ),
@@ -205,9 +206,9 @@ _TRAIN_LONG = Preset(
     control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
-    tasks="snowball-100k@2026.11.25.1",
+    tasks="snowball-100k@2026.11.19.1",
     model=_MODEL,
-    held_out_tasks="eval-lite@2026.11.25.1",
+    held_out_tasks="eval-lite@2026.11.17.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
     sample_namespace="datasets/mochi-rl",

@@ -105,11 +105,6 @@ class RunIndexIdentity(BaseModel):
         return tags
 
 
-def wandb_project(index: RunIndexIdentity | None, default: str) -> str:
-    """Select the project for a run's stored tracking identity."""
-    return RL_WANDB_PROJECT if index is not None else default
-
-
 class AttemptRecord(BaseModel):
     """One native attempt with its receipt, startup facts and checkpoint parent."""
 

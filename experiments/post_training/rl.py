@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -147,6 +147,9 @@ def _run_rl(
                 index=index,
             ),
         )
+        launch = yaml.safe_load(config.launch_config_yaml)
+        launch["run"]["index"] = index.model_dump(mode="json")
+        config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
     return run_skyrl(config, forward_env=forward_env)
 
 
@@ -327,10 +330,14 @@ def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
     )
 
 
-def _completed_update(path: str, workload: presets.Training | presets.Generation) -> int | None:
+def _completed_update(
+    path: str, workload: presets.Training | presets.Generation, receipt: AttemptRecord | None
+) -> int | None:
+    if receipt is None:
+        return None
     key = workload.completion_metric
     try:
-        metrics = read_skyrl_metrics(path)
+        metrics = read_skyrl_metrics(path, receipt.attempt_id)
     except FileNotFoundError:
         return None
     for _, values in sorted(metrics.items(), reverse=True):
@@ -346,6 +353,7 @@ def _status(
     stored_only: bool = False,
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
+    scoped_attempts: Mapping[str, AttemptRecord] | None = None,
 ) -> dict:
     prefix = recipe.run_prefix(preset)
     ttl = preset.output_ttl_days
@@ -373,7 +381,10 @@ def _status(
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
-            receipt = read_stored_skyrl_attempt(path) if stored_only else read_skyrl_attempt(path)
+            if scoped_attempts is not None:
+                receipt = scoped_attempts.get(path)
+            else:
+                receipt = read_stored_skyrl_attempt(path) if stored_only else read_skyrl_attempt(path)
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.native.result if receipt is not None else None
@@ -384,9 +395,9 @@ def _status(
         status_path = StoragePath(get_status_path(path))
         iris_job_id = result.iris_job_id if result else None
         gpu_hours = lineage_gpu_hours(receipt, launch) if receipt is not None and launch is not None else None
-        state = (
-            result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
-        )
+        state = result.state.value if result is not None else "not built"
+        if result is None and scoped_attempts is None and status_path.exists():
+            state = status_path.read_text().strip()
         best = {}
         if receipt is not None and launch is not None:
             native = receipt.native.config
@@ -426,7 +437,7 @@ def _status(
                     else {}
                 ),
                 **best,
-                "latest_completed_update": _completed_update(path, preset.recipe.layout.workload),
+                "latest_completed_update": _completed_update(path, preset.recipe.layout.workload, receipt),
                 "cluster": execution.cluster,
                 "allocation": {
                     **planned[-1]["iris"]["allocation"],
@@ -543,24 +554,24 @@ def run_index_identity(
 class _PublicationWatch(BaseModel):
     job: str
     preset: str
-    prefix: str
     outputs: tuple[str, ...]
-    gate: rl_gate.GateTarget | None
+    gate_required: bool
     service_url: str | None
+    issue: int | None = None
 
 
 def _publication_watch(
-    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, service_url: str | None
+    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, service_url: str | None, issue: int | None
 ) -> _PublicationWatch:
     run = _from_handles(handles)
     prefix = recipe.run_prefix(preset)
     return _PublicationWatch(
         job=str(job),
         preset=preset.name,
-        prefix=prefix,
         outputs=tuple(step.path(prefix) for step in run.runs),
-        gate=rl_gate.gate_target(run.gate) if run.gate is not None else None,
+        gate_required=run.gate is not None,
         service_url=service_url,
+        issue=issue,
     )
 
 
@@ -598,14 +609,19 @@ def _watch_publication(
             time.sleep(_PUBLICATION_POLL_SECONDS)
     gate_path = None
     try:
-        gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
+        evidence = rl_publication.read_coordinator_evidence(watch.outputs[0], watch.job)
+        gate_path = evidence.gate_path if evidence is not None else None
         publication = rl_publication.publish_runs(
             watch.outputs,
             preset,
             table=table,
             gate_path=gate_path,
             service_url=watch.service_url,
-            failed_coordinator=watch.job if state != JobState.SUCCEEDED else None,
+            coordinator=watch.job,
+            evidence=evidence,
+            interrupted=state != JobState.SUCCEEDED,
+            gate_required=watch.gate_required,
+            issue=watch.issue,
         )
     except Exception as error:
         publication = rl_publication.PublicationOutcome(
@@ -636,8 +652,9 @@ def _wait_for_run(
     table: presets.ModelPresets,
     service_url: str | None,
     has_following: bool,
+    issue: int | None,
 ) -> None:
-    watch = _publication_watch(job, handles, preset, service_url)
+    watch = _publication_watch(job, handles, preset, service_url, issue)
     parent_state, publication, gate_path = _watch_publication(watch, table)
     coordinator_error = (
         f"coordinator {job} is {parent_state}; required verdict unavailable"
@@ -653,6 +670,7 @@ def _wait_for_run(
         preset,
         stored_only=True,
         publication_urls=publication.urls,
+        scoped_attempts=publication.attempts,
     )
     snapshot["publication"] = publication.to_dict()
     rows = snapshot.get("runs", ())
@@ -720,7 +738,7 @@ def _submit_from_launcher(
     _print_status(result)
     if not context.params["wait"]:
         try:
-            watch = _publication_watch(job, rl_handles, preset, context.params["url"])
+            watch = _publication_watch(job, rl_handles, preset, context.params["url"], context.params["issue"])
             _print_status({"publication_log": _follow_detached(module, watch)})
         except OSError as error:
             logger.warning("Iris accepted %s. The publication watcher could not start (%s)", job, type(error).__name__)
@@ -745,16 +763,22 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
-        if get_job_info() is not None:
+        if (coordinator := get_job_info()) is not None:
             validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent)
+            _run_graph(rl_handles, max_concurrent, preset, str(coordinator.job_id))
             if following := handles[count:]:
                 build_artifacts(*following, max_concurrent=max_concurrent)
             return
         job = _submit_from_launcher(entry_module, argv, handles, rl_handles, max_concurrent, context, preset)
         if options["wait"]:
             _wait_for_run(
-                job, rl_handles, preset, table=table, service_url=options["url"], has_following=len(handles) > count
+                job,
+                rl_handles,
+                preset,
+                table=table,
+                service_url=options["url"],
+                has_following=len(handles) > count,
+                issue=options["issue"],
             )
 
     return click.command(
@@ -961,8 +985,9 @@ def command(
         )
         assert run.inputs is not None
         pin_error = None
+        pin_checked = from_launcher and (do_run or plan)
         preset_version = None
-        if from_launcher and (do_run or plan):
+        if pin_checked:
             try:
                 validated = rl_gate.validate_candidate(preset, run.inputs, table=table, control=control)
             except InvalidComparison as error:
@@ -1012,7 +1037,7 @@ def command(
                 snapshot["control_pin"] = {
                     "commit": pin.commit,
                     "version": pin.version,
-                    "current": pin_error is None,
+                    "current": pin_error is None if pin_checked else None,
                 }
             if pin_error is not None:
                 snapshot["control_pin_error"] = pin_error
@@ -1036,10 +1061,21 @@ def command(
     return run_command
 
 
-def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
+def _run_graph(handles: list[ArtifactStep], max_concurrent: int, preset: presets.Preset, coordinator: str) -> None:
     planned = _from_handles(handles)
-    build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-    gate = rl_gate.completed_gate(planned.gate)
+    prefix = recipe.run_prefix(preset)
+    outputs = tuple(step.path(prefix) for step in planned.runs)
+    artifacts = build_artifacts(*planned.runs, max_concurrent=max_concurrent)
+    attempts = tuple(
+        rl_publication.completed_artifact_attempt(path, artifact.attempt_id)
+        for path, artifact in zip(outputs, artifacts, strict=True)
+    )
+    gate = rl_gate.completed_gate(planned.gate, attempts)
+    evidence = rl_publication.CoordinatorEvidence(
+        attempts=dict(zip(outputs, (row.attempt_id if row is not None else None for row in attempts), strict=True)),
+        gate_path=gate.path(prefix) if gate is not None else None,
+    )
+    rl_publication.store_coordinator_evidence(outputs[0], coordinator, evidence)
     if gate is not None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 
