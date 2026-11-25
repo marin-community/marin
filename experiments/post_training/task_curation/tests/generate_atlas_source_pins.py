@@ -29,6 +29,7 @@ Regenerate whenever the Atlas admits more sources or main's declarations change:
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,10 +52,11 @@ for source in all_sources().values():
     info = source.info
     dataset = source.dataset
     pipeline = source.pipeline
+    status = source.status.value if hasattr(source, "status") else source.declaration.status
     rows.append(
         {
             "id": info.id,
-            "status": source.status.value,
+            "status": status,
             "dataset_repo": dataset.name if dataset else None,
             "dataset_revision": dataset.revision if dataset else None,
             "pipeline_files": list(source.files) if pipeline is not None else [],
@@ -168,7 +170,8 @@ def publish(raw: bytes) -> PublishedReference:
         repo_type="dataset",
         commit_message="Regenerate the Atlas source-coverage pins fixture",
     )
-    revision = info.commit_sha
+    match = re.search(r"/commit/([0-9a-f]{40})", info.commit_url)
+    revision = match.group(1) if match else info.commit_url
     return PublishedReference(
         repo=PINS_REPO,
         revision=revision,
