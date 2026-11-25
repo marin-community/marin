@@ -24,6 +24,7 @@ from rigging.secrets import SecretSpec
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.curated import requires_judge
+from experiments.evaluation.judges import ApiJudge, api_judge
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ _CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evaluations.yam
 EVALS: dict[str, EvaluationSelection] = {
     name: EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in _CONFIG["evaluations"].items()
 }
+JUDGES: dict[str, ApiJudge] = {name: api_judge(entry) for name, entry in _CONFIG["judges"].items()}
 
 
 def evaluation_for(name: str) -> EvaluationSelection:
