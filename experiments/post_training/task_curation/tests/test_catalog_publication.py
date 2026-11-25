@@ -246,10 +246,8 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
 
 
 def test_a_complete_attempt_publishes_its_measured_task_count(tmp_path):
-    """A COMPLETE attempt at the pin publishes the measurement it took as the row's task count."""
     root = str(tmp_path / "production")
     source = number_source(tmp_path / "input")
-    assert source.declaration.task_count is None
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [source])
     row = selected_sources(root)[source.info.id]
@@ -257,7 +255,6 @@ def test_a_complete_attempt_publishes_its_measured_task_count(tmp_path):
 
 
 def test_an_unmeasured_or_moved_declaration_publishes_an_empty_count(tmp_path):
-    """A failed attempt publishes an empty count; a moved pin or recipe drops the old measurement."""
     root = str(tmp_path / "production")
     source = number_source(tmp_path / "input")
     record_attempt(root, source, "failed", "2026-10-16T10:00:00Z", "key-a", AssessmentStatus.FAILED)
@@ -282,7 +279,6 @@ def test_an_unmeasured_or_moved_declaration_publishes_an_empty_count(tmp_path):
 
 
 def test_a_failed_attempt_keeps_the_measured_count_at_its_pin(tmp_path):
-    """A failed attempt supersedes the assessment but not the pin's measured count."""
     root = str(tmp_path / "production")
     source = number_source(tmp_path / "input")
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")

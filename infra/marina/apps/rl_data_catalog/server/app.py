@@ -119,9 +119,6 @@ def create_api(services: AppletServices) -> FastAPI:
                 text(
                     """
                 SELECT s.*, a.scope, a.model, summary.cohorts,
-                    -- The published declaration's task count is the measurement a COMPLETE
-                    -- attempt took at this row's pin; an unmeasured source is null and the
-                    -- interface reports it as not measured.
                     (s.declaration->>'task_count')::bigint AS task_count
                 FROM atlas_sources s
                 LEFT JOIN atlas_assessments a

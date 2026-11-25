@@ -74,9 +74,9 @@ print(info.sha, [file.rfilename for file in info.siblings])
 
 Pin the exact files and split the reference evaluates. A dataset that ships
 only a loading script usually has Parquet exports on the `refs/convert/parquet`
-revision; pin that revision's commit. Publication measures the row count of
-the pinned files and publishes exactly those rows, so a hand count or a
-paper's stated count never enters the declaration.
+revision; pin that revision's commit. Publication counts the rows conversion
+processes; selectors and custom readers can change that population. A hand
+count or a paper's stated count never enters the declaration.
 
 Record the license in the benchmark module docstring. Do not commit benchmark
 questions or answers to the repository; tests use synthetic rows.

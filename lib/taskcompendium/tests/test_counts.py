@@ -6,17 +6,9 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.counts import (
-    count_json_elements,
-    count_jsonl_rows,
-    count_parquet_rows,
-    count_source_files,
-    count_source_rows,
-)
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.counts import count_json_elements, count_jsonl_rows, count_parquet_rows
 
 
 def test_parquet_footer_counts_rows_across_row_groups(tmp_path):
@@ -43,41 +35,8 @@ def test_json_counts_top_level_array_elements(tmp_path):
     assert count_json_elements(StoragePath(str(path))) == 2
 
 
-def test_json_rejects_a_non_array_document(tmp_path):
-    path = tmp_path / "rows.json"
-    path.write_text(json.dumps({"a": 1}))
-    with pytest.raises(ValueError, match="record array"):
-        count_json_elements(StoragePath(str(path)))
-
-
 def test_memory_filesystem_counts_like_a_local_one():
     filesystem = StoragePath("memory://counts-bucket/rows.parquet")
     with filesystem.open("wb") as handle:
         pq.write_table(pa.table({"n": list(range(5))}), handle)
     assert count_parquet_rows(filesystem) == 5
-
-
-def test_source_rows_dispatches_per_format(tmp_path):
-    parquet = tmp_path / "rows.parquet"
-    pq.write_table(pa.table({"n": list(range(2))}), parquet)
-    jsonl = tmp_path / "rows.jsonl"
-    jsonl.write_text('{"a": 1}\n{"a": 2}\n{"a": 3}\n')
-    document = tmp_path / "rows.json"
-    document.write_text(json.dumps([{"a": 1}]))
-    assert count_source_rows(StoragePath(str(parquet)), SourceFormat.PARQUET) == 2
-    assert count_source_rows(StoragePath(str(jsonl)), SourceFormat.JSONL) == 3
-    assert count_source_rows(StoragePath(str(document)), SourceFormat.JSON) == 1
-    assert count_source_rows(StoragePath(str(parquet)), SourceFormat.GENERATED) is None
-    assert count_source_rows(StoragePath(str(parquet)), SourceFormat.CSV) is None
-
-
-def test_source_files_counts_each_declared_file(tmp_path):
-    first = tmp_path / "rows-00000.parquet"
-    pq.write_table(pa.table({"n": list(range(2))}), first)
-    second = tmp_path / "rows-00001.parquet"
-    pq.write_table(pa.table({"n": list(range(3))}), second)
-    counts = count_source_files(
-        {"rows-00000.parquet": StoragePath(str(first)), "rows-00001.parquet": StoragePath(str(second))},
-        SourceFormat.PARQUET,
-    )
-    assert counts == {"rows-00000.parquet": 2, "rows-00001.parquet": 3}

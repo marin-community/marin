@@ -98,7 +98,6 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False,
         origin="native",
         family="math",
         tags=[],
-        # The count a COMPLETE attempt measured at this row's pin, as publication wrote it.
         task_count=3,
         notes="",
         dataset_id=None,
@@ -219,7 +218,6 @@ def count_declaration(source_id: str) -> SourceDeclaration:
 
 
 def publish_count_rows(root: str, rows: list[SnapshotSource]) -> None:
-    """Store an assessment-free snapshot whose rows carry distinct published counts."""
     with DataStore.open(root, writer_id="counts") as store:
         register_catalog(store)
         store.flush()

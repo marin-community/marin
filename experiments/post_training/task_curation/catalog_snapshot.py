@@ -79,12 +79,7 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
 
 
 def measured_task_count(declaration: SourceDeclaration, summary: CurationSummary | None) -> int | None:
-    """The attempt's measured raw population, only when taken at the declaration's pin and recipe.
-
-    A measurement describes one dataset revision under one recipe version; when
-    either moved since it was taken, the measurement no longer identifies the
-    published row and is not published as its count.
-    """
+    """Return the attempt's raw population at the declaration's pin and recipe."""
     if summary is None or summary.raw_population_count is None or declaration.pipeline is None:
         return None
     if summary.source_revision != declaration.dataset_revision:
@@ -100,12 +95,7 @@ def published_task_count(
     attempt: AssessmentAttempt | None,
     prior: SnapshotSource | None,
 ) -> int | None:
-    """The published row's task count: the measurement that identifies the published declaration.
-
-    A COMPLETE attempt publishes its own measurement when its document names the
-    declaration's pin and recipe; otherwise a prior row keeps its measurement
-    only while its pin and recipe match the declaration's.
-    """
+    """Use a COMPLETE attempt's count or carry the prior count at the same pin and recipe."""
     if attempt is not None and attempt.status is AssessmentStatus.COMPLETE:
         measured = measured_task_count(declaration, summary)
         if measured is not None:
@@ -282,8 +272,6 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                     if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
                         update["declaration"] = declaration
                     elif declaration.id in by_id:
-                        # The verdict and its measurement describe runtime cost, not what the pinned
-                        # assessment graded, so an unselected source picks up the current measurement.
                         update["declaration"] = prior.declaration.model_copy(
                             update={
                                 "daytona_safety": declaration.daytona_safety,

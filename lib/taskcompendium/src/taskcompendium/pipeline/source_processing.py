@@ -486,14 +486,7 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
 
 
 def _census_payload_rows(run: _SourceRun, sample: RawSample) -> RawSample:
-    """Measure the staged payload's rows from their format metadata and require the reader to yield them.
-
-    A source read one row per payload record has an exact format-level count: parquet footers,
-    JSONL lines, JSON array elements. The census records that measurement as the population and
-    raises when the reader's streamed count disagrees, so a payload whose metadata and reader
-    disagree fails before conversion. A row selector, a custom reader or a decoder changes the
-    streamed rows, and parted generators have no fixed count, so those keep the streamed count.
-    """
+    """Check staged payload row counts against the reader's count when both are exact."""
     spec = run.recipe.source
     if spec.select is not None or spec.read is not None or spec.decode is not None:
         return sample
