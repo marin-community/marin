@@ -31,11 +31,24 @@ Every measured section must name the NEW pin (`release = filtration.filtered_rel
   raw=unique=775, duplicates=0.
 - `sample`: SampleQCReceipt whose review.panel binds the new pin + specs digest, seed 0,
   size min(100, 775), attempted_count == sample_size, ≥95% conclusive.
-- `filtration`: OracleFiltrationEvidence with filtered_release = the repair release and
-  tasks_parquet = its parquet binding; oracle_filter_version in {4,6} (facet is 4 → no
-  static_retention). The oracle-filter receipt reference (the seal-qualified-census
-  `facet_v2/filtration/oracle-filter.json`, sha 2b603b1e…) stays: the filtration decision
-  (775 of 780 kept) is unchanged by the grader repair.
+- `filtration`: **REVISED 2026-11-25 — a FRESH oracle-filter run over the repaired revision is
+  REQUIRED.** The original plan said to reuse the 20261120 filter receipt (sha `2b603b1e…`);
+  the FACET lane verified in code that `OracleFilterReceipt.admits`
+  (`taskcompendium/pipeline/oracle_filter.py`) refuses every repaired TaskSpec:
+  `entry.task_sha256 != task_spec_sha256(task)` → "Task changed after oracle filtering" — the
+  receipt is hash-bound to the old revision by construction, so no receipt bound to old hashes
+  can ever admit the new panel. The `RecollectionWaiver` route does NOT fit: it is ruling-bound
+  to the campaign-era rebuilt-packages case and binds rebuilt packages to sealed trials by
+  exact task/runtime content hashes, which changed bytes cannot satisfy. Re-run the maintained
+  oracle filtration over `open-athena/fweindel-facet-v2-quiesce-safe-20261124-v1` (775 repaired
+  TaskSpecs) to produce a new receipt bound to the new hashes — faithful, not a bypass: the
+  quiesce fix changed the grader's collect path, not task semantics (the A/B receipt proved
+  collect[0] completes with the machine alive), so the selection semantics are unchanged and
+  the fresh run reproduces the 775/780 selection under the new hashes while re-validating the
+  repair through the maintained gate. The oracle trials run the shipped solutions through the
+  repaired graders (facet: native_file_reward_grader → test.sh → reward file; no model judge
+  spend). `oracle_filter_version` stays 4 (no static retention); the negative-control policy
+  binds as in the original run. Cost: one oracle grading pass over the 775 repaired tasks.
 - `repair_evidence`: ≥1 ContentEvidenceReference — use the repair artifacts
   (`.../facet-quiesce-repair/20261124/repair-summary.json`, `repair-ledger.json`,
   `ab-verification-receipt.json`, `census-measurement.json`) + the landing commit.
