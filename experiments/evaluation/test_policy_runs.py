@@ -13,7 +13,6 @@ from marin.evaluation.runner import _record
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY, QWEN
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunEvidence,
@@ -23,6 +22,7 @@ from experiments.evaluation.policy.runs import (
     run_problems,
     run_warnings,
 )
+from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
 
 EVALUATIONS = {"aime24", "mrcr-32k"}
 

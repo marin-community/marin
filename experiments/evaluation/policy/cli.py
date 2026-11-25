@@ -18,7 +18,6 @@ from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
-from experiments.evaluation.policies import POLICIES
 from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.runs import (
@@ -31,6 +30,7 @@ from experiments.evaluation.policy.runs import (
     find_record,
 )
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
+from experiments.evaluation.policy.versions import POLICIES
 
 logger = logging.getLogger(__name__)
 
