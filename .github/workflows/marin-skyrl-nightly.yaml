@@ -30,7 +30,7 @@ on:
         default: ""
 
 concurrency:
-  group: ${{ (inputs.controls || inputs.model || inputs.preset) && github.ref_name != 'main' && format('marin-rl-controls-{0}', github.ref) || 'marin-nightly' }}
+  group: ${{ (inputs.controls || inputs.model || inputs.preset) && github.ref_name != 'main' && format('marin-rl-controls-{0}-{1}', github.ref, inputs.model || 'all') || 'marin-nightly' }}
   cancel-in-progress: false
 
 jobs:

@@ -14,7 +14,6 @@ from marin.rl.skyrl import (
     ResolvedModelLocator,
     SkyRLModelSource,
     skyrl_cpu_command,
-    skyrl_cpu_environment,
 )
 
 from experiments.post_training import rl_compose as recipe
@@ -47,7 +46,6 @@ def run_native_json(*command: str, timeout: int = 120):
         result = subprocess.run(
             skyrl_cpu_command(*command),
             capture_output=True,
-            env=skyrl_cpu_environment(),
             text=True,
             timeout=timeout,
         )
