@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -17,6 +19,7 @@ from omegaconf import OmegaConf
 from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
+from cloud.iris.rl_config_translation import RL_CONFIG_PAYLOAD_ENV, RL_CONFIG_TASK_DIR
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
 from skyrl_train.hf_export_schema import HFExportRequest
@@ -178,4 +181,12 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert transport["argv"][:4] == ["--mode", "gate", "--gate-coverage", "all-gpus"]
     assert transport["argv"][4:6] == ["--gate-report-prefix", f"{config.ray.rendezvous_dir}/interconnect-gate"]
     assert ("--pynccl-init" in transport["argv"]) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
-    assert controller["argv"][0] == "--config"
+    bundled = base64.b64decode(request.environment.env_vars[RL_CONFIG_PAYLOAD_ENV])
+    config_key = hashlib.sha256(bundled).hexdigest()[:16]
+    assert controller["argv"] == ["--config", f"{RL_CONFIG_TASK_DIR}/{config_key}.yaml"]
+    if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT:
+        failed = subprocess.run(
+            argv, env=os.environ | {"EXIT_TRANSPORT_FIXTURE": "1"}, capture_output=True, text=True, timeout=15
+        )
+        assert failed.returncode == 19
+        assert len(failed.stdout.splitlines()) == 1

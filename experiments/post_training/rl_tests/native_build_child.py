@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import fcntl
+import signal
 import subprocess
 import sys
-from time import sleep
 
 
 def main() -> None:
@@ -13,7 +13,8 @@ def main() -> None:
         with open(lock_path, "r+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             print("ready", flush=True)
-            sleep(8)
+            signal.alarm(8)
+            signal.pause()
         return
 
     worker = subprocess.Popen([sys.executable, "-I", __file__, "hold", lock_path], stdout=subprocess.PIPE, text=True)

@@ -1370,7 +1370,9 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
     try:
         diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
-        summary += subprocess.run(["bash", str(diagnostics)], capture_output=True, text=True, timeout=40).stdout
+        summary += subprocess.run(
+            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
+        ).stdout
     except subprocess.TimeoutExpired as exc:
         summary += (exc.stdout or b"").decode(errors="replace")
         summary += "\n<termination diagnostics timed out>\n"

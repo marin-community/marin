@@ -31,18 +31,7 @@ def _fake_frozen_runtime(
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
 
-    for package in (
-        "shellbox/backends/daytona",
-        "shellbox/backends/shellsim",
-        "rolloutengine",
-        "megatron/bridge",
-        "nvidia/cu13/lib",
-        "quack",
-        "skyrl_train/models",
-        "transformer_engine/common",
-        "vllm/model_executor",
-    ):
-        (site_packages / package).mkdir(parents=True, exist_ok=True)
+    (site_packages / "nvidia/cu13/lib").mkdir(parents=True)
     for package in (
         "shellbox",
         "shellbox/backends",
@@ -50,12 +39,10 @@ def _fake_frozen_runtime(
         "shellbox/backends/daytona",
         "shellbox/backends/shellsim",
         "rolloutengine",
-        "megatron/bridge",
         "quack",
         "skyrl_train",
         "skyrl_train/models",
         "transformer_engine",
-        "transformer_engine/common",
         "vllm/model_executor",
     ):
         _write_module(site_packages, f"{package}/__init__.py")
@@ -146,6 +133,7 @@ def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_pat
     (site_packages / "shellbox/backends/daytona/machine.py").unlink()
     (site_packages / "memray.py").unlink()
     (site_packages / "rolloutengine/engine.py").unlink()
+    shutil.rmtree(site_packages / "vllm")
 
     result = _run_bootstrap(environment, process_environment, "megatron-export")
 
