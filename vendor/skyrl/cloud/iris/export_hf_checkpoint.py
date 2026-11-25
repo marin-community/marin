@@ -468,7 +468,7 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
         if not completed:
             _run_export(spec, command)
         if not _has_completed_hf_model_export(export_path):
-            raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
+            raise ExportFailed(f"Export job returned without a completed HF model at {export_path}")
         if request.hf_hub_repo_id is not None:
             _run_hub_upload(spec)
     except BaseException as error:

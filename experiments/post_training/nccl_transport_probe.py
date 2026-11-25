@@ -227,6 +227,8 @@ def spawn_worker(
     port: int,
     world_size: int,
     log_dir: Path,
+    *,
+    pynccl_init: bool,
 ) -> WorkerProcess:
     """Start one benchmark worker process without waiting for it.
 
@@ -236,7 +238,8 @@ def spawn_worker(
     log_path = log_dir / f"{variant.name}-rank{index}.log"
     output_path = log_dir / f"{variant.name}-rank{index}.out"
     result_path = log_dir / f"{variant.name}-rank{index}.json"
-    env = dict(os.environ)
+    env = {**os.environ, **variant.env}
+    env.pop("NCCL_DEBUG_FILE", None)
     env.update(
         {
             "MASTER_ADDR": master,
@@ -246,16 +249,15 @@ def spawn_worker(
             "LOCAL_RANK": str(local_rank),
             "NCCL_DEBUG": "INFO",
             "PROBE_RESULT_FILE": str(result_path),
-            **variant.env,
         }
     )
     if os.environ.get("PROBE_INIT_TIMEOUT"):
         env["PROBE_INIT_TIMEOUT"] = os.environ["PROBE_INIT_TIMEOUT"]
     if os.environ.get("PROBE_BUFFER_BYTES"):
         env["PROBE_BUFFER_BYTES"] = os.environ["PROBE_BUFFER_BYTES"]
-    if os.environ.get("PROBE_PYNCCL_INIT"):
-        env["PROBE_PYNCCL_INIT"] = os.environ["PROBE_PYNCCL_INIT"]
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
+    if pynccl_init:
+        cmd.append("--pynccl-init")
     log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     process = subprocess.Popen(cmd, env=env, stdout=output_file, stderr=log_file)
@@ -270,7 +272,7 @@ def spawn_worker(
         result_path=result_path,
         log_file=log_file,
         output_file=output_file,
-        pynccl_requested=env.get("PROBE_PYNCCL_INIT") == "1",
+        pynccl_requested=pynccl_init,
     )
 
 
@@ -388,10 +390,12 @@ def run_variant(
     master: str,
     port: int,
     log_dir: Path,
+    *,
+    pynccl_init: bool,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     handles = [
-        spawn_worker(variant, rank_offset + local, local, master, port, world_size, log_dir)
+        spawn_worker(variant, rank_offset + local, local, master, port, world_size, log_dir, pynccl_init=pynccl_init)
         for local in range(local_gpus)
     ]
     ranks = [collect_worker(handle) for handle in handles]
@@ -467,8 +471,9 @@ def run_launcher(args: argparse.Namespace) -> None:
     else:
         endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
         coordinator = task_index == 0
+    variants = build_variants(extra_env=args.env_pairs)
     if coordinator:
-        base_port = allocate_port_block(len(build_variants()) + 1)
+        base_port = allocate_port_block(len(variants) + 1)
         master_host = job_info.advertise_host
         access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
@@ -486,12 +491,21 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
-    for offset, variant in enumerate(build_variants(extra_env=args.env_pairs)):
+    for offset, variant in enumerate(variants):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
         results.append(
-            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
+            run_variant(
+                variant,
+                rank_offset,
+                local_gpus,
+                world_size,
+                master_host,
+                base_port + 1 + offset,
+                log_dir,
+                pynccl_init=args.pynccl_init,
+            )
         )
         logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
@@ -526,8 +540,7 @@ def run_gate(args: argparse.Namespace) -> None:
     With ``--gate-coverage all-gpus``, every task joins with all of its local
     GPUs, so communicator init exercises every GPU-to-NIC pairing (a 64-rank
     data-parallel engine can fail on one GPU's HCA even when the first pair is
-    healthy). The check passes when the census shows NET/IB or no NET transport
-    at all (intra-node NVLink), and fails with the NCCL error tail otherwise.
+    healthy). On a multi-node job the check requires InfiniBand transport evidence.
     """
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
@@ -574,7 +587,16 @@ def run_gate(args: argparse.Namespace) -> None:
     results = []
     for offset, variant in enumerate(gate_variants):
         results.append(
-            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir)
+            run_variant(
+                variant,
+                rank_offset,
+                local_gpus,
+                world_size,
+                master_host,
+                base_port + offset,
+                log_dir,
+                pynccl_init=args.pynccl_init,
+            )
         )
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
@@ -652,16 +674,16 @@ def collect_ib_port_inventory() -> list[dict[str, str]]:
 
 
 def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
-    """Map one probe variant's outcome onto the launch-gate verdict.
-
-    NET/IB or an empty transport list (intra-node NVLink) passes; a socket
-    transport or a failed benchmark fails closed.
-    """
+    """Require positive InfiniBand evidence for a multi-node gate variant."""
     if not passed:
         return "collective_failed"
     flat = {transport for transports in rank_transports for transport in transports}
     if any(transport.startswith("NET/Socket") for transport in flat):
         return "socket_transport"
+    if not flat:
+        return "missing_transport_evidence"
+    if any(not transport.startswith("NET/IB/") for transport in flat):
+        return "unexpected_transport"
     return "pass"
 
 
@@ -813,7 +835,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         "alltoall_busbw_gigabytes_per_second": round(all_to_all_bandwidth, 2),
         "alltoall_bytes": a2a_bytes,
     }
-    if os.environ.get("PROBE_PYNCCL_INIT"):
+    if args.pynccl_init:
         payload["pynccl"] = run_pynccl_init_check(device)
     dist.barrier()
     dist.destroy_process_group()
@@ -883,8 +905,6 @@ def main() -> None:
         args.env_pairs = None
     if args.buffer_bytes:
         os.environ["PROBE_BUFFER_BYTES"] = str(args.buffer_bytes)
-    if args.pynccl_init:
-        os.environ["PROBE_PYNCCL_INIT"] = "1"
     if args.init_timeout_seconds:
         os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":

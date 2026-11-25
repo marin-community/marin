@@ -975,18 +975,19 @@ def run_skyrl_cpu(
             else:
                 process.wait(timeout=timeout)
         except BaseException as error:
-            if stream_stderr and isinstance(error, KeyboardInterrupt):
-                # The native launcher handles TERM by cancelling its Iris job tree.
-                # A wrapper can exit before that handler does, so monitor the group.
+            try:
+                if stream_stderr and isinstance(error, KeyboardInterrupt):
+                    # Let the native launcher interrupt its Iris wait and cancel the job.
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGINT)
+                        cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
+                        while monotonic() < cleanup:
+                            process.poll()
+                            os.killpg(process.pid, 0)
+                            stream_diagnostics(0.1)
+            finally:
                 with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGTERM)
-                    cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
-                    while monotonic() < cleanup:
-                        process.poll()
-                        os.killpg(process.pid, 0)
-                        stream_diagnostics(0.1)
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, signal.SIGKILL)
             if isinstance(error, subprocess.TimeoutExpired):
                 error.stderr = diagnostics()
             raise

@@ -172,6 +172,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         "load_runtime_environment.sh",
         "bootstrap_runtime.sh",
         "runtime_checks.py",
+        "runtime_environment.py",
         "setup_task_runtime.sh",
     ):
         (launcher / name).symlink_to(source / name)

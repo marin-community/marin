@@ -78,9 +78,10 @@ def test_parse_nccl_census_ignores_intra_node_p2p():
 
 
 def test_gate_verdict_fails_closed_on_sockets_and_failures():
-    """The gate passes only NET/IB or an empty (intra-node NVLink) census."""
+    """The gate requires positive InfiniBand evidence from a multi-node job."""
     assert gate_verdict(True, [["NET/IB/0/GDRDMA"]]) == "pass"
-    assert gate_verdict(True, [[]]) == "pass"
+    assert gate_verdict(True, [[]]) == "missing_transport_evidence"
+    assert gate_verdict(True, [["NET/Other/0"]]) == "unexpected_transport"
     assert gate_verdict(True, [[], ["NET/IB/0/GDRDMA"]]) == "pass"
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"

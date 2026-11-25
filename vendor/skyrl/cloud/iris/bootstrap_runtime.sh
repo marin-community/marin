@@ -13,14 +13,6 @@ runtime_file="$3"
 profile="$4"
 install_mode="$5"
 
-case "$profile" in
-  megatron|megatron-export|hub-publish) ;;
-  *)
-    echo "unsupported runtime profile: $profile" >&2
-    exit 2
-    ;;
-esac
-
 case "$install_mode" in
   production) dependency_group=(--no-group dev) ;;
   development) dependency_group=(--group dev) ;;
@@ -29,17 +21,6 @@ case "$install_mode" in
     exit 2
     ;;
 esac
-
-runtime_link_mode=symlink
-if [[ "$profile" == hub-publish ]]; then
-  runtime_extras=(--extra cpu)
-  runtime_link_mode="${UV_LINK_MODE:-copy}"
-elif [[ "$profile" == *-export ]]; then
-  strategy="${profile%-export}"
-  runtime_extras=(--extra "$strategy")
-else
-  runtime_extras=(--extra "$profile" --extra vllm --extra telemetry)
-fi
 
 required_python_minor="$(cat "$project_root/.python-version")"
 system_python="$(command -v "python$required_python_minor" || true)"
@@ -54,6 +35,20 @@ if [[ "$system_python_version" != "Python $required_python_minor".* ]]; then
   exit 1
 fi
 
+profile_settings="$("$system_python" -I "$project_root/cloud/iris/runtime_environment.py" "$profile")"
+mapfile -t settings <<< "$profile_settings"
+device="${settings[0]}"
+read -r -a extras <<< "${settings[1]}"
+read -r -a checks <<< "${settings[2]}"
+runtime_link_mode=symlink
+if [[ "$device" == cpu ]]; then
+  runtime_link_mode="${UV_LINK_MODE:-copy}"
+fi
+runtime_extras=()
+for extra in "${extras[@]}"; do
+  runtime_extras+=(--extra "$extra")
+done
+
 uv_version="$(cat "$project_root/.uv-version")"
 UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   --python "$system_python" --no-python-downloads uv sync --quiet \
@@ -66,10 +61,12 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
-checks="$project_root/cloud/iris/runtime_checks.py"
-"$python" -I "$project_root/marinskyrl/environment_contract.py" write-task-runtime "$runtime_file" "$profile" "$project_root"
-if [[ "$profile" == hub-publish ]]; then
-  "$python" -I "$checks" hub-publish
+check_script="$project_root/cloud/iris/runtime_checks.py"
+"$python" -I "$project_root/marinskyrl/environment_contract.py" write-task-runtime "$runtime_file" "$device" "$project_root"
+if [[ "$device" == cpu ]]; then
+  for check in "${checks[@]}"; do
+    "$python" -I "$check_script" "$check"
+  done
   exit 0
 fi
 source "$project_root/cloud/iris/load_runtime_environment.sh"
@@ -95,14 +92,9 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-run_check flash-attention "$python" -I "$checks" flash-attention
-run_check megatron "$python" -I "$checks" megatron
-if [[ "$profile" == *-export ]]; then
-  run_check export "$python" -I "$checks" export
-else
-  run_check agents "$python" -I "$checks" agents
-  run_check vllm "$python" -I "$checks" vllm
-fi
+for check in "${checks[@]}"; do
+  run_check "$check" "$python" -I "$check_script" "$check"
+done
 
 check_status=0
 for index in "${!check_pids[@]}"; do

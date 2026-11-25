@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import shlex
 from enum import StrEnum
 
@@ -23,8 +24,26 @@ class RuntimeProfile(StrEnum):
     HUB_PUBLISH = "hub-publish"
 
     @property
+    def extras(self) -> tuple[str, ...]:
+        return _PROFILE_DEPENDENCIES[self][0]
+
+    @property
+    def checks(self) -> tuple[str, ...]:
+        return _PROFILE_DEPENDENCIES[self][1]
+
+    @property
     def includes_vllm(self) -> bool:
-        return self is RuntimeProfile.MEGATRON
+        return "vllm" in self.extras
+
+
+_PROFILE_DEPENDENCIES = {
+    RuntimeProfile.MEGATRON: (
+        ("megatron", "vllm", "telemetry"),
+        ("flash-attention", "megatron", "agents", "vllm"),
+    ),
+    RuntimeProfile.MEGATRON_EXPORT: (("megatron",), ("flash-attention", "megatron", "export")),
+    RuntimeProfile.HUB_PUBLISH: (("cpu",), ("hub-publish",)),
+}
 
 
 class RuntimeMode(StrEnum):
@@ -49,3 +68,12 @@ def runtime_profile_for_strategy(
 def task_setup_command(profile: RuntimeProfile) -> str:
     """Return the Iris setup invocation for the selected frozen profile."""
     return shlex.join(("bash", f"{MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh", profile.value))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("profile", type=RuntimeProfile, choices=tuple(RuntimeProfile))
+    profile = parser.parse_args().profile
+    print("cpu" if "cpu" in profile.extras else "cuda")
+    print(" ".join(profile.extras))
+    print(" ".join(profile.checks))

@@ -86,7 +86,13 @@ def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path,
     project = tmp_path / "skyrl"
     scripts = project / "cloud/iris"
     scripts.mkdir(parents=True)
-    for name in ("setup_task_runtime.sh", "bootstrap_runtime.sh", "load_runtime_environment.sh", "runtime_checks.py"):
+    for name in (
+        "setup_task_runtime.sh",
+        "bootstrap_runtime.sh",
+        "load_runtime_environment.sh",
+        "runtime_checks.py",
+        "runtime_environment.py",
+    ):
         (scripts / name).symlink_to(BOOTSTRAP_SCRIPT.with_name(name))
     for relative in (".uv-version", ".python-version", "marinskyrl/environment_contract.py"):
         target = project / relative
