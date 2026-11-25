@@ -11,7 +11,7 @@
   "schemaVersion": 39,
   "refresh": "",
   "time": {
-    "from": "now-1h",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {
@@ -573,7 +573,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "- **GPU-hours allocated** (and TPU chip-hours): needs a precomputed table. The live query must read weeks of `iris.controller_db__task_attempts` and `job_config` to catch long attempts, and even a 1-day lookback took 14 s on the hub.\n- **Weekly figures**: about one day of `node_agent` GPU rows per cluster is the most a query can scan in Finelog's 10 s.\n- **Use by category**: waits for the job tag column, which the controller does not write yet.\n- **TPUs held**: not timed yet.\n\nThis dashboard queries the prod `marin` hub live: keep the range short (default 1 h) and leave auto-refresh off."
+        "content": "- **GPU-hours allocated** (and TPU chip-hours): needs a precomputed table. The live query must read weeks of `iris.controller_db__task_attempts` and `job_config` to catch long attempts, and even a 1-day lookback took 14 s on the hub.\n- **Weekly figures**: about one day of `node_agent` GPU rows per cluster is the most a query can scan in Finelog's 10 s.\n- **Use by category**: waits for the job tag column, which the controller does not write yet.\n- **TPUs held**: not timed yet.\n\nThis dashboard queries the prod `marin` hub live: keep the range short (default 15 min) and leave auto-refresh off."
       }
     }
   ]
