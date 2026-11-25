@@ -166,8 +166,15 @@ def wait_for_iris_vllm_shutdown(
 
     def coordinator_available() -> bool:
         nonlocal stopped
-        check_alive()
         stopped = client.shutdown_requested()
+        if not stopped:
+            try:
+                check_alive()
+            except RuntimeError:
+                # Shutdown can arrive between the first read and the health check.
+                stopped = client.shutdown_requested()
+                if not stopped:
+                    raise
         return True
 
     polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=maximum_poll_seconds)
