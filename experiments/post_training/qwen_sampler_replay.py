@@ -7,55 +7,65 @@ import asyncio
 import hashlib
 import json
 import random
-import re
 import time
 from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, cast
 
 import click
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
+from marin.evaluation.model_config import load_model_config
 from openai import APIError, AsyncOpenAI
+from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import MachineSpec, PackageSpec
+from taskcompendium.chat import chat_conversation
+from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec
+from taskcompendium.models import GradingAttempt, TaskSpec
+from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.submission import conversation_messages, submission_instruction
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 from verifyit.modes.extract import extract_boxed
 
+from experiments.models import qwen3_0_6b
 from experiments.post_training.task_curation import qwen_sampler_lab as lab
 
-MODEL_ID = "Qwen/Qwen3-0.6B"
-MODEL_REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
-MODEL_URI = f"{lab.CANONICAL_ARTIFACT_ROOT}/models/Qwen--Qwen3-0-6B--c1899de"
+SERVING_MODEL = load_model_config(
+    find_project_root(Path(__file__)) / "experiments/evaluation/serve/models/Qwen/Qwen3-0.6B.yaml"
+)
+MODEL_URI = qwen3_0_6b.path(prefix=lab.CANONICAL_ARTIFACT_ROOT)
 GROUP_SIZE = 4
 TERSE_INSTRUCTION = (
     r"Only output \boxed{answer}, with no explanation. For example, if the answer is 42, output \boxed{42}."
 )
-SAMPLING = {
-    "temperature": 1.0,
-    "top_p": 1.0,
-    "top_k": -1,
-    "min_p": 0.0,
-    "min_tokens": 1,
-    "repetition_penalty": 1.0,
-    "n": GROUP_SIZE,
-    "return_token_ids": True,
-    "skip_special_tokens": True,
-    "include_stop_str_in_output": True,
-}
+SAMPLING = MappingProxyType(
+    {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "min_p": 0.0,
+        "min_tokens": 1,
+        "repetition_penalty": 1.0,
+        "n": GROUP_SIZE,
+        "return_token_ids": True,
+        "skip_special_tokens": True,
+        "include_stop_str_in_output": True,
+    }
+)
 
 
 @dataclass(frozen=True)
 class PreparedPrompt:
-    task_id: str
+    task: TaskSpec
     task_sha256: str
     family: str
     difficulty: str
     token_ids: tuple[int, ...]
-    expected: str
 
 
 def prepare_panel(
@@ -80,7 +90,6 @@ def prepare_panel(
             raise ValueError(f"only {len(tasks)} eligible training tasks in {family}/{difficulty}")
         rng = random.Random(f"{lab.NAME}/{lab.VERSION}/{seed}/{family}/{difficulty}")
         for task in rng.sample(sorted(tasks, key=lambda item: item.id), prompts_per_cell):
-            assert isinstance(task.grader, ScriptGrader)
             instruction = TERSE_INSTRUCTION if style == "terse" else submission_instruction(task.answer_format)
             messages = [*conversation_messages(task.context.events), {"role": "user", "content": instruction}]
             tokens = cast(
@@ -95,12 +104,11 @@ def prepare_panel(
             )
             selected.append(
                 PreparedPrompt(
-                    task.id,
+                    task,
                     canonical_sha256(task.model_dump(mode="json")),
                     family,
                     difficulty,
                     tuple(tokens),
-                    task.grader.argv[-1],
                 )
             )
     return selected
@@ -112,15 +120,18 @@ def completion_seed(seed: int, task_id: str, group: int) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
-def normalized_answer(value: str) -> str:
-    """Match the lab verifier's whitespace and comma normalization."""
-    answer = extract_boxed(value)
-    text = value if answer is None else answer
-    return "\n".join(re.sub(r"\s*,\s*", ",", line.strip()) for line in text.split("\n")).rstrip("\n")
+async def verified_answer(task: TaskSpec, text: str, factory: ShellSimMachineFactory) -> bool:
+    """Record the reward from the same boxed-answer and sandboxed grader path as training."""
+    messages = [*conversation_messages(task.context.events), {"role": "assistant", "content": text}]
+    attempt = GradingAttempt(chat_conversation(messages))
+    grade = await grade_in_sandbox(task, attempt, factory, MachineSpec(PackageSpec()))
+    if grade.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or grade.reward not in (0.0, 1.0):
+        raise ValueError(f"Missing binary reward for {task.id}: {grade.status} ({grade.error})")
+    return grade.reward == 1.0
 
 
 def reasoning_split(token_ids: list[int], *, opening: int, closing: int) -> tuple[int, bool]:
-    """Return the raw thinking prefix width and whether it was cut before closure."""
+    """Count the generated thinking prefix and detect a generated opening marker without closure."""
     if closing in token_ids:
         return token_ids.index(closing) + 1, False
     if opening in token_ids:
@@ -138,18 +149,25 @@ def api_url(cluster: str, endpoint: str) -> str:
 
 
 async def capture_group(
-    client: AsyncOpenAI, tokenizer: PreTrainedTokenizerFast, prompt: PreparedPrompt, *, cap: int, group: int, seed: int
+    client: AsyncOpenAI,
+    tokenizer: PreTrainedTokenizerFast,
+    prompt: PreparedPrompt,
+    factory: ShellSimMachineFactory,
+    *,
+    cap: int,
+    group: int,
+    seed: int,
 ) -> list[dict[str, Any]]:
-    request_seed = completion_seed(seed, prompt.task_id, group)
+    request_seed = completion_seed(seed, prompt.task.id, group)
     completion = await client.completions.create(
         model=MODEL_URI,
         prompt=list(prompt.token_ids),
         max_tokens=cap,
         seed=request_seed,
-        extra_body=SAMPLING,
+        extra_body=dict(SAMPLING),
     )
     if len(completion.choices) != GROUP_SIZE:
-        raise ValueError(f"expected {GROUP_SIZE} replies for {prompt.task_id}, got {len(completion.choices)}")
+        raise ValueError(f"expected {GROUP_SIZE} replies for {prompt.task.id}, got {len(completion.choices)}")
     opening = tokenizer.convert_tokens_to_ids("<think>")
     closing = tokenizer.convert_tokens_to_ids("</think>")
     rows = []
@@ -157,12 +175,16 @@ async def capture_group(
         extra = choice.model_extra or {}
         ids = extra.get("token_ids")
         if not isinstance(ids, list) or not ids:
-            raise ValueError(f"endpoint omitted response token IDs for {prompt.task_id}")
+            raise ValueError(f"endpoint omitted response token IDs for {prompt.task.id}")
         reasoning_tokens, incomplete_thinking = reasoning_split(ids, opening=opening, closing=closing)
         final_answer = tokenizer.decode(ids[reasoning_tokens:], skip_special_tokens=True)
+        verified = await verified_answer(prompt.task, choice.text, factory)
+        final_verified = (
+            verified if final_answer == choice.text else await verified_answer(prompt.task, final_answer, factory)
+        )
         rows.append(
             {
-                "task_id": prompt.task_id,
+                "task_id": prompt.task.id,
                 "task_sha256": prompt.task_sha256,
                 "family": prompt.family,
                 "difficulty": prompt.difficulty,
@@ -179,8 +201,8 @@ async def capture_group(
                 "finish_reason": choice.finish_reason,
                 "stop_reason": extra.get("stop_reason"),
                 "complete_box": extract_boxed(choice.text) is not None,
-                "verified": normalized_answer(choice.text) == prompt.expected,
-                "final_answer_verified": normalized_answer(final_answer) == prompt.expected,
+                "verified": verified,
+                "final_answer_verified": final_verified,
             }
         )
     return rows
@@ -196,6 +218,8 @@ async def collect(
     base_url: str,
     output: Path,
 ) -> tuple[int, int]:
+    """Write verified groups and return the gross generated token count and number of replies."""
+    factory = ShellSimMachineFactory()
     requests = ((prompt, cap, group) for cap in caps for prompt in panel for group in range(groups_per_prompt))
     output_tokens = reply_count = 0
     try:
@@ -207,7 +231,7 @@ async def collect(
                 for batch in batched(requests, 16):
                     results = await asyncio.gather(
                         *(
-                            capture_group(client, tokenizer, prompt, cap=cap, group=group, seed=seed)
+                            capture_group(client, tokenizer, prompt, factory, cap=cap, group=group, seed=seed)
                             for prompt, cap, group in batch
                         )
                     )
@@ -250,7 +274,7 @@ def main(
 ) -> None:
     if len(set(caps)) != len(caps):
         raise click.BadParameter("each cap must be distinct", param_hint="--cap")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+    tokenizer = AutoTokenizer.from_pretrained(SERVING_MODEL.location, revision=SERVING_MODEL.revision)
     assert isinstance(tokenizer, PreTrainedTokenizerFast) and isinstance(tokenizer.chat_template, str)
     excluded = [] if exclude_task_ids is None else json.loads(exclude_task_ids.read_text())
     if not isinstance(excluded, list) or not all(isinstance(task_id, str) for task_id in excluded):
@@ -287,7 +311,7 @@ def main(
         "selection": f"{lab.NAME}@{lab.VERSION}",
         "split": "train",
         "model_uri": MODEL_URI,
-        "model_revision": MODEL_REVISION,
+        "model_revision": SERVING_MODEL.revision,
         "tokenizer_sha256": hashlib.sha256(tokenizer.backend_tokenizer.to_str().encode()).hexdigest(),
         "template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
         "endpoint": endpoint,
@@ -295,7 +319,7 @@ def main(
         "prompt_style": style,
         "enable_thinking": enable_thinking,
         "caps": caps,
-        "decoding": SAMPLING,
+        "decoding": dict(SAMPLING),
         "seed": seed,
         "excluded_task_ids_sha256": canonical_sha256({"task_ids": sorted(set(excluded))}),
         "prompts_per_cell": prompts_per_cell,
