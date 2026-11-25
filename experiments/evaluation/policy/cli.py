@@ -10,11 +10,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
-from marin.evaluation.model_config import prompt_format
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 
-from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 from experiments.evaluation.policy.versions import POLICIES
 
@@ -50,7 +48,7 @@ def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
     selection = item.selection
-    config = selection_dataset(selection, prompt_format(item.candidate.model))
+    config = catalog_variant(item.evaluation, item.candidate)
     protocol = config.protocol
     sampling = protocol.sampling
     generation = item.candidate.model.generation
