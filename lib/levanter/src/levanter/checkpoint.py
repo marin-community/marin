@@ -371,7 +371,7 @@ class CheckpointCandidate:
 
 @dataclass(frozen=True)
 class ResolvedCheckpoint:
-    """A concrete checkpoint path and its available stored metadata."""
+    """The path returned by checkpoint resolution and any available metadata."""
 
     path: str
     metadata: Mapping[str, Any]
@@ -1188,10 +1188,9 @@ def discover_checkpoint_candidates(
 
 
 def resolve_checkpoint(checkpoint_path: PathLike) -> ResolvedCheckpoint:
-    """Resolve the latest candidate or a direct checkpoint with optional metadata.
+    """Return the latest candidate or the input path with available metadata.
 
-    Present direct metadata is read even when its discovery bookkeeping is unusable;
-    unreadable metadata raises. A metadata-free direct checkpoint returns empty metadata.
+    If no candidate or metadata is found, return the input path with empty metadata.
     """
     checkpoint_path = str(checkpoint_path)
     candidates = discover_checkpoint_candidates(checkpoint_path)
