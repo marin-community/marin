@@ -24,6 +24,11 @@ from taskforge.model.content_hash import digest
 GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 SOURCE_IMAGES = "sandbox.source_images"
 """The policy key the driver sets from each source task's own images; an overlay may not set it."""
+SOURCE_TASK_ID = "source.task_id"
+SOURCE_TASK_SOURCE = "source.task_source"
+"""With ``SOURCE_TASK_ID``, the source task's ``id`` and its ``source`` as JSON, which every revision keeps."""
+DRIVER_SETTINGS = (SOURCE_IMAGES, SOURCE_TASK_ID, SOURCE_TASK_SOURCE)
+"""Set by the driver from each source task; a policy overlay may not set them."""
 
 PROMPTS_DIR = "prompts"
 SETTINGS_FILE = "policy.json"

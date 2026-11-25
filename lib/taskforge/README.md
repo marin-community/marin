@@ -59,10 +59,11 @@ review isn't charged against `budget.max_modify_rounds`, so a source task gets a
 sessions as a proposal, and when it asks for missing controls it also reports the measured solve rate.
 
 `workpiece.json` keeps the task as its source delivered it in `source`, beside the latest
-`submission`. A revision that changes the task's `id` or `source` goes back to the author, since
-they join the task to its source. A relaunch whose input file no longer matches the published
-workpiece fails rather than resuming another version's event stream; use a new `--output` for a
-re-converted input.
+`submission`. The driver sets policy `source.task_id` and `source.task_source` from the source
+task, and lowering refuses a revision that changes either, since they join the task to its source:
+the author's `submit` reports it in the same session. A relaunch whose input file no longer matches
+the published workpiece, or whose published events have no workpiece, fails without publishing,
+rather than resuming another version's event stream; use a new `--output` for a re-converted input.
 
 ## Running on the cluster
 
@@ -225,7 +226,7 @@ A task from another source usually brings its own containers: a SWE-rebench task
 image that holds its repository and tests, and often a separate grader image. The driver admits
 exactly those images: it sets `sandbox.source_images` to the source task's own task and grader
 images before the workpiece runs, and Iris runs them like any other container, with no container
-nested inside another. A policy overlay may not set that key. Lowering then refuses any other task
+nested inside another. A policy overlay may not set that key or the `source.task_*` keys. Lowering then refuses any other task
 or grader image for that task, the pinned image included unless the source used it, so a revision
 can't move the task onto another image. The images must
 already be built and pinned; Taskforge doesn't build images. The author of a task whose image is a

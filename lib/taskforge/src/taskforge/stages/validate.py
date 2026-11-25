@@ -233,22 +233,6 @@ async def run_adversary(
         await close_resource(env.close, ctx.emit)
 
 
-def check_source_identity(workpiece: Workpiece) -> None:
-    """Refuse a revision that changes a source task's id or source, which join it back to its source.
-
-    Raises:
-        InvalidTaskSpec: the submission's ``id`` or ``source`` differs from the source task's.
-    """
-    if workpiece.source is None or workpiece.submission is None:
-        return
-    original, task = workpiece.source.task, workpiece.submission.task
-    if (task.id, task.source) != (original.id, original.source):
-        raise InvalidTaskSpec(
-            f"A task from another source keeps its id {original.id!r} and its source {original.source}; "
-            f"this revision has id {task.id!r} and source {task.source}"
-        )
-
-
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
     submission = workpiece.submission
     if submission is None:
@@ -256,7 +240,6 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
     settings = lowering_settings(config.policy)
     task = submission.task
     try:
-        check_source_identity(workpiece)
         spec = lower_with_settings(task, settings, resources.factories).model_copy(update={"trace": TraceMode.MESSAGES})
     except (ValueError, NotImplementedError) as error:
         return Validated(

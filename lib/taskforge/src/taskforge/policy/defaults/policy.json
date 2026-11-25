@@ -11,6 +11,8 @@
   "sandbox.memory_mb": 8192,
   "sandbox.output_budget_mb": 1024,
   "sandbox.source_images": [],
+  "source.task_id": "",
+  "source.task_source": "",
   "proposals.environments": ["reasoning", "shellsim"],
   "proposals.verifications": ["code", "decision_model", "answer_in_box"],
   "author.image": "${GRADER_BASE_IMAGE}",

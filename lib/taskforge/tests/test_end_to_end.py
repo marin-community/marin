@@ -581,6 +581,9 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
     await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
     (destination / "events.jsonl.parts" / "000000000002.jsonl").write_bytes(Path(second.path).read_bytes())
     (destination / "status.json").write_text(json.dumps({"terminal": None}))
+    seed = driver.seed(driver_args.inputs, driver.run_policy(driver_args.policy)[1])
+    assert seed is not None
+    (destination / "workpiece.json").write_bytes(WORKPIECE.dump_json(seed))
     published = (destination / "events.jsonl").read_bytes()
 
     @asynccontextmanager
@@ -844,10 +847,32 @@ async def test_driver_refuses_to_resume_a_changed_source_task(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
+    destination = tmp_path / "out" / driver.input_key(str(source))
+    published = {name: (destination / name).read_bytes() for name in driver.SNAPSHOT_FILES}
     source.write_text(arithmetic_task().model_copy(update={"tags": ("reconverted",)}).model_dump_json())
     driver_args.work_dir = str(tmp_path / "relaunch-work")
     with pytest.raises(ValueError, match="another version of this input"):
         await driver.one(driver_args)
+    # The refusal leaves the published result as it was, so the changed input is not skipped as finished.
+    assert {name: (destination / name).read_bytes() for name in driver.SNAPSHOT_FILES} == published
+
+
+async def test_driver_refuses_published_events_it_cannot_match_to_their_input(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
+    destination.mkdir(parents=True)
+    await EventLog(sink=JsonlSink(str(destination / "events.jsonl"))).record(StageCompleted(Stage.AUTHOR, "", "draft"))
+
+    @asynccontextmanager
+    async def unexpected(*_: object) -> AsyncIterator[None]:
+        pytest.fail("A stream without its workpiece must not start the runtime")
+        yield
+
+    monkeypatch.setattr(driver, "runtime", unexpected)
+    with pytest.raises(ValueError, match="no workpiece"):
+        await driver.one(driver_args)
+    assert not (destination / "workpiece.json").exists()
 
 
 async def test_run_launches_past_a_malformed_source_task_and_reports_it(

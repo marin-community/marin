@@ -34,7 +34,15 @@ from taskforge.model.controls import CONTROLS, Control
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
-from taskforge.policy import SOURCE_IMAGES, Policy, load_policy, parse_overlay
+from taskforge.policy import (
+    DRIVER_SETTINGS,
+    SOURCE_IMAGES,
+    SOURCE_TASK_ID,
+    SOURCE_TASK_SOURCE,
+    Policy,
+    load_policy,
+    parse_overlay,
+)
 from taskforge.report import report
 from taskforge.resources.sandbox.factories import grading_environment
 from taskforge.stages.classify import replayable_grade
@@ -99,8 +107,10 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     return paths
 
 
-SNAPSHOT_FILES = ("events.jsonl", "workpiece.json", "status.json")
-"""Published in this order, so an interrupted publish leaves the stream without its status."""
+SNAPSHOT_FILES = ("workpiece.json", "events.jsonl", "status.json")
+"""Published in this order, so an interrupted publish leaves the stream with its input's workpiece but without
+its status."""
+STATE_FILES = ("workpiece.json", "status.json")
 
 
 def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
@@ -120,12 +130,13 @@ async def recover(workdir: Path, destination: str) -> Status | None:
         snapshot = {"events.jsonl": await asyncio.to_thread(sink.read_bytes)}
     except FileNotFoundError:
         return None
-    for name in SNAPSHOT_FILES[1:]:
+    for name in STATE_FILES:
         try:
             with open_url(prefix_join(destination, name), "rb") as source:
                 snapshot[name] = source.read()
         except FileNotFoundError:
-            logging.warning("Published %s lacks %s; resuming from its event stream", destination, name)
+            logging.warning("Published %s lacks %s", destination, name)
+            (workdir / name).unlink(missing_ok=True)
     for name, data in snapshot.items():
         (workdir / name).write_bytes(data)
     if "status.json" in snapshot:
@@ -137,8 +148,8 @@ def run_policy(path: str) -> tuple[Policy, Policy]:
     declared = load_policy(Path(__file__).parent / "policy" / "defaults")
     with open_url(path, "rt") as source:
         overlay = parse_overlay(source.read())
-    if SOURCE_IMAGES in overlay:
-        raise ValueError(f"{path} sets {SOURCE_IMAGES}, which the driver sets from each source task")
+    if owned := sorted(set(DRIVER_SETTINGS) & set(overlay)):
+        raise ValueError(f"{path} sets {', '.join(owned)}, which the driver sets from each source task")
     return declared, declared.overlaid(overlay)
 
 
@@ -198,17 +209,30 @@ def source_images(seed: Workpiece) -> tuple[str, ...]:
     return tuple(sorted(image for image in images if image is not None))
 
 
+def source_settings(seed: Workpiece) -> dict[str, list[str] | str]:
+    """The policy settings the driver owns for ``seed``: a source task's images and identity, unset otherwise."""
+    if seed.source is None:
+        return {SOURCE_IMAGES: [], SOURCE_TASK_ID: "", SOURCE_TASK_SOURCE: ""}
+    task = seed.source.task
+    return {
+        SOURCE_IMAGES: list(source_images(seed)),
+        SOURCE_TASK_ID: task.id,
+        SOURCE_TASK_SOURCE: task.source.model_dump_json(),
+    }
+
+
 def check_seed(published: Path, initial: Workpiece) -> None:
-    """Refuse to resume a published workpiece for an input that has changed since it was published.
+    """Refuse to resume a published event stream for an input that has changed since it was published.
 
     A relaunch replays the published event stream, so a re-converted source task or an edited proposal
-    would otherwise continue another input's run.
+    would otherwise continue another input's run. Checkpoints publish the workpiece before their first
+    events, so a stream without one cannot be matched to its input.
 
     Raises:
-        ValueError: the published workpiece started from another proposal or source task.
+        ValueError: the published workpiece is missing or started from another proposal or source task.
     """
     if not published.exists():
-        return
+        raise ValueError(f"{published.parent} has published events but no workpiece; use a new --output")
     previous = WORKPIECE.validate_json(published.read_bytes())
     if (previous.proposal, previous.source) != (initial.proposal, initial.source):
         raise ValueError(f"{published} was published for another version of this input; use a new --output")
@@ -220,7 +244,7 @@ async def one(args: argparse.Namespace) -> None:
     initial = seed(args.inputs, policy)
     if initial is None:
         return
-    policy = policy.overlaid({SOURCE_IMAGES: list(source_images(initial))})
+    policy = policy.overlaid(source_settings(initial))
     identity = input_key(args.inputs)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -234,7 +258,11 @@ async def one(args: argparse.Namespace) -> None:
     try:
         restored = await recover(workdir, destination)
         if restored is not None:
-            check_seed(workdir / "workpiece.json", initial)
+            try:
+                check_seed(workdir / "workpiece.json", initial)
+            except ValueError:
+                skipped = True  # A refused input leaves its published result in place.
+                raise
         if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
             logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
             skipped = True
@@ -274,7 +302,7 @@ async def one(args: argparse.Namespace) -> None:
                 fold(tuple(record.event for record in log.records)) if log is not None else Status(terminal=wp.terminal)
             )
             (workdir / "status.json").write_text(json.dumps(asdict(status)))
-            publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
+            publish(workdir, destination, SNAPSHOT_FILES if log is not None else STATE_FILES)
 
 
 async def run(args: argparse.Namespace) -> None:

@@ -140,11 +140,15 @@ def author_image_requirements(policy: Policy) -> EnvironmentRequirements:
 
 @dataclass(frozen=True, slots=True)
 class AuthorMachine:
-    """The author's started machine, its requirements, and why it is not the task's own when setup failed."""
+    """The author's started machine, its requirements, and why it is not the task's own when setup failed.
+
+    ``hydrated`` is true when the machine already holds the task's resources, installed before its setup ran.
+    """
 
     env: Env
     requirements: EnvironmentRequirements
     setup_failure: str | None
+    hydrated: bool = False
 
 
 async def author_machine(workpiece: Workpiece, policy: Policy, resources: Resources) -> AuthorMachine:
@@ -160,7 +164,7 @@ async def author_machine(workpiece: Workpiece, policy: Policy, resources: Resour
     assert workpiece.submission is not None
     files = (*workpiece.submission.task.resources.all, *workpiece.submission.task.resources.worker)
     try:
-        return AuthorMachine(await resources.envs.create(own, files), own, None)
+        return AuthorMachine(await resources.envs.create(own, files), own, None, hydrated=True)
     except EnvironmentSetupFailed as error:
         return AuthorMachine(await resources.envs.create(fallback), fallback, str(error))
 
@@ -177,10 +181,11 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
             writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
             submission = workpiece.submission
             if submission is not None:
-                writes.extend(
-                    (PurePosixPath("/", file.path), resource_bytes(file))
-                    for file in (*submission.task.resources.all, *submission.task.resources.worker)
-                )
+                if not started.hydrated:
+                    writes.extend(
+                        (PurePosixPath("/", file.path), resource_bytes(file))
+                        for file in (*submission.task.resources.all, *submission.task.resources.worker)
+                    )
                 writes.extend(
                     (PurePosixPath("/tests", file.path), resource_bytes(file))
                     for file in submission.task.resources.verifier

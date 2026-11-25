@@ -59,7 +59,7 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
+from taskforge.policy import GRADER_BASE_IMAGE, SOURCE_TASK_ID, SOURCE_TASK_SOURCE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.clock import Clock
@@ -75,7 +75,7 @@ from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
 from taskforge.stages.rules import NO_CONTROLS, default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
-from taskforge.wiring import build_config, install
+from taskforge.wiring import build_config, install, submit_gate
 
 
 @pytest.fixture
@@ -210,17 +210,38 @@ async def test_source_task_author_works_in_the_tasks_own_environment_when_admitt
     assert isinstance(bundle.envs, Environments)
     (requested,) = bundle.envs.requested
     (installed,) = bundle.envs.installed
+    (env,) = bundle.envs.created
     if own:
         assert requested == environment
-        # The task's own setup may read its files, so they are installed before it runs, as for the solver.
+        # The task's own setup may read its files, so they are installed before it runs, as for the solver,
+        # and not written again over whatever setup made of them.
         assert notes in installed
+        assert PurePosixPath("/workspace/setup.sh") not in env.files
     else:
         assert (requested.docker_image, requested.working_directory) == (GRADER_BASE_IMAGE, "/workspace")
         assert installed == ()
+        assert env.files[PurePosixPath("/workspace/setup.sh")] == b"true\n"
     assert harness.session is not None
     system = harness.session.messages[0].content
     # The prompt describes the machine the author got: its image and the directory its shell starts in.
     assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, own)
+
+
+def source_identity_config(task: TaskSpec) -> TaskforgeConfig:
+    setup = config()
+    identity = {SOURCE_TASK_ID: task.id, SOURCE_TASK_SOURCE: task.source.model_dump_json()}
+    return replace(setup, policy=setup.policy.overlaid(identity))
+
+
+def test_submit_gate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission
+    renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
+    settings = lowering_settings(source_identity_config(original.task).policy)
+    # The author hears of the rule as submit-tool feedback in the same session, before any modify round.
+    (finding,) = submit_gate(renamed, settings=settings, factories={})
+    assert "'renamed'" in finding and repr(original.task.id) in finding
+    assert submit_gate(original, settings=settings, factories={}) == ()
 
 
 async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
@@ -228,12 +249,13 @@ async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(wor
     original = workpiece.submission
     renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
     source = Workpiece("source", submission=renamed, source=original)
+    setup = source_identity_config(original.task)
     ctx = Context(log=EventLog())
-    result = (await validate(ctx, source, config(), resources(ctx))).result
+    result = (await validate(ctx, source, setup, resources(ctx))).result
     await ctx.drain()
     assert result.lowering_cause is Cause.INVALID_TASK and not result.solver
     assert result.lowering_error is not None and "'renamed'" in result.lowering_error
-    decision = default_review(source.with_(evidence=(result,)), config().band, config().budget)
+    decision = default_review(source.with_(evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Modify)
 
 
