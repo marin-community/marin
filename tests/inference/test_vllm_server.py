@@ -19,7 +19,7 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.config import STANDARD_VLLM_METRIC_FAMILIES, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -96,6 +96,27 @@ vllm:late_histogram_created{{engine="0"}} 1
         "late_histogram_sum",
     }
     assert len(snapshots) == 5
+
+
+def test_standard_vllm_families_forward_prefix_cache_counters() -> None:
+    scrape = """
+# TYPE vllm:prefix_cache_queries_total counter
+vllm:prefix_cache_queries_total{engine="0",model_name="snowball"} 120000
+# TYPE vllm:prefix_cache_hits_total counter
+vllm:prefix_cache_hits_total{engine="0",model_name="snowball"} 80000
+# TYPE vllm:cache_config_info gauge
+vllm:cache_config_info{block_size="128"} 1
+"""
+
+    snapshots = vllm_server._vllm_metric_snapshots(
+        tuple(text_string_to_metric_families(scrape)),
+        family_names=STANDARD_VLLM_METRIC_FAMILIES,
+    )
+
+    assert {snapshot.name: snapshot.value for snapshot in snapshots} == {
+        "prefix_cache_queries_total": 120000.0,
+        "prefix_cache_hits_total": 80000.0,
+    }
 
 
 def test_vllm_metric_overflow_rejects_whole_batch_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:

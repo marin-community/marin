@@ -52,6 +52,7 @@ from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
+from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
@@ -97,8 +98,7 @@ _LEVANTER_GPU_EXTRAS = ("gpu",)
 _ENDPOINT_READY_POLL_SECONDS = 5.0
 _BROKER_WORKER_TIMEOUT_FRACTION = 0.9
 _BROKER_LEASE_TIMEOUT_FRACTION = 0.95
-# The controller clamps endpoint-token TTLs to 7 days (MAX_ENDPOINT_TOKEN_TTL_SECONDS).
-_MAX_CAPABILITY_TTL_HOURS = 7 * 24.0
+_MAX_CAPABILITY_TTL_HOURS = MAX_ENDPOINT_TOKEN_TTL_SECONDS / 3600
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
 # other backend is a mistake worth failing on, but several carry non-None defaults, so only a
@@ -670,6 +670,8 @@ def main(
     brokered = broker or instances > 1
     if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
         raise click.ClickException("multi-host TPU serving requires one instance and no broker")
+    if brokered and not preemptible:
+        raise click.ClickException("--no-preemptible applies only to direct serves, not --broker or --instances > 1.")
     broker_config = (
         BrokerConfig(
             worker=InferenceWorkerConfig(

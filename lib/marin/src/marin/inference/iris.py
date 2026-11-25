@@ -817,7 +817,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=24 * 365,
+        timeout_hours=None,
         port_name=None,
     )
     device = iris.worker_resources.device

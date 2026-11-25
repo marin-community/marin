@@ -34,7 +34,6 @@ from marin.inference.backend import ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
-    STANDARD_VLLM_METRIC_FAMILIES,
     IrisConfig,
     LevanterEngineConfig,
     ObjectStoreLoadMode,
@@ -1200,8 +1199,12 @@ def test_iris_serve_rejects_served_model_name_as_raw_vllm_arg(monkeypatch):
     client.submit.assert_not_called()
 
 
-def test_standard_vllm_metrics_include_prefix_cache_hit_rate():
-    assert {"vllm:prefix_cache_hits", "vllm:prefix_cache_queries"} <= STANDARD_VLLM_METRIC_FAMILIES
+def test_iris_serve_rejects_no_preemptible_when_brokered(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--no-preemptible", "--instances", "2")
+
+    assert result.exit_code != 0
+    assert "--no-preemptible applies only to direct serves" in result.output
+    client.submit.assert_not_called()
 
 
 def test_iris_serve_model_preparation_disables_xet(monkeypatch):
