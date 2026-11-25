@@ -26,7 +26,6 @@ from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     ConversationStarted,
     Graded,
-    GradedRolloutInterrupted,
     Prompt,
     RolloutEvent,
     RolloutInterrupted,
@@ -195,16 +194,16 @@ async def test_rows_round_trip_through_a_finelog_server(finelog_client):
 async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelog_client):
     log = FinelogRolloutLog(finelog_client)
     # Nothing checks what a harness reports before its rows are queued: here numbers as tool call IDs, and a lone
-    # surrogate in a role and in a tool name. The grader refuses the odd message only after that.
+    # surrogate in a role and in a tool name. The grader rejects the odd message only after that.
     odd = {"role": "tool\ud800", "tool_call_id": 7, "content": "12"}
-    with pytest.raises(GradedRolloutInterrupted):
-        await run_two_turns(
-            log,
-            content_fraction=1.0,
-            run_id="odd",
-            observation=odd,
-            tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
-        )
+    result = await run_two_turns(
+        log,
+        content_fraction=1.0,
+        run_id="odd",
+        observation=odd,
+        tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
+    )
+    assert (result.grade.status, result.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     await run_two_turns(log, content_fraction=1.0)
     # A verifier's error detail reaches the grade unchecked.
     observer = FinelogObserver(log, SCOPE, content_fraction=1.0)
