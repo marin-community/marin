@@ -16,6 +16,7 @@ from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
 from marin.external_dependencies import VllmGpuRelease
 
@@ -495,6 +496,8 @@ class IrisConfig:
 
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
+    task_timeout: Duration | None = None
+    """Deadline for each preparation/serving task and the preparation batch wait."""
     serving_geometry: ServingGeometry | None = None
     cache_ttl_days: int = 14
     endpoint_ready_timeout_seconds: float = 1800.0
