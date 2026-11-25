@@ -9,7 +9,6 @@ import pytest
 from iris.rpc import job_pb2
 
 from experiments.evaluation.evals import JUDGES
-from experiments.evaluation.judges import ApiJudge
 from experiments.evaluation.policy.launch import launch_specs, server_groups
 from experiments.evaluation.policy.resolve import resolve
 from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY, QWEN
@@ -59,13 +58,12 @@ def test_an_agent_run_below_its_input_limit_gets_a_server_of_that_window():
     assert _windows(["swebench-verified"], **{"swebench-verified": 16_384}) == {(16_384, True, ("swebench-verified",))}
 
 
-def test_judges_with_different_keys_get_separate_servers():
+def test_judges_with_different_keys_get_separate_servers(monkeypatch):
     # A launch hands its judges one key; evaluations without a judge join the first server.
-    other_key = ApiJudge(
-        identity=JUDGES["together"].identity, endpoint="https://judge.example/v1", api_key=("env:OTHER",)
-    )
+    other_key = JUDGES["together"].model_copy(update={"judge_api_key": ("env:OTHER",)})
+    monkeypatch.setitem(JUDGES, "other", other_key)
     olympiad = RESOLVED["olympiadbench"]
-    olympiad = replace(olympiad, evaluation=replace(olympiad.evaluation, judge=other_key))
+    olympiad = replace(olympiad, evaluation=replace(olympiad.evaluation, judge="other"))
     groups = {
         tuple(item.evaluation.name for item in group.evaluations)
         for group in server_groups([RESOLVED["gsm8k-0shot"], RESOLVED["financebench"], olympiad], SERVED)
