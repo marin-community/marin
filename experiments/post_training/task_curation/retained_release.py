@@ -40,6 +40,17 @@ RETAINED_ADMISSION_VERSION = "2026.11.13.2"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
 
 
+def _empty_evidence_table() -> pa.Table:
+    """The zero-row review/verify view: the readers project these columns on open."""
+    return pa.table(
+        {
+            "task_id": pa.array([], pa.string()),
+            "admission": pa.array([], pa.string()),
+            "filter_reasons": pa.array([], pa.list_(pa.string())),
+        }
+    )
+
+
 @dataclass(frozen=True)
 class RetainedCohort:
     name: str
@@ -115,18 +126,42 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
     with local.open("rb") as source, (output / "tasks.parquet").open("wb") as destination:
         shutil.copyfileobj(source, destination)
     outputs = {"tasks": str(output / "tasks.parquet"), "normalize": str(normalized.parent)}
+    final_view = output / "final"
+    final_view.mkdirs(exist_ok=True)
     if admitted:
-        final = output / "final/part-000000.parquet"
+        final = final_view / "part-000000.parquet"
         with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
             shutil.copyfileobj(source, destination)
         outputs["final"] = str(final.parent)
+    else:
+        with (final_view / "part-000000.parquet").open("wb") as stream:
+            pq.write_table(RETAINED_SCHEMA.empty_table(), stream)
+    # The frozen retained population is all-admitted: the review and verify views
+    # carry no rows, so the assessment contract still holds and its excluded
+    # cohort samples zero.
+    empty_views = {}
+    for view in ("review", "verify"):
+        view_dir = output / view
+        view_dir.mkdirs(exist_ok=True)
+        with (view_dir / "part-000000.parquet").open("wb") as stream:
+            pq.write_table(_empty_evidence_table(), stream)
+        empty_views[view] = str(view_dir)
     manifest = {
         "mode": invocation.mode.value,
         "status": SourceStatus.COMPLETED.value,
         "intended_use": cohort.intended_use.value,
+        "source": cohort.name,
+        "datasets": {
+            "normalize": str(normalized.parent),
+            "review": empty_views["review"],
+            "verify": empty_views["verify"],
+            "final": str(final_view),
+        },
         "input_rows": len(seen),
         "converted_rows": len(seen),
         "admitted_rows": len(seen) if admitted else 0,
+        "processed_rows": len(seen),
+        "unprocessed_rows": 0,
         "qualification_newly_executed": False,
         "inherited_oversight": invocation.oversight.model_dump(mode="json") if invocation.oversight else None,
         "inherited_admission": (

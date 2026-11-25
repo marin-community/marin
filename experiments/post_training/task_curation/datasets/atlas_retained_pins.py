@@ -40,7 +40,15 @@ from dataclasses import replace
 from functools import cache
 from pathlib import Path
 
-from finestore.rl.curation import LexicalContaminationEvidence, LexicalUse, PipelineReference, SourceUse
+import huggingface_hub.errors
+from finestore.rl.curation import (
+    DatasetRelease,
+    LexicalContaminationEvidence,
+    LexicalUse,
+    PipelineReference,
+    SourceUse,
+    huggingface_dataset_url,
+)
 from finestore.rl.licenses import LicenseReceipt
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -51,7 +59,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import DatasetRelease, RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RECEIPTS_REPO = "open-athena/marin-rl-data-atlas-registry"
@@ -125,7 +133,8 @@ def lexical_evidence_for_release(source_id, publication, revision, use):
 
 rows = {}
 skipped = []
-for part in sorted(Path("experiments/post_training/task_curation/datasets/retained_release_receipts").glob("part-*.json")):
+receipts_dir = Path("experiments/post_training/task_curation/datasets/retained_release_receipts")
+for part in sorted(receipts_dir.glob("part-*.json")):
     reference = RegistryReference.model_validate_json(part.read_bytes())
     document = read_registry_document(reference)
     for source_id, payload in document.items():
@@ -230,8 +239,6 @@ class RetainedPin(BaseModel):
 
     @property
     def release(self) -> DatasetRelease:
-        from finestore.rl.curation import huggingface_dataset_url
-
         return DatasetRelease(
             repo=self.release_repo,
             revision=self.release_revision,
@@ -267,8 +274,6 @@ class RetainedPin(BaseModel):
 
     def cohort(self, *, name: str) -> RetainedCohort:
         """The retained-reader configuration for one bound declaration."""
-        from finestore.rl.curation import huggingface_dataset_url
-
         return RetainedCohort(
             name=name + "-retained",
             version=RETAINED_IMPORT_VERSION,
@@ -287,8 +292,6 @@ class RetainedPin(BaseModel):
 
 def _fetch_pin_table() -> bytes | None:
     """The pinned table bytes, or None when an offline run cannot fetch them."""
-    import huggingface_hub.errors
-
     try:
         local = Path(
             hf_hub_download(repo_id=PINS_REPO, repo_type="dataset", revision=PINS_REVISION, filename=PINS_FILENAME)
@@ -383,9 +386,7 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
     if expected != observed:
         raise ValueError(f"retention belongs to another conversion input: expected {expected}, sealed {observed}")
     version_note = _configured_reference(source, pin)
-    require_lexical_qualification(
-        pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value)
-    )
+    require_lexical_qualification(pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value))
 
     config = pin.cohort(name=source.name)
     release = pin.release
@@ -410,8 +411,7 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         daytona_count_basis=pin.retained_census.count_basis,
         daytona_execution_failures=pin.retained_census.execution_failures,
         notes=(
-            drift
-            + "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+            drift + "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
             f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
             + source.info.notes
         ),
@@ -457,7 +457,11 @@ def refresh(audit_root: Path) -> None:
     )
     match = re.search(r"/commit/([0-9a-f]{40})", info.commit_url)
     revision = match.group(1) if match else info.commit_url
-    print(f"published {len(document['pins'])} retained pins ({len(document['skipped_no_license'])} skipped without a certifying license receipt); paste into atlas_retained_pins.py:")
+    skipped = len(document["skipped_no_license"])
+    print(
+        f"published {len(document['pins'])} retained pins ({skipped} skipped without a certifying "
+        "license receipt); paste into atlas_retained_pins.py:"
+    )
     print(f'PINS_REVISION = "{revision}"')
     print(f'PINS_SHA256 = "{hashlib.sha256(raw).hexdigest()}"')
     print(f"PINS_BYTES = {len(raw)}")
