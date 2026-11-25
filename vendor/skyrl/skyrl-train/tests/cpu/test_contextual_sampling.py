@@ -20,7 +20,7 @@ def prompts():
     ]
 
 
-def _order(prompts, acquisition, held_out=(), *, reference=None, epsilon=0.2):
+def _order(prompts, acquisition, held_out=(), *, reference=None, epsilon=0.2, groups_per_family=None):
     return PromptThompsonOrder(
         prompts,
         set(held_out),
@@ -31,6 +31,7 @@ def _order(prompts, acquisition, held_out=(), *, reference=None, epsilon=0.2):
         decay=0.95,
         epsilon=epsilon,
         reference_tokens=100,
+        groups_per_family=groups_per_family,
     )
 
 
@@ -146,6 +147,61 @@ def test_resume_restores_pending_window_and_feedback_bookkeeping(prompts):
     following = [_feedback(1, 1, useful=False, tokens=25), _feedback(41, 2, useful=True, tokens=65)]
     assert restored.finish_step(2, following) == original.finish_step(2, following)
     assert [restored.next_index() for _ in range(36)] == [original.next_index() for _ in range(36)]
+
+
+@pytest.mark.parametrize("reference", [{}, {"rare": 3, "common": 1}])
+def test_family_windows_condition_the_reference_and_resume(prompts, reference):
+    quotas = {"sorting": 8, "division": 12}
+    prompts = [
+        replace(
+            prompt,
+            family="sorting" if i < 40 else "division",
+            source="rare" if i < 10 or 40 <= i < 70 else "common",
+        )
+        for i, prompt in enumerate(prompts)
+    ]
+    pools = {family: [i for i, prompt in enumerate(prompts) if prompt.family == family] for family in quotas}
+
+    def order(epsilon):
+        return _order(
+            prompts,
+            PromptAcquisition.WITHIN_SOURCE_COST_AWARE,
+            reference=reference,
+            epsilon=epsilon,
+            groups_per_family=quotas,
+        )
+
+    ranked, random = order(0.05), order(1.0)
+    ranked.finish_step(1, [_feedback(i, 1, useful=i < 30, tokens=20 if i < 30 else 200) for i in range(80)])
+    expected_rare = {"sorting": 4, "division": 10.8} if reference else {"sorting": 2, "division": 9}
+
+    def draw(sampler, family, live=()):
+        return sampler.next_family_index(family, pools[family], lambda row: row not in live)
+
+    for family, count in quotas.items():
+        for _ in range(12):
+            rows = [draw(ranked, family) for _ in range(count)]
+            assert len(set(rows)) == len(rows)
+            assert all(prompts[row].family == family for row in rows)
+            sources = [prompts[row].source for row in rows]
+            assert sources == [prompts[draw(random, family)].source for _ in range(count)]
+            assert abs(sources.count("rare") - expected_rare[family]) < 1
+
+    # One shared source has no capacity in this family. Cover the remaining rows without crossing families.
+    live = {row for row in pools["sorting"] if prompts[row].source == "rare"}
+    live.update(draw(ranked, "sorting", live) for _ in range(8))
+    assert len(live) == 18
+    draw(ranked, "division")
+    restored = order(0.05)
+    restored.load_state_dict(json.loads(json.dumps(ranked.state_dict())))
+    assert draw(restored, "division", pools["division"]) is None
+    delayed = [
+        replace(_feedback(5, 1, useful=True, tokens=25), lease_id="prefetched"),
+        _feedback(55, 2, useful=False, tokens=220),
+    ]
+    assert restored.finish_step(2, delayed) == ranked.finish_step(2, delayed)
+    for family in ["sorting", "division"] * 30:
+        assert draw(restored, family) == draw(ranked, family)
 
 
 def test_held_out_content_cannot_join_the_training_catalog(prompts):

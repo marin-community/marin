@@ -1,11 +1,33 @@
 """Quarantine of prompts whose groups training can never use."""
 
+import asyncio
+from collections import Counter
+
 import pytest
+import torch
 from loguru import logger
 
 from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
+from skyrl_train.contextual_sampling import PromptAcquisition, PromptThompsonOrder, PublicPrompt
+from skyrl_train.dynamic_sampling import GroupSelectionResult
 from skyrl_train.group_admission import AdmissionRejection
-from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
+from skyrl_train.rollouts.buffer import (
+    SAMPLING_SOURCE,
+    BatchPolicy,
+    GroupRewards,
+    PayloadReference,
+    RolloutBuffer,
+    RolloutBufferConfig,
+    RolloutVerdict,
+)
+from skyrl_train.rollouts.loader import (
+    QUARANTINE_STEPS,
+    QUARANTINED_PROMPTS_METRIC,
+    STALE_RETRIES_EXHAUSTED_METRIC,
+    PromptLoader,
+    SeededPasses,
+)
+from skyrl_train.telemetry import GeneratedWork
 
 UNUSABLE = AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value
 
@@ -42,6 +64,134 @@ def loader(num_rows: int, batch_size: int, max_unusable_groups: int = 2) -> Prom
 
 def offered(prompts: PromptLoader, count: int) -> list[str]:
     return [prompts.next_prompt(live=())["uid"] for _ in range(count)]
+
+
+def _family_thompson_loader(families, quotas, *, staleness=0, acquisition=PromptAcquisition.WITHIN_SOURCE_COST_AWARE):
+    order = PromptThompsonOrder(
+        [
+            PublicPrompt(uid, f"source-{int(uid) % 2}", f"What is {uid} plus one?", family)
+            for uid, family in families.items()
+        ],
+        set(),
+        {},
+        acquisition=acquisition,
+        seed=31,
+        window_size=sum(quotas.values()),
+        decay=0.95,
+        epsilon=0.25,
+        reference_tokens=100,
+        groups_per_family=quotas,
+    )
+    loader = PromptLoader(
+        Prompts(len(families)),
+        order,
+        batch_size=sum(quotas.values()),
+        max_stale_retries=1,
+        max_unusable_groups=1,
+        families=families,
+        family_minimums={family: quota * (staleness + 1) for family, quota in quotas.items()},
+    )
+    return loader, order
+
+
+def test_family_thompson_resumes_retries_quarantine_and_exhaustion(tmp_path):
+    families = {str(row): "short" if row < 4 else "long" for row in range(8)}
+    quotas = {"short": 2, "long": 2}
+    loader, _ = _family_thompson_loader(families, quotas)
+    retry = loader.next_prompt((), "short")
+    loader.retry(retry)
+    quarantined = next(uid for uid, family in families.items() if family == "short" and uid != retry["uid"])
+    loader.record_disposition(quarantined, UNUSABLE)
+    loader.observe([])
+
+    checkpoint = tmp_path / "loader.pt"
+    torch.save(loader.state_dict(), checkpoint)
+    restored, _ = _family_thompson_loader(families, quotas)
+    restored.load_state_dict(torch.load(checkpoint, weights_only=False))
+    live = {uid for uid in families if uid != quarantined}
+    for current in (loader, restored):
+        assert current.next_prompt(live, "short") is None
+        assert current.next_prompt((), "long")["family"] == "long"
+        assert current.next_prompt((), "short") == retry
+        current.retry(retry)
+        metrics = current.observe([])
+        assert metrics[STALE_RETRIES_EXHAUSTED_METRIC] == 1
+        assert metrics[QUARANTINED_PROMPTS_METRIC] == 1
+        for _ in range(QUARANTINE_STEPS - 2):
+            current.observe([])
+        assert current.next_prompt(live, "short")["uid"] == quarantined
+    assert [loader.next_prompt((), "short") for _ in range(8)] == [
+        restored.next_prompt((), "short") for _ in range(8)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("acquisition", list(PromptAcquisition))
+async def test_family_thompson_fills_exact_quotas_across_open_batches_and_resume(tmp_path, acquisition):
+    quotas = {"short": 11, "long": 21}
+    families = {str(row): "short" if row < 24 else "long" for row in range(70)}
+    config = RolloutBufferConfig(
+        batch_size=32,
+        max_in_flight=32,
+        max_staleness_steps=1,
+        batch_policy=BatchPolicy.FULL_BATCH,
+        dynamic_sampling=None,
+        max_candidate_groups=None,
+        groups_per_family=quotas,
+    )
+    loader, order = _family_thompson_loader(families, quotas, staleness=1, acquisition=acquisition)
+    buffer = RolloutBuffer(config)
+
+    async def dispatch(buffer, loader, order, live, count):
+        selected = []
+        for _ in range(count):
+            lease = await buffer.acquire_lease()
+            prompt = loader.next_prompt(live, lease.family)
+            uid = prompt["uid"]
+            assert uid not in live
+            assert Counter(families[row] for row in live | {uid})[lease.family] <= 2 * quotas[lease.family]
+            live.add(uid)
+            selected.append((lease.batch_id, lease.family, uid))
+            prompt[SAMPLING_SOURCE] = order.assign(uid)
+            verdict = RolloutVerdict(
+                uid, (), GroupSelectionResult.KEEP, GroupRewards((0.0, 1.0), (0.0, 1.0), True), GeneratedWork(2, 2, 20)
+            )
+            await buffer.commit(lease.lease_id, prompt, verdict, PayloadReference(uid))
+        return selected
+
+    async with asyncio.timeout(5):
+        await buffer.publish(1)
+        live = set()
+        await dispatch(buffer, loader, order, live, 33)
+        first = await buffer.admit(1)
+        assert first.selection is not None
+        assert Counter(families[group.uid] for group in first.admitted) == quotas
+        live.difference_update(group.uid for group in first.admitted)
+        loader.observe(first.selection.judged)
+        checkpoint = tmp_path / "queue.pt"
+        torch.save((loader.state_dict(), buffer.snapshot()), checkpoint)
+
+        restored_buffer = RolloutBuffer(config)
+        restored_loader, restored_order = _family_thompson_loader(
+            families, quotas, staleness=1, acquisition=acquisition
+        )
+        saved_loader, saved_buffer = torch.load(checkpoint, weights_only=False)
+        restored_loader.load_state_dict(saved_loader)
+        await restored_buffer.restore(saved_buffer)
+        restored_live = {rollout.verdict.uid for rollout in saved_buffer.ready}
+
+        await buffer.publish(2)
+        await restored_buffer.publish(2)
+        assert await dispatch(buffer, loader, order, live, 63) == await dispatch(
+            restored_buffer, restored_loader, restored_order, restored_live, 63
+        )
+        second = await restored_buffer.admit(1)
+        assert second.selection is not None
+        assert Counter(families[group.uid] for group in second.admitted) == quotas
+        await restored_buffer.publish(3)
+        third = await restored_buffer.admit(1)
+        assert third.selection is not None
+        assert Counter(families[group.uid] for group in third.admitted) == quotas
 
 
 def test_adaptive_loader_scans_past_live_rows_and_resumes_a_stale_retry():

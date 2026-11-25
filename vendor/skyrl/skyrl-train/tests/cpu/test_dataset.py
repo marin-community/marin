@@ -290,11 +290,12 @@ def prepared_selection(tmp_path):
         argv=("true",), placement=GraderMachine(environment=NATIVE_ENVIRONMENT), reward=ExitCodeReward()
     )
     tasks = [
-        text_task(f"fixture:{index}", prompt=prompt).model_copy(update={"grader": grader})
-        for index, prompt in ((4, "start!?"), (1, "middle " * 200), (3, "end!?"))
+        text_task(f"fixture:{index}", prompt=prompt, source=source).model_copy(update={"grader": grader})
+        for index, prompt, source in ((4, "start!?", "letters"), (1, "middle " * 200, "letters"), (3, "end!?", "words"))
     ]
-    write_selection_panel(selection, tasks, "fixture", "2026.11.19.1", lambda _: {"family": "math"})
-    rows = pq.read_table(path).append_column(FAMILY_COLUMN, pa.array(["math"] * len(tasks)))
+    families = {task.id: "strings" if task.source.dataset == "letters" else "tokens" for task in tasks}
+    write_selection_panel(selection, tasks, "fixture", "2026.11.19.1", lambda task: {"family": families[task.id]})
+    rows = pq.read_table(path).append_column(FAMILY_COLUMN, pa.array([families[task.id] for task in tasks]))
     pq.write_table(rows, path)
     cache = PreparedTaskCacheSource(str(path), "fixture@2026.11.19.1", str(tmp_path / "prepared"))
     return cache, configs
@@ -324,6 +325,9 @@ def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_
 
     assert [full.label(i) for i in range(len(full))] == ["fixture:4", "fixture:1", "fixture:3"]
     assert [warm.label(i) for i in range(len(warm))] == ["fixture:4", "fixture:3"]
+    prepared = warm.dataframe.with_format(None)
+    assert list(prepared[FAMILY_COLUMN]) == ["strings", "tokens"]
+    assert list(prepared["data_source"]) == ["letters", "words"]
     assert warm.prompts_dropped_too_long == 1
     assert [warm[i] for i in range(len(warm))] == [reference[i] for i in range(len(reference))]
     assert warm.collate_fn([warm[0], warm[1]]) == reference.collate_fn([reference[0], reference[1]])

@@ -5,7 +5,7 @@ from __future__ import annotations
 import collections
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 from loguru import logger
@@ -65,6 +65,13 @@ class PromptOrder(Protocol):
     def load_state_dict(self, state: Mapping[str, Any]) -> None: ...
 
 
+@runtime_checkable
+class FamilyPromptOrder(PromptOrder, Protocol):
+    """An order that can draw directly from the available rows of a leased family."""
+
+    def next_family_index(self, family: str, rows: Sequence[int], eligible: Callable[[int], bool]) -> int | None: ...
+
+
 class SeededPasses:
     """Endless passes over the dataset, each in a fresh seeded order."""
 
@@ -106,11 +113,23 @@ class SeededPasses:
 
 
 @dataclass(frozen=True)
+class PromptEligibilityState:
+    """Availability and retry budgets for family-conditioned selection."""
+
+    step: int
+    quarantined: dict[str, int]
+    unusable_groups: dict[str, int]
+    stale_retries: dict[str, int]
+    retries_exhausted: int
+
+
+@dataclass(frozen=True)
 class PromptLoaderState:
     """The prompt order's position and the prompts awaiting regeneration."""
 
     order: dict[str, Any]
     retries: list[dict]
+    eligibility: PromptEligibilityState | None = None
 
 
 class PromptLoader:
@@ -127,7 +146,7 @@ class PromptLoader:
     every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
     offers it again with a fresh count. The same rejections follow an infrastructure failure, so a prompt must be
     able to return. Quarantine keeps enough prompts for one batch, or enough in each family for every open batch
-    when batches specify groups per family. Retry counts and quarantine restart empty when a run resumes.
+    when batches specify groups per family. Family-conditioned learned orders checkpoint availability and retry budgets.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -163,10 +182,11 @@ class PromptLoader:
         self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
         for uid in sorted(self._families, key=self._uid_rows.__getitem__):
             self._family_rows[self._families[uid]].append(self._uid_rows[uid])
+        self._family_sampler = order if self._family_rows and isinstance(order, FamilyPromptOrder) else None
         self._family_orders = {}
-        if self._family_rows:
+        if self._family_rows and self._family_sampler is None:
             if not isinstance(order, SeededPasses):
-                raise ValueError("family prompt pools require seeded passes")
+                raise ValueError("family prompt pools require seeded passes or a family-conditioned order")
             self._family_orders = {family: order.for_pool(len(rows)) for family, rows in self._family_rows.items()}
         self._batch_size = batch_size
         self._draw_limit = 2 * batch_size
@@ -184,7 +204,7 @@ class PromptLoader:
     def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
         """Offer a prompt in the requested family whose uid is neither live nor quarantined.
 
-        Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
+        Prompts awaiting regeneration come first. A family lease draws from only that family's pool. Without
         a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
         """
 
@@ -216,6 +236,11 @@ class PromptLoader:
         rows = self._family_rows.get(family)
         if not rows:
             return None
+        if self._family_sampler is not None:
+            index = self._family_sampler.next_family_index(
+                family, rows, lambda index: self._available(self._dataset.uid(index), live)
+            )
+            return self._offer(index) if index is not None else None
         if len(live) + len(self._quarantined) >= len(rows) and all(
             not self._available(self._dataset.uid(index), live) for index in rows
         ):
@@ -302,7 +327,16 @@ class PromptLoader:
         order = self._order.state_dict()
         if self._family_orders:
             order["family_orders"] = {family: passes.state_dict() for family, passes in self._family_orders.items()}
-        return PromptLoaderState(order, list(self._retries))
+        eligibility = None
+        if self._family_sampler is not None:
+            eligibility = PromptEligibilityState(
+                self._step,
+                self._quarantined.copy(),
+                self._unusable_groups.copy(),
+                self._stale_retries.copy(),
+                self._retries_exhausted,
+            )
+        return PromptLoaderState(order, list(self._retries), eligibility)
 
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
@@ -311,6 +345,12 @@ class PromptLoader:
             if family in saved_families:
                 order.load_state_dict(saved_families[family])
         self._retries = collections.deque(state.retries)
+        if state.eligibility is not None:
+            self._step = state.eligibility.step
+            self._quarantined = state.eligibility.quarantined.copy()
+            self._unusable_groups = state.eligibility.unusable_groups.copy()
+            self._stale_retries = state.eligibility.stale_retries.copy()
+            self._retries_exhausted = state.eligibility.retries_exhausted
 
     def _log_name(self, uid: str) -> str:
         label = self._dataset.label(self._uid_rows[uid])

@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrl_train.contextual_sampling import PromptAcquisition
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
@@ -41,8 +42,9 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
                 f"{GROUPS_PER_FAMILY_KEY} sums to {sum(groups_per_family.values())}, "
                 f"expected train_batch_size={batch_size}"
             )
-        if cfg.data.sampling.kind is not None:
-            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null")
+        kind = cfg.data.sampling.kind
+        if kind is not None and kind not in PromptAcquisition:
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null or a prompt-Thompson kind")
     return dict(groups_per_family)
 
 

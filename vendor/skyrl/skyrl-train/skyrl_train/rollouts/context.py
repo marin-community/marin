@@ -8,7 +8,7 @@ import dataclasses
 import json
 import os
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -126,6 +126,7 @@ class TrainingContextState:
     discarded: tuple[DiscardedCandidate, ...] = ()
     source_rejections: SourceRejections | None = None
     sampling_dispositions: tuple[GroupDisposition, ...] = ()
+    family_order: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,11 @@ def _public_prompt_texts(dataset: PromptDataset) -> list[str]:
 
 
 def prompt_order_from_config(
-    config: DictConfig, dataset: PromptGroupDataset, *, held_out: Sequence[PromptDataset] = ()
+    config: DictConfig,
+    dataset: PromptGroupDataset,
+    *,
+    held_out: Sequence[PromptDataset] = (),
+    groups_per_family: Mapping[str, int] | None = None,
 ) -> PromptOrder:
     """Build the loader's prompt order: seeded passes by default, or the ``data.sampling`` order."""
     sampling = config.data.sampling
@@ -186,10 +191,14 @@ def prompt_order_from_config(
         samples = config.generator.n_samples_per_prompt
         if samples < 2:
             raise ValueError("prompt-thompson requires at least two samples per prompt")
-        sources = dataset.dataframe.with_format(None)[sampling.source_column]
+        prepared = dataset.dataframe.with_format(None)
+        sources = prepared[sampling.source_column]
+        families = prepared[FAMILY_COLUMN] if groups_per_family else [None] * len(dataset)
         prompts = [
-            PublicPrompt(dataset.uid(index), source, text)
-            for index, (source, text) in enumerate(zip(sources, _public_prompt_texts(dataset), strict=True))
+            PublicPrompt(dataset.uid(index), source, text, family)
+            for index, (source, text, family) in enumerate(
+                zip(sources, _public_prompt_texts(dataset), families, strict=True)
+            )
         ]
         held_out_digests = {public_prompt_digest(text) for panel in held_out for text in _public_prompt_texts(panel)}
         return PromptThompsonOrder(
@@ -202,6 +211,7 @@ def prompt_order_from_config(
             decay=sampling.decay,
             epsilon=sampling.epsilon,
             reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
+            groups_per_family=groups_per_family,
         )
     if kind in ADAPTIVE_SOURCE_KINDS:
         if config.generator.n_samples_per_prompt < 2:
@@ -396,7 +406,7 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
-        order = prompt_order_from_config(config, dataset, held_out=held_out)
+        order = prompt_order_from_config(config, dataset, held_out=held_out, groups_per_family=groups_per_family)
         assign_source = order.assign if isinstance(order, (AdaptiveSourceOrder, PromptThompsonOrder)) else None
         return cls(
             PromptLoader(
@@ -574,12 +584,13 @@ class TrainingContext:
     async def state_dict(self) -> TrainingContextState:
         """Capture every dispatched group that no trained batch has consumed.
 
-        The loader position and in-flight tasks are read together, before the buffer snapshot, so a task
-        that commits meanwhile appears in the buffer and not also among the prompts to regenerate.
+        Hold prompt dispatch while reading the loader and buffer. A task that commits meanwhile appears in
+        the buffer and is excluded from the prompts to regenerate.
         """
-        in_flight = dict(self._in_flight)
-        loader = self.loader.state_dict()
-        snapshot: BufferSnapshot = await self._buffer.snapshot.remote()
+        async with self._uids_released:
+            in_flight = dict(self._in_flight)
+            loader = self.loader.state_dict()
+            snapshot: BufferSnapshot = await self._buffer.snapshot.remote()
         uncommitted = [task.prompt for lease_id, task in in_flight.items() if lease_id in snapshot.leases]
         payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.ready))
         ready = [
@@ -600,6 +611,7 @@ class TrainingContext:
             snapshot.discarded,
             snapshot.source_rejections,
             snapshot.sampling_dispositions,
+            snapshot.family_order if loader.eligibility is not None else (),
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -638,6 +650,7 @@ class TrainingContext:
                 discarded=state.discarded,
                 source_rejections=state.source_rejections,
                 sampling_dispositions=state.sampling_dispositions,
+                family_order=state.family_order,
             )
         )
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
@@ -678,7 +691,7 @@ class TrainingContext:
                             "task_id": metadata.task_id,
                             "task_digest": identity.task_digest if identity is not None else None,
                             "source": prompt[SAMPLING_SOURCE],
-                            "family": identity.strata.family if identity is not None else lease.family,
+                            "family": lease.family or (identity.strata.family if identity is not None else None),
                         },
                     )
                 task = RolloutTask(lease, prompt, request)

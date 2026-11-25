@@ -397,6 +397,7 @@ class BufferSnapshot:
     discarded: tuple[DiscardedCandidate, ...] = ()
     source_rejections: SourceRejections | None = None
     sampling_dispositions: tuple[GroupDisposition, ...] = ()
+    family_order: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -821,6 +822,7 @@ class RolloutBuffer:
             sampling_dispositions=tuple(
                 outcome for outcome in self._dispositions if outcome.sampling_result is not None
             ),
+            family_order=tuple(self._family_order),
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
@@ -835,6 +837,10 @@ class RolloutBuffer:
                     for (_, family), count in occupied.items()
                 ):
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
+            if snapshot.family_order:
+                if set(snapshot.family_order) != self.config.groups_per_family.keys():
+                    raise ValueError(f"Checkpoint family order does not match {GROUPS_PER_FAMILY_KEY}")
+                self._family_order = collections.deque(snapshot.family_order)
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
             self._dispositions.extend(snapshot.sampling_dispositions)
