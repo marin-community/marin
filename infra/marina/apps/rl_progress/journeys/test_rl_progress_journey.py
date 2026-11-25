@@ -186,7 +186,8 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     }
     early_only = attempt("early-only", 6, 0.2, final=False)
     unpushed_main = attempt("unpushed-main", 7, 0.65) | {"base_commit": controls[0]["base_commit"]}
-    for record in (*controls, branch, superseded, early_only, unpushed_main):
+    main_without_control = attempt("main-without-control", 8, 0.68) | {"is_control": False}
+    for record in (*controls, branch, superseded, early_only, unpushed_main, main_without_control):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
@@ -202,7 +203,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     for attempt_id in ("control-2", "control-3"):
         expect(chart.locator(f'line.history-marker[data-attempt="{attempt_id}"]')).to_have_count(1)
     expect(chart.get_by_role("link")).to_have_count(4)
-    for name in ("superseded", "early-only", "unpushed-main"):
+    for name in ("superseded", "early-only", "unpushed-main", "main-without-control"):
         expect(chart.get_by_role("link", name=re.compile(f"^{name}"))).to_have_count(0)
     journey.shoot("preset-main-controls")
     chart.get_by_role("link", name="control-0 · 50.0%").click()

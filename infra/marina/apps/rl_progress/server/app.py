@@ -65,6 +65,7 @@ def create_api(services):
 
     @api.post("/runs")
     def publish(record: dict[str, Any]) -> dict:
+        record.pop("evaldash_run_ids", None)
         try:
             encoded = json.dumps(record, allow_nan=False)
             summary = AttemptSummary.model_validate_json(encoded, extra="forbid")

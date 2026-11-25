@@ -264,13 +264,15 @@ def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset
     } == {preset.updates}
 
     def family_identity(summary):
-        return next(
+        digest = next(
             score.comparability
             for entry in summary.evaluations
             if (score := entry.evaluation_score) and score.final and score.statistic == "family_mean"
         )
+        assert digest is not None
+        return digest
 
-    assert family_identity(row) == family_identity(baseline) and family_identity(row) is not None
+    assert family_identity(row) == family_identity(baseline)
     outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
     index, item = next((i, item) for i, item in enumerate(outputs) if item.step == preset.updates)
     unanswered = item.answers[0].model_copy(update={"verification_status": "unavailable", "verifier_score": None})

@@ -587,7 +587,7 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
                 archive.extractall(path, filter="data")
             # The launcher owns the JSON protocol, including for bases that predate it.
             native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            if not (path / "experiments/post_training/rl_preset_plan.py").is_file() or not (path / native_cli).is_file():
+            if not (path / native_cli).is_file():
                 shutil.copyfile(root / native_cli, path / native_cli)
             for name in ("rl_preset_cli.py", "rl_preset_plan.py"):
                 source = Path(__file__).with_name(name)

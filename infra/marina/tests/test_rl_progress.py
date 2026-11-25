@@ -88,6 +88,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
+    for evaldash_ids in (None, ["existing-evaluation"]):
+        assert publish(changed | {"evaldash_run_ids": evaldash_ids}) == changed
     config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
     assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
     control_row = changed | {"is_control": True}
