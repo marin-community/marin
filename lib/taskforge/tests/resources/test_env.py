@@ -43,9 +43,10 @@ from shellbox.machine import (
 )
 from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.events import Event, Note, Retrying
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
+from taskforge.effects.issues import EnvironmentSetupFailed, Hold, OutputBudgetExhausted, Restart, Transient
 from taskforge.resources import env as env_module
 from taskforge.resources.env import (
     CommandResult,
@@ -285,6 +286,26 @@ async def test_machine_startup_expected_failure_is_transient(
     with pytest.raises(Transient) as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
+
+
+@pytest.mark.parametrize("installed", [True, False])
+async def test_setup_reads_installed_resources_and_a_failing_setup_is_the_tasks(installed: bool) -> None:
+    script = inline_resource("workspace/setup.sh", b"echo ready\n")
+    requirements = EnvironmentRequirements(
+        command_semantics=CommandSemantics.SHELL_SIMULATOR,
+        working_directory="/workspace",
+        setup_commands=("sh setup.sh",),
+    )
+    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
+    if not installed:
+        with pytest.raises(EnvironmentSetupFailed, match=r"setup\.sh"):
+            await factory.create(requirements)
+        return
+    env = await factory.create(requirements, (script,))
+    try:
+        assert await env.read(PurePosixPath("setup.sh")) == b"echo ready\n"
+    finally:
+        await env.close()
 
 
 @pytest.mark.parametrize(
