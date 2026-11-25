@@ -40,8 +40,12 @@ def grade(config, test_log):
     pass_to_pass = config["PASS_TO_PASS"]
     results = parse_test_log(test_log)
     expected = {"PASSED": set(fail_to_pass) | set(pass_to_pass)}
-    # Package build failures identify no test; they cannot make a log scorable.
-    unscorable = not any(name for names in results.values() for name in names if not name.endswith(BUILD_ERROR_SUFFIX))
+    # Package build failures and parser placeholders identify no test.
+    unscorable = not any(
+        not name.endswith(BUILD_ERROR_SUFFIX) and not _is_placeholder_test_name(_normalize_test_name_for_compare(name))
+        for names in results.values()
+        for name in names
+    )
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
 
     def status(names):

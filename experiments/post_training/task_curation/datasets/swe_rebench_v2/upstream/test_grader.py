@@ -57,6 +57,8 @@ def test_go_json_named_results_match_configured_ids(tmp_path):
         ("parse_log_js_4", "PASS src/repair.test.ts\nTest Suites: 1 passed, 1 total\nTests: 1 passed, 1 total\n"),
         ("parse_log_gotest", "ok  example.com/repair  0.123s\n"),
         ("parse_log_gotest", go_json_log({"Action": "pass", "Package": "example.com/repair"})),
+        ("parse_log_maven", "[INFO] BUILD SUCCESS\n"),
+        ("parse_java_mvn", "[INFO] BUILD SUCCESS\n"),
     ],
 )
 def test_summary_only_log_is_unscorable_with_named_ids(tmp_path, parser, log):
@@ -66,6 +68,7 @@ def test_summary_only_log_is_unscorable_with_named_ids(tmp_path, parser, log):
     assert report["unscorable"] is True
     assert report["resolved"] is False
     assert report["fail_to_pass"] == {"TestRepair": False}
+    assert "UNSCORABLE" in result.stdout
 
 
 @pytest.mark.parametrize("action", ["fail", "skip"])
