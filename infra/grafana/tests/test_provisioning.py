@@ -1361,3 +1361,14 @@ def test_a_local_dashboard_bounds_its_load_on_the_prod_hub(path):
     assert queries
     for sql in queries:
         assert "{{from}}" in sql and "{{to}}" in sql, sql
+        # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
+        assert "'${" not in sql, sql
+
+
+def test_the_production_image_ships_no_local_dashboard():
+    """The image stitches dashboards/*.json without recursing (Dockerfile), so dashboards/local/,
+    which queries the production hub live, is provisioned only by local/compose.yaml."""
+    shipped = stitch_all(DASHBOARDS, DASHBOARDS / "panels")
+
+    assert set(shipped) == {path.name for path in DASHBOARDS.glob("*.json")}
+    assert not set(shipped) & {path.name for path in LOCAL_DASHBOARDS.glob("*.json")}

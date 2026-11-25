@@ -103,6 +103,12 @@ def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
     assert raised.value is invalid
 
 
+def test_finelog_query_classifies_a_transport_failure_as_unavailable():
+    """A dropped connection to the finelog VM is transient, like a failed discovery."""
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ConnectionResetError("connection reset")).query(HEALTH_QUERY, max_rows=1)
+
+
 def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
     with pytest.raises(FinelogUnavailableError):
         _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
