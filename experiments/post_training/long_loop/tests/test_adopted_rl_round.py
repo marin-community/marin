@@ -30,6 +30,7 @@ from experiments.post_training.long_loop.round_runner import (
     round_draft,
 )
 from experiments.post_training.long_loop.run_spec import FilePin
+from experiments.post_training.task_curation.exp3_curriculum import exp3_rl_curriculum
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
@@ -357,6 +358,88 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert generator["max_input_length"] == 32768
     assert generator["sampling_params"]["max_generate_length"] == 98304
     assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+
+
+def test_v5_exp3_round_preserves_route_mix_and_context_through_native_composition(round_inputs, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    model, data = round_inputs
+    authored = load_round(ROUND_DIR / "mochi-v5-exp3-rl.yaml")
+    assert authored.adopted_model.checkpoint_step == 2100
+    assert authored.evaluation_checkpoints == "best_and_final"
+    curriculum = exp3_rl_curriculum(
+        {
+            route: tuple(PoolRow(id=f"{route}-{i}", sha256=f"{i:064x}") for i in range(180))
+            for route in ("agentic", "nonagentic")
+        }
+    )
+    files = {"validation.parquet": hashlib.sha256((data / "validation.parquet").read_bytes()).hexdigest()}
+    for route in ("agentic", "nonagentic"):
+        (data / route).mkdir()
+        content = f"frozen {route} training fixture".encode()
+        (data / route / "train.parquet").write_bytes(content)
+        files[f"{route}/train.parquet"] = hashlib.sha256(content).hexdigest()
+    (data / "manifest.json").write_text(
+        json.dumps(
+            {
+                "curriculum": curriculum.identity,
+                "validation": validation_payload(curriculum.validation),
+                "composition": {"agentic": 180, "nonagentic": 180},
+                "routes": authored.rl.recipe["trainer"]["rollout_buffer"]["source_routes"],
+                "files": files,
+            }
+        )
+    )
+    spec = dataclasses.replace(
+        authored,
+        adopted_model=dataclasses.replace(
+            authored.adopted_model,
+            uri=str(model),
+            checkpoint_step=400407,
+            config_sha256=hashlib.sha256((model / "config.json").read_bytes()).hexdigest(),
+            export_manifest_sha256=hashlib.sha256((model / "export-manifest.json").read_bytes()).hexdigest(),
+        ),
+        rl=dataclasses.replace(authored.rl, pools={"uri": str(data)}),
+    )
+    training = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=training.deps, runtime_args=training.runtime_args
+    )
+    built = training.build_config(context)
+    document = yaml.safe_load(built.launch_config_yaml)
+    # Metadata is local in this fixture; terminal export needs a replayable cloud locator.
+    document["inputs"]["model"]["uri"] = authored.adopted_model.uri
+    validate_launch(yaml.safe_dump(document), tmp_path / "composed", model_config=b"{}")
+    launch = yaml.safe_load((tmp_path / "composed" / "compiled.yaml").read_text())
+    config = launch["skyrl"]
+    trainer, generator = config["trainer"], config["generator"]
+    buffer = trainer["rollout_buffer"]
+    assert buffer["batch_policy"] == "rolling"
+    assert buffer["eval_drain"] == "priority"
+    assert buffer["consumed_route_quotas"] == {"agentic": 32, "nonagentic": 32}
+    assert buffer["max_staleness_steps"] == 3
+    assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 64
+    assert generator["n_samples_per_prompt"] == 8
+    assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
+    optimizer = trainer["policy"]["optimizer_config"]
+    assert optimizer["optimizer"] == "MuonH"
+    assert optimizer["lr"] == 1e-5
+    assert optimizer["max_grad_norm"] == 0.5
+    assert optimizer["optimizer_kwargs"]["offload_momentum"]
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+    assert generator["engine_init_kwargs"]["max_model_len"] == 131072
+    agent = config["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]
+    assert agent["model_info"] == {"max_input_tokens": 131072, "max_output_tokens": 24576}
+    assert agent["compaction_reserve_tokens"] == 24576
+    callbacks = {cb["type"]: cb for cb in trainer["callbacks"]}
+    assert callbacks["best_checkpoint"]["expected_tasks"] == 200
+    assert callbacks["best_checkpoint"]["minimum_scored_tasks"] == 180
+    assert {key: callbacks["wall_time_budget"][key] for key in RL_TRAINING_BUDGET} == RL_TRAINING_BUDGET
+    assert trainer["hf_export_checkpoint"] == "best"
+    assert built.export_hf
+    allocation = launch["iris"]["allocation"]
+    assert allocation["num_nodes"] * allocation["gpus_per_node"] == 128
+    assert launch["artifacts"]["resume_checkpoint_count"] == 1
 
 
 def _write_schema1_model(tmp_path: Path, checkpoint_step: int) -> tuple[Path, dict[str, str]]:
