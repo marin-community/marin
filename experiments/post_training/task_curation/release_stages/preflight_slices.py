@@ -296,6 +296,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     expected_source_count=plan.expected_source_count,
                     targets=plan.targets,
                     prior_declarations=plan.pins.prior_declarations,
+                    removed_sources=plan.removed_sources,
                 ),
                 dry_run=True,
                 repo_root=REPO_ROOT,
