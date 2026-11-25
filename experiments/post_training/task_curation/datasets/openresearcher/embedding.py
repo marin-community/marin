@@ -255,6 +255,20 @@ def upload_completed_parts(output: StoragePath, staged_output: Path, uploaded: s
         stop.wait(timeout=20)
 
 
+def preflight(embed_python: str) -> None:
+    """Fail fast with a clear error when the pinned runtime cannot reach the GPUs."""
+    subprocess.run(
+        [
+            embed_python,
+            "-c",
+            "import torch; assert torch.cuda.is_available(), 'cuda unavailable'; "
+            "x = torch.zeros(8, device='cuda'); assert int(x.sum()) == 0; import transformers; "
+            "print('preflight ok', torch.cuda.device_count())",
+        ],
+        check=True,
+    )
+
+
 def run_workers(
     config: EmbeddingConfig,
     shards: list[Path],
@@ -267,6 +281,7 @@ def run_workers(
     expected_documents: int = EXPECTED_DOCUMENTS,
 ) -> list[dict]:
     """Embed every corpus shard once across the visible GPUs, then verify each part."""
+    preflight(config.embed_python)
     staged_output = work / "embedding-output"
     staged_output.mkdir(parents=True, exist_ok=False)
     uploaded = adopt_regional_parts(output, staged_output)
@@ -309,6 +324,8 @@ def run_workers(
                     "HF_HUB_OFFLINE": "1",
                     "TRANSFORMERS_OFFLINE": "1",
                 },
+                stdout=open(work / f"worker-{worker}.log", "wb"),
+                stderr=subprocess.STDOUT,
             )
         )
     stop = threading.Event()
@@ -328,7 +345,11 @@ def run_workers(
     if uploader_error:
         raise RuntimeError(f"Regional part upload failed: {uploader_error[0]!r}") from uploader_error[0]
     if failures:
-        raise RuntimeError(f"Embedding workers failed: {failures}")
+        tails = []
+        for number in failures:
+            log = (work / f"worker-{number}.log").read_text(errors="replace")
+            tails.append(f"worker {number}: ...{log[-2000:]}")
+        raise RuntimeError(f"Embedding workers failed: {failures}; tails: {tails}")
     entries = []
     for worker in range(len(workers)):
         entries.extend(json.loads((staged_output / f"worker-manifest-{worker}.json").read_text()))
