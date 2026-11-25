@@ -550,3 +550,45 @@ def test_runtime_imports_without_harbor():
         [sys.executable, "-c", program], capture_output=True, text=True, check=True, cwd=Path(__file__).parents[4]
     )
     assert result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize("layout", ["private-docker", "containerd", "host-root"])
+def test_worker_delegation_handles_private_gcp_scope_and_refuses_host_root(tmp_path, monkeypatch, layout):
+    filesystem = tmp_path / "filesystem"
+    cgroup = filesystem / "sys/fs/cgroup"
+    membership = "/kubepods.slice/cri-containerd-fixture.scope" if layout == "containerd" else "/"
+    parent = cgroup / membership.lstrip("/")
+    parent.mkdir(parents=True)
+    for name, value in {
+        "cgroup.type": "domain",
+        "cgroup.controllers": "cpu memory",
+        "cgroup.subtree_control": "",
+        "cpu.max": "400000 100000",
+        "memory.max": str(12 * 2**30),
+        "cgroup.procs": "",
+    }.items():
+        (parent / name).write_text(value)
+    for name in ("proc/self/cgroup", "proc/1/cgroup"):
+        path = filesystem / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("0::" + membership + "\n")
+    if layout == "private-docker":
+        (filesystem / ".dockerenv").touch()
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    monkeypatch.setattr(difficulty_runtime, "Path", lambda value: filesystem / str(value).lstrip("/"))
+    monkeypatch.setattr(difficulty_runtime.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("DEBIAN_FRONTEND", "")
+    if layout == "host-root":
+        with pytest.raises(RuntimeError, match="Refuse cgroup delegation"):
+            difficulty_runtime.worker_limits(worker)
+        assert not (parent / "atlas-difficulty-driver").exists()
+        assert (parent / "cgroup.subtree_control").read_text() == ""
+    else:
+        limits = difficulty_runtime.worker_limits(worker)
+        assert limits["cgroup_parent"] == str(parent.resolve())
+        assert (parent / "cgroup.subtree_control").read_text() == "+cpu +memory"
+        receipt = json.loads((worker / "worker-cgroup.json").read_text())
+        assert receipt["before"]["cpu.max"] == receipt["after"]["cpu.max"] == "400000 100000"
+        assert receipt["before"]["memory.max"] == receipt["after"]["memory.max"] == str(12 * 2**30)

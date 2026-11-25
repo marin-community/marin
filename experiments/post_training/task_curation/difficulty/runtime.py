@@ -185,8 +185,20 @@ def worker_limits(root: Path) -> dict:
         check=True,
     )
     membership = next(line for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))
-    parent = (Path("/sys/fs/cgroup") / membership.removeprefix("0::").lstrip("/")).resolve()
-    if not parent.name.startswith("cri-containerd-") or not parent.name.endswith(".scope"):
+    cgroup_root = Path("/sys/fs/cgroup").resolve()
+    parent = (cgroup_root / membership.removeprefix("0::").lstrip("/")).resolve()
+    containerd_scope = parent.name.startswith("cri-containerd-") and parent.name.endswith(".scope")
+    # Iris's GCP Docker workers use a private cgroup namespace: its root is
+    # this container's scope, not the host hierarchy. Privileged jobs expose
+    # that scope writable. Require the container marker and PID1 membership
+    # before accepting this layout; a bare host root must still fail closed.
+    private_container_root = (
+        parent == cgroup_root
+        and membership == "0::/"
+        and Path("/.dockerenv").exists()
+        and Path("/proc/1/cgroup").read_text().strip() == "0::/"
+    )
+    if not (containerd_scope or private_container_root):
         raise RuntimeError("Refuse cgroup delegation outside this disposable container's own scope")
     fields = ("cgroup.type", "cgroup.controllers", "cgroup.subtree_control", "cpu.max", "memory.max")
     before = {name: (parent / name).read_text().strip() for name in fields}
