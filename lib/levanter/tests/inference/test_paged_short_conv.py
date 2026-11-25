@@ -15,6 +15,9 @@ from levanter.kernels.triton.short_conv import short_conv_reference
 from levanter.layers.paged_short_conv import ShortConvSequenceCache, paged_short_conv
 
 
+_PADDING_TOKENS = 2
+
+
 class PackedBatch(NamedTuple):
     inputs: hax.NamedArray
     info: PageBatchInfo
@@ -34,20 +37,22 @@ def _packed_batch(chunks, page_rows, starts, page_size, slot_ids) -> PackedBatch
         ]
     )
     # Nonzero padded activations must neither leak into output nor update history.
-    values = jnp.concatenate([*chunks, jnp.full((2, chunks[0].shape[1]), 42, dtype=chunks[0].dtype)])
+    values = jnp.concatenate([*chunks, jnp.full((_PADDING_TOKENS, chunks[0].shape[1]), 42, dtype=chunks[0].dtype)])
     info = PageBatchInfo(
         slot_ids=hax.named(jnp.asarray(slot_ids), "seq"),
         page_indices=hax.named(jnp.asarray(page_rows), ("seq", "page")),
         seq_lens=hax.named(jnp.asarray(starts) + jnp.asarray(lengths), "seq"),
         cu_q_lens=hax.named(jnp.asarray([0, *np.cumsum(lengths), INVALID], dtype=jnp.int32), "seq"),
         num_seqs=jnp.asarray(len(chunks), dtype=jnp.int32),
-        new_token_dests=hax.named(jnp.asarray([*destinations, INVALID, INVALID], dtype=jnp.int32), "position"),
+        new_token_dests=hax.named(
+            jnp.asarray([*destinations, *([INVALID] * _PADDING_TOKENS)], dtype=jnp.int32), "position"
+        ),
         page_size=page_size,
     )
     return PackedBatch(
         hax.named(values, ("position", "channel")),
         info,
-        hax.named(jnp.asarray([*positions, 0, 0], dtype=jnp.int32), "position"),
+        hax.named(jnp.asarray(np.pad(positions, (0, _PADDING_TOKENS)), dtype=jnp.int32), "position"),
     )
 
 
@@ -71,10 +76,10 @@ def test_paged_short_conv_chunked_interleaved_requests_match_full_sequence(page_
     ]:
         inputs, info, positions = _packed_batch(chunks, rows, starts, page_size, [0, 1] if a_first else [1, 0])
         result, cache = jax.jit(paged_short_conv)(weight, inputs, cache, info, positions)
-        first, second = result.array[: len(chunks[0])], result.array[len(chunks[0]) : -2]
+        first, second = result.array[: len(chunks[0])], result.array[len(chunks[0]) : -_PADDING_TOKENS]
         actual_a.append(first if a_first else second)
         actual_b.append(second if a_first else first)
-        np.testing.assert_array_equal(result.array[-2:], 0)
+        np.testing.assert_array_equal(result.array[-_PADDING_TOKENS:], 0)
     for full_input, chunks in [(a, actual_a), (b, actual_b)]:
         expected = jax.jit(short_conv_reference)(weight, full_input[None, ...])[0]
         np.testing.assert_allclose(
