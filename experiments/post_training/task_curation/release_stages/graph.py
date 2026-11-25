@@ -694,6 +694,9 @@ def _execute_stage(stage: str, config: dict) -> dict:
 # Iris children do not inherit the parent environment: the dispatched stage jobs
 # receive the run's attestation and the credentials explicitly (the workspace rides
 # by bundle inheritance).
+# The uv extra carrying the CPU torch wheels the Harrier embedder imports.
+EMBED_CPU_DEPENDENCY_GROUP = "cpu"
+
 STAGE_CHILD_ENV_KEYS = (
     "ATLAS_RELEASE_SOURCE_REVISION",
     "ATLAS_PUSH_LOG",
@@ -1089,6 +1092,7 @@ def _stage_step(
     identity: Callable[[], dict],
     inputs_type: type,
     resources: Callable[[], ResourceConfig] | None = None,
+    dependency_groups: list[str] | None = None,
     receipt_key: str | None = None,
     name_suffix: str = "",
 ) -> ArtifactStep[StageReceipt]:
@@ -1097,7 +1101,9 @@ def _stage_step(
     ``node`` is the graph key (unique, used for the graph-receipt document);
     ``spec.stage`` is the executor key (shared by phase variants). ``receipt_key``
     overrides the spec's sealed-reference key; it defaults to the spec's own so a
-    custom spec key cannot drift out of the cluster dispatch.
+    custom spec key cannot drift out of the cluster dispatch. ``dependency_groups``
+    names the uv extras the dispatched job (and the Zephyr workers it spawns, which
+    reproduce its setup) installs; ``None`` infers them from the resources' device.
     """
     graph_receipt_root = f"{plan.release_root}/graph"
     receipt_key = spec.receipt_key if receipt_key is None else receipt_key
@@ -1120,6 +1126,7 @@ def _stage_step(
                     partial(_execute_stage_node, node, spec.stage, receipt_key),
                     resources=dispatch_resources,
                     env_vars=_stage_child_env(),
+                    pip_dependency_groups=dependency_groups,
                     pip_packages=list(spec.pip_packages) or None,
                 )
                 dispatch(config)
@@ -1366,9 +1373,11 @@ def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -
             "gpu_runtime": plan.gpu_runtime,
         }
 
+    cuda = plan.pins.parity_receipt is not None and bool(plan.gpu_runtime)
+
     def resources() -> ResourceConfig:
         config = _resources_config(embedding_sizing(plan.expected_population_tasks))
-        if plan.pins.parity_receipt is not None and plan.gpu_runtime:
+        if cuda:
             return dataclasses.replace(config, device=GpuConfig(variant=plan.gpu_runtime))
         return config
 
@@ -1381,6 +1390,9 @@ def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -
         identity=identity,
         inputs_type=embed_stage.EmbedInputs,
         resources=resources,
+        # The Harrier embedder needs torch: the CPU wheel group on CPU, the inferred
+        # GPU group on a CUDA run.
+        dependency_groups=None if cuda else [EMBED_CPU_DEPENDENCY_GROUP],
     )
 
 

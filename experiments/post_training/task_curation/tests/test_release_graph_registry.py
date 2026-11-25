@@ -614,10 +614,11 @@ def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_remote(callable_, *, resources, env_vars=None, pip_packages=None):
+    def fake_remote(callable_, *, resources, env_vars=None, pip_packages=None, pip_dependency_groups=None):
         captured["dispatch"] = callable_
         captured["env_vars"] = env_vars
         captured["pip_packages"] = pip_packages
+        captured["pip_dependency_groups"] = pip_dependency_groups
         return lambda config: callable_(config)
 
     monkeypatch.setitem(release_graph_module._STAGE_EXECUTORS, spec.stage, fake_executor)
@@ -628,6 +629,33 @@ def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
     assert dispatch.args == ("identity_backend_compose", spec.stage, "documents.identity_receipt")
     assert captured["env_vars"] is not None
     assert receipt.receipt == ArtifactRef(**receipt_ref)
+
+
+def test_cpu_embed_dispatch_installs_the_torch_cpu_extra(tmp_path, monkeypatch):
+    """The Harrier embedder imports torch; a CPU embed job and its workers need the cpu extra.
+
+    Regression: R40's embed dispatched with no extras and every Zephyr worker failed
+    with ModuleNotFoundError: torch.
+    """
+    release_root = str(tmp_path / "release")
+    plan = fixture_plan(release_root=release_root)
+    assert plan.pins.parity_receipt is None  # the CPU path
+    spec = release_graph_module._STAGE_SPECS["embed"]
+    receipt_ref = {"uri": f"{release_root}/embed/receipt.json", "sha256": "b" * 64}
+    captured = {}
+
+    def fake_remote(callable_, *, resources, env_vars=None, pip_packages=None, pip_dependency_groups=None):
+        captured["pip_dependency_groups"] = pip_dependency_groups
+        return lambda config: callable_(config)
+
+    monkeypatch.setitem(
+        release_graph_module._STAGE_EXECUTORS,
+        spec.stage,
+        lambda _config: {"release_id": plan.release_id, "receipt": receipt_ref},
+    )
+    monkeypatch.setattr(release_graph_module, "remote", fake_remote)
+    release_graph(plan).stages["embed"].run({"graph_receipt_root": f"{release_root}/graph"})
+    assert captured["pip_dependency_groups"] == [release_graph_module.EMBED_CPU_DEPENDENCY_GROUP]
 
 
 def test_stage_child_env_forwards_the_attestation_and_credentials(monkeypatch):
