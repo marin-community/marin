@@ -103,7 +103,7 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
         event = Resolved(request, fingerprints, value, restored["replayed"])
         if legacy:
             # Later records refer to this one by the digest of its stored form.
-            document = json_value((data["type"], event.identity()))
+            document = cast(list[Any], json_value((data["type"], event.identity())))
             document[1][MAPPING_TAG]["value"] = data["payload"]["value"]
             encoded = json.dumps(
                 {"value": document}, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True
