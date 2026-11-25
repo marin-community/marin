@@ -211,6 +211,7 @@ def training_config(budget: int, lr: float) -> RecipePatch:
         RecipePatch(
             config_groups=sections.ConfigGroups(algorithm_recipe="ftpo"),
             trainer=sections.Trainer(
+                logger=("console", "records", "wandb"),
                 update_epochs_per_batch=1,
                 algorithm=sections.Algorithm(
                     policy_loss_type="ftpo",
