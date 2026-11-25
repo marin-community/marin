@@ -124,6 +124,16 @@ def requires_judge(selection: EvaluationSelection) -> bool:
     )
 
 
+def declared_task_evidence(selection: ResolvedEvaluationSelection) -> TaskEvidence:
+    """Reference when any selected corpus declares it, else embedded."""
+    if any(
+        source.config is not None and source.config.task_evidence is TaskEvidence.REFERENCE
+        for source in selected_sources(selection)
+    ):
+        return TaskEvidence.REFERENCE
+    return TaskEvidence.EMBEDDED
+
+
 def runs_agent(selection: ResolvedEvaluationSelection) -> bool:
     return any(
         source.config is not None and source.config.protocol.operation == OperationKind.AGENT_EPISODE
@@ -182,13 +192,14 @@ def settings_for(
     seed: int | None,
     default_seed: int | None,
     task_machine_backend: TaskMachineBackend | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
 ) -> CuratedSettings:
     """Resolve run settings.
 
     The seed is the launch seed, else the selection's, else ``default_seed``. Concurrency is the smaller
     of the model's and the selection's bounds, else the default. Agent benchmarks run on the selection's
     task machines, else the default :class:`TaskMachineSettings`; a launch backend replaces either backend.
+    Task evidence is the launch's choice, else the one the selection's corpora declare.
     """
     if model.effective_tokenizer_revision is None:
         raise ValueError("Curated evaluation requires an explicit tokenizer revision")
@@ -227,7 +238,7 @@ def settings_for(
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
         task_machine=task_machine,
-        task_evidence=task_evidence,
+        task_evidence=task_evidence if task_evidence is not None else declared_task_evidence(protocol),
     )
 
 

@@ -59,6 +59,12 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[PDBThink](../explanations/pdbthink.md) uses the published 88-question coordinate
+panel with three completions per question. `--evals pdbthink` preserves each
+prompt and fails before inference if any selected question exceeds the context.
+Use the model's full context and output allowance; headline accuracy gives each
+question family equal weight. It needs no LLM judge.
+
 [LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
 multiple-choice questions over contexts of 8,000 to 2 million words, with the
 upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
@@ -118,8 +124,9 @@ continuations and have no generation output budget.
 Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
 `judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
 secret references. The standard
-FinanceBench, OlympiadBench and EconEvals definitions use Together and record its model alias
-as provider-managed. A provider alias does not establish the exact weights served.
+FinanceBench, OlympiadBench, EconEvals and IMO-Bench definitions use Together and record its model alias
+as provider-managed. IMO-Bench's published scores used Gemini 2.5 Pro as the judge, so IMO-AnswerBench and
+IMO-ProofBench scores are comparable only between runs that share a judge. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
 The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
 supplies its separately pinned hosted judge through `--policy-finalization-config`.
