@@ -4,10 +4,10 @@
   "catalog_target_load_id": "54405be9b4db4c2d9828549469abe759",
   "curriculum_target_load_id": "cbe58f5c9e2142b294986479c6f457c2",
   "embed_cache_root": "s3://marin-us-east-02a/marin/rl-data/atlas/embedding-cache/r40",
-  "expected_browse_source_count": 223,
+  "expected_browse_source_count": 227,
   "expected_contract_count": 4,
   "expected_contract_tasks": 51879,
-  "expected_panels": 228,
+  "expected_panels": 227,
   "expected_population_tasks": 4363214,
   "expected_prior_sources": 332,
   "expected_selected_panels": 227,
@@ -408,12 +408,13 @@
   "prior_curriculum_load_id": "ad06a27603574ddd96a5feb8cc6da4cc",
   "prior_snapshot_id": "assembly-r39-admissions-20261123-v2",
   "qc_exclusions": [
-    "di-zhang-fdu:aime_1983_2024",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit"
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+    "di-zhang-fdu:aime_1983_2024"
   ],
   "rebound_source": "",
   "rebound_tasks": 0,
@@ -441,7 +442,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "dab326d78577c7535dcbce257e70062a572648f5",
+  "source_revision": "PENDING",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
