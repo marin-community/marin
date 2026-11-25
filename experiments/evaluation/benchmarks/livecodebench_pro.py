@@ -21,6 +21,7 @@ from pathlib import Path
 
 import yaml
 from evalrecords.records import TaskEvidence
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.script_grader import grade_script, script_package
@@ -46,7 +47,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import LIVECODEBENCH_PRO_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HARNESS_REVISION = "d614eef4f95b3654bf0758c64e1194b2575850b8"
 """GavinZhengOI/LiveCodeBench-Pro commit whose prompt, extraction and judge settings this benchmark follows."""
@@ -65,7 +66,7 @@ POPULATION = 678
 """The 720 problems less those :func:`judgeable` drops: 26 interactive, 10 without tests, and 6 whose tests
 give one input two different answers (1988D, 1988E, 1998D, 2004F, 2023E, 2044H)."""
 RESOURCE_BUDGET_BYTES = 400 << 20
-"""Above the largest test archive, 377 MiB (problem 2044H)."""
+"""Above the largest selected test archive, 203 MiB (problem 2053I1)."""
 
 PROMPT = (
     "\n        You are a competitive programmer. You will be given a problem statement, please implement solution "
@@ -177,9 +178,11 @@ def livecodebench_pro_item(task: TaskSpec) -> EvaluationItem:
 def source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="LiveCodeBench-Pro:2024H2-2025H1",
-            title="LiveCodeBench Pro",
-            origin="LiveCodeBench Pro",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="2024H2-2025H1",
+            upstream_name="LiveCodeBench Pro",
+            build_path="LiveCodeBench-Pro",
+            origin=SourceOrigin.LIVECODEBENCH_PRO,
             family="competitive-programming",
             tags=("eval", "source:livecodebench-pro", "benchmark", "code", "single-turn"),
             count=POPULATION,
