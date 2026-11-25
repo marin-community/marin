@@ -27,6 +27,8 @@ SOURCE_IMAGES = "sandbox.source_images"
 SOURCE_TASK_ID = "source.task_id"
 SOURCE_TASK_SOURCE = "source.task_source"
 """With ``SOURCE_TASK_ID``, the source task's ``id`` and its ``source`` as JSON, which every revision keeps."""
+OFFLINE_NOTE = "solver.offline"
+"""The prompt that tells a solver on an image task machine without network that it has none."""
 DRIVER_SETTINGS = (SOURCE_IMAGES, SOURCE_TASK_ID, SOURCE_TASK_SOURCE)
 """Set by the driver from each source task; a policy overlay may not set them."""
 

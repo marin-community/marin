@@ -7,6 +7,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, ShellHarness
@@ -16,11 +17,14 @@ from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     CommandSemantics,
+    ConversationEvent,
+    ConversationInput,
     EnvironmentRequirements,
     Grader,
     GraderMachine,
     ScriptGrader,
     TaskSpec,
+    TextMessage,
     VerifyitGrader,
     judge_spec,
 )
@@ -31,7 +35,7 @@ from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.grade_judge import JudgeConnection
 
 from taskforge.model.controls import Candidate
-from taskforge.policy import GRADER_BASE_IMAGE, SOURCE_IMAGES, SOURCE_TASK_ID, SOURCE_TASK_SOURCE, Policy
+from taskforge.policy import GRADER_BASE_IMAGE, OFFLINE_NOTE, SOURCE_IMAGES, SOURCE_TASK_ID, SOURCE_TASK_SOURCE, Policy
 from taskforge.resources.sandbox.factories import (
     DEFAULT_WORKDIR,
     SANDBOX_SCHEDULING_TIMEOUT,
@@ -113,6 +117,14 @@ def requirements(
         environment_variables=dict(env or {}),
     )
 
+
+OFFLINE_PIP_ENVIRONMENT = MappingProxyType({"PIP_NO_INDEX": "1"})
+"""Make pip fail at once on a task machine without network instead of retrying an unreachable index.
+
+Without it, ``pip download`` and ``pip install`` from the index outlast the solver's command timeout, and a timed-out
+command closes an Iris machine. Local installs (``--find-links``, a path, ``-e .`` with its build requirements
+present) still work. A task's own ``environment_variables`` take precedence.
+"""
 
 IN_PROCESS_GRADER_TIMEOUT = 300.0
 """Deadline for graders without a declared command timeout; script graders own their timeout."""
@@ -236,6 +248,8 @@ class LoweringSettings:
         source_identity: A source task's ``id`` and its ``source`` as JSON, from policy ``source.task_id``
             and ``source.task_source``, which the driver sets; a revision must keep both, since they join
             it back to its source. ``None`` for generated tasks.
+        offline_note: The system message, from policy ``solver.offline``, that tells the solver of an image task
+            machine without network that it has none; empty adds no message.
     """
 
     task_machine: MachineSettings
@@ -244,6 +258,7 @@ class LoweringSettings:
     judge_model: str = ""
     source_images: frozenset[str] = frozenset()
     source_identity: tuple[str, str] | None = None
+    offline_note: str = ""
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -270,6 +285,7 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         policy.setting("judge.model", str),
         frozenset(policy.setting(SOURCE_IMAGES, tuple)),
         (task_id, policy.setting(SOURCE_TASK_SOURCE, str)) if task_id else None,
+        policy.prompt(OFFLINE_NOTE).template,
     )
 
 
@@ -329,13 +345,44 @@ def lower_with_settings(
         timeout = max(timeout, settings.limits.model_turn_timeout or 0)
     limits = settings.limits.model_copy(update={"verifier_timeout": timeout})
     return lower(
-        task,
+        offline_task(task, settings),
         task_machine=settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None,
         verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
         limits=limits,
         factories=factories,
         judge_connection=connection,
     )
+
+
+def offline_task(task: TaskSpec, settings: LoweringSettings) -> TaskSpec:
+    """``task`` as it runs on an image task machine without network: pip skips its index, and the solver is told.
+
+    The environment reaches every command on the task machine, including setup and a grader placed there, so
+    controls and solver trials grade alike. A grader on its own machine keeps its environment, since the solver
+    never runs there. ShellSim machines, which have no pip, and machines with network are unchanged.
+    """
+    requirements = task.environment_requirements
+    if (
+        SHELL_CAPABILITY not in requirements.capabilities
+        or requirements.docker_image is None
+        or settings.task_machine.network is not NetworkPolicy.DENY
+    ):
+        return task
+    environment = {**OFFLINE_PIP_ENVIRONMENT, **requirements.environment_variables}
+    update: dict[str, object] = {
+        "environment_requirements": requirements.model_copy(update={"environment_variables": environment})
+    }
+    if settings.offline_note:
+        update["context"] = ConversationInput(events=_with_system_note(task.context.events, settings.offline_note))
+    return task.model_copy(update=update)
+
+
+def _with_system_note(events: tuple[ConversationEvent, ...], note: str) -> tuple[ConversationEvent, ...]:
+    """Append ``note`` to a leading system message, or start the conversation with one; never add a second."""
+    first = events[0]
+    if isinstance(first, TextMessage) and first.role == "system":
+        return (first.model_copy(update={"content": f"{first.content}\n\n{note}"}), *events[1:])
+    return (TextMessage(role="system", content=note), *events)
 
 
 def check_candidates(task: TaskSpec, candidates: Sequence[Candidate]) -> None:

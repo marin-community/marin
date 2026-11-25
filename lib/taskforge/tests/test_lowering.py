@@ -1,19 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import override
 
 import pytest
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.machines import _machine_spec
+from rolloutengine.models import ModelRequest, ModelTurn, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
+from shellbox.machine import (
+    Backend,
+    Command,
+    ExecutionRequirements,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+)
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CommandSemantics,
+    ConversationInput,
     EnvironmentRequirements,
     FinalAction,
     FunctionDefinition,
@@ -23,6 +36,7 @@ from taskcompendium.models import (
     ScriptGrader,
     ShellToolBinding,
     StdoutReward,
+    TextMessage,
 )
 from verifyit.spec import JudgeSpec
 
@@ -149,6 +163,80 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
         assert runtime.workdir == (directory or "/workspace")
     with _machine_spec(declared, machine_runtime(backend="gvisor")) as runtime:
         assert runtime.workdir == (directory or "")
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingFactory(MachineFactory):
+    """Create machines that answer no command, recording the spec each one was created with."""
+
+    backend: Backend
+    specs: list[MachineSpec] = field(default_factory=list)
+
+    @override
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        """Every spec is admitted; the test inspects what reached ``create``."""
+
+    @override
+    async def create(self, spec: MachineSpec) -> Machine:
+        self.specs.append(spec)
+        return IdleMachine()
+
+
+class IdleMachine(Machine):
+    @override
+    async def run(self, command: Command) -> Result:
+        raise AssertionError(f"The solver answered without a command, but the machine ran {command.argv}")
+
+    @override
+    async def upload(self, source: Path, target: str) -> None:
+        raise AssertionError("No resources to upload")
+
+    @override
+    async def download(self, source: str, target: Path) -> None:
+        raise AssertionError("No outputs to download")
+
+    @override
+    async def close(self) -> None:
+        pass
+
+
+async def test_offline_solver_machine_skips_the_pip_index_and_the_solver_is_told() -> None:
+    policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
+    note = policy.prompt("solver.offline").template
+    context = ConversationInput(
+        events=(TextMessage(role="system", content="Be brief."), TextMessage(role="user", content="What is 6+6?"))
+    )
+    task = arithmetic_task(
+        context=context,
+        environment_requirements=requirements(image=GRADER_BASE_IMAGE, env={"PIP_FIND_LINKS": "/wheels"}),
+    )
+    factory = RecordingFactory(Backend.GVISOR)
+    spec = lower_with_settings(task, lowering_settings(policy), {"gvisor": factory})
+    spec = spec.model_copy(update={"trace": TraceMode.MESSAGES})
+    prompts: list[tuple[dict[str, object], ...]] = []
+
+    async def answer(request: ModelRequest) -> ModelTurn:
+        prompts.append(request.messages)
+        return ModelTurn({"role": "assistant", "content": "12"}, (), (), None, "stop")
+
+    engine = RolloutEngine({"gvisor": factory}, {spec.harness: ShellHarness(command_timeout=30)})
+    graded = await engine.run_task(spec, answer)
+    assert graded.grade.reward == 1
+    [machine] = factory.specs
+    assert machine.env == {"PIP_NO_INDEX": "1", "PIP_FIND_LINKS": "/wheels"}
+    system = [message for message in prompts[0] if message["role"] == "system"]
+    assert system == [{"role": "system", "content": f"Be brief.\n\n{note}"}]
+
+
+@pytest.mark.parametrize("network,image", [(NetworkPolicy.ALLOW, GRADER_BASE_IMAGE), (NetworkPolicy.DENY, None)])
+def test_task_machines_with_network_or_without_pip_are_unchanged(network: NetworkPolicy, image: str | None) -> None:
+    settings = lowering_settings(load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults"))
+    settings = replace(settings, task_machine=replace(settings.task_machine, network=network))
+    task = arithmetic_task(environment_requirements=requirements(image=image, env={"PIP_INDEX_URL": "file:///x"}))
+    backend = Backend.GVISOR if image else Backend.SHELLSIM
+    spec = lower_with_settings(task, settings, {backend.value: AvailableFactory(backend)})
+    assert spec.task.environment_requirements.environment_variables == {"PIP_INDEX_URL": "file:///x"}
+    assert spec.task.context == task.context
 
 
 def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> None:

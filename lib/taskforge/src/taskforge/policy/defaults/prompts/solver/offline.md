@@ -1,0 +1,1 @@
+This shell has no network access. Package indexes, Git remotes and every other host are unreachable, and pip is set to skip its package index, so commands such as `pip download`, `pip install <package>`, `pip index`, `git fetch` and `curl` cannot fetch anything. Do not try them. Work only with the source tree and the packages already installed in the environment.

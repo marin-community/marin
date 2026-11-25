@@ -3,7 +3,7 @@
 
 import json
 from functools import partial
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine, twelve
@@ -11,6 +11,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.machines import MachineSetupError
 from rolloutengine.models import (
+    ConversationRecord,
     GradedRollout,
     Rollout,
     RolloutInterrupted,
@@ -47,14 +48,23 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import EnvironmentSetupFailed, OutputBudgetExhausted, Restart, Transient
-from taskforge.effects.log import EventLog
+from taskforge.effects.log import EventLog, JsonlSink
 from taskforge.harness.protocol import ToolResult as ToolReply
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
-from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
+from taskforge.resources.rollouts import (
+    CALL_CHARS,
+    INTERRUPTED_CALLS,
+    InterruptedRollout,
+    RolloutResource,
+    SolverRollout,
+    ToolCallOutcome,
+    interruption,
+    run_rollout,
+)
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.stages.author import install_env
 
@@ -93,12 +103,63 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     resource = RolloutResource(engine, twelve, "test-config")
     decision = Transient if operation == RolloutOperation.START else Restart
     with pytest.raises(decision) as failure:
-        await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
+        await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2), notify=lambda _: None)
     assert failure.value.__cause__ is interrupted
     detail = (f"RuntimeError: {cause} <- RuntimeError: {cause.__cause__}")[:300]
     assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
     assert "ImagePullBackOff" in str(failure.value)
     assert engine.run_ids == ["arithmetic:4:2"]
+
+
+def shell_turn(call_id: str, command: str) -> dict[str, object]:
+    call = {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": "shell", "arguments": json.dumps({"command": command})},
+    }
+    return {"role": "assistant", "content": None, "tool_calls": [call]}
+
+
+async def test_interrupted_rollout_records_its_last_calls_before_the_restart(tmp_path: Path) -> None:
+    earlier = [
+        message
+        for index in range(INTERRUPTED_CALLS)
+        for message in (
+            shell_turn(f"ls-{index}", "ls"),
+            {"role": "tool", "tool_call_id": f"ls-{index}", "content": '{"exit_code": 0}'},
+        )
+    ]
+    download = "pip download click==8.1.7 --no-deps " + "x" * CALL_CHARS
+    messages = (
+        {"role": "user", "content": "Fix the bug"},
+        *earlier,
+        shell_turn("fetch", download),
+        {"role": "tool", "tool_call_id": "fetch", "content": '{"exit_code": null, "reason": "timed_out"}'},
+        shell_turn("test", "pytest -q"),
+    )
+    conversation = ConversationRecord(messages, (), (), (), None)
+    interrupted = RolloutInterrupted(Rollout("click:0:0", (conversation,), "interrupted"), RolloutOperation.ADVANCE)
+    interrupted.__cause__ = MachineTerminated("Machine is closed")
+    resource = RolloutResource(FakeEngine((interrupted,)), twelve, "interrupt-test")
+    path = tmp_path / "events.jsonl"
+    sink = JsonlSink(str(path))
+    ctx = Context(log=EventLog(sink=sink))
+    ctx.resource(resource, resource.fingerprint)
+    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.emit), uses=(resource,))
+    with pytest.raises(Restart, match="Machine is closed"):
+        await ctx.emit(SolverRollout(rollout_spec(arithmetic_task()), 0, 0))
+    await ctx.drain()
+
+    [record] = [record.event for record in await sink.read() if isinstance(record.event, InterruptedRollout)]
+    assert record.run_id == "click:0:0" and record.operation is RolloutOperation.ADVANCE
+    assert record.failure.startswith("Restart: Rollout interrupted during advance: MachineTerminated: Machine is closed")
+    assert record.omitted_calls == 2
+    assert len(record.calls) == INTERRUPTED_CALLS
+    *_, fetch, last = record.calls
+    assert fetch.result == '{"exit_code": null, "reason": "timed_out"}'
+    assert fetch.arguments.startswith('{"command": "pip download click==8.1.7')
+    assert len(fetch.arguments) < CALL_CHARS + 40
+    assert last == ToolCallOutcome("shell", '{"command": "pytest -q"}', None)
 
 
 async def test_grading_runs_real_engine_without_inference() -> None:

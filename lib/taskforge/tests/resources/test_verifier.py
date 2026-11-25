@@ -172,7 +172,7 @@ async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -
             result = await resource.grade(candidate)
             assert result.reward == expected, result
         solver = RolloutResource(pool.rollouts, twelve, "test")
-        result = await solver.run(SolverRollout(event().spec, 0, 0))
+        result = await solver.run(SolverRollout(event().spec, 0, 0), notify=lambda _: None)
         assert result.grade.reward == 1
         assert result.grade.diagnostics["verifier_lease"] == 4
         assert len(factory.machines) == 1 and not factory.machines[0].closed
