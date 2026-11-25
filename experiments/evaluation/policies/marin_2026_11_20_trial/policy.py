@@ -60,7 +60,7 @@ def _taskspec(
 
 
 def _judged(name: str, *, seed: int | None = None) -> PolicyEvaluation:
-    """A benchmark graded by the shared Together ``openai/gpt-oss-120b`` judge selection, as in October."""
+    """A benchmark graded by the shared Together ``openai/gpt-oss-120b`` judge selection."""
     return PolicyEvaluation(definition=EVALS[name], context=SERVED_CONTEXT, max_output=None, seed=seed)
 
 
