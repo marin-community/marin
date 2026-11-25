@@ -727,9 +727,7 @@ def run_lint_review(
         return 0
     merge_base, stat = resolved
 
-    # Drop lanes whose diff-size floor the change doesn't clear (only the holistic meta lane
-    # sets one). Do this before computing leads / running agents so neither pays for a lane
-    # that will not run.
+    # Apply catalog floors before computing leads or starting agents.
     diff_stats = _diff_numstat(merge_base)
     changed_lines = diff_stats[1] + diff_stats[2]
     runnable = []

@@ -7,8 +7,7 @@ diff. It reads beyond the diff and reports design findings. With `--comment`,
 it maintains one overview comment and may create one new top-level comment
 with follow-up findings. Otherwise it is read-only.
 
-Run it at the exact head named by the caller. Review agent-generated pull
-requests; they are the population where structural findings concentrate.
+Run it at the exact head named by the caller, including for agent-generated PRs.
 
 ## Load the context
 
@@ -26,11 +25,10 @@ requests; they are the population where structural findings concentrate.
    overview supplies the previous findings and last reviewed sha. A rebase
    or force-push does not change which comment to edit. When the last
    reviewed sha still names a commit on the PR branch, diff it against the
-   head. Stop without posting or editing when that delta is under 100 changed
-   lines, touches only fixtures, generated files, or documentation, or
-   consists only of commits whose subject starts with `Deslop`. If the sha
-   is unavailable or no longer on the branch, do a full review and replace
-   the same overview. With no overview, perform a first review. On re-review,
+   head. Recheck open findings and trace the delta's effects on the whole
+   design. A mechanical change may need only a brief update. On a first
+   review, rebase or other non-ancestor history, review the full diff
+   against the PR's own merge base. On re-review,
    carry earlier finding numbers forward, mark each resolved, open, or
    changed, and assign new numbers above the largest previously used number.
 4. Read root `AGENTS.md`, every `AGENTS.md` that scopes a changed path, and
@@ -52,11 +50,21 @@ requests; they are the population where structural findings concentrate.
    `gh pr list --state open --limit 100 --json number,title,files`, then keep
    PRs whose `files[].path` intersects the changed paths.
 
-## Answer the questions
+## Review the design from the caller's side
 
-Answer each question for the whole change. A finding must name a file and
-line, the concrete consequence, and the concrete replacement. Omit anything
-without a named replacement.
+For a change to an interface or its ownership, give a fresh read-only
+reviewer the requested behavior, pinned base and head, scoped repository
+instructions and [design review](design.md). Ask it to return findings to
+you while you check the implementation. Give it the code before giving it
+any proposed verdict or prior review comments. The main reviewer owns all
+posting and telemetry. If independent review is unavailable, work through
+the design review yourself before the implementation audit.
+
+Verify the returned claims against the callers, reconcile them with the
+implementation findings, and lead with the decision that most needs the
+author's attention. Scale a follow-up to the interfaces the delta affects.
+
+## Check the implementation
 
 1. **Fit.** For each new helper, type, flag, module, or dependency, name the
    existing repository concept that could carry it. Search `lib/*/src`, the
@@ -67,21 +75,8 @@ without a named replacement.
    Code that changes for the same reason should have a clear owner; flag
    scattered case handling or modules that mix unrelated responsibilities
    when they force callers to understand or coordinate those details.
-2. **Better abstraction.** Name one construct that deletes surface the PR
-   added and cite the lines it deletes. The recurring shapes are an enum plus
-   a wrapper that re-derives what the type already decides, an always-truthy
-   wrapper around an optional value, a nested conditional that a lookup table
-   replaces, an alias or re-export, a helper duplicated with one branch
-   changed, boolean dispatch where separate classes fit, a compatibility shim
-   where the callers are all in-repo, and parameters threaded through layers
-   that only forward them. Check whether changing one supported behavior
-   requires coordinated edits across unrelated layers. Generic code that
-   recognizes individual callers or cases can signal a missing concept in
-   its input contract. Identify where explicit typed inputs or the
-   responsible component could carry that policy;
-   replacing conditionals with a table alone may leave the same coupling.
-   Distinguish necessary boundary adapters and explicitly requested
-   compatibility from exceptions embedded throughout generic mechanisms.
+2. **Better abstraction.** Check the design review's alternative against the
+   implementation. Cite the sites that establish the tradeoff.
 3. **Consequences outside the diff.** For every new config or dataclass
    instance, read the base defaults and ask whether a critical parameter
    (memory, timeout, user, network, version, region) is satisfied by a silent
@@ -130,8 +125,8 @@ without a named replacement.
 
 Validate every finding against the code. Do not report style preferences,
 speculative failures, or pre-existing problems the PR did not touch. A finding
-that a hunk-scoped reviewer or the lint catalog would report belongs to them;
-report it here only when the whole-change view changes its conclusion.
+already reported on this head can be cited briefly. Include material issues
+you verified even when another review lane could have found them.
 A structural finding must show the current obstacle or contract violation,
 its consequence, a concrete replacement, and evidence from the affected code
 or a reproduction. A different organization alone is not a finding.
@@ -311,7 +306,7 @@ head immediately before writing. If the head no longer matches the requested
 head, write nothing and report the stale review; the launcher cannot cancel
 a Loom session already running. If a bot-authored overview marker already
 names this head or a later commit on the branch, write nothing.
-Keep the stale-head and small-delta gates from Load the context.
+Use the previous overview and delta as described in Load the context.
 
 ### Create or edit the overview
 
