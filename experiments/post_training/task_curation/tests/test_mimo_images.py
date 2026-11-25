@@ -49,7 +49,7 @@ def smoke_row() -> tuple[dict, str, bytes]:
     recipe_digest = f"sha256:{digest_hex}"
     dockerfile = (
         f"FROM docker.io/xiaomimimo/mimo-v2.6-rl-oss@{recipe_digest}\n"
-        "WORKDIR /testbed\n"
+        "WORKDIR /workspace/repo\n"
         "RUN install-tmux\n"
         "# ot-validation: repository-leak-repair-v1 (generated; replaced, never stacked)\n"
         "RUN repair-repository\n"
@@ -80,6 +80,10 @@ class FakeTools:
             bundle = Path(command[-1])
             (bundle / "rootfs" / "testbed").mkdir(parents=True)
             (bundle / "rootfs" / "testbed" / "mimo_test_command.sh").write_text("exit 0\n")
+            # Some bases occupy the declared workdir with a plain file, exactly as the
+            # /workspace/repo bases that broke the retry did.
+            (bundle / "rootfs" / "workspace").mkdir(parents=True)
+            (bundle / "rootfs" / "workspace" / "repo").write_text("occupant\n")
             return ""
         if command[0] == "umoci" and command[1] in ("config", "repack"):
             return ""
@@ -209,6 +213,9 @@ def test_entry_point_builds_one_task_end_to_end_and_resumes(tmp_path, monkeypatc
         if destination.startswith("docker://"):
             pushes.append(destination)
     assert len(pushes) == 1 and pushes[0].startswith("docker://" + PACKAGE)
+    # The retry reproduction: the workdir the base occupied with a file is now a directory.
+    rootfs = next(Path(command[1]) for command in tools.commands if command[0].endswith("/chroot"))
+    assert rootfs.is_dir() and (rootfs / "workspace" / "repo").is_dir()
 
     # A resume run re-reads the registry instead of rebuilding.
     resume = FakeTools(manifest)

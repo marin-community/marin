@@ -294,6 +294,25 @@ def image_environment(layout: Path, tag: str) -> tuple[dict[str, str], str | Non
     return environment, user
 
 
+def ensure_workdir(rootfs: Path, workdir: str) -> None:
+    """Create the Dockerfile's working directory, however the base image occupies the path.
+
+    Docker's WORKDIR turns the declared path into a directory: a symlink in the way is
+    followed (creating the directory it points at, which the runtime's ``cd`` needs), and
+    a file or dangling link occupying the path is removed first so the directory can
+    exist. The step is idempotent across retries and resumes.
+    """
+    guest = rootfs / workdir.removeprefix("/")
+    seen = set()
+    while guest.is_symlink() and guest not in seen:
+        seen.add(guest)
+        link = os.readlink(guest)
+        guest = (guest.parent / link) if not os.path.isabs(link) else rootfs / link.removeprefix("/")
+    if guest.exists() and not guest.is_dir():
+        guest.unlink()
+    guest.mkdir(parents=True, exist_ok=True)
+
+
 def build_one(task: dict, config: BuildConfig, workroot: Path, authfile: Path | None, job: str) -> BuildRecord:
     """Build and push one task's prepared image, recording its provenance."""
     task_id = task["task_id"]
@@ -332,7 +351,7 @@ def build_one(task: dict, config: BuildConfig, workroot: Path, authfile: Path | 
         if user not in (None, "", "0", "root"):
             raise BuildRejected(f"the base image declares user {user!r}; the audited recipes run as root")
         for workdir in (recipe.workdir,):
-            (rootfs / workdir.removeprefix("/")).mkdir(parents=True, exist_ok=True)
+            ensure_workdir(rootfs, workdir)
         for command in recipe.run_commands:
             run_in_rootfs(rootfs, command, environment, recipe.workdir)
         run(
