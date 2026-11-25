@@ -1581,3 +1581,32 @@ async def test_trusted_judge_exposes_symlinked_wheel_archive_without_mounting_th
     assert archive in mounted
     assert archive.parent not in mounted
     assert archive.parent.parent not in mounted
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.asyncio
+async def test_measured_machine_closes_after_usage_accounting_fails(tmp_path, monkeypatch, cancelled):
+    class Machine:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    entered = asyncio.Event()
+
+    async def failed_usage(*args):
+        entered.set()
+        if cancelled:
+            await asyncio.Future()
+        raise RuntimeError("Resource usage evidence unavailable")
+
+    machine = Machine()
+    measured = adapter._MeasuredMachine(machine, [], tmp_path / "usage.json", {})
+    monkeypatch.setattr(adapter, "write_resource_usage", failed_usage)
+    closing = asyncio.create_task(measured.close())
+    await entered.wait()
+    if cancelled:
+        closing.cancel()
+    with pytest.raises(asyncio.CancelledError if cancelled else RuntimeError):
+        await closing
+    assert machine.closed
