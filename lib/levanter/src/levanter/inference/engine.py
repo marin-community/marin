@@ -30,7 +30,7 @@ from levanter.inference.jit_scheduler import (
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
@@ -410,6 +410,7 @@ def _prefill_kernel(
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
+    batch_info: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
@@ -418,7 +419,7 @@ def _prefill_kernel(
     pos_ids = queue.queued_pos_ids
     slot_ids = queue.queued_slot_ids
 
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    decode_state = gen_state.decode_state
 
     seq_lens = decode_state.seq_lens
 
@@ -431,7 +432,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
     logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -504,46 +505,46 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     return hax.tree_util.tree_map(select, work.seq_params)
 
 
-def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
+def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenState, PageBatchInfo]:
     num_new = work.new_num_seqs.astype(jnp.int32)
     max_slots = work.new_slot_ids.array.shape[0]
 
-    def body(i: int, state: GenState) -> GenState:
-        slot_val = work.new_slot_ids.array[i]
+    def primary(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
 
-        def process(gs: GenState) -> GenState:
-            parent_val = work.clone_targets.array[i]
-            seq_params = _seq_params_from_work(work, i)
+        def assign(gs: GenState) -> GenState:
+            decode_state, _ = gs.decode_state.reserve_slot(slot)
+            decode_state = decode_state.assign_seq(
+                local_slot_id=slot,
+                tokens=work.prompt_tokens["seq", i],
+                seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
+                kv_pages=None,
+                page_indices=None,
+                seq_params=_seq_params_from_work(work, i),
+            )
+            return dataclasses.replace(gs, decode_state=decode_state)
 
-            def do_clone(gs_clone: GenState) -> GenState:
-                new_state, _ = gs_clone.clone_sequence(
-                    parent_val,
-                    child_local_id=slot_val,
-                    seq_params=seq_params,
-                )
-                return new_state
+        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
-            def do_primary(gs_primary: GenState) -> GenState:
-                decode_state = gs_primary.decode_state
-                decode_state, assigned = decode_state.reserve_slot(slot_val)
-                # Get the prompt length for this sequence
-                prompt_len = work.prompt_lengths.array[i].astype(jnp.int32)
-                decode_state = decode_state.assign_seq(
-                    local_slot_id=slot_val,
-                    tokens=work.prompt_tokens["seq", i],
-                    seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
-                    page_indices=None,  # Will be set during page allocation
-                    seq_params=seq_params,
-                )
-                return dataclasses.replace(gs_primary, decode_state=decode_state)
+    def clone(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
+        parent = work.clone_targets.array[i]
 
-            return jax.lax.cond(is_valid(parent_val), do_clone, do_primary, gs)
+        def assign(gs: GenState) -> GenState:
+            cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
+            return cloned
 
-        should_process = (i < num_new) & is_valid(slot_val)
-        return jax.lax.cond(should_process, process, lambda gs: gs, state)
+        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    return jax.lax.fori_loop(0, max_slots, body, gen_state)
+    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
+    decode_state, batch_info = gen_state.decode_state.allocate_for_seq(
+        token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
+    )
+    gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state), batch_info
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -554,8 +555,8 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    gen_state, batch_info = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill)
 
 
 def _handle_clones(

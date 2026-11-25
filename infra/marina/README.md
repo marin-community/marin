@@ -115,11 +115,17 @@ hashes of the app and declared shared inputs in `dist/marina-release.json`.
 The metadata contains no publisher identity and is
 public when the app is public.
 
+`--release-branch <name>` cuts from a clean checkout landed on a declared branch
+instead: the guard verifies that origin's branch contains the checkout's commit
+(its tip or any merged commit) and the metadata records the branch beside the
+commit. Use it for integration-branch releases such as Atlas's.
+
 Use `--allow-dirty` to explicitly release from a branch or uncommitted checkout.
 It bypasses the Git and tracked-file checks and omits verified source metadata;
-`release-status` reports `unrecorded` from a clean checkout. Package validation,
-expected-revision checks and server authorization still apply. Use `--local`
-for a disposable preview that leaves production unchanged.
+`release-status` reports `unrecorded` from a clean checkout. It cannot combine
+with `--release-branch`. Package validation, expected-revision checks and server
+authorization still apply. Use `--local` for a disposable preview that leaves
+production unchanged.
 
 `release-status` compares the published source with the checkout. It reports
 `current`, `different`, `modified`, or `unrecorded` for packages without provenance.

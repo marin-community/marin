@@ -809,8 +809,7 @@ class Generator(Section):
     weight_sync_pause_timeout_seconds: int | float = field(30.0)
     "Deadline for every engine to acknowledge a weight-sync pause or resume."
     error_handling: ErrorHandling = Field(default_factory=ErrorHandling)
-    """Terminal-error taxonomy. Unknown Gym failures retain the previous masking behavior; context overflow and
-    timeouts are agent errors."""
+    "Mask unknown terminal failures and zero rewards for known agent errors."
     chat_template: ChatTemplate | None = Field(default_factory=ChatTemplate)
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})

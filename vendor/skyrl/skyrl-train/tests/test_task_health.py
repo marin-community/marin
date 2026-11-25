@@ -31,7 +31,7 @@ def test_health_receipt_preserves_setup_exit_evidence(tmp_path, reason, exit_cod
         response_token_ids=(),
         loss_mask=(),
         logprobs=None,
-        grade=GradeResult(Outcome.INFRA_ERROR, None, message),
+        grade=GradeResult(Outcome.UNAVAILABLE, None, message),
         stop_reason="error",
         failure=RolloutFailure(
             "MachineSetupError",
@@ -44,6 +44,7 @@ def test_health_receipt_preserves_setup_exit_evidence(tmp_path, reason, exit_cod
 
     (stored_receipts,) = (tmp_path / ATTEMPT_RECEIPTS_DIRECTORY).glob("*.jsonl")
     stored = json.loads(stored_receipts.read_text())
+    assert stored["outcome"] == Outcome.INFRA_ERROR
     assert (stored["phase"], stored["setup_completed"], stored["setup_exit_code"]) == (
         Phase.TASK_SETUP,
         False,

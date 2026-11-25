@@ -3,8 +3,9 @@
 
 """Storage conventions for compact task health receipts emitted by RL workers."""
 
-from dataclasses import dataclass
 from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict
 
 ATTEMPT_RECEIPTS_DIRECTORY = "task-health"
 
@@ -17,8 +18,9 @@ class Phase(StrEnum):
     VERIFIER = "verifier"
 
 
-@dataclass(frozen=True)
-class AttemptReceipt:
+class AttemptReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     attempt_id: str
     task_id: str
     task_digest: str

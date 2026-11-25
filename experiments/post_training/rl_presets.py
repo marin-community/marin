@@ -24,6 +24,7 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
 )
 from pydantic import BaseModel, Field, PositiveInt
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
@@ -388,7 +389,7 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
     if "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
         raise ValueError("Daytona ttl_minutes must cover the task attempt timeout")
     stall = config.trainer.algorithm.group_admission.stall_timeout
-    if "pi" in sessions.get("agent_harnesses", {}) and stall is not None and stall < 2 * attempt_timeout:
+    if PI_HARNESS in sessions.get("agent_harnesses", {}) and stall is not None and stall < 2 * attempt_timeout:
         raise ValueError("group_admission.stall_timeout must cover the Pi attempt and one retry")
 
 

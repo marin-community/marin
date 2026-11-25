@@ -214,6 +214,8 @@ Two adapters build cache behavior on this primitive:
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
+  A fetch preserves a regular local file when its bytes match the committed blob;
+  missing or different files are atomically replaced.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache
 cleanup does not acknowledge persistence or return a commit token. Use

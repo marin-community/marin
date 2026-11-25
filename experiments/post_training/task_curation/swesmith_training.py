@@ -22,6 +22,7 @@ from taskcompendium.importers.harbor.package import JobSettings, PackageTests, l
 from taskcompendium.models import AgentMachine, FileReward, NoGrader, ScriptGrader, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
+from experiments.evaluation.benchmarks.harbor import image_lock
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
     PARQUET_BATCH_ROWS,
@@ -49,11 +50,6 @@ SWESMITH_MACHINE = MachineRuntimeSpec(
 VERIFIER_TIMEOUT = 900
 _PI_LOCK = "environment/long-loop-pi/package-lock.json"
 _PI_LOCK_PACKAGE = "node_modules/@earendil-works/pi-coding-agent"
-_IMAGE_DIGESTS = {
-    "ghcr.io/astral-sh/uv:0.8": "sha256:1d31be550ff927957472b2a491dc3de1ea9b5c2d319a9cea5b6a48021e2990a6",
-    "python:3.10-bookworm": "sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8",
-    "python:3.11-bookworm": "sha256:726d304906fa5eb468e5531e366548d1903286352f5adb54ef508ac01fbd80c6",
-}
 
 
 def lower_swesmith_task(task: TaskSpec, machine: MachineRuntimeSpec, image_digests: Mapping[str, str]) -> TaskSpec:
@@ -194,6 +190,6 @@ def native_swesmith_selection(selection: ArtifactStep) -> ArtifactStep:
         selection_name=name.rsplit("/", 1)[-1],
         selection_version=selection.version,
         machine=SWESMITH_MACHINE,
-        image_digests=_IMAGE_DIGESTS,
+        image_digests=image_lock(SWESMITH_DATASET),
     )
     return replace(step, output_path_prefix=CANONICAL_ARTIFACT_ROOT)

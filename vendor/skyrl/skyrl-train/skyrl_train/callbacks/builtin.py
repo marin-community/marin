@@ -73,6 +73,8 @@ from .types import (
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
 CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
+EVALUATION_ATTEMPTED_METRIC = "eval/all/num_attempted"
+EVALUATION_SCORED_METRIC = "eval/all/num_scored"
 
 
 def register_callback(name: str):
@@ -242,8 +244,8 @@ class BestCheckpointCallback(TrainerCallback):
                 saved = json.load(stream)
                 self.best_score = saved["accuracy"]
                 self.preservation_baseline = saved.get("preservation_baseline", {})
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
+        attempted = metrics[EVALUATION_ATTEMPTED_METRIC]
+        scored = metrics[EVALUATION_SCORED_METRIC]
         ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
@@ -323,8 +325,8 @@ def pool_checkpoint_scores(metrics: Dict[str, float], policy: PooledCheckpointEv
         if included:
             reward_sums.append(metrics[f"{prefix}/avg_verifier_score"] * included)
     metrics["eval/selection_eligible"] = float(eligible)
-    metrics["eval/all/num_attempted"] = attempted
-    metrics["eval/all/num_scored"] = scored
+    metrics[EVALUATION_ATTEMPTED_METRIC] = attempted
+    metrics[EVALUATION_SCORED_METRIC] = scored
     metrics["eval/all/verifier_score_coverage"] = scored / attempted if attempted else 0.0
     if scored:
         metrics["eval/all/avg_verifier_score"] = math.fsum(reward_sums) / scored
@@ -526,7 +528,7 @@ class DatabaseRegistrationCallback(TrainerCallback):
     - Direct env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
     Args:
-        agent_name: Name of the agent being trained (default: from terminal_bench config or "skyrl")
+        agent_name: Name of the agent being trained. Defaults to TRAINING_AGENT_NAME or "skyrl".
         enabled: Whether registration is enabled (default: True, auto-disabled if no credentials)
     """
 
@@ -1079,7 +1081,6 @@ def create_default_callbacks(
     # Database registration callback (auto-enabled, gracefully disabled if no credentials)
     enable_db_registration = getattr(cfg.trainer, "enable_db_registration", True)
     if enable_db_registration:
-        # Get agent name from terminal_bench config if available
         callbacks.append(DatabaseRegistrationCallback())
 
     # Pre-flight reward gate (default-off)

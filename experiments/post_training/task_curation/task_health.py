@@ -19,7 +19,6 @@ import re
 import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -32,6 +31,7 @@ from marin.rl.skyrl_records import read_skyrl_launch_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from rigging.task_errors import setup_exit_is_task_failure
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
@@ -216,7 +216,7 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
     rows: dict[str, tuple[AttemptReceipt, str | None]] = {}
 
     def read_batch(path: StoragePath) -> list[AttemptReceipt]:
-        return [AttemptReceipt(**json.loads(line)) for line in path.read_text().splitlines()]
+        return [AttemptReceipt.model_validate_json(line) for line in path.read_text().splitlines()]
 
     paths = sorted((path for path in root.ls() if path.name.endswith(".jsonl")), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
@@ -226,7 +226,7 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
                 prior, _ = rows.setdefault(receipt.attempt_id, (receipt, address))
                 if prior != receipt:
                     raise ValueError(f"Conflicting records for attempt {receipt.attempt_id}")
-    return [{**asdict(receipt), "address": address} for receipt, address in rows.values()]
+    return [{**receipt.model_dump(mode="json"), "address": address} for receipt, address in rows.values()]
 
 
 def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
@@ -291,7 +291,7 @@ def publish_skip_list(
             row["phase"] == Phase.TASK_SETUP
             and row["setup_completed"] is False
             and (
-                0 < setup_exit_code < 128
+                setup_exit_is_task_failure(setup_exit_code)
                 if setup_exit_code is not None
                 else HARBOR_SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
             )

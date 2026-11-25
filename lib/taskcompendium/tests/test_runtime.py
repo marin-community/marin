@@ -13,6 +13,7 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import httpx
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -567,14 +568,22 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("placement", ["grader", "agent"])
-async def test_daytona_script_judge_uses_a_host_credential(tmp_path, script_grading_task, judge_server, placement):
+async def test_daytona_script_judge_uses_a_host_credential(
+    tmp_path, script_grading_task, judge_server, placement, monkeypatch
+):
     class DaytonaGradingMachines(LocalGradingMachines):
         backend = Backend.DAYTONA
 
+    handle_request = httpx.AsyncHTTPTransport.handle_async_request
+
+    async def check_judge_timeout(transport, request):
+        assert request.extensions["timeout"]["read"] == 240
+        return await handle_request(transport, request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", check_judge_timeout)
     script = b"""
 import json, os, urllib.error, urllib.request
 
-assert os.environ['VERIFYIT_JUDGE_API_KEY'] != 'host-only-key'
 url = os.environ['VERIFYIT_JUDGE_BASE_URL']
 body = json.dumps({'model': os.environ['VERIFYIT_JUDGE_MODEL'], 'top_k': 20}).encode()
 try:
@@ -594,7 +603,7 @@ with urllib.request.urlopen(request) as response:
                 cwd="/",
                 placement=GraderMachine(environment=GRADER_ENVIRONMENT) if placement == "grader" else AgentMachine(),
                 answer_path=None,
-                judge=JudgeSpec(references=("PASS",)),
+                judge=JudgeSpec(references=("PASS",), request_timeout=240),
             ),
             "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
         }
@@ -622,10 +631,8 @@ with urllib.request.urlopen(request) as response:
     [machine] = machines.machines
     assert "host-only-key" not in machine.env.values()
     assert machine.closed
-    assert "runtime-private-key" not in json.dumps(result.diagnostics)
-    assert all(
-        b"runtime-private-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file()
-    )
+    assert "host-only-key" not in json.dumps(result.diagnostics)
+    assert all(b"host-only-key" not in path.read_bytes() for path in (tmp_path / "tests").rglob("*") if path.is_file())
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])

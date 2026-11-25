@@ -302,3 +302,35 @@ async def test_micro210_native_error_policy_preserves_verdict_and_excludes_unnam
     assert batch["exclude_from_baseline"] == [not scored]
     assert batch.get("unshaped_reward_available", [True]) == [scored]
     assert batch["unshaped_rewards"] == [0.5 if scored else 0.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exit_code", "retries"), [(2, 0), (137, 1)])
+async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, exit_code, retries):
+    async def agent(_context, _complete):
+        pytest.fail("An unsuccessful setup must stop the agent")
+
+    async def skip_backoff(_delay):
+        pass
+
+    environment = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": (f"exit {exit_code}",)})
+    task = text_task().model_copy(update={"environment_requirements": environment})
+    request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
+    worker = TaskRolloutWorker(
+        worker_config,
+        WholeTaskProjection(worker_config, WorkerTokenizer()),
+        ScriptedClient([]),
+        {"shellsim": ShellSimMachineFactory()},
+        retry_wait=skip_backoff,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
+        agents=agent_harnesses(agent),
+        shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert result.failure is not None
+    assert result.failure.diagnostics["setup_exit_code"] == exit_code
+    assert result.metrics["rollout_retries"] == retries

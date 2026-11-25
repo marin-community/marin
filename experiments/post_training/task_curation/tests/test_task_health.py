@@ -4,7 +4,6 @@
 import hashlib
 import json
 import sys
-from dataclasses import asdict, replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -100,16 +99,17 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     first = receipts / "first.jsonl"
     second = receipts / "second.jsonl"
     for ordinal, path in enumerate((first, second), start=1):
-        failed_setup = replace(receipt, attempt_id=f"setup-{ordinal}")
-        killed_setup = replace(
-            receipt,
-            attempt_id=f"killed-{ordinal}",
-            task_id=killed.id,
-            task_digest=selection_digest(killed),
-            docker_image="swe/killed",
-            setup_exit_code=137,
+        failed_setup = receipt.model_copy(update={"attempt_id": f"setup-{ordinal}"})
+        killed_setup = receipt.model_copy(
+            update={
+                "attempt_id": f"killed-{ordinal}",
+                "task_id": killed.id,
+                "task_digest": selection_digest(killed),
+                "docker_image": "swe/killed",
+                "setup_exit_code": 137,
+            }
         )
-        path.write_text("\n".join(json.dumps(asdict(row)) for row in (failed_setup, killed_setup)) + "\n")
+        path.write_text("\n".join(row.model_dump_json() for row in (failed_setup, killed_setup)) + "\n")
     config = {
         "skyrl": {"trainer": {"export_path": str(export)}},
         "inputs": {"train_data": [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]},

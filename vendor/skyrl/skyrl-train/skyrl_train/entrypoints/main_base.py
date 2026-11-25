@@ -202,11 +202,8 @@ def create_ray_wrapped_inference_engines_from_config(
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
         expert_parallel_size=cfg.generator.inference_engine_expert_parallel_size,
-        # vLLM Decode Context Parallel (DCP). Default 1 (disabled) -> forwarded as the
-        # signature default and (per ray_wrapped_inference_engine) NOT passed to the vLLM
-        # engine, so flag-off engine init is byte-identical to today (G1). When > 1 it is
-        # threaded into vllm.LLM / AsyncEngineArgs as a native EngineArgs kwarg. DCP rides
-        # the TP GPUs and does not affect GPU placement (G4).
+        # Decode context parallelism uses the tensor-parallel GPUs. Pass values above 1
+        # as native vLLM engine arguments without changing placement.
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),
@@ -245,7 +242,12 @@ def create_ray_wrapped_inference_engines_from_config(
             )
             engine_kwargs["enforce_eager"] = False
 
-    if stream_policy_model and rollout_model_path.startswith("s3://") and cfg.generator.backend == "vllm":
+    # Coordinated DP ranks must restart together after an actor fails during
+    # rendezvous, including when their checkpoint is staged on local disk.
+    if cfg.generator.backend == "vllm" and (
+        (stream_policy_model and rollout_model_path.startswith("s3://"))
+        or cfg.generator.inference_engine_data_parallel_size > 1
+    ):
         retry = cfg.trainer.model_load_retry
 
         def create_engines(remaining_timeout_seconds: float):

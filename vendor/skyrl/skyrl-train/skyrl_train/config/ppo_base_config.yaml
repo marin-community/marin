@@ -402,8 +402,7 @@ generator:
   weight_sync_pause_timeout_seconds: 30.0
   max_turns: 1
 
-  # Terminal-error taxonomy. Unknown Gym failures retain the
-  # previous masking behavior; context overflow and timeouts are agent errors.
+  # Mask unknown terminal failures and zero rewards for known agent errors.
   error_handling:
     enable_error_classification: true
     passthrough_exceptions: []

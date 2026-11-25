@@ -134,6 +134,12 @@ SkyRL reply text (`responses`, assistant content) never includes a trailing EOS 
 terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
 token, including the terminator.
 
+SkyRL sets `environment.task_sessions.daytona.image_build` to `snapshot` or
+`declarative`. Tasks that select the `daytona-eval` backend can use a separate
+build mode through `eval_image_build`. They use the primary credential unless
+`eval_api_key_env` is set. Declarative builds create no persistent snapshot and
+require an account that permits them.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.
