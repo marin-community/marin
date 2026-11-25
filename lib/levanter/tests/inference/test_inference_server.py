@@ -1096,6 +1096,13 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
         learned = SnowballLMHeadModel.init(vocab, cfg, key=jax.random.key(21))
         path = str(tmp_path / "native-policy")
         save_checkpoint({"model": learned}, 3, path, metadata={"policy_version": 2, "policy_id": "learned:2"})
+        incomplete = str(tmp_path / "incomplete-policy")
+        save_checkpoint(
+            {"model": {"other": jnp.array(0)}},
+            3,
+            incomplete,
+            metadata={"policy_version": 2, "policy_id": "incomplete:2"},
+        )
         server = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
         try:
             with TestClient(server.app) as client:
@@ -1117,6 +1124,10 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
                 assert before.status_code == 200
                 with pytest.raises(ValueError):
                     publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
+                with pytest.raises(FileNotFoundError):
+                    publish_snowball_checkpoint(server, incomplete, policy_version=2, expected_serving_version=0)
+                assert generate("incomplete:2").status_code == 409
+                assert generate("starting").status_code == 200
                 assert publish_snowball_checkpoint(server, path, policy_version=2, expected_serving_version=0) == 1
                 assert generate("starting").status_code == 409
                 result = generate("learned:2")
@@ -1139,23 +1150,6 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
                 )
         finally:
             server.shutdown()
-
-
-            inputs = np.concatenate((prompt, tensors["choice.0.token_ids"]))
-            experts, valid = choice_expert_routes(tensors, 0, inputs)
-            tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
-            replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
-            learner_loss, _ = model.next_token_loss_and_metrics(
-                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
-            )
-
-    np.testing.assert_allclose(
-        tensors["choice.0.behavior_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
-    )
-    wrong_inputs = inputs.copy()
-    wrong_inputs[0] += 1
-    with pytest.raises(ValueError):
-        choice_expert_routes(tensors, 0, wrong_inputs)
 
 
 @pytest.fixture(scope="module")
@@ -1440,3 +1434,55 @@ def test_unsupported_pause_policy_keeps_admission_open(greedy_client, policy):
     )
     assert response.status_code == 200, response.text
     assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+def test_staged_weights_leave_admission_open_and_recheck_version(
+    inference_server_config, generated_model_and_tokenizer
+):
+    model, tokenizer = generated_model_and_tokenizer
+    config = dataclasses.replace(inference_server_config, initial_policy_id="initial")
+    server = InferenceServer.create(config, model, tokenizer)
+    context = server.inference_context
+    entered, release = threading.Event(), threading.Event()
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+
+    def restore(model):
+        entered.set()
+        if not release.wait(30):
+            raise TimeoutError("Test did not release checkpoint staging")
+        return jax.tree.map(jnp.zeros_like, model)
+
+    def generate(client, policy_id):
+        response = client.post(
+            GENERATE_PATH,
+            content=encode_frame(
+                {"max_tokens": 2, "temperature": 0, "expected_policy_id": policy_id},
+                {"prompt_token_ids": prompt},
+            ),
+            headers={"content-type": MEDIA_TYPE},
+        )
+        return response
+
+    with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        try:
+            staging = pool.submit(context.stage_policy, restore, expected_version=0, policy_id="staged")
+            assert entered.wait(5)
+            during_stage = pool.submit(generate, client, "initial").result(timeout=30)
+            assert during_stage.status_code == 200, during_stage.text
+            during_metadata, _ = decode_frame(during_stage.content)
+            assert during_metadata["choices"][0]["model_version"] == 0
+        finally:
+            release.set()
+        candidate = staging.result(timeout=30)
+
+        assert server.reload(lambda model: model, expected_version=0, policy_id="next") == 1
+        with pytest.raises(ValueError, match="Expected model version"):
+            context.install_policy(candidate)
+        with pytest.raises(ValueError, match="new, nonempty policy ID"):
+            context.stage_policy(lambda model: model, expected_version=1, policy_id="next")
+        assert generate(client, "staged").status_code == 409
+        response = generate(client, "next")
+        assert response.status_code == 200
+        metadata, _ = decode_frame(response.content)
+        assert metadata["choices"][0]["model_version"] == 1
+        assert metadata["choices"][0]["policy_id"] == "next"

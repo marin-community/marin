@@ -73,6 +73,14 @@ The inference server is built around a `GenerationService` that encapsulates:
   token IDs to the prompt and request the rest of its token budget.
 - **Error Handling**: Proper HTTP status codes and error messages
 
+### Frozen checkpoint publication
+
+Native Snowball checkpoint publication restores and validates an immutable
+candidate while the current policy serves. Installation rechecks the base
+serving version and policy ID, then drains generation and resets the KV state
+before making the candidate visible. New binary requests can supply
+`expected_policy_id` to reject a stale policy with HTTP 409.
+
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
 - **Memory Management**: Efficient KV cache page allocation and deallocation

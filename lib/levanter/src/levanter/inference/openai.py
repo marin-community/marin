@@ -196,6 +196,15 @@ class InferenceBatch(list):
 WeightSource = collections.abc.Callable[[LmHeadModel], LmHeadModel]
 
 
+@dataclass(frozen=True)
+class StagedPolicy:
+    """Ready-to-install weights tied to a serving version and immutable policy ID."""
+
+    model: LmHeadModel
+    expected_version: int
+    policy_id: str
+
+
 def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     """Fetch all items from `q` which arrive within `timeout` seconds."""
     deadline = time.time() + timeout
@@ -268,7 +277,7 @@ class InferenceContext:
     def unload(self):
         """Unload the inference model to free up resources."""
         logger.info("Unloading inference model...")
-        with self.model_lock:
+        with self._publication_lock, self.model_lock:
             # pyrefly: ignore[bad-assignment]  # unload() deliberately clears the model; reload() restores it
             self.model = None
             self.engine = None  # type: ignore[assignment]
@@ -296,6 +305,37 @@ class InferenceContext:
         with self._publication_lock, self._requests_lock:
             self._paused.clear()
 
+    def _check_policy_update(self, expected_version: int | None, policy_id: str | None) -> None:
+        if expected_version is not None and expected_version != self._model_version:
+            raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+        if policy_id is not None and (
+            not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
+        ):
+            raise ValueError("A weight update requires a new, nonempty policy ID")
+
+    def stage_policy(self, restore: WeightSource, *, expected_version: int, policy_id: str) -> StagedPolicy:
+        """Prepare compatible weights while the current policy keeps serving."""
+        with self._publication_lock:
+            self._check_policy_update(expected_version, policy_id)
+            active, engine = self.model, self.engine
+        with (
+            hax.partitioning.set_mesh(self.mesh),
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            candidate = restore(active)
+            if not engine.can_reuse_cache(candidate):
+                raise ValueError("Staged weights must preserve the model structure and array layouts")
+            jax.block_until_ready(candidate)
+        return StagedPolicy(candidate, expected_version, policy_id)
+
+    def install_policy(self, policy: StagedPolicy) -> int:
+        """Install the candidate if its base serving version is still current."""
+        return self.reload(
+            lambda _: policy.model,
+            expected_version=policy.expected_version,
+            policy_id=policy.policy_id,
+        )
+
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
@@ -304,12 +344,7 @@ class InferenceContext:
             self._publication_pending.set()
             try:
                 with self.model_lock:
-                    if expected_version is not None and expected_version != self._model_version:
-                        raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
-                    if policy_id is not None and (
-                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
-                    ):
-                        raise ValueError("A weight update requires a new, nonempty policy ID")
+                    self._check_policy_update(expected_version, policy_id)
 
                     with (
                         hax.partitioning.set_mesh(self.mesh),
@@ -319,6 +354,7 @@ class InferenceContext:
                         engine = self.engine
                         if engine.can_reuse_cache(model):
                             engine.reset()
+                            jax.block_until_ready(engine.gen_state)
                             engine.model = model
                         else:
                             engine = InferenceEngine.from_model_with_config(
