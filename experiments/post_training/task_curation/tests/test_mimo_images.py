@@ -70,6 +70,7 @@ class FakeTools:
         self.pushed = {}
         self.fail_on = set()
         self.rootfs_seen = None
+        self.workdir_is_dir = None
 
     def __call__(self, command, *, env=None, timeout=None):
         self.commands.append(command)
@@ -90,8 +91,9 @@ class FakeTools:
             return ""
         if command[0].endswith("/chroot") or command[0] == "chroot":
             rootfs = Path(command[1])
-            if self.rootfs_seen is None or (rootfs / "workspace" / "repo").is_dir():
+            if self.rootfs_seen is None:
                 self.rootfs_seen = rootfs
+                self.workdir_is_dir = (rootfs / "workspace" / "repo").is_dir()
             return ""
         if command[0] == "skopeo" and "copy" in command:
             source, destination = self.copy_arguments(command)
@@ -217,10 +219,9 @@ def test_entry_point_builds_one_task_end_to_end_and_resumes(tmp_path, monkeypatc
         if destination.startswith("docker://"):
             pushes.append(destination)
     assert len(pushes) == 1 and pushes[0].startswith("docker://" + PACKAGE)
-    # The retry reproduction: the workdir the base occupied with a file is now a directory
+    # The retry reproduction: the workdir the base occupied with a file is a directory
     # when the RUN steps execute.
-    assert tools.rootfs_seen is not None
-    assert (tools.rootfs_seen / "workspace" / "repo").is_dir()
+    assert tools.workdir_is_dir is True
 
     # A resume run re-reads the registry instead of rebuilding.
     resume = FakeTools(manifest)
