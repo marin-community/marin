@@ -640,7 +640,7 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     assert response.status_code == 400
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
     tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     token_ids = tokenizer.encode("a", add_special_tokens=False)
@@ -682,8 +682,8 @@ def test_openai_generation_reports_stop_at_the_token_limit(greedy_client, chat):
     assert [choice["finish_reason"] for choice in stopped.json()["choices"]] == ["stop", "stop"]
 
 
-def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(test_client):
-    client, _ = test_client
+def test_binary_multi_choice_generation_reports_stop_at_the_token_limit(greedy_client):
+    client = greedy_client
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
     options = {"max_tokens": 1, "temperature": 0, "seed": 17, "n": 2}
 
