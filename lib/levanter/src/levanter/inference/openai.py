@@ -764,6 +764,59 @@ def _completion_logprobs(
     )
 
 
+def _format_completion_choice(
+    tokenizer: MarinTokenizer,
+    request: CompletionRequest,
+    prompt: str | list[int],
+    generation: InferenceResponse,
+    index: int,
+) -> CompletionChoice:
+    choice_text = generation.text
+    if request.echo:
+        prefix = prompt if isinstance(prompt, str) else tokenizer.decode(prompt, skip_special_tokens=False)
+        choice_text = prefix + choice_text
+
+    # Format logprobs if available
+    logprobs = None
+    if request.echo and request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
+        if generation.echo_token_ids is None or generation.echo_logprobs is None:
+            raise RuntimeError("Echo logprobs requested but missing from generation result.")
+        echo_logprobs = _completion_logprobs(
+            tokenizer,
+            generation.echo_token_ids,
+            generation.echo_logprobs,
+        )
+        logprobs = Logprobs(
+            tokens=echo_logprobs.tokens,
+            token_logprobs=echo_logprobs.token_logprobs,
+            text_offset=echo_logprobs.text_offset,
+            top_logprobs=echo_logprobs.top_logprobs,
+        )
+    elif not request.echo and request.logprobs is not None:
+        tokens = []
+        token_logprobs = []
+        for token_id, score in zip(generation.tokens, generation.logprobs or [], strict=True):
+            tokens.append(tokenizer.convert_ids_to_tokens(token_id))
+            token_logprobs.append(float(score))
+        logprobs = Logprobs(tokens=tokens, token_logprobs=token_logprobs)
+
+    choice = CompletionChoice.model_construct(
+        text=choice_text,
+        index=index,
+        finish_reason=format_finish_reason(generation.finish_reason),
+        logprobs=logprobs,
+    )
+    if request.return_token_ids:
+        choice = choice.model_copy(
+            update={
+                "token_ids": generation.tokens,
+                "model_version": generation.model_version,
+                "policy_id": generation.policy_id,
+            }
+        )
+    return choice
+
+
 async def _create_completion(
     ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
 ) -> Completion:
@@ -784,7 +837,6 @@ async def _create_completion(
         if request.stop_token_ids:
             stop_tokens = (stop_tokens or []) + [[token] for token in request.stop_token_ids]
         config = ctx.config.service
-        max_prefill_size = config.max_prefill_size or config.max_seq_len
         vocab_size = ctx.model.Vocab.size
         _validate_stop_tokens(stop_tokens, config, vocab_size)
 
@@ -803,14 +855,7 @@ async def _create_completion(
                 prompt_tokens = prompt
                 if not prompt_tokens or min(prompt_tokens) < 0 or max(prompt_tokens) >= vocab_size:
                     raise HTTPException(status_code=400, detail="Token prompts must be nonempty and in vocabulary")
-                if (
-                    request.max_tokens < 1
-                    or len(prompt_tokens) + request.max_tokens > config.max_seq_len
-                    or len(prompt_tokens) > max_prefill_size
-                ):
-                    raise HTTPException(
-                        status_code=400, detail="Prompt and generation must fit the configured context"
-                    )
+                _validate_generation_context(len(prompt_tokens), request.max_tokens, config)
             scored_token_budget = len(prompt_tokens) + request.max_tokens
             if echo_logprobs_top_k is not None and scored_token_budget > config.max_seq_len:
                 raise HTTPException(
@@ -851,55 +896,7 @@ async def _create_completion(
         choice_idx = 0
         for prompt, result in zip(prompts, results, strict=True):
             for generation in result:
-                choice_text = generation.text
-                if request.echo:
-                    prefix = (
-                        prompt if isinstance(prompt, str) else ctx.tokenizer.decode(prompt, skip_special_tokens=False)
-                    )
-                    choice_text = prefix + choice_text
-
-                # Format logprobs if available
-                logprobs = None
-                if echo_logprobs_top_k is not None and (
-                    generation.tokens or generation.finish_reason != FinishReason.ABORT
-                ):
-                    if generation.echo_token_ids is None or generation.echo_logprobs is None:
-                        raise RuntimeError("Echo logprobs requested but missing from generation result.")
-                    echo_logprobs = _completion_logprobs(
-                        ctx.tokenizer,
-                        generation.echo_token_ids,
-                        generation.echo_logprobs,
-                    )
-                    logprobs = Logprobs(
-                        tokens=echo_logprobs.tokens,
-                        token_logprobs=echo_logprobs.token_logprobs,
-                        text_offset=echo_logprobs.text_offset,
-                        top_logprobs=echo_logprobs.top_logprobs,
-                    )
-                elif not request.echo and request.logprobs is not None:
-                    tokens = []
-                    token_logprobs = []
-                    for token_id, score in zip(generation.tokens, generation.logprobs or [], strict=True):
-                        tokens.append(ctx.tokenizer.convert_ids_to_tokens(token_id))
-                        token_logprobs.append(float(score))
-                    logprobs = Logprobs(tokens=tokens, token_logprobs=token_logprobs)
-
-                choice = CompletionChoice.model_construct(
-                    text=choice_text,
-                    index=choice_idx,
-                    finish_reason=format_finish_reason(generation.finish_reason),
-                    logprobs=logprobs,
-                )
-                if request.return_token_ids:
-                    choice = choice.model_copy(
-                        update={
-                            "token_ids": generation.tokens,
-                            "model_version": generation.model_version,
-                            "policy_id": generation.policy_id,
-                        }
-                    )
-                choices.append(choice)
-
+                choices.append(_format_completion_choice(ctx.tokenizer, request, prompt, generation, choice_idx))
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -931,8 +928,7 @@ def _compute_tokens(
     tools: list[dict[str, object]] | None = None,
     chat_template_kwargs: dict[str, object] | None = None,
     *,
-    add_generation_prompt: bool = True,
-    continue_final_message: bool = False,
+    mode: Literal["generate", "render", "continue"] = "generate",
 ) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
@@ -953,11 +949,9 @@ def _compute_tokens(
         raise HTTPException(status_code=400, detail=f"chat_template_kwargs may not override: {names}")
     if tools is not None:
         template_kwargs["tools"] = tools
-    if continue_final_message:
-        if add_generation_prompt or not dict_messages or "content" not in dict_messages[-1]:
-            raise HTTPException(
-                status_code=400, detail="Continuing the final message requires its text and no generation prompt"
-            )
+    if mode == "continue":
+        if not dict_messages or "content" not in dict_messages[-1]:
+            raise HTTPException(status_code=400, detail="Continuing the final message requires its text")
         marker = uuid.uuid4().hex
         dict_messages[-1]["content"] += marker
         rendered = tokenizer.apply_chat_template(dict_messages, tokenize=False, **template_kwargs)
@@ -971,7 +965,7 @@ def _compute_tokens(
     result = tokenizer.apply_chat_template(
         dict_messages,
         tokenize=True,
-        add_generation_prompt=add_generation_prompt,
+        add_generation_prompt=mode == "generate",
         return_dict=False,
         **template_kwargs,
     )
@@ -1087,6 +1081,12 @@ async def _create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _validate_generation_context(prompt_length: int, max_tokens: int, config: InferenceEngineConfig) -> None:
+    max_prefill_size = config.max_prefill_size or config.max_seq_len
+    if max_tokens < 1 or prompt_length + max_tokens > config.max_seq_len or prompt_length > max_prefill_size:
+        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
+
+
 def _validate_stop_tokens(stops: list[list[int]] | None, config: InferenceEngineConfig, vocab_size: int) -> None:
     if stops and (
         len(stops) > config.max_stop_seqs
@@ -1102,9 +1102,7 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
     config = ctx.engine.config
     if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
         raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
-    max_prefill_size = config.max_prefill_size or config.max_seq_len
-    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
-        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
+    _validate_generation_context(prompt.size, options.max_tokens, config)
     if options.n > config.max_seqs:
         raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
     vocab_size = ctx.model.Vocab.size
@@ -1279,13 +1277,19 @@ class InferenceServer:
 
         @app.post("/tokenize", response_model=ChatTokenizeResponse)
         async def tokenize_chat(request: ChatTokenizeRequest) -> ChatTokenizeResponse:
+            mode: Literal["generate", "render", "continue"] = "generate" if request.add_generation_prompt else "render"
+            if request.continue_final_message:
+                if request.add_generation_prompt:
+                    raise HTTPException(
+                        status_code=400, detail="Continuing the final message requires no generation prompt"
+                    )
+                mode = "continue"
             tokens = _compute_tokens(
                 request.messages,
                 inference_context.tokenizer,
                 request.tools,
                 request.chat_template_kwargs,
-                add_generation_prompt=request.add_generation_prompt,
-                continue_final_message=request.continue_final_message,
+                mode=mode,
             )
             return ChatTokenizeResponse(
                 tokens=tokens, count=len(tokens), max_model_len=inference_context.config.service.max_seq_len

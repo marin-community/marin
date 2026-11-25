@@ -1117,7 +1117,7 @@ def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_ser
             assert choice["policy_id"] == "policy-0"
         finally:
             release.set()
-        assert running.result(timeout=30).status_code == 200
+        assert running.result(timeout=PREFILL_GATE_TIMEOUT).status_code == 200
     stale = client.post("/v1/completions", json={**completion, "expected_policy_id": "stale"})
     assert stale.status_code == 409, stale.text
 
