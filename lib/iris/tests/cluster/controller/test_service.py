@@ -245,6 +245,15 @@ def test_launch_job_rejects_an_unknown_priority_band(service, state):
     assert exc.value.code == Code.INVALID_ARGUMENT
 
 
+def test_launch_job_rejects_an_unknown_job_category(service, state):
+    """proto3 enums are open, so a client built against a longer list can send an unlisted number."""
+    request = make_job_request("bogus-category")
+    request.tags.category = 99
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+
+
 def test_launch_job_rejects_band_above_the_user_cap(service, state):
     """An explicit band above the user's cap is refused."""
     _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)

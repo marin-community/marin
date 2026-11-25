@@ -16,7 +16,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint, get_device_variant
 from iris.cluster.egress import parse_egress_rules
-from iris.cluster.types import get_gpu_count, get_tpu_count
+from iris.cluster.types import get_gpu_count, get_tpu_count, job_tags_from_dict
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -197,7 +197,7 @@ def reconstruct_launch_job_request(
     for arg in job.submit_argv_json:
         req.submit_argv.append(arg)
     if job.tags_json is not None:
-        req.tags.CopyFrom(proto_from_json(job.tags_json, job_pb2.JobTags))
+        req.tags.CopyFrom(job_tags_from_dict(json.loads(job.tags_json)))
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(

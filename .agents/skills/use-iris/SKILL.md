@@ -20,7 +20,7 @@ Read only the material needed for the request:
 
 Resolve cluster facts from `lib/iris/config/<cluster>.yaml`; do not copy live coordinates from memory.
 
-When you submit a root job, tag it with `--project` and `--category` (up to 100 characters each) and a `--description` of what it does (up to 1000 characters); the controller rejects longer values. Suggested values are in "Iris Job Tags" in the root `AGENTS.md`; see also "Job Management" in `lib/iris/OPS.md`.
+When you submit a root job, tag it with `--project`, `--category` and `--description`; the categories and suggested projects are in [references/job-tags.md](references/job-tags.md).
 
 Use `manage-hero-run` for production lineage, checkpoint retention, and recovery
 decisions; `launch-rl` and `run-ferries` own their recipes. This skill supplies

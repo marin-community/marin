@@ -51,6 +51,7 @@ from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
+    JOB_CATEGORY_NAMES,
     LOCAL_ADMIN_SUBMITTER,
     MAX_JOB_DESCRIPTION_CHARS,
     MAX_JOB_TAG_CHARS,
@@ -504,9 +505,10 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
             raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+    if request.tags.category != job_pb2.JOB_CATEGORY_UNSPECIFIED and request.tags.category not in JOB_CATEGORY_NAMES:
+        raise ConnectError(Code.INVALID_ARGUMENT, f"Job tag category {request.tags.category} is not a JobCategory")
     for tag, limit in (
         ("project", MAX_JOB_TAG_CHARS),
-        ("category", MAX_JOB_TAG_CHARS),
         ("description", MAX_JOB_DESCRIPTION_CHARS),
     ):
         length = len(getattr(request.tags, tag))

@@ -69,9 +69,19 @@ def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submission
 
 
 def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
-    assert _run_cli(["--category", "evaluation"]).exit_code == 0
+    assert _run_cli(["--category", "data-processing"]).exit_code == 0
     assert _run_cli([]).exit_code == 0
-    assert [s["tags"] for s in recorded_job_submissions] == [_job_pb2.JobTags(category="evaluation"), None]
+    assert [s["tags"] for s in recorded_job_submissions] == [
+        _job_pb2.JobTags(category=_job_pb2.JOB_CATEGORY_DATA_PROCESSING),
+        None,
+    ]
+
+
+def test_job_run_refuses_a_category_outside_the_list_before_submitting(recorded_job_submissions):
+    result = _run_cli(["--category", "post-training"])
+    assert result.exit_code == 2
+    assert "Invalid value for '--category'" in result.output
+    assert recorded_job_submissions == []
 
 
 def test_job_run_leaves_everything_after_double_dash_to_the_command(recorded_job_submissions):

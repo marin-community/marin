@@ -100,6 +100,20 @@ class EgressPolicy(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EGRESS_POLICY_INTERNET: _ClassVar[EgressPolicy]
     EGRESS_POLICY_NONE: _ClassVar[EgressPolicy]
     EGRESS_POLICY_ALLOWLIST: _ClassVar[EgressPolicy]
+
+class JobCategory(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    JOB_CATEGORY_UNSPECIFIED: _ClassVar[JobCategory]
+    JOB_CATEGORY_PRE_TRAINING: _ClassVar[JobCategory]
+    JOB_CATEGORY_SFT: _ClassVar[JobCategory]
+    JOB_CATEGORY_RL: _ClassVar[JobCategory]
+    JOB_CATEGORY_EVALUATION: _ClassVar[JobCategory]
+    JOB_CATEGORY_DATA_PROCESSING: _ClassVar[JobCategory]
+    JOB_CATEGORY_INFERENCE: _ClassVar[JobCategory]
+    JOB_CATEGORY_TRAINING: _ClassVar[JobCategory]
+    JOB_CATEGORY_TESTING: _ClassVar[JobCategory]
+    JOB_CATEGORY_DEVELOPMENT: _ClassVar[JobCategory]
+    JOB_CATEGORY_INFRASTRUCTURE: _ClassVar[JobCategory]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -162,6 +176,17 @@ EGRESS_POLICY_CLUSTER: EgressPolicy
 EGRESS_POLICY_INTERNET: EgressPolicy
 EGRESS_POLICY_NONE: EgressPolicy
 EGRESS_POLICY_ALLOWLIST: EgressPolicy
+JOB_CATEGORY_UNSPECIFIED: JobCategory
+JOB_CATEGORY_PRE_TRAINING: JobCategory
+JOB_CATEGORY_SFT: JobCategory
+JOB_CATEGORY_RL: JobCategory
+JOB_CATEGORY_EVALUATION: JobCategory
+JOB_CATEGORY_DATA_PROCESSING: JobCategory
+JOB_CATEGORY_INFERENCE: JobCategory
+JOB_CATEGORY_TRAINING: JobCategory
+JOB_CATEGORY_TESTING: JobCategory
+JOB_CATEGORY_DEVELOPMENT: JobCategory
+JOB_CATEGORY_INFRASTRUCTURE: JobCategory
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -765,14 +790,14 @@ class WorkerMetadata(_message.Message):
     def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class JobTags(_message.Message):
-    __slots__ = ("project", "category", "description")
+    __slots__ = ("project", "description", "category")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
-    CATEGORY_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
     project: str
-    category: str
     description: str
-    def __init__(self, project: _Optional[str] = ..., category: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
+    category: JobCategory
+    def __init__(self, project: _Optional[str] = ..., description: _Optional[str] = ..., category: _Optional[_Union[JobCategory, str]] = ...) -> None: ...
 
 class EgressRule(_message.Message):
     __slots__ = ("domain", "cidr", "ports")

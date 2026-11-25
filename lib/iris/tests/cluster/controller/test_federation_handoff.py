@@ -426,7 +426,7 @@ def test_a_federated_job_carries_its_tags_to_the_peer(tmp_path, log_client):
         manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-tags")
-        request.tags.CopyFrom(job_pb2.JobTags(project="tokenizer-sweep", category="evaluation"))
+        request.tags.CopyFrom(job_pb2.JobTags(project="tokenizer-sweep", category=job_pb2.JOB_CATEGORY_EVALUATION))
         parent_service.launch_job(request, None)
         promote_queued_federation(manager, parent_state)
         manager.sync_once()

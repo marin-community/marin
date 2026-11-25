@@ -50,6 +50,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
+    JOB_CATEGORIES,
     MAX_JOB_DESCRIPTION_CHARS,
     MAX_JOB_TAG_CHARS,
     CoschedulingConfig,
@@ -1073,9 +1074,9 @@ Examples:
 )
 @click.option(
     "--category",
-    type=str,
+    type=click.Choice(list(JOB_CATEGORIES)),
     default=None,
-    help=f"Job tag: the kind of work, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. See OPS.md. "
+    help="Job tag: the kind of work; on a root job, what the whole job tree is for. Child jobs inherit it. "
     + _JOB_TAG_RETENTION,
 )
 @click.option(
@@ -1221,7 +1222,11 @@ def run(
             bundle_exclude=bundle_exclude,
             extra_bundle_includes=include,
             tags=(
-                job_pb2.JobTags(project=project, category=category, description=description)
+                job_pb2.JobTags(
+                    project=project,
+                    category=JOB_CATEGORIES[category] if category else job_pb2.JOB_CATEGORY_UNSPECIFIED,
+                    description=description,
+                )
                 if project or category or description
                 else None
             ),

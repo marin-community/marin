@@ -158,7 +158,8 @@ ORDER BY accelerator_hours DESC;
 ```
 
 `iris.controller_db__jobs.tags` holds the job's tags as a JSON object
-(`json_get(tags, 'category')`), copied as written, or NULL for an untagged job; jobs submitted before tags existed are
+(`json_get(tags, 'category')`), copied as written with the category as its
+lowercase name (`pre-training`), or NULL for an untagged job; jobs submitted before tags existed are
 untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see

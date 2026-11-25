@@ -77,6 +77,35 @@ def test_sandbox_submission_carries_no_bundle_or_submitter_env(tmp_path, monkeyp
     assert list(stub.request.entrypoint.setup_commands) == []
 
 
+def test_an_untagged_submission_sends_no_tags_field():
+    """An untagged submit is the same on the wire as before tags existed."""
+
+    class ControllerStub:
+        request: controller_pb2.Controller.LaunchJobRequest | None = None
+
+        def launch_job(self, request, *, timeout_ms=None):
+            self.request = request
+            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+        def close(self):
+            pass
+
+    stub = ControllerStub()
+    client = RemoteClusterClient("http://controller.example:8080/", bundle_id="test-bundle")
+    client._client = stub
+    try:
+        client.submit_job(
+            job_id=JobName.root("alice", "untagged"),
+            entrypoint=Entrypoint.from_command("python", "train.py"),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000),
+        )
+    finally:
+        client.shutdown()
+
+    assert stub.request is not None
+    assert not stub.request.HasField("tags")
+
+
 def test_submission_serializes_termination_grace_as_duration():
     class ControllerStub:
         request: controller_pb2.Controller.LaunchJobRequest | None = None

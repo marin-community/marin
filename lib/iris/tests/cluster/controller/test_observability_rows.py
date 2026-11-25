@@ -331,11 +331,15 @@ def test_a_replaced_child_gets_its_own_job_key(state):
 def test_job_rows_carry_tags_and_children_inherit_them(state):
     rows = _attach(state, "marin")
     root = make_job_request("train")
-    root.tags.CopyFrom(job_pb2.JobTags(project="tokenizer-sweep", category="pre-training", description="Sweep sizes."))
+    root.tags.CopyFrom(
+        job_pb2.JobTags(
+            project="tokenizer-sweep", category=job_pb2.JOB_CATEGORY_PRE_TRAINING, description="Sweep sizes."
+        )
+    )
     submit_job(state, "train", root)
     submit_job(state, "/test-user/train/data", make_job_request("/test-user/train/data"))
     evaluation = make_job_request("/test-user/train/eval")
-    evaluation.tags.CopyFrom(job_pb2.JobTags(project="", category="evaluation"))
+    evaluation.tags.CopyFrom(job_pb2.JobTags(project="", category=job_pb2.JOB_CATEGORY_EVALUATION))
     submit_job(state, "/test-user/train/eval", evaluation)
     submit_job(state, "untagged", make_job_request("untagged"))
 

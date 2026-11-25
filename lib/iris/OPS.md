@@ -118,8 +118,8 @@ iris job logs /user/job --max-lines 400000 --no-tail --substring 'Saving checkpo
 
 Tag each root job you submit with what it is for: `--project <effort>`,
 `--category <kind>` and `--description "<what it does>"` (SDK:
-`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested projects and
-categories are in "Iris Job Tags" in the root `AGENTS.md`. On a child job, each
+`IrisClient.submit(tags=job_pb2.JobTags(...))`). The categories, a fixed list,
+and suggested projects are in `.agents/skills/use-iris/references/job-tags.md`. On a child job, each
 tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
 Put the command's own arguments after `--`: without it, an argument named like
 an iris option (`--project`, `--memory`, ...) is taken by iris.

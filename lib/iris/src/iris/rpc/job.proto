@@ -718,18 +718,48 @@ enum EgressPolicy {
   EGRESS_POLICY_ALLOWLIST = 4;
 }
 
-// A job's purpose, for compute accounting. Written to the Finelog iris.job
-// table's tags column as a JSON object; empty fields are omitted.
+// The kind of work a job does. On a root job it is what the whole job tree is
+// for; on a child job, what that child does. The controller refuses a value
+// not listed here.
+enum JobCategory {
+  JOB_CATEGORY_UNSPECIFIED = 0;
+  // Base and MoE language-model training.
+  JOB_CATEGORY_PRE_TRAINING = 1;
+  // Supervised and preference fine-tuning (SFT, DPO).
+  JOB_CATEGORY_SFT = 2;
+  // Reinforcement learning runs.
+  JOB_CATEGORY_RL = 3;
+  // Benchmark and eval runs, and the harness or scoring job itself.
+  JOB_CATEGORY_EVALUATION = 4;
+  // Download, normalization, dedup, decontamination, tokenization and
+  // synthetic data pipelines.
+  JOB_CATEGORY_DATA_PROCESSING = 5;
+  // Inference servers and their workers; on a root job, a standing service.
+  JOB_CATEGORY_INFERENCE = 6;
+  // A training job under a pre-training or SFT root.
+  JOB_CATEGORY_TRAINING = 7;
+  // Canaries, ferries, CI and smoke runs.
+  JOB_CATEGORY_TESTING = 8;
+  // Dev sessions, interactive and one-off engineering runs, ad hoc benchmarks.
+  JOB_CATEGORY_DEVELOPMENT = 9;
+  // Platform services, dashboards and maintenance jobs.
+  JOB_CATEGORY_INFRASTRUCTURE = 10;
+}
+
+// A job's purpose, for compute accounting. Written to the Finelog
+// iris.controller_db__jobs table's tags column as a JSON object; empty fields
+// are omitted, and the category is its lowercase name (JOB_CATEGORY_PRE_TRAINING
+// is "pre-training").
 message JobTags {
+  // Field 2 was a free-text category in unreleased builds.
+  reserved 2;
   // The effort the job belongs to, such as a project or issue name, at most
   // iris.cluster.types.MAX_JOB_TAG_CHARS characters.
   string project = 1;
-  // The kind of work, at most MAX_JOB_TAG_CHARS characters; lib/iris/OPS.md
-  // lists suggested values.
-  string category = 2;
   // Free-form text on what the job does, at most
   // iris.cluster.types.MAX_JOB_DESCRIPTION_CHARS characters.
   string description = 3;
+  JobCategory category = 4;
 }
 
 // A destination an ALLOWLIST task may reach beyond the cluster's allowlist.

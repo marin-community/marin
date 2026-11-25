@@ -33,7 +33,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
 )
 from iris.cluster.egress import format_egress_rule
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName, job_tags_dict
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
@@ -197,8 +197,7 @@ def insert_job_and_config(
 
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms
-    # Not proto_to_json: JobTags fields have explicit presence, so it keeps a set empty string.
-    tags = {field.name: value for field, value in request.tags.ListFields() if value}
+    tags = job_tags_dict(request.tags)
     if job_id.parent is not None:
         parent_row = cur.execute(
             select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user, job_config_table.c.tags_json)

@@ -19,49 +19,6 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
-## Iris Job Tags
-
-Tag every root Iris job with `--project`, `--category` and `--description`
-(see "Job Management" in `lib/iris/OPS.md`). Tags are free text; reuse a value
-below when one fits, so compute reports group cleanly, and add a new one only
-for a new effort. Never put credentials or sensitive content in a tag.
-
-Categories (the kind of work):
-
-- `pre-training`: base or MoE language-model training.
-- `post-training`: RL and SFT, including rollouts run as part of training.
-- `evaluation`: benchmark and eval runs.
-- `inference-serving`: vLLM serving, proxies and prewarm jobs.
-- `data-processing`: dedup, decontamination, normalization, tokenization.
-- `data-generation`: rollout, synthetic and task data generation.
-- `benchmarking`: throughput, kernel and A/B performance runs.
-- `testing`: canaries, ferries and smoke tests.
-- `development`: dev boxes and interactive sessions.
-- `infrastructure`: ops and maintenance jobs.
-- `external-collaboration`: work for or with an outside partner.
-
-Projects (the effort; usually the `experiments/` area or library):
-
-- `grug`: Grug/Grugformer model variants (`experiments/grug`).
-- `moe-hero`: large MoE hero runs (`experiments/grug/moe_hero_*`, `experiments/june_tpu_67b_a2b`).
-- `rl`: SkyRL and Snowball RL (`experiments/post_training`).
-- `sft`: supervised fine-tuning (`experiments/sft`, `experiments/post_training/*sft*`).
-- `swe-agentic`: SWE and agentic task curation and rollouts (`experiments/post_training/task_curation`, `experiments/rollout_data`).
-- `evaluation`: the eval catalog and campaigns (`experiments/evaluation`).
-- `datakit`: the data pipeline (`experiments/datakit`).
-- `data-belay`: dataset-value tests (`experiments/data_belay`).
-- `datasets`: dataset registration and tokenization (`experiments/datasets`).
-- `taskforge`: task generation (`lib/taskforge`).
-- `inference`: vLLM serving and parity (`experiments/evaluation/serve`).
-- `ferries`: canary and daily ferries (`experiments/ferries`).
-- `scaling-laws`: reference scaling suites (`experiments/references`).
-- `weight-merging`: weight merging (`experiments/weight_merging`).
-- `mlx-export`: MLX export and parity (`experiments/mlx_export`).
-- `kernels`: Pallas kernels and benchmarks (`experiments/benchmarks`).
-- `iris`, `zephyr`, `levanter`, `fray`: library development and smoke runs.
-- `tutorials`: onboarding and tutorial runs (`experiments/tutorials`).
-- `amd-hpcfund`: the AMD HPC Fund collaboration (`experiments/amd/hpcfund`).
-
 ## Infrastructure (Pulumi)
 
 `infra/` hosts several independent Pulumi projects following three distinct
