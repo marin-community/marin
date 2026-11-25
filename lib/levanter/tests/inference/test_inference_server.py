@@ -1558,3 +1558,13 @@ def test_live_chat_abort_returns_terminal_sse_event(gated_server):
     chunks = [json.loads(event) for event in events[:-1]]
     assert chunks[-1]["choices"][0]["finish_reason"] == "abort"
     assert "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in chunks)
+
+
+def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
+    client, server = test_client
+    stops = ["A"] * (server.config.service.max_stop_seqs + 1)
+    response = client.post(
+        "/v1/completions",
+        json={"model": TEST_MODEL_NAME, "prompt": "A", "max_tokens": 1, "stop": stops},
+    )
+    assert response.status_code == 400

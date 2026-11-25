@@ -849,6 +849,20 @@ def _completion_logprobs(
     )
 
 
+def _generation_options_error(
+    config: InferenceEngineConfig, num_choices: int, stops: list[list[int]] | None, vocab_size: int
+) -> str | None:
+    if not 1 <= num_choices <= config.max_seqs:
+        return "Requested choices exceed the configured capacity"
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+        or any(not 0 <= token < vocab_size for sequence in stops for token in sequence)
+    ):
+        return "Stop tokens exceed the configured capacity or vocabulary"
+    return None
+
+
 async def _create_completion(
     ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
 ) -> Completion:
@@ -860,6 +874,9 @@ async def _create_completion(
             prompts = request.prompt
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create futures for all prompts
         futures = []
@@ -898,7 +915,7 @@ async def _create_completion(
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=num_choices,
                 echo_logprobs_top_k=echo_logprobs_top_k,
                 abort_event=abort_event,
             )
@@ -1044,16 +1061,20 @@ def _submit_chat_completion(
     abort_event: threading.Event | None = None,
 ) -> tuple[list[int], asyncio.Future[list[InferenceResponse]]]:
     prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools, request.chat_template_kwargs)
+    stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+    num_choices = request.n or 1
+    if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+        raise HTTPException(status_code=400, detail=error)
     future = asyncio.get_running_loop().create_future()
     ctx.submit_request(
         prompt_tokens=prompt_tokens,
         max_tokens=request.max_tokens,
         temperature=request.temperature,
         top_p=request.top_p,
-        stop_tokens=_encode_stop_tokens(request.stop, ctx.tokenizer),
+        stop_tokens=stop_tokens,
         seed=request.seed,
         future=future,
-        n_generations=request.n or 1,
+        n_generations=num_choices,
         on_tokens=on_tokens,
         abort_event=abort_event,
         return_route_captures=request.return_route_captures,
@@ -1323,16 +1344,8 @@ class _GrpcInference:
         vocab_size = ctx.model.Vocab.size
         if any(token >= vocab_size for token in prompt):
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
-        if not 1 <= num_choices <= config.max_seqs:
-            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Requested choices exceed the configured capacity")
-        if (
-            len(stops) > config.max_stop_seqs
-            or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
-            or any(token >= vocab_size for sequence in stops for token in sequence)
-        ):
-            await context.abort(
-                grpc.StatusCode.INVALID_ARGUMENT, "Stop tokens exceed the configured capacity or vocabulary"
-            )
+        if error := _generation_options_error(config, num_choices, stops, vocab_size):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, error)
 
         request_id = dict(context.invocation_metadata()).get("x-request-id") or uuid.uuid4().hex
         try:

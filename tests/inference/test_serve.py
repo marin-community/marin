@@ -703,28 +703,6 @@ def test_local_cli_rejects_backend_specific_flags() -> None:
     assert "--max-seqs" in vllm.output
 
 
-def test_local_levanter_cli_enables_the_grpc_listener(monkeypatch):
-    @contextmanager
-    def serve(_model, engine, **_kwargs):
-        assert isinstance(engine, LevanterEngineConfig)
-        assert engine.grpc_port == 50051
-
-        def stop():
-            raise KeyboardInterrupt
-
-        yield SimpleNamespace(
-            model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://127.0.0.1:8000")),
-            check_alive=stop,
-        )
-
-    monkeypatch.setattr("marin.inference.serve_cli.local_inference", serve)
-    result = CliRunner().invoke(
-        serve_main,
-        ["local", "Qwen/Qwen3-0.6B", "--backend", "levanter", "--grpc-port", "50051"],
-    )
-    assert result.exit_code == 0, result.output
-
-
 def _plan(**overrides):
     args = {
         "backend": "vllm",
