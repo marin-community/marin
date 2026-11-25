@@ -95,7 +95,7 @@ command line; the driver reads them from Iris secret files.
 - **Source tasks**: a `*.task.json` file holding a `TaskSpec` JSON object, in place of a proposal
   file. Its controls go beside it in `<name>.controls.json`, a JSON list of `Control` values in the
   format the author writes `controls.json`; the file is optional, and a candidate file on a task
-  without a machine fails the input. `--proposals` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
+  without a machine fails the input. `--inputs` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
   keeps its file name, without the suffix, as its output identity, and the proposal filters
   (`proposals.environments`, `proposals.verifications`) do not apply to it.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
@@ -115,7 +115,7 @@ ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
 uv run --frozen fsutil cp policy.json $ROOT/policy.json
 for arm in S T; do
   uv run --frozen experiments/taskforge/run_taskforge.py \
-    --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
+    --inputs s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
     --ranks "$(seq -s, 0 31 | sed 's/,$//')" --arm $arm \
     --output $ROOT/$arm --policy $ROOT/policy.json \
     --job-prefix forge-pilot-<date>-$(echo $arm | tr A-Z a-z) \

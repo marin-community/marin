@@ -34,7 +34,7 @@ from taskforge.model.controls import CONTROLS, Control
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
-from taskforge.policy import Policy, load_policy, parse_overlay
+from taskforge.policy import SOURCE_IMAGES, Policy, load_policy, parse_overlay
 from taskforge.report import report
 from taskforge.resources.sandbox.factories import grading_environment
 from taskforge.stages.classify import replayable_grade
@@ -54,8 +54,6 @@ CONTROLS_SUFFIX = ".controls.json"
 """Beside a source task, optionally: the JSON list of ``Control`` values its source supplies, as an author's
 ``controls.json`` holds them."""
 SOURCE_TASK_NOTES = "source task"
-SOURCE_IMAGES = "sandbox.source_images"
-"""The policy key the driver sets from each source task's own images; an overlay may not set it."""
 
 
 def input_key(path: str) -> PurePosixPath:
@@ -97,7 +95,7 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     if not paths:
         raise ValueError(f"No proposal or task files at {source}")
     if len({input_key(path) for path in paths}) != len(paths):
-        raise ValueError("Proposal inputs have duplicate output identities")
+        raise ValueError("Inputs have duplicate output identities")
     return paths
 
 
@@ -219,11 +217,11 @@ def check_seed(published: Path, initial: Workpiece) -> None:
 async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     _, policy = run_policy(args.policy)
-    initial = seed(args.proposals, policy)
+    initial = seed(args.inputs, policy)
     if initial is None:
         return
     policy = policy.overlaid({SOURCE_IMAGES: list(source_images(initial))})
-    identity = input_key(args.proposals)
+    identity = input_key(args.inputs)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
     workdir = Path(args.work_dir) / identity
@@ -285,7 +283,7 @@ async def run(args: argparse.Namespace) -> None:
     start, end = args.bucket_range or (0, args.buckets)
     if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
         raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")
-    proposals = (path for path in inputs(args.proposals, args.ranks) if start <= input_bucket(path, args.buckets) < end)
+    pending = (path for path in inputs(args.inputs, args.ranks) if start <= input_bucket(path, args.buckets) < end)
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
     _, policy = run_policy(args.policy)
@@ -294,7 +292,7 @@ async def run(args: argparse.Namespace) -> None:
         exhausted = False
         while active or not exhausted:
             while len(active) < args.concurrency and not exhausted:
-                path = next(proposals, None)
+                path = next(pending, None)
                 if path is None:
                     exhausted = True
                     break
@@ -308,7 +306,7 @@ async def run(args: argparse.Namespace) -> None:
                 if initial is None:
                     skipped += 1
                     continue
-                command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
+                command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--inputs", path]
                 command += [
                     item
                     for name in ("arm", "output", "policy", "work_dir")
@@ -346,7 +344,7 @@ def main() -> None:
     for name in ("run", "one"):
         command = commands.add_parser(name)
         command.add_argument(
-            "--proposals", required=True, help=f"{PROPOSAL_SUFFIX} proposals and {TASK_SUFFIX} source tasks"
+            "--inputs", required=True, help=f"{PROPOSAL_SUFFIX} proposals and {TASK_SUFFIX} source tasks"
         )
         command.add_argument("--arm", choices=("S", "T"), required=True)
         command.add_argument("--output", required=True)

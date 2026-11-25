@@ -22,7 +22,7 @@ from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT, Modify
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, Policy
+from taskforge.policy import GRADER_BASE_IMAGE, SOURCE_IMAGES, Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import (
     Env,
@@ -55,7 +55,7 @@ def system_prompt(policy: Policy, machine: EnvironmentRequirements) -> str:
     )
     image = machine.docker_image
     workdir = policy.setting("author.workdir", str)
-    sources = policy.setting("sandbox.source_images", tuple)
+    sources = policy.setting(SOURCE_IMAGES, tuple)
     # Only a source task's run has source images; its author keeps them even on the author.image fallback.
     rule = (
         policy.prompt("author.source_image_rule").render(images=", ".join(f"`{source}`" for source in sources))
@@ -126,7 +126,7 @@ def source_environment(workpiece: Workpiece, policy: Policy) -> EnvironmentRequi
     if workpiece.source is None or submission is None:
         return None
     environment = submission.task.environment_requirements
-    admitted = policy.setting("sandbox.source_images", tuple)
+    admitted = policy.setting(SOURCE_IMAGES, tuple)
     return host_requirements(environment) if environment.docker_image in admitted else None
 
 

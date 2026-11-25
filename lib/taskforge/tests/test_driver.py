@@ -89,7 +89,7 @@ def test_launcher_passes_secrets_by_reference_only(monkeypatch: pytest.MonkeyPat
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
     argv = ["launcher", "--arm", "S", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    argv += [item for name in ("inputs", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv)
     run_taskforge.main()
     assert len(commands) == 2
@@ -108,7 +108,7 @@ def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int,
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
     argv = ["launcher", "--arm", "S", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    argv += [item for name in ("inputs", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv + (["--driver-range", span] if span else []))
     run_taskforge.main()
     ranges = [tuple(map(int, command[command.index("--bucket-range") + 1].split(":"))) for command in commands]

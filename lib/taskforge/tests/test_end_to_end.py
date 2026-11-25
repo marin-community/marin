@@ -304,7 +304,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
     overlay.write_text('{"proposals.environments": ["container"]}')
     return Namespace(
-        proposals=str(source),
+        inputs=str(source),
         policy=str(overlay),
         arm="S",
         output=str(tmp_path / "out"),
@@ -322,14 +322,14 @@ async def test_bucket_split_preserves_manifest_order_and_ownership(
 ) -> None:
     paths = [tmp_path / f"slot-{index}.proposal.json" for index in range(40)]
     for path in paths:
-        path.write_bytes(Path(driver_args.proposals).read_bytes())
+        path.write_bytes(Path(driver_args.inputs).read_bytes())
     manifest = tmp_path / "manifest.txt"
     manifest.write_text("\n".join(map(str, paths)))
-    driver_args.proposals = str(manifest)
+    driver_args.inputs = str(manifest)
     launched: list[str] = []
 
     def launch(command: list[str]) -> SimpleNamespace:
-        launched.append(command[command.index("--proposals") + 1])
+        launched.append(command[command.index("--inputs") + 1])
         return SimpleNamespace(wait=lambda: 0)
 
     monkeypatch.setattr(driver.subprocess, "Popen", launch)
@@ -358,7 +358,7 @@ async def test_driver_persists_programming_failure_then_reraises(
 
     with pytest.raises(RuntimeError, match="exhaust"):
         await driver.one(args)
-    destination = tmp_path / "out" / driver.input_key(args.proposals)
+    destination = tmp_path / "out" / driver.input_key(args.inputs)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal == Terminal.HELD
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
@@ -368,7 +368,7 @@ async def test_driver_persists_programming_failure_then_reraises(
     # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
     args.work_dir = str(tmp_path / "retry-work")
     await driver.one(args)
-    assert (Path(args.work_dir) / driver.input_key(args.proposals) / "events.jsonl").read_bytes() == (
+    assert (Path(args.work_dir) / driver.input_key(args.inputs) / "events.jsonl").read_bytes() == (
         destination / "events.jsonl"
     ).read_bytes()
 
@@ -403,7 +403,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     with pytest.raises(asyncio.CancelledError):
         await driver.one(args)
     monkeypatch.setattr(driver, "publish", final_publish)
-    destination = tmp_path / "out" / driver.input_key(args.proposals)
+    destination = tmp_path / "out" / driver.input_key(args.inputs)
     assert json.loads((destination / "status.json").read_text())["terminal"] is None
     args.work_dir = str(tmp_path / "second")
     await driver.one(args)
@@ -506,7 +506,7 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
     published = (destination / "events.jsonl").read_bytes()
     driver_args.work_dir += "-skip"
@@ -545,7 +545,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert envs.calls == min(failures + 1, 3)
     assert result.terminal is (Terminal.ACCEPTED if failures == 1 else Terminal.HELD)
@@ -571,7 +571,7 @@ async def test_recover_resumes_a_stream_published_without_status(tmp_path: Path)
 async def test_driver_holds_an_undecodable_stream_without_touching_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     (destination / "events.jsonl.parts").mkdir(parents=True)
     first = JsonlSink(str(destination / "events.jsonl"))
     await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
@@ -637,7 +637,7 @@ async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.HELD
     assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
@@ -705,7 +705,7 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.HELD
     assert cause in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
@@ -747,7 +747,7 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.inputs)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.ACCEPTED and result.session is not None
     assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
@@ -760,7 +760,7 @@ async def test_driver_repairs_source_task_without_proposal(
 ) -> None:
     source = tmp_path / "arithmetic.task.json"
     source.write_text(arithmetic_task().model_dump_json())
-    driver_args.proposals = str(source)
+    driver_args.inputs = str(source)
     driver_args.arm = arm
     bundle = resources(Envs(), script(arm))
 
@@ -805,7 +805,7 @@ async def test_driver_validates_source_task_with_its_own_controls(
         Control(Candidate("9"), RewardBand(Outcome.GRADED, 0, 0), ControlKind.NEGATIVE),
     )
     (tmp_path / "arithmetic.controls.json").write_bytes(CONTROLS.dump_json(controls))
-    driver_args.proposals = str(source)
+    driver_args.inputs = str(source)
     bundle = resources(Envs(), ())
 
     @asynccontextmanager
@@ -834,7 +834,7 @@ async def test_driver_refuses_to_resume_a_changed_source_task(
 ) -> None:
     source = tmp_path / "arithmetic.task.json"
     source.write_text(arithmetic_task().model_dump_json())
-    driver_args.proposals = str(source)
+    driver_args.inputs = str(source)
 
     @asynccontextmanager
     async def fake_runtime(
@@ -857,12 +857,12 @@ async def test_run_launches_past_a_malformed_source_task_and_reports_it(
     run.mkdir()
     (run / "good.task.json").write_text(arithmetic_task().model_dump_json())
     (run / "broken.task.json").write_text('{"id": "broken"}')
-    (run / "slot-3.proposal.json").write_bytes(Path(driver_args.proposals).read_bytes())
-    driver_args.proposals = str(run)
+    (run / "slot-3.proposal.json").write_bytes(Path(driver_args.inputs).read_bytes())
+    driver_args.inputs = str(run)
     launched: list[str] = []
 
     def launch(command: list[str]) -> SimpleNamespace:
-        launched.append(Path(command[command.index("--proposals") + 1]).name)
+        launched.append(Path(command[command.index("--inputs") + 1]).name)
         return SimpleNamespace(wait=lambda: 0, poll=lambda: 0)
 
     monkeypatch.setattr(driver.subprocess, "Popen", launch)

@@ -31,7 +31,7 @@ from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.grade_judge import JudgeConnection
 
 from taskforge.model.controls import Candidate
-from taskforge.policy import GRADER_BASE_IMAGE, Policy
+from taskforge.policy import GRADER_BASE_IMAGE, SOURCE_IMAGES, Policy
 from taskforge.resources.sandbox.factories import (
     DEFAULT_WORKDIR,
     SANDBOX_SCHEDULING_TIMEOUT,
@@ -263,7 +263,7 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         settings,
         limits,
         policy.setting("judge.model", str),
-        frozenset(policy.setting("sandbox.source_images", tuple)),
+        frozenset(policy.setting(SOURCE_IMAGES, tuple)),
     )
 
 

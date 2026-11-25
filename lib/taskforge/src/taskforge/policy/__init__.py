@@ -22,6 +22,8 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import digest
 
 GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+SOURCE_IMAGES = "sandbox.source_images"
+"""The policy key the driver sets from each source task's own images; an overlay may not set it."""
 
 PROMPTS_DIR = "prompts"
 SETTINGS_FILE = "policy.json"
