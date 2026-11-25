@@ -39,7 +39,7 @@ from levanter.layers.paged_short_conv import ShortConvSequenceCache, paged_short
 from levanter.layers.stacked import ArrayStacked
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm
+from levanter.models.snowball import DenseMLP, GatedNorm, RMSNorm, _reshard_sequence, rms_norm
 from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -109,14 +109,6 @@ def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> F
 def _sequence_axis_of(x: jax.Array) -> str | None:
     spec = partition_spec_of(x)
     return spec[1] if spec is not None and len(spec) > 1 else None
-
-
-def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
-    """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
-    spec = partition_spec_of(x)
-    if spec is None:
-        return x
-    return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
 def _apply_rotary_embedding_fused(
@@ -209,7 +201,7 @@ class HeroAttention(eqx.Module):
             w_v=_init_weight(k_v, (d, m * h), cfg.initializer_std, P(_FSDP_AXES, "model")),
             w_o=_init_weight(k_o, (n * h, d), cfg.initializer_std, P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.uses_short_conv("k") else None),
             cfg=cfg,
         )
 
@@ -218,7 +210,6 @@ class HeroAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
@@ -287,7 +278,7 @@ class HeroAttention(eqx.Module):
                 head_dim=head_dim,
                 rotary_dim=head_dim // 2,
                 rope=self.cfg.rope,
-                disable_rope=disable_rope,
+                disable_rope=is_global,
             )
         else:
 
@@ -301,12 +292,12 @@ class HeroAttention(eqx.Module):
                     jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
                 )
 
-            if isinstance(disable_rope, bool):
-                if not disable_rope:
+            if isinstance(is_global, bool):
+                if not is_global:
                     q, k = _rope(q, k)
             else:
                 q_roped, k_roped = _rope(q, k)
-                keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+                keep = ~jnp.asarray(is_global, dtype=jnp.bool_)
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
@@ -320,54 +311,16 @@ class HeroAttention(eqx.Module):
         # XSA needs v row-aligned with the local attention output, so keep the pre-gather v.
         v_local = v
         if seq_axis is not None:
-            q = _reshard_sequence_axis(q, seq_axis)
-            k = _reshard_sequence_axis(k, None)
-            v = _reshard_sequence_axis(v, None)
+            q = _reshard_sequence(q, seq_axis)
+            k = _reshard_sequence(k, None)
+            v = _reshard_sequence(v, None)
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         if seq_axis is not None:
-            attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
+            attn_out = _reshard_sequence(attn_out, residual_seq_axis)
         return _attention_output(self, x, attn_out, v_local)
 
 
-class DenseMLP(eqx.Module):
-    w_gate: jax.Array
-    w_up: jax.Array
-    w_down: jax.Array
-
-    @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
-        k_gate, k_up, k_down = random.split(key, 3)
-        return DenseMLP(
-            w_gate=_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
-            w_up=_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
-            w_down=_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std, P("model", _FSDP_AXES)),
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        *,
-        activation: ActivationFunctionEnum = ActivationFunctionEnum.silu,
-    ) -> Float[Array, "B S D"]:
-        if isinstance(activation, ActivationFunctionEnum):
-            activation_fn = activation.to_jax_fn()
-        else:
-            activation_fn = activation
-
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
-
-
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
-    # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
-    # not a multiple of global_every still ends on a global-context layer.
     layer_indices = jnp.arange(num_layers)
     return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
@@ -514,12 +467,8 @@ class HeroBlock(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=HeroMoEMLP.init(cfg, key=mlp_key),
             shared=shared,
-            sconv_attn=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
-            ),
-            sconv_mlp=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
-            ),
+            sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.uses_short_conv("attn") else None),
+            sconv_mlp=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.uses_short_conv("mlp") else None),
         )
 
     @named_call
@@ -527,7 +476,6 @@ class HeroBlock(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
@@ -535,20 +483,51 @@ class HeroBlock(eqx.Module):
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        attn_out = self.attn(attn_in, mask, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
-        mlp_out = self.mlp(mlp_in, token_valid)
-        if self.shared is not None:
-            for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+        mlp_out = self._mlp_output(x, token_valid)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
         return x
+
+    def _mlp_output(self, x: jax.Array, token_valid: jax.Array | None) -> jax.Array:
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        output = self.mlp(mlp_in, token_valid)
+        if self.shared is not None:
+            for expert in self.shared:
+                output = output + expert(mlp_in)
+        return output
+
+    @named_call
+    def decode(
+        self,
+        x: jax.Array,
+        cache: "HeroLayerCache",
+        batch_info: PageBatchInfo,
+        positions: NamedArray,
+        token_valid: jax.Array,
+        use_long: jax.Array,
+    ) -> tuple[jax.Array, "HeroLayerCache"]:
+        """Apply one layer to packed tokens and advance its KV and convolution cache."""
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out, cache = jax.lax.cond(
+            use_long,
+            lambda _: _decode_attention(self.attn, attn_in, cache, batch_info, positions, use_long=True),
+            lambda _: _decode_attention(self.attn, attn_in, cache, batch_info, positions, use_long=False),
+            operand=None,
+        )
+        attn_out, attn_history = _decode_convolution(
+            self.sconv_attn, attn_out, cache.attn_history, batch_info, positions
+        )
+        x = x + attn_out
+        mlp_out, mlp_history = _decode_convolution(
+            self.sconv_mlp, self._mlp_output(x, token_valid), cache.mlp_history, batch_info, positions
+        )
+        return x + mlp_out, dataclasses.replace(cache, attn_history=attn_history, mlp_history=mlp_history)
 
 
 class HeroTransformer(eqx.Module):
@@ -599,10 +578,8 @@ class HeroTransformer(eqx.Module):
             block, use_long = inputs
             output = jax.lax.cond(
                 use_long,
-                lambda x: block(x, long_mask.with_fa4_bounds(long_lower, valid), disable_rope=True, is_global=True),
-                lambda x: block(
-                    x, short_mask.with_fa4_bounds(short_lower, valid), disable_rope=False, is_global=False
-                ),
+                lambda x: block(x, long_mask.with_fa4_bounds(long_lower, valid), is_global=True),
+                lambda x: block(x, short_mask.with_fa4_bounds(short_lower, valid)),
                 hidden,
             )
             return output, None
@@ -681,7 +658,7 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
             raise ValueError("Hero paged inference requires context_axis_size=1")
 
         def conv_cache(site, channels):
-            if not cfg.sconv or site not in cfg.sconv_sites or cfg.sconv_kernel == 1:
+            if not cfg.uses_short_conv(site) or cfg.sconv_kernel == 1:
                 return None
             return ShortConvSequenceCache.init(spec, Axis("channel", channels), cfg.sconv_kernel, dtype)
 
@@ -723,6 +700,8 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         blocks = self.transformer.stacked_blocks.stacked
         expert_size = _mesh_axis_size(get_abstract_mesh(), "expert")
         if expert_size > 1:
+            # Paged serving must retain every routed assignment. The ring with
+            # one full token budget per source rank guarantees dropless dispatch.
             experts = dataclasses.replace(
                 blocks.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
             )
@@ -753,30 +732,12 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
                 history_from_array(template.attn_history, pages.attn_history),
                 history_from_array(template.mlp_history, pages.mlp_history),
             )
-            attn_in = block.attn_gated_norm(block.rms_attn(x))
-            attn_out, cache = jax.lax.cond(
-                use_long,
-                lambda _: _decode_attention(block.attn, attn_in, cache, batch_info, pos_ids, use_long=True),
-                lambda _: _decode_attention(block.attn, attn_in, cache, batch_info, pos_ids, use_long=False),
-                operand=None,
-            )
-            attn_out, attn_history = _decode_convolution(
-                block.sconv_attn, attn_out, cache.attn_history, batch_info, pos_ids
-            )
-            x = x + attn_out
-            mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
-            mlp_out = block.mlp(mlp_in, valid)
-            if block.shared is not None:
-                for expert in block.shared:
-                    mlp_out = mlp_out + expert(mlp_in, activation=ActivationFunctionEnum.silu)
-            mlp_out, mlp_history = _decode_convolution(
-                block.sconv_mlp, mlp_out, cache.mlp_history, batch_info, pos_ids
-            )
-            return x + mlp_out, _HeroPageArrays(
+            x, cache = block.decode(x, cache, batch_info, pos_ids, valid, use_long)
+            return x, _HeroPageArrays(
                 cache.kv.kv_pages.array,
                 None if cache.k_history is None else cache.k_history.history.array,
-                None if attn_history is None else attn_history.history.array,
-                None if mlp_history is None else mlp_history.history.array,
+                None if cache.attn_history is None else cache.attn_history.history.array,
+                None if cache.mlp_history is None else cache.mlp_history.history.array,
             )
 
         hidden, updated = jax.lax.scan(

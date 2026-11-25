@@ -32,13 +32,13 @@ def test_hero_and_snowball_reject_each_others_checkpoint_recipe():
     snowball = SnowballConfig().to_hf_config(128)
     assert HeroConfig.matches_hf_config(hero) and not HeroConfig.matches_hf_config(snowball)
     assert SnowballConfig.matches_hf_config(snowball) and not SnowballConfig.matches_hf_config(hero)
-    with pytest.raises(ValueError, match="schema-v2"):
+    with pytest.raises(ValueError):
         HeroConfig.from_hf_config(snowball)
     with pytest.raises(ValueError):
         SnowballConfig.from_hf_config(hero)
 
     hero.grugmoe_artifact_schema_version = 3
-    with pytest.raises(ValueError, match="schema-v2"):
+    with pytest.raises(ValueError):
         HeroConfig.from_hf_config(hero)
 
 

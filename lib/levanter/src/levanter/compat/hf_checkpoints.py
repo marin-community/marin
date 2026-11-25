@@ -588,10 +588,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         ref = _coerce_to_rr(model_name_or_path)
         # Model plugins register custom Transformers config classes at import time.
         known_configs = LmConfig.get_known_choices()
-        with _patch_hf_hub_download():
-            hf_config = AutoConfig.from_pretrained(
-                ref.model_name_or_path, revision=ref.revision, trust_remote_code=trust_remote_code
-            )
+        hf_config = _load_hf_config(ref.model_name_or_path, ref.revision, trust_remote_code)
 
         deferred = []
         for candidate in known_configs.values():
@@ -714,9 +711,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if ref is None:
                 raise ValueError("Must provide either config class or reference_checkpoint")
             path, rev = ref.model_name_or_path, ref.revision
-            with _patch_hf_hub_download():
-                config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=trust_remote_code)
-            clss = type(config)
+            clss = type(_load_hf_config(path, rev, trust_remote_code))
         elif isinstance(hf_config_class, str):
             if ref is None:
                 raise ValueError("Must provide either config class or reference_checkpoint")
@@ -776,9 +771,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def hf_config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> HfConfig:
         path, rev = self._get_ref(ref)
 
-        with _patch_hf_hub_download():
-            config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=self.trust_remote_code)
-        return config
+        return _load_hf_config(path, rev, self.trust_remote_code)
 
     def _get_ref(self, ref) -> Tuple[str, Optional[str]]:
         if ref is None:
@@ -1734,6 +1727,11 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
         return arr
 
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
+
+
+def _load_hf_config(path: str, revision: str | None, trust_remote_code: bool) -> HfConfig:
+    with _patch_hf_hub_download():
+        return AutoConfig.from_pretrained(path, revision=revision, trust_remote_code=trust_remote_code)
 
 
 @contextlib.contextmanager

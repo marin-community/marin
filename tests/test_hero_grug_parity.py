@@ -78,12 +78,10 @@ def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, s
         if expert_layout == "individual":
             exported = {}
             for name, value in canonical.items():
-                if ".mlp.experts." in name:
-                    stem, projection = name.split(".mlp.experts.")
+                stem, boundary, projection = name.partition(".mlp.experts.")
+                if boundary:
                     value = np.asarray(value)
-                    exported.update(
-                        {f"{stem}.mlp.experts.{i}.{projection}": value[i] for i in range(exp_cfg.num_experts)}
-                    )
+                    exported.update({f"{stem}{boundary}{i}.{projection}": value[i] for i in range(exp_cfg.num_experts)})
                 else:
                     exported[name] = value
         hf_config = exp_cfg.to_hf_config(exp_cfg.vocab_size, {"grugmoe_artifact_schema_version": 2})

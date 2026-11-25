@@ -14,10 +14,16 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.grug.attention import GrugAttentionImplementation, PagedAttentionImplementation, RotaryConfig
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.models.snowball import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GRUG_MOE_MODEL_TYPE, GrugMoeHfConfig
+from levanter.models.snowball import (
+    GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY,
+    GRUG_MOE_ATTENTION_MODE,
+    GRUG_MOE_MODEL_TYPE,
+    GrugMoeHfConfig,
+)
 
 
 _HERO_SCHEMA_VERSION = 2
+_HERO_HIDDEN_DIM = 6144
 
 
 @LmConfig.register_subclass("hero")
@@ -26,7 +32,7 @@ class HeroConfig(HFCompatConfig):
     """Hero's latent MoE, independent shared experts, and short-convolution recipe."""
 
     vocab_size: int = 128256
-    hidden_dim: int = 6144
+    hidden_dim: int = _HERO_HIDDEN_DIM
     intermediate_dim: int = 3072
     shared_expert_intermediate_dim: int = 3072
     num_shared_experts: int = 2
@@ -43,7 +49,7 @@ class HeroConfig(HFCompatConfig):
     sliding_window: int = 2048
     global_every: int = 4
     layer_norm_eps: float = 1e-5
-    initializer_std: float = 0.5 / math.sqrt(6144)
+    initializer_std: float = 0.5 / math.sqrt(_HERO_HIDDEN_DIM)
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
     sconv: bool = True
@@ -83,6 +89,9 @@ class HeroConfig(HFCompatConfig):
     def Embed(self) -> Axis:
         return Axis("embed", self.hidden_dim)
 
+    def uses_short_conv(self, site: str) -> bool:
+        return self.sconv and site in self.sconv_sites
+
     @property
     def inferred_head_dim(self) -> int:
         if self.head_dim is not None:
@@ -119,7 +128,7 @@ class HeroConfig(HFCompatConfig):
     def from_hf_config(cls, hf_config: PretrainedConfig) -> "HeroConfig":
         if not cls.matches_hf_config(hf_config):
             raise ValueError("Hero requires a grug_moe schema-v2 checkpoint")
-        if getattr(hf_config, "grugmoe_attention_mode", None) != "production":
+        if getattr(hf_config, "grugmoe_attention_mode", None) != GRUG_MOE_ATTENTION_MODE:
             raise ValueError("Hero requires production attention")
         if getattr(hf_config, "tie_word_embeddings", False):
             raise ValueError("Hero requires independent embeddings and output weights")
@@ -184,9 +193,9 @@ class HeroConfig(HFCompatConfig):
             sconv=self.sconv,
             sconv_kernel=self.sconv_kernel,
             sconv_sites=list(self.sconv_sites),
-            grugmoe_attention_mode="production",
-            grugmoe_artifact_schema_version=_HERO_SCHEMA_VERSION,
+            grugmoe_attention_mode=GRUG_MOE_ATTENTION_MODE,
         )
+        values[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = _HERO_SCHEMA_VERSION
         if config_overrides is not None:
             values.update(config_overrides)
         return GrugMoeHfConfig(**values)
