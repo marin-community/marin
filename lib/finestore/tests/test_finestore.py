@@ -12,6 +12,7 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -590,6 +591,38 @@ def test_full_read_of_overlapping_shards_holds_a_few_row_groups_per_shard(monkey
     assert rows == shards * rows_per_shard
     # A shard decodes to about 2 MB; holding each one whole would take about 16 MB.
     assert peak < 4 * 1024 * 1024
+
+
+class _CountingExecutor(ThreadPoolExecutor):
+    def __init__(self) -> None:
+        super().__init__(max_workers=2)
+        self.submitted = 0
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.submitted += 1
+        return super().submit(fn, *args, **kwargs)
+
+
+@pytest.mark.parametrize(("budget", "reads_before_first_group"), [(64 * 1024, 2), (16 * 1024, 1)])
+def test_row_groups_far_above_the_read_ahead_budget_get_no_read_ahead(
+    monkeypatch, archive_root, budget, reads_before_first_group
+):
+    # Groups of about 60 KB: one budget's worth reads one group ahead, a quarter of it reads none,
+    # so a shard written with large row groups holds one decoded group, not two.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
+    monkeypatch.setattr(reader_module, "_ROW_GROUP_PREFETCH_BYTES", budget)
+    with DataStore.open(archive_root, writer_id="w", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        table.extend({"id": index, "payload": bytes(1_000)} for index in range(500))
+        store.flush()
+    view = ReadView(archive_root)
+    plan = view._read_plan("samples", None, None)
+    assert plan is not None
+    with _CountingExecutor() as executor:
+        groups = reader_module.iter_shard_row_groups(plan.shards[0], plan.schema, plan.filesystem, executor)
+        with closing(groups):
+            next(groups)
+            assert executor.submitted == reads_before_first_group
 
 
 def test_schema_evolution_null_promotes_missing_column(archive_root):

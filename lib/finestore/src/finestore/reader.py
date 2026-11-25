@@ -457,7 +457,8 @@ def iter_shard_row_groups(
     """Yield one resolved Arrow table per Parquet row group whose statistics may match ``where``.
 
     Later groups are read on ``prefetch`` while the caller holds the current one, up to
-    ``_ROW_GROUP_PREFETCH_BYTES`` judged by the size of the last group read.
+    ``_ROW_GROUP_PREFETCH_BYTES`` judged by the size of the last group read; a group of twice that
+    budget or more is followed by no read-ahead.
     """
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
     fragment = next(dataset.get_fragments())
@@ -480,12 +481,18 @@ def iter_shard_row_groups(
         while len(pending) < depth and (group := next(groups, None)) is not None:
             pending.append(prefetch.submit(read, group))
 
+    depth = 1
     try:
-        fill(1)
-        while pending:
+        while True:
+            fill(max(depth, 1))
+            if not pending:
+                return
             rows = pending.popleft().result()
-            # Submit the next reads before handing these rows over, so they overlap the caller.
-            fill(max(1, _ROW_GROUP_PREFETCH_BYTES // max(rows.nbytes, 1)))
+            # Submit the next reads before handing these rows over, so they overlap the caller. Rounding
+            # keeps one group ahead for a full 4 MB group, which decodes slightly above the budget, and
+            # none for a group of twice the budget or more, such as one written with the old 100 MB cap.
+            depth = round(_ROW_GROUP_PREFETCH_BYTES / max(rows.nbytes, 1))
+            fill(depth)
             if rows.num_rows:
                 yield _resolved_version_columns(rows, shard.commit_sequence, shard.generation)
     finally:
