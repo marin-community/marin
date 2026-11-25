@@ -42,7 +42,9 @@ print(HfApi().repo_info("$RELEASE_REPO", repo_type="dataset").sha)
 PY
 )
 
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
+uv run --frozen --with-editable ./lib/taskcompendium[pipeline] \
+  --with-editable "./lib/shellbox[daytona]" \
+  --with-editable ./lib/rolloutengine python -m \
   experiments.post_training.task_curation.staged_census \
   --source-id "$SOURCE_ID" \
   --release-repo "$RELEASE_REPO" \
