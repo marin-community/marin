@@ -41,6 +41,7 @@ from experiments.evaluation.benchmarks import (
     reasoning,
     simpleqa,
     supergpqa,
+    truthfulqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
@@ -91,6 +92,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             pdbthink,
             physics_verified,
             arc_agi,
+            truthfulqa,
         )
         for benchmark in family.benchmarks()
     ]
