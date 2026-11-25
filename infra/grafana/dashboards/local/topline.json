@@ -295,7 +295,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/finelog/marin/query",
+          "url": "/query",
           "url_options": {
             "method": "GET",
             "params": [
@@ -431,7 +431,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/finelog/marin/query",
+          "url": "/query",
           "url_options": {
             "method": "GET",
             "params": [
