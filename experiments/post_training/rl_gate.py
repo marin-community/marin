@@ -53,13 +53,13 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
 from experiments.post_training.rl_measurements import (
+    InvalidComparison,
     RunInputs,
     RunMeasurements,
     read_measurements,
     read_recorded_launch,
     read_run_inputs,
 )
-from experiments.post_training.rl_preset_plan import InvalidComparison, preset_launch_yaml
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
 from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
@@ -639,6 +639,31 @@ def _gate_config(
 def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
     """Fingerprint the effective launch configuration used by the gate."""
     return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
+
+
+def preset_launch_yaml(
+    preset: presets.Preset,
+    *,
+    name: str,
+    tasks: ArtifactStep | None = None,
+    init: SkyRLModelSource | ResolvedModelLocator | None = None,
+    resume: presets.StoredResume | None = None,
+    settings: tuple[str, ...] = (),
+) -> str:
+    spec = recipe.run_spec(preset, name=name, tasks=tasks, init=init, resume=resume, settings=settings)
+    if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
+        spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
+    step = recipe.run_step(preset, spec)
+    return materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml
+
+
+def compose_preset(preset: presets.Preset) -> dict:
+    """Compose the nominal preset in the checkout's SkyRL CPU environment."""
+    with tempfile.TemporaryDirectory(prefix="rl-preset-") as directory:
+        path = Path(directory) / "launch.yaml"
+        path.write_text(preset_launch_yaml(preset, name="nominal"))
+        (config,) = compose_configs([str(path)])
+        return config
 
 
 def _compose_plans(

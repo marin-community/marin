@@ -46,7 +46,6 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
-from experiments.post_training.rl_preset_plan import preset_launch_yaml
 from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -1019,9 +1018,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     historical_launch = json.loads(json.dumps(launch))
     historical_launch["skyrl"]["trainer"]["max_steps"] += 1
     if real_archive:
-        plan = tmp_path / "nominal.yaml"
-        plan.write_text(preset_launch_yaml(nominal, name="nominal"))
-        (historical_launch,) = gate.compose_configs([str(plan)])
+        historical_launch = gate.compose_preset(nominal)
     historical_version = gate.config_version(historical_launch)
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
@@ -1050,8 +1047,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
             return subprocess.CompletedProcess(argv, 0, str(pr_number))
         if argv[:2] == ["git", "archive"]:
             assert argv[2] == archive_tree
-        if argv[1:3] == ["-m", "experiments.post_training.rl_preset_cli"]:
-            assert argv[3:] == ["describe", entry_module, model, preset.name]
+        if argv[1:4] == ["-m", entry_module, "_preset-config"]:
+            assert argv[4:] == [preset.name]
             assert (kwargs["cwd"] / "vendor/skyrl/cloud/iris/config_cli.py").is_file()
             assert str(kwargs["cwd"]) in kwargs["env"]["PYTHONPATH"]
             if not real_archive:

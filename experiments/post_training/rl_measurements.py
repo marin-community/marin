@@ -36,7 +36,6 @@ from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
-from experiments.post_training.rl_preset_plan import InvalidComparison as InvalidComparison
 from experiments.post_training.rl_scoring import (
     ANSWER_SCHEMA,
     answer_table,
@@ -45,6 +44,10 @@ from experiments.post_training.rl_scoring import (
     score_slices,
 )
 from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
+
+
+class InvalidComparison(ValueError):
+    """Required configuration or measurement evidence is unavailable or inconsistent."""
 
 
 def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:

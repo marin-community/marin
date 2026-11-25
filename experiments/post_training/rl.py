@@ -14,13 +14,13 @@ import json
 import logging
 import math
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -555,7 +555,7 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
     except (OSError, RuntimeError):
         logger.debug("Git could not resolve the main merge base for preset %s", preset)
         return None, None
-    if index.is_control and index.branch == "main" and index.source_revision == base and not index.dirty:
+    if index.is_control and index.branch == "main" and base.startswith(index.source_revision) and not index.dirty:
         return base, index.preset_version
     try:
         snapshot = subprocess.run(
@@ -586,26 +586,9 @@ def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str 
             path = Path(directory)
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
-            # The launcher owns the JSON protocol, including for bases that predate it.
-            native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
-            if not (path / native_cli).is_file():
-                shutil.copyfile(root / native_cli, path / native_cli)
-            for name in ("rl_preset_cli.py", "rl_preset_plan.py"):
-                source = Path(__file__).with_name(name)
-                destination = path / "experiments/post_training" / name
-                if not destination.is_file():
-                    shutil.copyfile(source, destination)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "experiments.post_training.rl_preset_cli",
-                    "describe",
-                    module,
-                    index.model,
-                    preset,
-                ],
+                [sys.executable, "-m", module, "_preset-config", preset],
                 text=True,
                 capture_output=True,
                 check=True,
@@ -1149,6 +1132,18 @@ def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 
 
+def _preset_config_command(table: presets.ModelPresets) -> click.Command:
+    @click.command()
+    @click.argument("preset")
+    def describe(preset: str) -> None:
+        selected = table.by_name.get(preset)
+        with redirect_stdout(sys.stderr):
+            config = rl_gate.compose_preset(selected) if selected is not None else None
+        click.echo(json.dumps(config))
+
+    return describe
+
+
 def main(
     table: presets.ModelPresets,
     *,
@@ -1163,6 +1158,8 @@ def main(
     try:
         if args and args[0] == "_follow-publication":
             selected, args = _follow_command(table), args[1:]
+        elif args and args[0] == "_preset-config":
+            selected, args = _preset_config_command(table), args[1:]
         elif args and args[0] in {"compare", "publish"}:
             if init is not None and args[0] == "compare":
                 raise click.UsageError("Python init cannot be used with compare")

@@ -5,9 +5,11 @@
 
 import os
 
-from experiments.post_training import rl_compose
+from experiments.post_training import rl, rl_compose
 from experiments.post_training.snowball_rl import SNOWBALL as TABLE
 
-__all__ = ("TABLE",)
-
 rl_compose.SELECTION_ROOT = os.environ["MARIN_RL_TEST_SELECTION_ROOT"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(rl.main(TABLE))
