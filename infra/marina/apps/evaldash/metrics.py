@@ -214,6 +214,10 @@ def in_cohort(record: EvalRunRecord, request: SelectionRequest | None) -> bool:
     return request is None or request.cohort is CohortMode.LATEST_VALID or record.version == request.cohort_version
 
 
+def _policy_admits(violations: tuple[str, ...], request: SelectionRequest | None) -> bool:
+    return (request is not None and request.cohort is CohortMode.LATEST_VALID) or not violations
+
+
 def _panel_records(records: list[EvalRunRecord], request: SelectionRequest | None = None) -> list[EvalRunRecord]:
     """Return non-smoke records; an all-cohorts request skips policy enforcement."""
     return [
@@ -221,7 +225,7 @@ def _panel_records(records: list[EvalRunRecord], request: SelectionRequest | Non
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
         if in_cohort(record, request)
-        if (request is not None and request.cohort is CohortMode.LATEST_VALID) or not record_policy_violations(record)
+        if _policy_admits(record_policy_violations(record), request)
     ]
 
 
@@ -661,14 +665,16 @@ def _model_history(measurements: list[Measurement], protocols: Mapping[str, Metr
     return history
 
 
-def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> list[dict]:
+def _model_runs(
+    records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol], request: SelectionRequest
+) -> list[dict]:
     """Every run for the model, newest first, with grades only for admitted runs."""
     runs = []
     for record in records:
         violations = record_policy_violations(record)
         protocol = protocols.get(record.evaluation.name)
         measurement = measurement_from_record(record) if score_eligible(record) else None
-        headline = None if violations else record_headline(record, protocol)
+        headline = record_headline(record, protocol) if _policy_admits(violations, request) else None
         protocol_mismatch = (
             measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
         )
@@ -697,21 +703,22 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
     return runs
 
 
-def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
+def build_model_detail(records: list[EvalRunRecord], model: str, request: SelectionRequest) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` is the version of the model's most recent non-smoke run, and ``cohorts``
-    lists one entry per distinct version, both excluding ``-smoke`` suites as the headline panel
-    does. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans
-    every run for the model (smoke included), newest first.
+    ``current_version`` is the version of the model's most recent admitted non-smoke run, and
+    ``cohorts`` lists its admitted versions. ``history`` spans admitted scores across cohorts;
+    ``runs`` includes every run for the model (smoke included), newest first.
     """
-    measurements = dashboard_measurements(_panel_records(records))
+    # Detail history spans cohorts; the selected cohort controls policy admission, not its time range.
+    history_request = request if request.cohort is CohortMode.LATEST_VALID else None
+    measurements = dashboard_measurements(_panel_records(records, history_request))
     protocols = declared_protocols(measurements)
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
     newest = max(model_records, key=lambda record: record.created_at or "")
-    eligible = _panel_records(model_records)
+    eligible = _panel_records(model_records, history_request)
     return {
         "model": model,
         "location": newest.model.location,
@@ -720,8 +727,26 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
         "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
         "cohorts": _model_cohorts(eligible),
         "history": _model_history([item for item in measurements if item.model == model], protocols),
-        "runs": _model_runs(model_records, protocols),
+        "runs": _model_runs(model_records, protocols, request),
     }
+
+
+def build_history(records: list[EvalRunRecord], model: str, task: str, request: SelectionRequest) -> list[dict]:
+    """Return a score's timeline across cohorts under the selected policy admission rule."""
+    protocol_records = [
+        record
+        for record in records
+        if record.evaluation.name == task and _policy_admits(record_policy_violations(record), request)
+    ]
+    task_records = [record for record in protocol_records if record.model.name == model]
+    protocols = declared_protocols(dashboard_measurements(protocol_records))
+    points = []
+    for record in task_records:
+        headline = record_headline(record, protocols.get(task))
+        if headline is not None:
+            points.append({**headline, "status": record.status.value})
+    points.sort(key=lambda point: point["created_at"] or "")
+    return points
 
 
 def panel_request(
