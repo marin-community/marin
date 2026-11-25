@@ -30,6 +30,7 @@ class FinishReason(IntEnum):
     RUNNING = 0
     STOP = auto()
     LENGTH = auto()
+    ABORT = auto()
 
 
 class PackedSequence(eqx.Module):
@@ -686,6 +687,13 @@ class DecodeState(eqx.Module):
         sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
+    def abort_slots(self, slot_mask: jax.Array) -> "DecodeState":
+        """Drop queued tokens and release page references for the selected slots."""
+        slots = self.tqueue.queued_slot_ids
+        cancelled = is_valid(slots) & hax.named(slot_mask[jnp.maximum(slots.array, 0)], slots.axes)
+        state = dataclasses.replace(self, tqueue=self.tqueue.purge_tokens(cancelled))
+        return state.free_pages_for_finished(slot_mask)
+
     def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
         return dataclasses.replace(self, sequences=sequences)
@@ -1109,9 +1117,12 @@ class TokenQueue(eqx.Module):
             is_slot_id = hax.einsum(" -> position", self.queued_slot_ids.broadcast_axis(slot_id.axes) == slot_id)
         else:
             is_slot_id = self.queued_slot_ids == slot_id
-        new_slot_ids = purge(self.queued_slot_ids, is_slot_id)
-        new_tokens = purge(self.queued_tokens, is_slot_id)
-        new_pos_ids = purge(self.queued_pos_ids, is_slot_id)
+        return self.purge_tokens(is_slot_id)
+
+    def purge_tokens(self, mask: hax.NamedArray) -> "TokenQueue":
+        new_slot_ids = purge(self.queued_slot_ids, mask)
+        new_tokens = purge(self.queued_tokens, mask)
+        new_pos_ids = purge(self.queued_pos_ids, mask)
         new_queued = hax.sum(new_slot_ids != INVALID).scalar()
 
         return dataclasses.replace(

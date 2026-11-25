@@ -61,6 +61,10 @@ The inference server is built around a `GenerationService` that encapsulates:
   and in the metadata from `POST /v1/levanter/generate`. A sampled EOS or a matched stop
   sequence reports `stop`, including at the token limit. A choice that exhausts its token
   budget reports `length`.
+- **Cancellation**: Send an `X-Request-ID` header on generation, then post
+  `{"request_ids": ["<id>"]}` to `/abort`. Unfinished choices return `abort` with their
+  sampled tokens and scores so far. Queued choices return zero completion tokens.
+  Disconnecting cancels the same request.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations
