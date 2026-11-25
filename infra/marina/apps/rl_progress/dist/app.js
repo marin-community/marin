@@ -84,11 +84,11 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Preset', run.preset], ['Preset version', run.preset_version],
+    ['Model', run.model], ['Preset', series(run)], ['Preset version', run.preset_version],
     ['Base version', run.base_preset_version], ['Evaluation set', run.evaluation_data_identity],
     ['User', run.user], ['Branch', run.branch], ['Commit', run.commit], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
     ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
-    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
+    ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
