@@ -171,6 +171,8 @@ def trial_persistent_environment(task: PreparedTask) -> dict[str, str]:
         return {}
     if task.judge_model == SUBSTITUTE_JUDGE_MODEL:
         template_var = bundle_judge_template_var(task)
+        if template_var is None:
+            return {TOGETHER_AI_API_BASE_ENV: f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"}
         if template_var is not None:
             return {
                 TOGETHER_AI_API_BASE_ENV: f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",

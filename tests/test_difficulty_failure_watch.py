@@ -6,6 +6,9 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from scripts.ops import difficulty_failure_watch
 from scripts.ops.difficulty_failure_watch import ledger_outcomes, update_patterns
 from scripts.ops.job_watchdog import JsonlAlertSink
 
@@ -50,3 +53,25 @@ def test_ledger_backstop_reads_legacy_failures_without_recounting_partitions(tmp
     rows, partitions = ledger_outcomes(str(tmp_path), since, set())
     assert rows == [row]
     assert ledger_outcomes(str(tmp_path), since, partitions) == ([], set())
+
+
+def test_campaign_monitor_excludes_old_run_logs_and_refuses_shared_state(tmp_path, monkeypatch):
+    ledger = tmp_path / "campaign/ledger"
+    (ledger / "v1").mkdir(parents=True)
+    (ledger / "v1/campaign.json").write_text("{}")
+    row = {
+        "source_id": "new-source",
+        "outcome": "unscored",
+        "reason": "ENVIRONMENT_START_FAILURE",
+        "attempt_id": "new-attempt",
+        "run_id": str(ledger.parent / "runs/new"),
+    }
+    old = {**row, "attempt_id": "old-attempt", "run_id": "s3://old-campaign/runs/old"}
+    monkeypatch.setattr(difficulty_failure_watch, "finelog_outcomes", lambda since: [old, row])
+    monkeypatch.setattr(difficulty_failure_watch, "ledger_outcomes", lambda *args: ([], set()))
+    state = tmp_path / "state.json"
+    alerts = tmp_path / "alerts.jsonl"
+    assert difficulty_failure_watch.tick(str(ledger), state, alerts, datetime.now(UTC)) == 1
+    assert json.loads(alerts.read_text())["evidence"]["example_attempt_ids"] == ["new-attempt"]
+    with pytest.raises(ValueError, match="another ledger"):
+        difficulty_failure_watch.tick(str(tmp_path / "other"), state, alerts, datetime.now(UTC))

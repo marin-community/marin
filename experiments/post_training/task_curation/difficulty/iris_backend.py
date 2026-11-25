@@ -15,6 +15,7 @@ from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
+from experiments.post_training.task_curation.difficulty.campaign import campaign_record
 from experiments.post_training.task_curation.difficulty.executor import Job, action_job_slots
 from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET, JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
@@ -109,9 +110,13 @@ class IrisBackend:
             entrypoint=Entrypoint.from_command(*command),
             name=name,
             resources=(
-                ResourceSpec(cpu=16, memory="64GB", disk="256GB")
-                if isinstance(action, AttemptBatch)
-                else ResourceSpec(cpu=8, memory="32GB", disk="128GB")
+                ResourceSpec(cpu=4, memory="12GB", disk="64GB")
+                if campaign_record(self.ledger) is not None
+                else (
+                    ResourceSpec(cpu=16, memory="64GB", disk="256GB")
+                    if isinstance(action, AttemptBatch)
+                    else ResourceSpec(cpu=8, memory="32GB", disk="128GB")
+                )
             ),
             environment=EnvironmentSpec(env_vars={"DAYTONA_API_URL": DAYTONA_API_URL, "DAYTONA_TARGET": DAYTONA_TARGET}),
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,

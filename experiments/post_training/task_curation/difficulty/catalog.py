@@ -12,6 +12,7 @@ from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.difficulty.campaign import campaign_record
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, declaration_population_revision
 from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, LEDGER_VERSION, PANELS_DIRECTORY
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason, PanelReference
@@ -87,6 +88,9 @@ def served_catalog(
 ) -> list[CatalogSource]:
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
+    campaign = campaign_record(ledger)
+    if campaign is not None:
+        queues = tuple(tuple(item) for item in campaign["queues"])
     declarations = query(
         "SELECT id, load_id, declaration->>'intended_use' AS intended_use, "
         "jsonb_build_object('current_release', declaration->'current_release', "

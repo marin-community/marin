@@ -14,6 +14,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
 
+from experiments.post_training.task_curation.difficulty.campaign import campaign_record
 from experiments.post_training.task_curation.difficulty.ledger import (
     LEDGER_VERSION,
     RESULTS_DIRECTORY,
@@ -89,11 +90,24 @@ def main() -> None:
     key = action_id(action)
     try:
         if isinstance(action, AttemptBatch):
-            output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
+            campaign = campaign_record(args.ledger)
+            output = (
+                args.ledger.removesuffix("/ledger") + "/runs/" + key
+                if campaign
+                else str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
+            )
             # The batch's local root must live on the node's NVMe /cache mount: the
             # container root and /tmp are memory-backed on CoreWeave bare metal, so
             # pulled images and sandbox disks there are unreclaimable cgroup memory.
-            local_root = Path("/cache/atlas-difficulty/actions") / key / "runtime"
+            local_root = (
+                Path(
+                    "/var/lib/iris-cache/atlas-difficulty/actions"
+                    if campaign_record(args.ledger)
+                    else "/cache/atlas-difficulty/actions"
+                )
+                / key
+                / "runtime"
+            )
             command = attempt_command(
                 action,
                 args.manifest,

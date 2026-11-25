@@ -33,6 +33,7 @@ from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_MODEL
+from experiments.post_training.task_curation.difficulty.campaign import JUDGE_VERSION, TPU_SERVING_ID, campaign_record
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty.ledger import record_action_failure
 from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
@@ -127,8 +128,10 @@ def solver_pool_record(solver: Solver, registry: str) -> dict:
     return record
 
 
-def solver_pool_connection(record: dict) -> OpenAIEndpoint:
-    address = iris_ctx().client.resolve_endpoint(record["endpoint_name"]).rstrip("/")
+def solver_pool_connection(record: dict, routing_key: str = "") -> OpenAIEndpoint:
+    names = [record["endpoint_name"]] if record.get("endpoint_name") else record["endpoint_names"]
+    selected = int(hashlib.sha256(routing_key.encode()).hexdigest(), 16) % len(names)
+    address = iris_ctx().client.resolve_endpoint(names[selected]).rstrip("/")
     return OpenAIEndpoint(base_url=address + "/v1", model=record["model"], api_key="EMPTY")
 
 
@@ -481,8 +484,13 @@ def run_batch(args: argparse.Namespace) -> None:
     sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     pin = PINS[args.solver]
     action = json.loads(StoragePath(args.action_manifest).read_text())
+    campaign = campaign_record(args.ledger)
+    if campaign is not None and args.solver_pool is None:
+        raise ValueError("The TPU campaign requires its qualified regional pool registry")
+    if campaign is not None and args.solver in SELF_HOSTED_SOLVERS and action["vllm_release_tag"] != TPU_SERVING_ID:
+        raise ActionFailure(GapReason.SERVING_RELEASE_MISMATCH, "Action does not bind the maintained TPU serving pair")
     release = VLLM_GPU_RELEASE if args.solver_pool is not None else solver_vllm_release(args.solver)
-    if args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != release.release_tag:
+    if campaign is None and args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != release.release_tag:
         raise ActionFailure(
             GapReason.SERVING_RELEASE_MISMATCH,
             f"Snowball action binds {action['vllm_release_tag']}; serving requires {release.release_tag}",
@@ -491,13 +499,20 @@ def run_batch(args: argparse.Namespace) -> None:
     options = worker_limits(args.local_root)
     # Pulled actor images go to the node's NVMe scratch, never the container's
     # memory-backed root: a cached image also survives later pods on the node.
-    options.setdefault("image_cache", LOCAL_IMAGE_CACHE)
+    options.setdefault("image_cache", str(args.local_root.parent / "image-cache") if campaign else LOCAL_IMAGE_CACHE)
     if args.registry_auth_secret is not None:
         authfile = args.local_root / "registry-auth.json"
         authfile.write_text(require_secret(args.registry_auth_secret))
         authfile.chmod(384)
         options["registry_authfile"] = str(authfile)
-    prepared = [prepare_source(source, args.local_root / "prepared") for source in sources]
+    prepared = [
+        (
+            prepare_source(source, args.local_root / "prepared", judge_version=JUDGE_VERSION)
+            if campaign
+            else prepare_source(source, args.local_root / "prepared")
+        )
+        for source in sources
+    ]
     requested = {source["source_id"]: {task[0] for task in source["tasks"]} for source in action["sources"]}
     prepared = [
         source.model_copy(
@@ -524,6 +539,7 @@ def run_batch(args: argparse.Namespace) -> None:
             "source_queue": args.sources,
             "source_queue_sha256": args.sources_sha256,
             "worker_limits": json.loads((args.local_root / "worker-cgroup.json").read_text()),
+            "campaign": campaign,
         },
     )
     deviations = (
@@ -567,14 +583,16 @@ def run_batch(args: argparse.Namespace) -> None:
     )
     if pool is not None:
         model_definition = pool["effective_serving"]
-        gpu_release = asdict(VLLM_GPU_RELEASE)
+        gpu_release = (
+            {"platform": "tpu", "campaign_id": campaign["campaign_id"]} if campaign else asdict(VLLM_GPU_RELEASE)
+        )
     elif args.solver in SELF_HOSTED_SOLVERS:
         model_definition = asdict(serving_model(args.solver, settings.context_tokens))
         gpu_release = asdict(solver_vllm_release(args.solver))
     else:
         model_definition = gpu_release = None
     if pool is not None:
-        connection = solver_pool_connection(pool)
+        connection = solver_pool_connection(pool, args.action_manifest) if campaign else solver_pool_connection(pool)
         route = nullcontext((connection.base_url, connection.model, connection.api_key or "EMPTY", []))
     else:
         route = solver_endpoint(args.solver, settings, priority_band_value(args.priority))
@@ -633,7 +651,8 @@ def run_batch(args: argparse.Namespace) -> None:
                         judge_metadata = {
                             "model": judge_api_model,
                             "api_model": judge_api_model,
-                            "revision": SUBSTITUTE_JUDGE_PIN.revision,
+                            "revision": "opaque-provider",
+                            "judge_version": JUDGE_VERSION if campaign else "standing-route-repair-20261124",
                             "tokenizer": judge_api_model,
                             "tokenizer_revision": SUBSTITUTE_JUDGE_PIN.revision,
                             "chat_template_sha256": SUBSTITUTE_JUDGE_PIN.template_sha256,

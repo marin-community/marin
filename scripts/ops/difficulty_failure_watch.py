@@ -130,6 +130,8 @@ def ledger_outcomes(ledger: str, since: datetime, seen_partitions: set[str]) -> 
 
 def tick(ledger: str, state_path: Path, alerts_path: Path, now: datetime) -> int:
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    if state.get("ledger", ledger) != ledger:
+        raise ValueError("Failure monitor state belongs to another ledger; choose a new state file")
     patterns = {key: FailurePattern(**value) for key, value in state.get("patterns", {}).items()}
     seen = set(state.get("seen_attempts", []))
     partitions = set(state.get("seen_partitions", []))
@@ -139,12 +141,16 @@ def tick(ledger: str, state_path: Path, alerts_path: Path, now: datetime) -> int
         else now - timedelta(seconds=INITIAL_LOOKBACK_SECONDS)
     )
     logs = finelog_outcomes(since)
+    if (StoragePath(ledger) / "v1/campaign.json").exists():
+        run_prefix = ledger.removesuffix("/ledger") + "/runs/"
+        logs = [row for row in logs if row.get("run_id", "").startswith(run_prefix)]
     rows, added = ledger_outcomes(ledger, since, partitions)
     alerts = update_patterns(patterns, seen, logs + rows, now)
     sink = JsonlAlertSink(alerts_path)
     for alert in alerts:
         sink.deliver(alert)
     state = {
+        "ledger": ledger,
         "last_tick": now.isoformat(),
         "patterns": {key: asdict(value) for key, value in patterns.items()},
         "seen_attempts": sorted(seen),

@@ -18,6 +18,7 @@ from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import GpuBudget, campaign_budget, record_pool_cost
+from experiments.post_training.task_curation.difficulty.campaign import TPU_SERVING_ID, campaign_record
 from experiments.post_training.task_curation.difficulty.ledger import (
     ACTIONS_DIRECTORY,
     ESCALATIONS_DIRECTORY,
@@ -161,6 +162,7 @@ def execute_plan(
     }
     spent = budget.recorded_gpu_hours(rows) if budget else 0.0
     reserved = budget.reserved_gpu_hours(rows, ledger) if budget else 0.0
+    tpu_campaign = campaign_record(ledger) is not None
     for action in actions:
         key = action_id(action)
         if key in recorded:
@@ -185,7 +187,12 @@ def execute_plan(
             deferred.append(key)
             continue
         if isinstance(action, AttemptBatch):
-            if sum(job.active and job.solver == action.solver for job in jobs) >= ATTEMPT_JOBS_PER_SOLVER[action.solver]:
+            solver_cap = (
+                {Solver.SMALL: 2, Solver.LARGE: 2, Solver.SNOWBALL: 1, Solver.HOSTED: 1}[action.solver]
+                if tpu_campaign
+                else ATTEMPT_JOBS_PER_SOLVER[action.solver]
+            )
+            if sum(job.active and job.solver == action.solver for job in jobs) >= solver_cap:
                 deferred.append(key)
                 continue
             cells = {(source.source_id, action.solver.value) for source in action.sources}
@@ -281,6 +288,8 @@ def reconcile_once(
                     release = (
                         VLLM_GPU_RELEASE.release_tag if action.solver == Solver.SNOWBALL else action.vllm_release_tag
                     )
+                    if campaign_record(ledger) is not None and action.solver != Solver.HOSTED:
+                        release = TPU_SERVING_ID
                     actions[index] = replace(action, max_gpu_hours=0.0, vllm_release_tag=release)
             return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
     finally:

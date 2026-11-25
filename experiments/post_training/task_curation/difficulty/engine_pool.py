@@ -5,14 +5,12 @@
 
 import argparse
 import asyncio
-import hashlib
 import json
 import logging
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 
-import httpx
 from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from iris.rpc.proto_display import priority_band_name, priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -26,7 +24,9 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
+from experiments.post_training.task_curation.difficulty.pool_receipts import publish_pool_receipt, warm_throughput
 from experiments.post_training.task_curation.difficulty.runtime import TOGETHER_BASE_URL, hosted_liveness_response
+from experiments.post_training.task_curation.difficulty.tpu import run_tpu_pool
 from experiments.post_training.task_curation.difficulty_config import TOGETHER_API_KEY_ENV
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 
@@ -151,66 +151,6 @@ def pool_config(solver: Solver) -> RemoteInferenceConfig:
     )
 
 
-async def warm_throughput(
-    endpoint: str, model: str, gpu_count: int, api_key: str | None = None, concurrency: int = WARM_CONCURRENCY
-) -> dict:
-    """Measure completed output tokens over a concurrent warm batch, including HTTP overhead."""
-    headers = {} if api_key is None else {"Authorization": f"Bearer {api_key}"}
-    async with httpx.AsyncClient(
-        timeout=1800, limits=httpx.Limits(max_connections=concurrency), headers=headers
-    ) as client:
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": "Continue counting integers separated by spaces, starting at 1."}],
-            "max_tokens": WARM_OUTPUT_TOKENS,
-            "temperature": 0.7,
-        }
-        if gpu_count:
-            body["ignore_eos"] = True
-
-        async def request() -> dict:
-            response = await client.post(endpoint.rstrip("/") + "/chat/completions", json=body)
-            response.raise_for_status()
-            return response.json()["usage"]
-
-        await request()
-        started = time.monotonic()
-        usages = await asyncio.gather(*(request() for _ in range(concurrency)))
-        elapsed = time.monotonic() - started
-    output = sum(usage["completion_tokens"] for usage in usages)
-    return {
-        "requests": len(usages),
-        "concurrency": concurrency,
-        "output_tokens": output,
-        "elapsed_seconds": elapsed,
-        "output_tokens_per_second": output / elapsed,
-        "output_tokens_per_second_per_gpu": output / elapsed / gpu_count if gpu_count else None,
-        "basis": "completed decode output tokens / concurrent-batch wall time, including prefill and HTTP overhead",
-    }
-
-
-def publish_pool_receipt(registry: str, solver: Solver, receipt: dict) -> None:
-    """Retain ready generations before replacing the active solver endpoint."""
-    target = StoragePath(registry) / f"{solver.value}.json"
-    encoded = json.dumps(receipt, sort_keys=True) + "\n"
-    versions = [encoded]
-    if target.exists():
-        previous = target.read_text()
-        previous_receipt = json.loads(previous)
-        for field in ("solver", "model", "revision"):
-            if previous_receipt[field] != receipt[field]:
-                raise ValueError(f"Cannot replace solver pool with a different {field}")
-        versions.insert(0, previous)
-    history = target.parent / "history" / solver.value
-    history.mkdirs()
-    for version in versions:
-        digest = hashlib.sha256(version.encode()).hexdigest()
-        (history / f"{digest}.json").write_text(version)
-    # S3 publishes each complete object on close; readers retain the previous
-    # ready endpoint until this replacement succeeds.
-    target.write_text(encoded)
-
-
 def run_pool(solver: Solver, registry: str) -> None:
     configure_coreweave_s3()
     shape = ENGINE_SHAPES[solver]
@@ -283,8 +223,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--solver", type=Solver, required=True)
     parser.add_argument("--registry", required=True)
+    parser.add_argument("--tpu-root")
+    parser.add_argument("--replicas", type=int, default=1)
     args = parser.parse_args()
-    if args.solver == Solver.HOSTED:
+    if args.tpu_root is not None:
+        run_tpu_pool(args.solver, args.tpu_root, args.replicas)
+    elif args.solver == Solver.HOSTED:
         run_provider_warm(args.registry)
     else:
         run_pool(args.solver, args.registry)

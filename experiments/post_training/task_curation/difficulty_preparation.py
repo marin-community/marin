@@ -9,6 +9,7 @@ import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
+import tomlkit
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from taskcompendium.harbor.adapter import declared_execution_limits, unsupported_harbor_contract, write_harbor_task
@@ -21,6 +22,11 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_available
+from experiments.post_training.task_curation.difficulty.campaign import (
+    JUDGE_VERSION,
+    record_judge_redeclaration,
+    redeclare_judge,
+)
 from experiments.post_training.task_curation.difficulty_artifacts import restore_original_lock
 from experiments.post_training.task_curation.difficulty_config import (
     DECLARED_JUDGE_ENV_VAR,
@@ -113,7 +119,9 @@ def restore_source_locks(tasks: Sequence[TaskSpec]) -> None:
         packages_lock_available.cache_clear()
 
 
-def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
+def prepare_source(source: DifficultySource, root: Path, *, judge_version: str | None = None) -> PreparedSource:
+    if judge_version is not None and judge_version != JUDGE_VERSION:
+        raise ValueError("Unknown versioned difficulty judge")
     tasks, runtimes = panel_task_runtimes(source.panel)
     frozen = {selected.task_id: selected.task_sha256 for selected in source.sample.tasks}
     for task in tasks:
@@ -136,7 +144,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         judge = judge_spec(task.grader)
         if reason is None and judge is not None and judge.api != "chat_completions":
             reason = source_gap_reason(DifficultyGap.JUDGE_API_UNQUALIFIED, judge.api)
-        if reason is None and judge is not None and judge.model not in SERVED_JUDGE_MODELS:
+        if reason is None and judge is not None and judge.model not in SERVED_JUDGE_MODELS and judge_version is None:
             reason = source_gap_reason(DifficultyGap.JUDGE_ROUTE_UNQUALIFIED, judge.model)
         served_judge = None if judge is None else judge.model
         if reason is None and native:
@@ -149,10 +157,15 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
             if repair is not None:
                 served_judge = repair.served_model
             elif (
-                declared is not None
+                judge_version is None
+                and declared is not None
                 and declared.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX) not in SERVED_DECLARED_JUDGE_MODELS
             ):
                 reason = source_gap_reason(DifficultyGap.JUDGE_ROUTE_UNQUALIFIED, declared)
+            if judge_version is not None and declared is not None:
+                served_judge = SUBSTITUTE_JUDGE_MODEL
+        if judge_version is not None and judge is not None:
+            served_judge = SUBSTITUTE_JUDGE_MODEL
         if reason is None:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):
@@ -170,6 +183,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                 reason = source_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, ",".join(missing))
         directory = root / canonical_sha256(source.declaration.id)[:20] / canonical_sha256(task.id)[:20]
         if reason is None:
+            execution_task = redeclare_judge(task) if judge_version is not None and judge is not None else task
             if native:
                 validate_native_package(task)
                 write_native_task(task, directory)
@@ -180,8 +194,19 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                         **declared_execution_limits(task),
                     }
                 )
-                write_harbor_task(task, directory, shape)
-            write_source_runtime(task, runtime, directory)
+                write_harbor_task(execution_task, directory, shape)
+            write_source_runtime(execution_task, runtime, directory)
+            if judge_version is not None and judge is not None:
+                record_judge_redeclaration(directory, task)
+            if judge_version is not None and native and bundle_declared_judge_model(task) is not None:
+                config_path = directory / "task.toml"
+                original = config_path.read_text()
+                config = tomlkit.parse(original)
+                config["verifier"]["env"][DECLARED_JUDGE_ENV_VAR] = (
+                    DECLARED_JUDGE_PROVIDER_PREFIX + SUBSTITUTE_JUDGE_MODEL
+                )
+                (directory / "original-judge-task.toml").write_text(original)
+                config_path.write_text(tomlkit.dumps(config))
         prepared.append(
             PreparedTask(
                 task_id=task.id,

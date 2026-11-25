@@ -22,6 +22,7 @@ from rigging.credential_store import load_credentials
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 
+from experiments.post_training.task_curation.difficulty.campaign import campaign_record
 from experiments.post_training.task_curation.difficulty.capacity import available_provider_solvers
 from experiments.post_training.task_curation.difficulty.catalog import (
     available_artifact_uris,
@@ -34,7 +35,7 @@ from experiments.post_training.task_curation.difficulty.launch import cpu_job_co
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.runtime import solver_pool_record
-from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason, Outcome
+from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason, Outcome, TerminalRuling
 from experiments.post_training.task_curation.difficulty_config import (
     SELF_HOSTED_SOLVERS,
     SOLVER_POOL_GPU_COUNT,
@@ -77,6 +78,21 @@ def run_controller(
     backend = IrisBackend(context.client, context.job_id, ledger, serving_pool)
     notifications = EscalationLog(ledger)
     policy = CoveragePolicy()
+    campaign = campaign_record(ledger)
+    if campaign is not None:
+        policy = CoveragePolicy(
+            terminal_rulings=tuple(
+                TerminalRuling(
+                    hold["source_id"],
+                    solver,
+                    GapReason(hold["reason"]),
+                    hold["registry_revision"],
+                    campaign["parent_seal"]["uri"],
+                )
+                for hold in campaign["holds"]
+                for solver in Solver
+            )
+        )
     provider = IapRefreshTokenProvider(
         MARIN_DESKTOP_OAUTH_CLIENT.client_id,
         MARIN_DESKTOP_OAUTH_CLIENT.client_secret,
@@ -88,9 +104,14 @@ def run_controller(
         LOGGER.info("DIFFICULTY_WAITING_FOR_MEASURED_SOLVER_POOLS %s", serving_pool)
         time.sleep(CONTROLLER_INTERVAL)
     if serving_pool is not None:
-        actual_gpus = sum(solver_pool_record(solver, serving_pool)["gpu_count"] for solver in SELF_HOSTED_SOLVERS)
-        if actual_gpus != SOLVER_POOL_GPU_COUNT:
-            raise ValueError(f"Solver pools request {actual_gpus} GPUs; expected {SOLVER_POOL_GPU_COUNT}")
+        pools = [solver_pool_record(solver, serving_pool) for solver in SELF_HOSTED_SOLVERS]
+        if campaign_record(ledger) is not None:
+            if any(pool.get("platform") != "tpu" or pool.get("region") != "us-central2" for pool in pools):
+                raise ValueError("TPU campaign has a non-regional or non-TPU solver pool")
+            if sum(pool["chip_count"] for pool in pools) != 256:
+                raise ValueError("TPU campaign requires the measured 256-chip allocation")
+        elif sum(pool["gpu_count"] for pool in pools) != SOLVER_POOL_GPU_COUNT:
+            raise ValueError("GPU solver pool allocation differs from the protocol's 64 GPUs")
     reporting_started = datetime.now(UTC)
     if excluded_sources:
         LOGGER.warning("DIFFICULTY_SOURCE_QUARANTINE %s", json.dumps(sorted(excluded_sources)))
@@ -179,7 +200,23 @@ def launch_controller(
     environment = controller_environment(secrets_env)
     environment[REFRESH_TOKEN_ENV] = record.edge_refresh_token
     command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
-    if serving_pool is not None:
+    if campaign_record(ledger) is not None:
+        command.remove("--target-cluster=cw-rno2a")
+        command.extend(
+            [
+                "--region",
+                "us-central2",
+                "--zone",
+                "us-central2-b",
+                "--env-vars",
+                "MARIN_TEMP_PREFIX",
+                "gs://marin-us-central2",
+            ]
+        )
+        command[command.index("--max-retries") + 1] = str(CONTROLLER_FAILURE_RETRIES)
+        command[command.index("--memory") + 1] = "8GB"
+        command[command.index("--disk") + 1] = "64GB"
+    elif serving_pool is not None:
         command[command.index("--target-cluster=cw-rno2a")] = "--target-cluster=cw-us-east-08a"
         command[command.index("--priority") + 1] = "production"
         command[command.index("--max-retries") + 1] = str(CONTROLLER_FAILURE_RETRIES)

@@ -73,6 +73,22 @@ def record_pool_cost(ledger: str, registry: str, rows: Sequence[LedgerRow]) -> l
         elapsed = (now - datetime.fromisoformat(start)).total_seconds()
         if elapsed <= 0:
             continue
+        evidence_uri = receipt_uri
+        if receipt.get("platform") == "tpu":
+            accounting = {
+                "solver": solver.value,
+                "start": start,
+                "end": now.isoformat(),
+                "chip_count": receipt["chip_count"],
+                "chip_hours": receipt["chip_count"] * elapsed / 3600,
+                "receipt_uri": receipt_uri,
+                "budget_enforced": False,
+                "basis": "pool allocation wall time; includes recovery intervals",
+            }
+            path = StoragePath(ledger) / LEDGER_VERSION / "tpu-accounting" / (digest(accounting) + ".json")
+            path.parent.mkdirs()
+            path.write_text(json.dumps(accounting, sort_keys=True) + "\n")
+            evidence_uri = str(path)
         additions.append(
             LedgerRow(
                 receipt["revision"],
@@ -85,7 +101,7 @@ def record_pool_cost(ledger: str, registry: str, rows: Sequence[LedgerRow]) -> l
                 registry,
                 receipt["gpu_count"] * elapsed / 3600,
                 now.isoformat(),
-                evidence_uri=receipt_uri,
+                evidence_uri=evidence_uri,
             )
         )
     append_rows(ledger, additions)
