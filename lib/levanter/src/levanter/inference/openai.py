@@ -1259,7 +1259,8 @@ async def _stream_chat_completion(
             ctx._unregister_http_request(request_id, abort_event)
 
     return StreamingResponse(
-        events(), media_type=_EVENT_STREAM,
+        events(),
+        media_type=_EVENT_STREAM,
         background=BackgroundTask(ctx._unregister_http_request, request_id, abort_event),
     )
 

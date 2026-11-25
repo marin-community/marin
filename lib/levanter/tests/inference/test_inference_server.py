@@ -1061,7 +1061,7 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         choice_expert_routes(tensors, 0, wrong_inputs)
 
 
-def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, local_gpt2_tokenizer):
+def test_paused_snowball_replicas_converge_after_an_incomplete_checkpoint(tmp_path, local_gpt2_tokenizer):
     cfg = SnowballConfig(
         vocab_size=48,
         hidden_dim=16,
@@ -1087,6 +1087,7 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
             max_seqs_in_prefill=2,
             max_prefill_size=12,
             max_queued_tokens=4,
+            max_retained_prompts=2,
             logprob_mode=LogprobMode.POLICY,
             compute_dtype=jnp.float32,
         ),
@@ -1104,14 +1105,15 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
             {"model": {"other": jnp.array(0)}},
             3,
             incomplete,
-            metadata={"policy_version": 2, "policy_id": "incomplete:2"},
+            metadata={"policy_version": 2, "policy_id": "learned:2"},
         )
         server = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
+        peer = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
         try:
-            with TestClient(server.app) as client:
+            with TestClient(server.app) as client, TestClient(peer.app) as peer_client:
                 prompt = np.array([2, 5, 7], dtype=np.int32)
 
-                def generate(policy_id):
+                def generate(policy_id, target=client):
                     request = encode_frame(
                         {
                             "max_tokens": 3,
@@ -1121,22 +1123,46 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
                         },
                         {"prompt_token_ids": prompt},
                     )
-                    return client.post(GENERATE_PATH, content=request, headers={"content-type": MEDIA_TYPE})
+                    return target.post(GENERATE_PATH, content=request, headers={"content-type": MEDIA_TYPE})
 
                 before = generate("starting")
                 assert before.status_code == 200
                 with pytest.raises(ValueError):
                     publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
-                with pytest.raises(FileNotFoundError):
-                    publish_snowball_checkpoint(server, incomplete, policy_version=2, expected_serving_version=0)
-                assert generate("incomplete:2").status_code == 409
-                assert generate("starting").status_code == 200
+                assert generate("starting", peer_client).status_code == 200
+
+                for target in (client, peer_client):
+                    paused = target.post("/pause_generation", json={"mode": "abort", "clear_cache": True})
+                    assert paused.status_code == 200, paused.text
+
                 assert publish_snowball_checkpoint(server, path, policy_version=2, expected_serving_version=0) == 1
+                with pytest.raises(FileNotFoundError):
+                    publish_snowball_checkpoint(peer, incomplete, policy_version=2, expected_serving_version=0)
                 assert generate("starting").status_code == 409
+                assert generate("learned:2", peer_client).status_code == 409
+                for target, policy_id in ((client, "learned:2"), (peer_client, "starting")):
+                    reply = generate(policy_id, target)
+                    assert reply.status_code == 200, reply.text
+                    receipt, arrays = decode_frame(reply.content)
+                    assert receipt["choices"][0]["policy_id"] == policy_id
+                    assert receipt["choices"][0]["finish_reason"] == "abort"
+                    assert not arrays["choice.0.token_ids"].size
+
+                assert publish_snowball_checkpoint(peer, path, policy_version=2, expected_serving_version=0) == 1
+                for target in (client, peer_client):
+                    assert target.post("/resume_generation").status_code == 200
                 result = generate("learned:2")
                 assert result.status_code == 200
                 metadata, tensors = decode_frame(result.content)
                 assert metadata["choices"][0]["policy_id"] == "learned:2"
+                reply = generate("learned:2", peer_client)
+                assert reply.status_code == 200, reply.text
+                peer_metadata, peer_tensors = decode_frame(reply.content)
+                assert peer_metadata["choices"] == metadata["choices"]
+                np.testing.assert_array_equal(peer_tensors["choice.0.token_ids"], tensors["choice.0.token_ids"])
+                np.testing.assert_array_equal(
+                    peer_tensors["choice.0.policy_logprobs"], tensors["choice.0.policy_logprobs"]
+                )
                 _, previous = decode_frame(before.content)
                 assert not np.array_equal(tensors["choice.0.policy_logprobs"], previous["choice.0.policy_logprobs"])
                 tokens = np.r_[prompt, tensors["choice.0.token_ids"]]
@@ -1152,6 +1178,7 @@ def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, l
                     tensors["choice.0.policy_logprobs"], -loss.array[0, prompt.size - 1 : -1], rtol=0, atol=1e-5
                 )
         finally:
+            peer.shutdown()
             server.shutdown()
 
 
@@ -1247,7 +1274,7 @@ def gated_binary_server(inference_server_config, local_gpt2_tokenizer, fixed_tok
             jax.debug.callback(gate, pos_ids.array)
             return super().decode(input_ids, kv_cache, batch_info, pos_ids)
 
-    tokenizer = local_gpt2_tokenizer
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     model = GatedModel(vocab_size=len(tokenizer), token_id=3)
     config = dataclasses.replace(
         inference_server_config,
@@ -1450,11 +1477,14 @@ def test_unsupported_pause_policy_keeps_admission_open(greedy_client, policy):
 
 
 def test_staged_weights_leave_admission_open_and_recheck_version(
-    inference_server_config, generated_model_and_tokenizer
+    inference_server_config, llama_model_config, local_gpt2_tokenizer
 ):
-    model, tokenizer = generated_model_and_tokenizer
+    tokenizer = local_gpt2_tokenizer
     config = dataclasses.replace(inference_server_config, initial_policy_id="initial")
-    server = InferenceServer.create(config, model, tokenizer)
+    mesh = config.trainer.device_mesh
+    with hax.partitioning.set_mesh(mesh), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        model = LlamaLMHeadModel.init(hax.Axis("vocab", len(tokenizer)), llama_model_config, key=jax.random.key(0))
+        server = InferenceServer.create(config, model, tokenizer, mesh=mesh)
     entered, release = threading.Event(), threading.Event()
     prompt = np.array([18, 7, 3, 18], dtype=np.int32)
 
@@ -1527,3 +1557,32 @@ def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inferenc
         assert response.json()["usage"]["completion_tokens"] == 1
     finally:
         server.shutdown()
+
+
+def test_live_chat_abort_returns_terminal_sse_event(gated_binary_server):
+    client, started, release, registered, _, _ = gated_binary_server
+    payload = {
+        "model": TEST_MODEL_NAME,
+        "temperature": 0,
+        "max_tokens": 4,
+        "stream": True,
+        "messages": [{"role": "user", "content": "A B"}],
+    }
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            pending = pool.submit(
+                client.post, "/v1/chat/completions", json=payload, headers={"x-request-id": "running"}
+            )
+            assert started.wait(PREFILL_GATE_TIMEOUT)
+            assert registered["running"].wait(ADMISSION_TIMEOUT)
+            assert client.post("/abort", json={"request_ids": ["running"]}).status_code == 200
+        finally:
+            release.set()
+        response = pending.result(timeout=PREFILL_GATE_TIMEOUT)
+
+    assert response.status_code == 200, response.text
+    events = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == "[DONE]"
+    chunks = [json.loads(event) for event in events[:-1]]
+    assert chunks[-1]["choices"][0]["finish_reason"] == "abort"
+    assert "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in chunks)

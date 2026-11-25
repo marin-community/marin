@@ -273,3 +273,40 @@ def test_continuous_abort_returns_partial_scores_while_peer_keeps_decoding(fixed
     continued = engine.generate([replace(short, prompt_tokens=short.prompt_tokens + partial.tokens[0])])
     assert partial.tokens[0] + continued.tokens[0] == uninterrupted.tokens[0]
     assert partial.logprobs[0] + continued.logprobs[0] == pytest.approx(uninterrupted.logprobs[0])
+
+
+def test_continuous_abort_keeps_the_stop_reason_of_a_completed_clone(fixed_token_model):
+    engine = InferenceEngine.from_model_with_config(
+        model=fixed_token_model(vocab_size=10, token_id=3),  # type: ignore
+        tokenizer=None,
+        config=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            page_size=4,
+            max_rounds=1,
+            max_seqs=2,
+            max_seqs_in_prefill=2,
+            max_queued_tokens=4,
+        ),
+    )
+    params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(5), temperature=jnp.asarray(1.0))
+    request = Request([1, 2], request_id=1, decode_params=params, n_generations=2)
+    baseline = engine.generate([request])
+    stopped_token, running_token = [ids[0] for ids in baseline.tokens]
+    assert stopped_token != running_token
+    request = replace(
+        request,
+        decode_params=replace(params, stop_tokens=hax.named(jnp.asarray([[stopped_token]]), ("stop_seq", "position"))),
+    )
+    results = {}
+    cancelled = set()
+    engine.generate_continuously(
+        [request],
+        on_complete=results.__setitem__,
+        should_abort=cancelled.__contains__,
+        step_callback=lambda _: cancelled.add(request.request_id),
+    )
+    result = results[request.request_id]
+    assert result.tokens == [[stopped_token], [running_token]]
+    assert result.finish_reasons == [FinishReason.STOP, FinishReason.ABORT]
+    assert result.logprobs == [scores[:1] for scores in baseline.logprobs]
