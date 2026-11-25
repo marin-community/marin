@@ -227,7 +227,7 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
 
 BASELINE = Preset(
     name="doom-baseline",
-    revision="2026.11.24.2",
+    revision="2026.11.24.3",
     recipe=Recipe(
         layout=BASELINE_LAYOUT,
         fixed_reply_tokens=None,
@@ -291,7 +291,7 @@ SMOKE = replace(
     recipe=replace(MATH.recipe, config=config(32768, 3e-6, training=True)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
-MIXED = replace(MATH, name="doom-mixed", tasks=f"{SELECTION_NAME}@{VERSION}", tasks_input="optional")
+MIXED = replace(MATH, name="doom-mixed", tasks=f"{SELECTION_NAME}@{VERSION}", tasks_input="required")
 LONG = replace(
     SMOKE,
     name="doom-long",
@@ -299,7 +299,7 @@ LONG = replace(
     export="best",
     additional_callbacks=MATH.additional_callbacks,
     tasks=f"{SELECTION_NAME}@{VERSION}",
-    tasks_input="optional",
+    tasks_input="required",
     updates=4,
     measured=range(1, 5),
     recipe=replace(SMOKE.recipe, config=config(32768, 6e-7, training=True)),

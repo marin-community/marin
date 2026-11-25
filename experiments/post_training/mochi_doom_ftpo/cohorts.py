@@ -11,7 +11,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -19,6 +18,7 @@ from finestore.rl.strata import MembershipState, SelectionDefinition, TaskStrata
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe.cohort_identity import cohort_hash, prompt_hash
+from taskcompendium.evaluation.corpus import parquet_rows
 from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, RawRow
@@ -86,14 +86,8 @@ def prompt_tokens(task: TaskSpec, tokenizer: PreTrainedTokenizerBase) -> list[in
     )
 
 
-def read_parquet(url: str, columns: list[str] | None = None) -> Iterable[dict[str, Any]]:
-    with StoragePath(url).open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches(batch_size=128, columns=columns):
-            yield from batch.to_pylist()
-
-
 def dapo_tasks(filename: str) -> Iterable[TaskSpec]:
-    for row in read_parquet(str(StoragePath(DAPO_ROOT) / filename)):
+    for row in parquet_rows(StoragePath(DAPO_ROOT) / filename):
         uid = row["uid"]
         source = Source(
             dataset="BytedTsinghua-SIA/DAPO-Math-17k",
@@ -142,6 +136,40 @@ def _record(item: Candidate) -> dict:
     }
 
 
+def publish_task_files(
+    root: StoragePath, name: str, version: str, files: dict[str, list[dict]], recipe: dict, sampling: str
+) -> None:
+    """Publish validated task files and their native evaluation identity manifest."""
+    with TemporaryDirectory(prefix="mochi-doom-selection-") as temporary:
+        directory = Path(temporary)
+        for file_name, rows in files.items():
+            pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), directory / f"{file_name}.parquet")
+        manifest = []
+        for row in [*files["train"], *files["full_validation"]]:
+            task = TaskSpec.model_validate_json(row["task_spec"])
+            strata = TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
+            manifest.append(_selection_row(task, strata, state=MembershipState.ACTIVE).model_dump(mode="json"))
+        pq.write_table(pa.Table.from_pylist(manifest, schema=TASK_MANIFEST_SCHEMA), directory / "task_manifest.parquet")
+        summary = {
+            "selection_strata": (
+                SelectionDefinition(
+                    name=name,
+                    version=version,
+                    task_files=("train.parquet", "full_validation.parquet"),
+                    active_files=("train.parquet", "full_validation.parquet"),
+                    sampling=sampling,
+                ).model_dump(mode="json")
+            ),
+            **{f"{name}_rows": len(rows) for name, rows in files.items()},
+            "training_rows": len(files["train"]),
+            "training_family_counts": dict(Counter(row["family"] for row in files["train"])),
+            "recipe": recipe,
+        }
+        validated = directory / "validated"
+        _publish_selection(directory, str(validated), tuple(f"{name}.parquet" for name in files), summary)
+        publish_once(root, {path.name: path.read_bytes() for path in validated.iterdir()})
+
+
 def _publish(root: str, cohorts: dict[str, list[Candidate]], training: list[Candidate], provenance: dict) -> None:
     all_eval = {row.task.id: row for values in cohorts.values() for row in values}
     initial_panel = [row for domain, values in cohorts.items() if domain != "math16k" for row in values[:128]]
@@ -158,38 +186,14 @@ def _publish(root: str, cohorts: dict[str, list[Candidate]], training: list[Cand
         "reserve32k": reserve,
         "math_train": [row for row in training if row.domain == "math"],
     }
-    with TemporaryDirectory(prefix="mochi-doom-cohorts-") as temporary:
-        directory = Path(temporary)
-        for name, values in files.items():
-            pq.write_table(
-                pa.Table.from_pylist([_record(row) for row in values], schema=TASK_SCHEMA), directory / f"{name}.parquet"
-            )
-        population = [*training, *all_eval.values()]
-        rows = [
-            _selection_row(
-                row.task, TaskStrata(family=row.domain, source=row.task.source.dataset), state=MembershipState.ACTIVE
-            ).model_dump(mode="json")
-            for row in population
-        ]
-        pq.write_table(pa.Table.from_pylist(rows, schema=TASK_MANIFEST_SCHEMA), directory / "task_manifest.parquet")
-        summary = {
-            "selection_strata": (
-                SelectionDefinition(
-                    name=SELECTION_NAME,
-                    version=VERSION,
-                    task_files=("train.parquet", "full_validation.parquet"),
-                    active_files=("train.parquet", "full_validation.parquet"),
-                    sampling="fixed prompt-token hashes; full reserves excluded before training",
-                ).model_dump(mode="json")
-            ),
-            **{f"{name}_rows": len(values) for name, values in files.items()},
-            "training_rows": len(training),
-            "recipe": provenance,
-            "training_family_counts": dict(Counter(row.domain for row in training)),
-        }
-        validated = directory / "validated"
-        _publish_selection(directory, str(validated), tuple(f"{name}.parquet" for name in files), summary)
-        publish_once(StoragePath(root), {path.name: path.read_bytes() for path in validated.iterdir()})
+    publish_task_files(
+        StoragePath(root),
+        SELECTION_NAME,
+        VERSION,
+        {name: [_record(row) for row in values] for name, values in files.items()},
+        provenance,
+        "fixed prompt-token hashes; full reserves excluded before training",
+    )
 
 
 def main() -> None:
@@ -205,6 +209,9 @@ def main() -> None:
     configure_coreweave_s3()
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
     selection_recipe = json.loads(args.recipe.read_text())
+    math_sources = {source for source, domain in selection_recipe["sources"].items() if domain == "math"}
+    if math_sources != {"MarinSkyRL:dapo_math"}:
+        raise ValueError("This campaign requires the recovered, pinned DAPO math split")
     source_domains = {key: value for key, value in selection_recipe["sources"].items() if value != "math"}
     corpus = json.loads(StoragePath(args.corpus).read_text())
     admitted = json.loads(StoragePath(ADMITTED_SELECTION).read_text())
@@ -219,7 +226,7 @@ def main() -> None:
         f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}/" + protocol["evaluation"]["data_relative_path"]
     )
     for uri in exclusion_sources:
-        for row in read_parquet(uri, ["task_spec"]):
+        for row in parquet_rows(StoragePath(uri), columns=("task_spec",)):
             task = TaskSpec.model_validate_json(row["task_spec"])
             excluded_ids.add(task.id)
             excluded_hashes.add(prompt_hash(prompt_tokens(task, tokenizer)))

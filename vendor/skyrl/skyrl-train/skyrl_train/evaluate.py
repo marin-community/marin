@@ -257,6 +257,7 @@ def _calculate_eval_metrics(
 
 
 def _ftpo_loop_config(cfg: DictConfig) -> LoopCreditConfig | None:
+    """Return the FTPO detector settings, or None when FTPO is disabled."""
     if not ftpo_requested(cfg.trainer.algorithm):
         return None
     return parse_trajectory_reward_shaping_config(cfg.generator.trajectory_reward_shaping).loop

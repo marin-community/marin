@@ -9,8 +9,8 @@ from taskcompendium.models import Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
+from experiments.post_training.mochi_doom_ftpo.cohorts import publish_task_files
 from experiments.post_training.mochi_doom_ftpo.training_selection import (
-    publish_selection,
     selected_training,
     training_groups,
 )
@@ -61,14 +61,13 @@ def test_selected_pool_publication_preserves_balanced_structure_and_native_famil
             **TaskStrata(family="math", source="fixture").model_dump(),
         }
     ]
-    publish_selection(
+    publish_task_files(
         StoragePath(str(tmp_path)),
         "fixture-targets",
         "2026.11.25.1",
-        selected,
-        heldout,
-        heldout,
+        {"train": selected, "validation": heldout, "full_validation": heldout},
         {"heldout": [], "exclusions": [], "groups_per_family": groups},
+        "fixture fixed groups",
     )
     manifest = read_selection_manifest(str(tmp_path))
     assert manifest is not None
