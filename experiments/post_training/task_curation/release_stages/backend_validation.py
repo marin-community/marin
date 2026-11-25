@@ -18,6 +18,8 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,8 +196,7 @@ def run_backend_validation(
             run_validation,
         )
 
-        workdir = Path(f"{inputs.output_root}/work")
-        workdir.mkdir(parents=True, exist_ok=True)
+        workdir = Path(tempfile.mkdtemp(prefix="atlas-backend-validation-specs-"))
         local_paths: list[str] = []
         for index, part in enumerate(_specs_parts(population.specs_output_dir)):
             local = workdir / f"specs-{index:06d}.parquet"
@@ -203,6 +204,18 @@ def run_backend_validation(
             local_paths.append(str(local))
         manifest = build_census_manifest(inputs, task_count=task_count, specs_paths=local_paths)
         manifest_ref = seal(f"{inputs.output_root}/backend-census-manifest.json", manifest)
+        # The extracting checkout may sit at any descendant of the pinned revision
+        # (pipeline fixes land after the plan); state the revision directly instead of
+        # demanding checkout-HEAD equality, and verify the containment here.
+        pinned = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", inputs.source_revision, "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pinned.returncode != 0:
+            raise ValueError(f"checkout HEAD does not contain the plan's pinned revision {inputs.source_revision}")
         receipt = run_validation(
             ValidationInputs(
                 release_id=inputs.release_id,
@@ -216,6 +229,7 @@ def run_backend_validation(
             ),
             dry_run=False,
             repo_root=repo_root,
+            revision=inputs.source_revision,
         )
         receipt["manifest"] = {"uri": manifest_ref.uri, "sha256": manifest_ref.sha256}
         receipt["population"] = {"source_id": inputs.target, "census_artifact": row["population_path"]}

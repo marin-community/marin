@@ -151,7 +151,7 @@ def measure_source(
     source = resolve_source(row.source_id, row.declaration, sources_fn)
     declaration = source.declaration
     population = SourceTextPopulation.raw_load(row.population_path)
-    if population.source_id != row.source_id:
+    if canonical_source_id(population.source_id) != canonical_source_id(row.source_id):
         raise ValueError(f"population {population.source_id!r} does not bind {row.source_id!r}")
     for pinned in (population.path, population.specs_output_dir):
         if not pinned.startswith(region_prefix):

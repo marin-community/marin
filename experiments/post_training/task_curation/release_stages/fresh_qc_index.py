@@ -81,6 +81,23 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
     return rows
 
 
+def _paged(query, sql: str, params: dict, order_column: str) -> list[dict]:
+    """Read one panel's table rows through the applet's bounded response size."""
+    rows: list[dict] = []
+    after = None
+    while True:
+        bound = dict(params)
+        predicate = ""
+        if after is not None:
+            bound["after"] = after
+            predicate = f" AND {order_column}>CAST(:after AS TEXT)"
+        page = query(sql.format(predicate=predicate), bound)["rows"]
+        if not page:
+            return rows
+        rows.extend(page)
+        after = page[-1][order_column]
+
+
 def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, dict], query, *, write: bool) -> dict:
     """Export one panel's replayable staged document from the prior load's review tables."""
     from infra.marina.apps.rl_data_catalog.server.evidence_content import (  # noqa: PLC0415 — the maintained codec
@@ -96,44 +113,60 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         raise ValueError(f"no frozen declaration for staged panel source: {source_id}")
     key = row["pipeline_key"]
     bound = {"load": inputs.prior_load_id, "key": key}
-    assessments = query(
+    assessments = _paged(
+        query,
         "SELECT pipeline_key,source_id,scope,model,rubric,curation,curation_uri,traces"
-        " FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key",
+        " FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key{predicate}"
+        " ORDER BY pipeline_key",
         bound,
-    )["rows"]
+        "pipeline_key",
+    )
     if len(assessments) != 1:
         raise ValueError(f"{len(assessments)} assessments for the staged panel {source_id}")
-    populations = query(
+    populations = _paged(
+        query,
         "SELECT pipeline_key,cohort,population,sample_count"
-        " FROM atlas_populations WHERE load_id=:load AND pipeline_key=:key ORDER BY cohort",
+        " FROM atlas_populations WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY cohort",
         bound,
-    )["rows"]
-    items = query(
+        "cohort",
+    )
+    items = _paged(
+        query,
         "SELECT pipeline_key,task_id,cohort,status,verdict,explanation,evidence_ids,packet_uri,has_task,"
         "omissions,exclusion_reason,confidence,reference_status,defects,provenance,replaced_task_sha256,"
-        "repair_advisories FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        "repair_advisories FROM atlas_items WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-    )["rows"]
-    raw_rows = query(
+        "task_id",
+    )
+    raw_rows = _paged(
+        query,
         "SELECT pipeline_key,task_id,record,reviewer"
-        " FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        " FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-    )["rows"]
-    batch_rows = query(
+        "task_id",
+    )
+    batch_rows = _paged(
+        query,
         "SELECT pipeline_key,batch_key,record,chunk_count"
-        " FROM atlas_review_batches WHERE load_id=:load AND pipeline_key=:key ORDER BY batch_key",
+        " FROM atlas_review_batches WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY batch_key",
         bound,
-    )["rows"]
-    chunk_rows = query(
+        "batch_key",
+    )
+    chunk_rows = _paged(
+        query,
         "SELECT batch_key,chunk_index,payload"
-        " FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key ORDER BY batch_key,chunk_index",
+        " FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key{predicate}"
+        " ORDER BY batch_key,chunk_index",
         bound,
-    )["rows"]
-    links = query(
+        "batch_key",
+    )
+    links = _paged(
+        query,
         "SELECT pipeline_key,task_id,batch_key"
-        " FROM atlas_review_batch_tasks WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        " FROM atlas_review_batch_tasks WHERE load_id=:load AND pipeline_key=:key{predicate} ORDER BY task_id",
         bound,
-    )["rows"]
+        "task_id",
+    )
     chunks_by_batch: dict[str, list[str]] = {}
     for chunk in chunk_rows:
         chunks_by_batch.setdefault(chunk["batch_key"], []).append(chunk["payload"])

@@ -127,11 +127,18 @@ OUT_OF_REGION_PENDING_IDS = frozenset(
 
 # The 2026-11-24 freeze ruling: R40's source set was frozen at the cut — sources
 # admitted or imported after it route to R41 through the standing mechanism.
-# The FACET-Terminal and Endless imports unfroze for R41: the coordinator's
-# 5:10 PM EST blockers are fixed (the contract-repair license receipt and the
-# declared release-pin census receipt are registered), so their declarations
-# enter the served set and the frozen route no longer holds them.
-R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS
+# The FACET-Terminal and Endless imports unfroze for R41 (their blockers were fixed
+# after the 5:10 PM EST ruling), but the R40 cut is frozen at the 334-source exact
+# cover per that ruling — they hold here until the cut completes, then re-enter the
+# served set for R41.
+R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS | {
+    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
+    "FWeindel:validated-tasks/endless",
+    # The pinned population record measures one task more than the declared census
+    # binding (13,969 vs 13,968) — the delta needs its owner's reconciliation, so it
+    # holds here rather than refusing the release census.
+    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+}
 
 PENDING_MEASUREMENT_SOURCES = (
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),

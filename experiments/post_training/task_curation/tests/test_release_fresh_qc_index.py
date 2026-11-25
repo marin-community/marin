@@ -125,8 +125,12 @@ class _FakeQuery:
     def query(self, sql: str, params: dict) -> dict:
         for table, rows in self.tables.items():
             if f"FROM {table}" in sql:
+                order = sql.split("ORDER BY ")[1].split(",")[0].strip() if "ORDER BY" in sql else "pipeline_key"
                 filtered = [r for r in rows if r.get("pipeline_key") == params.get("key")]
-                return {"rows": filtered}
+                after = params.get("after")
+                if after is not None:
+                    filtered = [r for r in filtered if str(r.get(order)) > after]
+                return {"rows": filtered[:2]}
         raise AssertionError(f"unexpected query: {sql[:80]}")
 
 

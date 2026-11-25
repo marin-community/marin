@@ -11,7 +11,7 @@
   "expected_population_tasks": 4363214,
   "expected_prior_sources": 332,
   "expected_selected_panels": 227,
-  "expected_source_count": 334,
+  "expected_source_count": 333,
   "gpu_runtime": null,
   "kind": "atlas-release-plan",
   "measured": {
@@ -179,7 +179,7 @@
     "HuggingFaceH4:aime24": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d0568a365e5a911da0e0/2026.11.12.2",
     "HuggingFaceH4:math500": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/af19f87ffd13d2190377/2026.11.12.2",
     "Lego-X:Terminal-Lego-15k": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/terminal-lego/2026.11.20.1/root-delivery-census-correction-v1/qualified/census/population",
-    "Lite-Coder:LiteCoder-Terminal-RL-preview": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/file-state-admission-v1/execution-census/population",
+    "Lite-Coder:LiteCoder-Terminal-RL-preview": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/file-state-qualified-publication-census-v1/census/population",
     "Marin:forge-main-20261117": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-qualification-v3/population",
     "Marin:thoughtcrime": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/41f22e32b9744169bcd5/2026.11.17.1",
     "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/cascade/2026.11.16.1/d941139928857a09768b/population",
@@ -369,7 +369,6 @@
     "TaskTrove:swesmith-verifier-repaired-v5": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-swesmith/0bfcd894f5d3f6676595/population",
     "TaskTrove:tasktrove-code-contests-built-image": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/d94783d83eb583e565bf/population",
     "TaskTrove:tasktrove-codeforces-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.18.3-codeforces/e8ef857d8ec3ef76c1e9/population",
-    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6ce7836f7ace1338d63a/population",
     "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/37fbdc295ae79fe5660c/population",
     "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/58724ce930d65b7c0f58/population",
     "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/7c5352cebb83cadf8f67/population",
@@ -426,7 +425,8 @@
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
     "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
     "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
-    "TaskTrove:laion__wizardlm-orca-v4"
+    "TaskTrove:laion__wizardlm-orca-v4",
+    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1"
   ],
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
@@ -441,7 +441,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "11baf249cc979237a2c60c241694a43c1367c850",
+  "source_revision": "PENDING",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
