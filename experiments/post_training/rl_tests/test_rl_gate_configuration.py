@@ -23,6 +23,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
+    RL_TEST_MARKS,
     SELECTION_IDENTITY,
     cache_native_compositions,
     compare,
@@ -36,7 +37,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 @pytest.mark.parametrize(

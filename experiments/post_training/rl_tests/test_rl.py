@@ -24,6 +24,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
+    RL_TEST_MARKS,
     SELECTION_IDENTITY,
     controls,
     fake_iris,
@@ -34,7 +35,7 @@ from experiments.post_training.skyrl_test_support import native_json
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 def test_preset_table_rejects_duplicate_names():

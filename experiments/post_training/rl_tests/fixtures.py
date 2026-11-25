@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import yaml
 from click.testing import CliRunner
 from finestore.reader import ReadView
@@ -78,6 +79,7 @@ from experiments.post_training.skyrl_test_support import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
+RL_TEST_MARKS = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
 

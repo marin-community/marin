@@ -27,6 +27,7 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_tests.fixtures import (
+    RL_TEST_MARKS,
     edit_receipt,
     fake_iris,
     fake_publication,
@@ -39,7 +40,7 @@ from experiments.post_training.rl_tests.fixtures import (
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import native_json
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(

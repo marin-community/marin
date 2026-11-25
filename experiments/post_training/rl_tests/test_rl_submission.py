@@ -27,6 +27,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_tests.fixtures import (
+    RL_TEST_MARKS,
     SELECTION_IDENTITY,
     append_metrics,
     cache_native_compositions,
@@ -41,7 +42,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_receipt,
 )
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 @pytest.mark.parametrize(

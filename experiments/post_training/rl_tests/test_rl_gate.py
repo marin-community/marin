@@ -39,6 +39,7 @@ from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RunInputs
 from experiments.post_training.rl_tests.fixtures import (
     KL,
+    RL_TEST_MARKS,
     compare,
     controls,
     edit_receipt,
@@ -53,7 +54,7 @@ from experiments.post_training.task_curation.selection import (
     TASK_MANIFEST_FILENAME,
 )
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):

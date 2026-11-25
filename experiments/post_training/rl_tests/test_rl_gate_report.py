@@ -3,15 +3,14 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from experiments.post_training.rl_tests.fixtures import (
     KL,
+    RL_TEST_MARKS,
     compare,
     controls,
 )
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):

@@ -3,7 +3,6 @@
 import shutil
 from copy import deepcopy
 
-import pytest
 from click.testing import CliRunner
 from marin.execution.artifact import Artifact
 
@@ -11,12 +10,13 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_tests.fixtures import (
+    RL_TEST_MARKS,
     SELECTION_IDENTITY,
     printed_status,
     write_published_artifact,
 )
 
-pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
+pytestmark = RL_TEST_MARKS
 
 
 def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
