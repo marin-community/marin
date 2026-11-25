@@ -4,15 +4,6 @@
  "main_revision": "f68813aee7e15bc0df3ba1b68d66c7d5c2a717ce",
  "pin_parity_waivers": {
   "AI-MO:numina_math": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-numina-math-61c8eeaa-retained-2026.11.16.1",
-    "dataset_revision": "db0dcb7758e8270ef07b5d40a1bef0563e76f248",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "numina_math-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "AI-MO/NuminaMath-CoT",
@@ -25,15 +16,6 @@
    }
   },
   "AllenAI:IF_multi_constraints_upto5": {
-   "atlas": {
-    "dataset_repo": "open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1",
-    "dataset_revision": "1b4076f63af29e34aee43e16781784890b1e9835",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "ifbench-train-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1",
@@ -44,15 +26,6 @@
    }
   },
   "AllenAI:rlvr_ifeval": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-rlvr-ifeval-00227508-retained-20261113-v1",
-    "dataset_revision": "3346512b0a166f5571b0f1a4946b3f9f823a826d",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "rlvr_ifeval-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "allenai/RLVR-IFeval",
@@ -65,15 +38,6 @@
    }
   },
   "BytedTsinghua-SIA:dapo_math": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1",
-    "dataset_revision": "36fa57456e941732aa805200cda98389734b5399",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "dapo_math-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "BytedTsinghua-SIA/DAPO-Math-17k",
@@ -86,15 +50,6 @@
    }
   },
   "ChilleD:svamp": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-svamp-dbfea888-retained-20261116-v1",
-    "dataset_revision": "0b5b473a0e6d04860524add557b69bb3f2b53adc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "svamp-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "ChilleD/SVAMP",
@@ -107,15 +62,6 @@
    }
   },
   "CodeParrot:apps": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-apps-5b74ad63-retained-20261116-v1",
-    "dataset_revision": "9ac8025b4ae11f9e0f90f2600cc49025c5ef844a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "apps-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "codeparrot/apps",
@@ -128,15 +74,6 @@
    }
   },
   "EleutherAI:hendrycks_math": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-hendrycks-math-bd6fa045-retained-20261113-v1",
-    "dataset_revision": "29862633dc66f3228af2e99104ec2bc8251bda60",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "hendrycks_math-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "EleutherAI/hendrycks_math",
@@ -149,15 +86,6 @@
    }
   },
   "Evalchemy:JEEBench": {
-   "atlas": {
-    "dataset_repo": "daman1209arora/jeebench",
-    "dataset_revision": "d070d1113ce365df05903763a2017ec2d0d56118",
-    "pipeline_files": [
-     "test.json"
-    ],
-    "pipeline_name": "evalchemy-jeebench",
-    "pipeline_version": "source-script-v1-384bff43e79b45c8"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "daman1209arora/jeebench",
@@ -170,15 +98,6 @@
    }
   },
   "Evalchemy:NUPA-Loose": {
-   "atlas": {
-    "dataset_repo": "HaotongYang/NUPA_text",
-    "dataset_revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
-    "pipeline_files": [
-     "test.json"
-    ],
-    "pipeline_name": "evalchemy-nupa-loose",
-    "pipeline_version": "source-script-v1-6c72778481ab4f26"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "HaotongYang/NUPA_text",
@@ -191,15 +110,6 @@
    }
   },
   "Evalchemy:NUPA5K-Loose": {
-   "atlas": {
-    "dataset_repo": "HaotongYang/NUPA_text",
-    "dataset_revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
-    "pipeline_files": [
-     "test.json"
-    ],
-    "pipeline_name": "evalchemy-nupa5k-loose",
-    "pipeline_version": "source-script-v1-6c72778481ab4f26"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "HaotongYang/NUPA_text",
@@ -212,15 +122,6 @@
    }
   },
   "Evalchemy:cruxeval": {
-   "atlas": {
-    "dataset_repo": "cruxeval-org/cruxeval",
-    "dataset_revision": "b96af0450242eb4da433032b90998f25588a5d0f",
-    "pipeline_files": [
-     "test.jsonl"
-    ],
-    "pipeline_name": "evalchemy-cruxeval",
-    "pipeline_version": "3-7e645214236612eb"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cruxeval-org/cruxeval",
@@ -233,15 +134,6 @@
    }
   },
   "Evalchemy:drop": {
-   "atlas": {
-    "dataset_repo": "EleutherAI/drop",
-    "dataset_revision": "619386fc7ffe6dace3cc6d3483c69b164ebf6bf3",
-    "pipeline_files": [
-     "drop_validation.parquet"
-    ],
-    "pipeline_name": "evalchemy-drop",
-    "pipeline_version": "source-script-v1-6325804147b8eeae"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "EleutherAI/drop",
@@ -254,15 +146,6 @@
    }
   },
   "Evalchemy:gpqa-diamond": {
-   "atlas": {
-    "dataset_repo": "Idavidrein/gpqa",
-    "dataset_revision": "83022cefff930aea54f654c0b282e74b9eeda5c6",
-    "pipeline_files": [
-     "gpqa_diamond.csv"
-    ],
-    "pipeline_name": "evalchemy-gpqa-diamond",
-    "pipeline_version": "source-script-v1-1a262d7d2b8619af"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "Idavidrein/gpqa",
@@ -275,16 +158,6 @@
    }
   },
   "Evalchemy:graphwalks": {
-   "atlas": {
-    "dataset_repo": "openai/graphwalks",
-    "dataset_revision": "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7",
-    "pipeline_files": [
-     "graphwalks_128k_and_shorter.parquet",
-     "graphwalks_256k_to_1mil.parquet"
-    ],
-    "pipeline_name": "evalchemy-graphwalks",
-    "pipeline_version": "source-script-v1-99f76a5768da2d96"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/graphwalks",
@@ -298,15 +171,6 @@
    }
   },
   "Evalchemy:gsm8k": {
-   "atlas": {
-    "dataset_repo": "openai/gsm8k",
-    "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
-    "pipeline_files": [
-     "main/test-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-gsm8k",
-    "pipeline_version": "source-script-v1-6325804147b8eeae"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/gsm8k",
@@ -319,15 +183,6 @@
    }
   },
   "Evalchemy:gsm8k-0shot": {
-   "atlas": {
-    "dataset_repo": "openai/gsm8k",
-    "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
-    "pipeline_files": [
-     "main/test-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-gsm8k-0shot",
-    "pipeline_version": "source-script-v1-6325804147b8eeae"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/gsm8k",
@@ -338,15 +193,6 @@
    }
   },
   "Evalchemy:humaneval": {
-   "atlas": {
-    "dataset_repo": "openai/openai_humaneval",
-    "dataset_revision": "7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544",
-    "pipeline_files": [
-     "openai_humaneval/test-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-humaneval",
-    "pipeline_version": "3-7e645214236612eb"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/openai_humaneval",
@@ -359,15 +205,6 @@
    }
   },
   "Evalchemy:humanevalplus": {
-   "atlas": {
-    "dataset_repo": "evalplus/humanevalplus",
-    "dataset_revision": "d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
-    "pipeline_files": [
-     "test.jsonl"
-    ],
-    "pipeline_name": "evalchemy-humanevalplus",
-    "pipeline_version": "3-7e645214236612eb"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "evalplus/humanevalplus",
@@ -380,15 +217,6 @@
    }
   },
   "Evalchemy:ifbench": {
-   "atlas": {
-    "dataset_repo": "allenai/IFBench_test",
-    "dataset_revision": "2e8a48de45ff3bf41242f927254ca81b59ca3ae2",
-    "pipeline_files": [
-     "data/train-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-ifbench",
-    "pipeline_version": "source-script-v1-f03df83b88833c09"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "allenai/IFBench_test",
@@ -401,15 +229,6 @@
    }
   },
   "Evalchemy:ifeval": {
-   "atlas": {
-    "dataset_repo": "google/IFEval",
-    "dataset_revision": "966cd89545d6b6acfd7638bc708b98261ca58e84",
-    "pipeline_files": [
-     "ifeval_input_data.jsonl"
-    ],
-    "pipeline_name": "evalchemy-ifeval",
-    "pipeline_version": "source-script-v1-3e9d9a3d4b64502d"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "google/IFEval",
@@ -422,15 +241,6 @@
    }
   },
   "Evalchemy:lambada_openai": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-lambada-openai-52fc4632-retained-20261113-v1",
-    "dataset_revision": "81670cb498bc5118e8ff1b2232b7978bc16da3c1",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-lambada_openai-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "EleutherAI/lambada_openai",
@@ -443,15 +253,6 @@
    }
   },
   "Evalchemy:mbppplus": {
-   "atlas": {
-    "dataset_repo": "evalplus/mbppplus",
-    "dataset_revision": "b2d74c91837c3f2a20c1299ae98133cbe7cfa077",
-    "pipeline_files": [
-     "data/test-00000-of-00001-d5781c9c51e02795.parquet"
-    ],
-    "pipeline_name": "evalchemy-mbppplus",
-    "pipeline_version": "3-7e645214236612eb"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "evalplus/mbppplus",
@@ -464,15 +265,6 @@
    }
   },
   "Evalchemy:mmlu-college_physics": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-college-physics-91f396d9-retained-20261113-v1",
-    "dataset_revision": "2616c2d92157dbf50423b6510d53ef546700d822",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-college_physics-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -485,15 +277,6 @@
    }
   },
   "Evalchemy:mmlu-elementary_mathematics": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-elementary-mathematics-b4aafbd4-retained-20261113-v1",
-    "dataset_revision": "5a947696be064d08c14aeaece20afff1eab20d4e",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-elementary_mathematics-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -506,15 +289,6 @@
    }
   },
   "Evalchemy:mmlu-high_school_psychology": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-high-school-psychology-19c4eeec-retained-20261113-v1",
-    "dataset_revision": "2d5be10daee279ee51a957c629dc2bdd437c9ee9",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-high_school_psychology-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -527,15 +301,6 @@
    }
   },
   "Evalchemy:mmlu-pro": {
-   "atlas": {
-    "dataset_repo": "TIGER-Lab/MMLU-Pro",
-    "dataset_revision": "b189ec765aa7ed75c8acfea42df31fdae71f97be",
-    "pipeline_files": [
-     "data/test-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-pro",
-    "pipeline_version": "source-script-v1-1a262d7d2b8619af"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "TIGER-Lab/MMLU-Pro",
@@ -548,15 +313,6 @@
    }
   },
   "Evalchemy:mmlu-professional_psychology": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-professional-psychology-5fbaff7b-retained-20261113-v1",
-    "dataset_revision": "732a261c6611a475eab498b2733104b4897d6328",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-professional_psychology-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -569,15 +325,6 @@
    }
   },
   "Evalchemy:mmlu-public_relations": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-public-relations-23b240d9-retained-20261113-v1",
-    "dataset_revision": "f8605ffa353c8c0cd4b1981f72c38c506ae6bc60",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-public_relations-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -590,15 +337,6 @@
    }
   },
   "Evalchemy:mmlu-smoke": {
-   "atlas": {
-    "dataset_repo": "cais/mmlu",
-    "dataset_revision": "c30699e8356da336a370243923dbaf21066bb9fe",
-    "pipeline_files": [
-     "abstract_algebra/test-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-smoke",
-    "pipeline_version": "2026.11.02"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -609,15 +347,6 @@
    }
   },
   "Evalchemy:mmlu-us_foreign_policy": {
-   "atlas": {
-    "dataset_repo": "open-athena/evalchemy-mmlu-us-foreign-policy-0672a30f-retained-20261113-v1",
-    "dataset_revision": "d7a71437e328ec53db345ad16fc002532ebef726",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "evalchemy-mmlu-us_foreign_policy-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "cais/mmlu",
@@ -630,20 +359,6 @@
    }
   },
   "Evalchemy:mrcr": {
-   "atlas": {
-    "dataset_repo": "openai/mrcr",
-    "dataset_revision": "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d",
-    "pipeline_files": [
-     "2needle/2needle_0.parquet",
-     "2needle/2needle_1.parquet",
-     "4needle/4needle_0.parquet",
-     "4needle/4needle_1.parquet",
-     "8needle/8needle_0.parquet",
-     "8needle/8needle_1.parquet"
-    ],
-    "pipeline_name": "evalchemy-mrcr",
-    "pipeline_version": "source-script-v1-99f76a5768da2d96"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/mrcr",
@@ -661,20 +376,6 @@
    }
   },
   "Evalchemy:mrcr-32k": {
-   "atlas": {
-    "dataset_repo": "openai/mrcr",
-    "dataset_revision": "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d",
-    "pipeline_files": [
-     "2needle/2needle_0.parquet",
-     "2needle/2needle_1.parquet",
-     "4needle/4needle_0.parquet",
-     "4needle/4needle_1.parquet",
-     "8needle/8needle_0.parquet",
-     "8needle/8needle_1.parquet"
-    ],
-    "pipeline_name": "evalchemy-mrcr-32k",
-    "pipeline_version": "source-script-v1-99f76a5768da2d96"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/mrcr",
@@ -692,20 +393,6 @@
    }
   },
   "Evalchemy:mrcr-65k": {
-   "atlas": {
-    "dataset_repo": "openai/mrcr",
-    "dataset_revision": "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d",
-    "pipeline_files": [
-     "2needle/2needle_0.parquet",
-     "2needle/2needle_1.parquet",
-     "4needle/4needle_0.parquet",
-     "4needle/4needle_1.parquet",
-     "8needle/8needle_0.parquet",
-     "8needle/8needle_1.parquet"
-    ],
-    "pipeline_name": "evalchemy-mrcr-65k",
-    "pipeline_version": "source-script-v1-99f76a5768da2d96"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/mrcr",
@@ -723,15 +410,6 @@
    }
   },
   "Evalchemy:nq_open": {
-   "atlas": {
-    "dataset_repo": "google-research-datasets/nq_open",
-    "dataset_revision": "5dd9790a83002ad084ddeb7c420dc716852c6f28",
-    "pipeline_files": [
-     "nq_open/validation-00000-of-00001.parquet"
-    ],
-    "pipeline_name": "evalchemy-nq_open",
-    "pipeline_version": "source-script-v1-6325804147b8eeae"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "google-research-datasets/nq_open",
@@ -744,15 +422,6 @@
    }
   },
   "Evalchemy:simpleqa": {
-   "atlas": {
-    "dataset_repo": "basicv8vc/SimpleQA",
-    "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
-    "pipeline_files": [
-     "simple_qa_test_set.csv"
-    ],
-    "pipeline_name": "evalchemy-simpleqa",
-    "pipeline_version": "2026.11.16.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "basicv8vc/SimpleQA",
@@ -765,15 +434,6 @@
    }
   },
   "Evalchemy:simpleqa-mini": {
-   "atlas": {
-    "dataset_repo": "basicv8vc/SimpleQA",
-    "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
-    "pipeline_files": [
-     "simple_qa_test_set.csv"
-    ],
-    "pipeline_name": "evalchemy-simpleqa-mini",
-    "pipeline_version": "2026.11.16.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "basicv8vc/SimpleQA",
@@ -786,15 +446,6 @@
    }
   },
   "FWeindel:validated-tasks/fineenvs_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/fweindel-fineenvs-v2-oracle-qualified-20261120-b-v2",
-    "dataset_revision": "d6c199c7b895c9f22153c03fbd02d044d25db6cb",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "fineenvs-v2-retained-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/fweindel-fineenvs-v2-oracle-qualified-20261120-b-v2",
@@ -805,15 +456,6 @@
    }
   },
   "FWeindel:validated-tasks/fineenvs_v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/fweindel-fineenvs-v3-oracle-qualified-20261120-b-v2",
-    "dataset_revision": "6c0d2834431e65823fd3ee08555d55aff6cf83f7",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "fineenvs-v3-retained-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/fweindel-fineenvs-v3-oracle-qualified-20261120-b-v2",
@@ -824,15 +466,6 @@
    }
   },
   "Gretel:gretel_text_to_sql": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-gretel-text-to-sql-769201fa-retained-20261116-v1",
-    "dataset_revision": "52818f58db6e723f2fe513c9115d8718e5fbf99e",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "gretel_text_to_sql-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "gretelai/synthetic_text_to_sql",
@@ -845,15 +478,6 @@
    }
   },
   "Lego-X:Terminal-Lego-15k": {
-   "atlas": {
-    "dataset_repo": "open-athena/terminal-lego-root-delivery-qualified-20261122-b-v1",
-    "dataset_revision": "01d71ba8b6dd0458c5552445c8b7b73b2d8fc4fa",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "terminal-lego-root-delivery-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/terminal-lego-root-delivery-qualified-20261122-b-v1",
@@ -864,15 +488,6 @@
    }
   },
   "Lite-Coder:LiteCoder-Terminal-RL-preview": {
-   "atlas": {
-    "dataset_repo": "open-athena/litecoder-file-state-qualified-20261123-b-v1",
-    "dataset_revision": "ac69555e731ec72b83104f8c208aa9b7c88e1bc2",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "litecoder-file-state-execution-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/litecoder-file-state-qualified-20261123-b-v1",
@@ -883,15 +498,6 @@
    }
   },
   "Marin:forge-main-20261117": {
-   "atlas": {
-    "dataset_repo": "open-athena/forge-main-atlas-20261122-v1",
-    "dataset_revision": "f5766a0e3da2320d30af7c5d6c245f1f1fa711d5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "forge-main-20261117-oracle-filtered",
-    "pipeline_version": "2026.11.22.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/forge-main-atlas-20261122-v1",
@@ -902,15 +508,6 @@
    }
   },
   "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": {
-   "atlas": {
-    "dataset_repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-mopd-d9411399-retained-20261116-b-v1",
-    "dataset_revision": "7ac886010b3706345337eed86330b484111cfbf8",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron-cascade-2-mopd-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-mopd-d9411399-retained-20261116-b-v1",
@@ -921,15 +518,6 @@
    }
   },
   "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL": {
-   "atlas": {
-    "dataset_repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-multi-domain-rl-ee15b18a-retained-20261116-b-v1",
-    "dataset_revision": "52522171b690b25e50faa954619ab56362c0d55a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron-cascade-2-multi-domain-rl-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-multi-domain-rl-ee15b18a-retained-20261116-b-v1",
@@ -940,15 +528,6 @@
    }
   },
   "Nemotron:Nemotron-RL-instruction_following-structured_outputs": {
-   "atlas": {
-    "dataset_repo": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
-    "dataset_revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemo-structured-native-train-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
@@ -959,15 +538,6 @@
    }
   },
   "Nemotron:nemotron_if": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-if-bfb072d2-retained-20261113-v1",
-    "dataset_revision": "07de9679afd9afd0f46d30fd4ddccce3ef7ec98e",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_if-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Llama-Nemotron-Post-Training-Dataset",
@@ -980,15 +550,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-04b49f98-retained-20261113-v1",
-    "dataset_revision": "5213fe5132ae8a2d548fce5224fe3530bc23c03b",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_swe_gym_swe_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1001,15 +562,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-c82c21c7-retained-20261113-v1",
-    "dataset_revision": "4fac18c420496b79ae685db55d1bf577661c3eb5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1022,15 +574,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-abste-f8b6719c-retained-20261113-v1",
-    "dataset_revision": "c370a53be3f94b841e4d42c3ac704f40de914efc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_abstention-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1043,15 +586,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-calen-db100211-retained-20261116-v1",
-    "dataset_revision": "d42f6b0d42a17c595b3b6048089dc835f1469b82",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_calendar_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1064,15 +598,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-comp-96fe01cb-retained-20261116-v1",
-    "dataset_revision": "cbfcb9243ef773316f4728b619578677e55ccd77",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_comp_coding-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1085,15 +610,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-instr-ca5c0fe9-retained-20261116-v1",
-    "dataset_revision": "b9af11e658996aa3ba9164af9e43eceb687a72b5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_instruction_following-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1106,15 +622,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-jailb-24bcf489-retained-20261113-v1",
-    "dataset_revision": "d8ccaddb782540e0d47d21979c6d5c872a283829",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_jailbreak-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1127,15 +634,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-aab0f213-retained-20261113-v1",
-    "dataset_revision": "39e709249bc568f6fa36d7e7d6cab56da611b0f9",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_math_cot-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1148,15 +646,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
-    "dataset_revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1169,15 +658,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-multi-880000d8-retained-20261113-v1",
-    "dataset_revision": "9d6809b3eb420ac17fda833301833868e815a6a8",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_multichallenge_len40k-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1190,15 +670,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-nvarc-1223d453-retained-20261116-v1",
-    "dataset_revision": "3d607f16554cc01166a2cff11c3b540d50f79908",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_inductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1211,15 +682,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-nvarc-f1ff808c-retained-20261116-v1",
-    "dataset_revision": "72a0378366bc0d1549e62a1f054fdfbfd4e87831",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_transductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1232,15 +694,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-reaso-cdf55a72-retained-20261116-v1",
-    "dataset_revision": "c7ccce03910629cb7db9816c23583646d7212bbc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_reasoning_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1253,15 +706,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-stem-04bdf411-retained-20261113-v1",
-    "dataset_revision": "094d654a5d80cb73a8c4cff75b9c55178f3b8d26",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1274,15 +718,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-stem-9673fa57-retained-20261116-v1",
-    "dataset_revision": "5d514c206b33a38705c4d6f12bbe25fa2a2bdf71",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1295,15 +730,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-struc-fac4332d-retained-20261116-v1",
-    "dataset_revision": "facc2d35975121eed5dbc49c2118565e7c7891cb",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_structured_outputs_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1316,15 +742,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-toolc-8380bd8d-retained-20261113-v1",
-    "dataset_revision": "4a5a5c5767f67a5f9e383e2be351088acac4f780",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_sft_step3200_toolcall_schema-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1337,15 +754,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-v3-agentic-rl-step-75724792-retained-20261116-v1",
-    "dataset_revision": "9bda272031538098aff580e948c61f020c111b80",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_citation_format_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1358,15 +766,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-v3-agentic-rl-step-693115a3-retained-20261116-v1",
-    "dataset_revision": "50f369de1fe08de786d2280cf5ef763e3be88b98",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_freeform_text_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1379,15 +778,6 @@
    }
   },
   "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-v3-agentic-rl-step-c9385670-retained-20261113-v1",
-    "dataset_revision": "271399281fc87f3102577ad3e1c3a1e226d05fad",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_structured_outputs_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1400,15 +790,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-language-mixing-hs3-ult-3543235c-retained-20261113-v1",
-    "dataset_revision": "a1e25bae044f96f89b9ff64c0c3bb42d8fd6c569",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_language_mixing_hs3_ultra_genrm_fmt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1421,15 +802,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-abst-e337b8da-retained-20261113-v1",
-    "dataset_revision": "53156b631c6fca7bca1a5693ea18d95936881b22",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_abstention-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1442,15 +814,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-cale-ee5c044d-retained-20261116-v1",
-    "dataset_revision": "1ec3089062e3526e0902130d76f22415a4b6431a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1463,15 +826,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-comp-3e83d403-retained-20261116-v1",
-    "dataset_revision": "fe915015e013505153d9c711af94e1e86c5ffc90",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1484,15 +838,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-inst-c40988ec-retained-20261116-v1",
-    "dataset_revision": "460eb6ad0fc7fe41bf9a817ee52e75652d19515b",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_instruction_following-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1505,15 +850,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-jail-abb8e2df-retained-20261113-v1",
-    "dataset_revision": "899f77568c704d9566b1096fa6e61d80a2ae3937",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_jailbreak-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1526,15 +862,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1",
-    "dataset_revision": "5d7382c202ebbbfde021ab8cb1d651e41f6a0a69",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1547,15 +874,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
-    "dataset_revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1568,15 +886,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-mult-ffee8901-retained-20261113-v1",
-    "dataset_revision": "d9413e7871b01a6c1ba18f5cc3aa3e298b85476c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_multichallenge_len40k-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1589,15 +898,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-nvar-fa685f7d-retained-20261116-v1",
-    "dataset_revision": "5384e976afe89e1853e97793afa90a592cceb0ff",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_inductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1610,15 +910,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-nvar-b480cbe0-retained-20261116-v1",
-    "dataset_revision": "9e4c2913b67b81f727890748f341a0783b6135f2",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_transductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1631,15 +922,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-reas-70eecf33-retained-20261116-v1",
-    "dataset_revision": "afd3cf55df38637e9ff727482f0b1d24ec230012",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1652,15 +934,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stem-fa1f2f23-retained-20261113-v1",
-    "dataset_revision": "d4469d5f8d507c97ca7f6ff0d97579d53a1aebf0",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1673,15 +946,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stem-0eb9d373-retained-20261116-v1",
-    "dataset_revision": "93cfab26f619337d54c4baa90c020b6fad9bc068",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1694,15 +958,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stru-defc7f2c-retained-20261116-v1",
-    "dataset_revision": "a381a8d703f2ffed25a50b6311a232c33ffe1c98",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_structured_outputs_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1715,15 +970,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-f13b621a-retained-20261113-v1",
-    "dataset_revision": "9513d0693219e0b64552aa66a455ffe8a02d55f9",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1736,15 +982,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-dadb8d84-retained-20261113-v1",
-    "dataset_revision": "94f9b6ba1d9321da9ce2c71223d9c488670c5c37",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1757,15 +994,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
-   "atlas": {
-    "dataset_repo": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
-    "dataset_revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tau-pivot-rlvr1-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1778,15 +1006,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-tool-a81e18bc-retained-20261113-v1",
-    "dataset_revision": "f60c55a31f8594d730cb3ebf0452e15649451dc4",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr1_ultra_sft_step3200_toolcall_schema-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1799,15 +1018,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-language-mixing-hs3-ult-2432d731-retained-20261113-v1",
-    "dataset_revision": "4460ab0d74fa0a88179a593b90f3071cb68e7c7d",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_language_mixing_hs3_ultra_genrm_fmt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1820,15 +1030,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-abst-70ba04b2-retained-20261113-v1",
-    "dataset_revision": "0d22e0bfff07a835d5d5f9819c13e10695bacc68",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_abstention-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1841,15 +1042,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-cale-e02f0dfd-retained-20261116-v1",
-    "dataset_revision": "6c47f387efed10cdca8665683c5adacfc2fd9084",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_calendar_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1862,15 +1054,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-comp-bf9fd53a-retained-20261116-v1",
-    "dataset_revision": "c9fb161610739c1f53ce7c2444aee6dbb112e881",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_comp_coding-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1883,15 +1066,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-ds2-565975a4-retained-20261116-v1",
-    "dataset_revision": "e08c5da865ba6b48175858b4ecc9d68cafc6a0d2",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds2_freeform-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1904,15 +1078,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-ds3-cc4c7bd2-retained-20261116-v1",
-    "dataset_revision": "c551050f1d5a4f4fda0f53b86491d525c4e53fe5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds3_citation-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1925,15 +1090,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-inst-e325790a-retained-20261116-v1",
-    "dataset_revision": "b714f4f176f207b72ac14161fcb256701a963e12",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_instruction_following-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1946,15 +1102,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-jail-ce00a4a2-retained-20261113-v1",
-    "dataset_revision": "11b739ff62ca9550041be46c08db95855a4ea6b5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_jailbreak-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1967,15 +1114,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-0a4352f8-retained-20261113-v1",
-    "dataset_revision": "d8e49588fc6ee17fba414aacce5c29d38609768f",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_cot-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1988,15 +1126,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
-    "dataset_revision": "18d99806633f7ae886baf448f5535e8a2b4620ae",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2009,15 +1138,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-mult-6d1481e0-retained-20261113-v1",
-    "dataset_revision": "b41bd6a505fcb3c48203f0f6a1bcbf04ee4b9991",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_multichallenge_len40k-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2030,15 +1150,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-nvar-1f8bd4c6-retained-20261116-v1",
-    "dataset_revision": "e356c533967910155b38b194913b42c6ae0ff982",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_inductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2051,15 +1162,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-nvar-977e9295-retained-20261116-v1",
-    "dataset_revision": "24d1a2c17e99c89c090f83eaa752208d951cfc31",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_transductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2072,15 +1174,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-reas-441c53eb-retained-20261116-v1",
-    "dataset_revision": "4030d6d4e30e7e4aa82edaecdd70e74bf917b914",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_reasoning_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2093,15 +1186,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stem-ae831f62-retained-20261113-v1",
-    "dataset_revision": "a8d119a60fffd6d7dfbc2b4190f270be75ec4a0a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2114,15 +1198,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stem-aff6a4d6-retained-20261116-v1",
-    "dataset_revision": "805f88a6730ecf3968c14a33070c693e3a2c2085",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2135,15 +1210,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stru-b1f6f147-retained-20261116-v1",
-    "dataset_revision": "9683e22a2c9cfff3eee735b9b10da942b3ebc269",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2156,15 +1222,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stru-af85d883-retained-20261113-v1",
-    "dataset_revision": "7a8181f26e399c156dfbb1bc75d6382929da920c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v3-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2177,15 +1234,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-472bc3c6-retained-20261113-v1",
-    "dataset_revision": "5846f671af0c8d50731251bd240bf94c404a3e1c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2198,15 +1246,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-aceb95ea-retained-20261113-v1",
-    "dataset_revision": "813142924ae8ea9dfe54c3072012f18e209be32c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2219,15 +1258,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
-   "atlas": {
-    "dataset_repo": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
-    "dataset_revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tau-pivot-rlvr2-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2240,15 +1270,6 @@
    }
   },
   "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-tool-4af876a3-retained-20261113-v1",
-    "dataset_revision": "bb8052bb05631c6c58b95d94f85de241d1f97f89",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron_ultra_rlvr2_ultra_sft_step3200_toolcall_schema-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2261,15 +1282,6 @@
    }
   },
   "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/atlas-terminal-pivot-oracle-20261115-v1",
-    "dataset_revision": "749601f48a75f03d4068e5d2106ffed706f5fec7",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "nemotron-terminal-pivot-retained-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/atlas-terminal-pivot-oracle-20261115-v1",
@@ -2280,15 +1292,6 @@
    }
   },
   "Nemotron:openscience": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-openscience-05da1aa0-retained-20261116-v1",
-    "dataset_revision": "4be5f7506db9499a3d4835d6c4de94f587a15acb",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "openscience-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "nvidia/OpenScience",
@@ -2301,15 +1304,6 @@
    }
   },
   "OpenAI:gsm8k": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-gsm8k-41476efe-retained-20261116-v1",
-    "dataset_revision": "c9a8ff4c68cccedee91ebb503199ff0b8d73282a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "gsm8k-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "openai/gsm8k",
@@ -2322,15 +1316,6 @@
    }
   },
   "OpenAthena:pdbthink-coordinate-tasks": {
-   "atlas": {
-    "dataset_repo": "open-athena/pdbthink-coordinate-tasks-oracle-qualified-20261122-b-v1",
-    "dataset_revision": "25265b8ecb2155015eae283fa383452d1a439ffa",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "pdbthink-coordinate-train-daytona-retained-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/pdbthink-coordinate-tasks-oracle-qualified-20261122-b-v1",
@@ -2341,15 +1326,6 @@
    }
   },
   "OpenAthena:structure-closure": {
-   "atlas": {
-    "dataset_repo": "open-athena/snowballv01-structure-closure-d9e5f81a-retained-2026.11.18.1-r1",
-    "dataset_revision": "c70a87a62e9b6a559f01b0874ee02d2363054fcc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "snowball-v01-structure-closure-train-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data",
@@ -2362,15 +1338,6 @@
    }
   },
   "OpenAthena:structure-closure/validation": {
-   "atlas": {
-    "dataset_repo": "open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-2026.11.18.1-r1",
-    "dataset_revision": "8096972dc72c82ae0c14abed53a0d532f44aaefc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "snowball-v01-structure-closure-validation-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data",
@@ -2383,15 +1350,6 @@
    }
   },
   "OpenResearcher:OpenResearcher-Dataset": {
-   "atlas": {
-    "dataset_repo": "open-athena/openresearcher-openresearcher-dataset-8d7d09e1-retained-20261121-bootstrap-v1",
-    "dataset_revision": "8d5a48bf4994f861c903cc90f34e1530c25ea052",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "openresearcher-train-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/openresearcher-openresearcher-dataset-8d7d09e1-retained-20261121-bootstrap-v1",
@@ -2402,15 +1360,6 @@
    }
   },
   "POLARIS-Project:Polaris-Dataset-53K": {
-   "atlas": {
-    "dataset_repo": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
-    "dataset_revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "polaris-53k-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
@@ -2421,15 +1370,6 @@
    }
   },
   "PRIME-RL:eurus2_code": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-eurus2-code-a8a86264-retained-20261113-v1",
-    "dataset_revision": "3993e1d5cffbbbb98a64aae73b7018709e923b31",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "eurus2_code-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "PRIME-RL/Eurus-2-RL-Data",
@@ -2442,15 +1382,6 @@
    }
   },
   "RST:laion/rts-1k-rootless-apptainer": {
-   "atlas": {
-    "dataset_repo": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-20261117of1",
-    "dataset_revision": "3fe05149a182c3d9ab141ccc7ef2b8fb27b44d00",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "rst-validated-retained-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-20261117of1",
@@ -2461,15 +1392,6 @@
    }
   },
   "Reasoning Gym:reasoning_gym": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-reasoning-gym-86531e4c-retained-20261116-v2",
-    "dataset_revision": "60cbfd12d22832e116c630d0f83463511e2b049c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "reasoning_gym_generated-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "reasoning_gym-0.1.25-py3-none-any.whl",
@@ -2482,15 +1404,6 @@
    }
   },
   "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/nl2bash-cleaned-85b437bd-oracle-filter-20261114-v1",
-    "dataset_revision": "780889d966a2913b2e70b0a35a32b11740f31c01",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-nl2bash-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2503,15 +1416,6 @@
    }
   },
   "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118": {
-   "atlas": {
-    "dataset_repo": "open-athena/atlas-repair-nl2bash-20261118-oracle-filter-v1",
-    "dataset_revision": "4cf30f2874864d8549c7adfa7f6516cf414825a5",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "atlas-repair-nl2bash-20261118-oracle-filtered",
-    "pipeline_version": "3"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/atlas-repair-nl2bash-20261118-oracle-filter-v1",
@@ -2522,15 +1426,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_curriculum-easy": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-curriculum-easy-4940c584-retained-20261116-v1",
-    "dataset_revision": "7a71017f7c78bfc7938a42e28709467fa0b08908",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-curriculum_easy-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2543,15 +1438,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-curriculum-medium-v2-83165c9f-retained-20261116-v1",
-    "dataset_revision": "d037a0c1682bf5d75ce3132bcb3e8025b90b8043",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-curriculum_medium-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2564,15 +1450,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_e2egit-large": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-e2egit-large-553f18a8-retained-20261116-v1",
-    "dataset_revision": "52b46900218c3127b7af036137a11f255f3a885e",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-e2egit_large-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2585,15 +1462,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_e2egit-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-e2egit-v2-9731c389-retained-20261116-v1",
-    "dataset_revision": "8a896d177923c773079180302304546c8a89739c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-e2egit-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2606,15 +1474,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_multifile-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-multifile-v3-19512025-retained-20261116-v1",
-    "dataset_revision": "a3d8ec35976dc839f8312cbbdb0c8bf58483720f",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-multifile-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2627,15 +1486,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1",
-    "dataset_revision": "9bb2b58153faa81e9ef156425be4054cffefe0e4",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-pymethods_large-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2648,15 +1498,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": {
-   "atlas": {
-    "dataset_repo": "open-thoughts/TaskTrove",
-    "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "atlas-backfill-pymethods-20261122",
-    "pipeline_version": "harbor-v2-r3"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2667,15 +1508,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
-   "atlas": {
-    "dataset_repo": "open-athena/atlas-repair-pymethods-20261118-oracle-filter-v1",
-    "dataset_revision": "3699e8ea33bda5774a045db8a25f09aa878628a8",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "atlas-repair-pymethods-20261118-oracle-filtered",
-    "pipeline_version": "5"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/atlas-repair-pymethods-20261118-oracle-filter-v1",
@@ -2686,15 +1518,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1",
-    "dataset_revision": "abf6368f9988a3a97745684fb6c3aa488f2ffa40",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-pymethods-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2707,15 +1530,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-dcagent-exp-rpt-stack-pytest-v2-fd03a3e1-retained-20261116-v1",
-    "dataset_revision": "461bea23930bc9822de225d12d4042dc2e5f9c5c",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-stack_pytest-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2728,15 +1542,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/unitsyn-large-bc301818-oracle-filter-20261114-v1",
-    "dataset_revision": "2e229e8c80f561969c1cab87e4ccbc7fb049ce87",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-unitsyn_large-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2749,15 +1554,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122": {
-   "atlas": {
-    "dataset_repo": "open-thoughts/TaskTrove",
-    "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "atlas-backfill-unitsyn-20261122",
-    "pipeline_version": "harbor-v2-r3"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2768,15 +1564,6 @@
    }
   },
   "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
-   "atlas": {
-    "dataset_repo": "open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1",
-    "dataset_revision": "8ecfda4d934131068163ba45e7a59f15d2f722bc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-unitsyn-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2789,15 +1576,6 @@
    }
   },
   "TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-sankalpkj-nemotron-math-oracle-filter-eaf403d5-oracle-filtered-20261114-v2",
-    "dataset_revision": "ca4f2be9881621bff9f29c2acfc02df02ac60a85",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-math_oracle-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2810,15 +1588,6 @@
    }
   },
   "TaskTrove:laion__all-puzzles-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-all-puzzles-v2-f2975a12-retained-20261113-v1",
-    "dataset_revision": "fb73d862f3a6fed9389ec3d9fd856dff19727ac8",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-puzzles-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2831,15 +1600,6 @@
    }
   },
   "TaskTrove:laion__codeforces-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-codeforces-v3-2a90aa72-retained-20261113-v1",
-    "dataset_revision": "eccf9a938be33173b6c8a58eab6d17f27b8b479a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-codeforces-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2852,15 +1612,6 @@
    }
   },
   "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1",
-    "dataset_revision": "5c1270d7d2ec851e65d360e8efe752c556fe14ea",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "laion__exp_rpt_crosscodeeval-python-v2-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1",
@@ -2871,15 +1622,6 @@
    }
   },
   "TaskTrove:laion__exp_rpt_taco-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/taco-laion-ede8bc2f-oracle-filter-20261114-v1",
-    "dataset_revision": "77909f8c8049f881c0b6d33f536347eec88bbc4b",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-taco-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2892,15 +1634,6 @@
    }
   },
   "TaskTrove:laion__nemo-prism-math-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemo-prism-math-v3-a3d51da3-oracle-filtered-20261114-v2",
-    "dataset_revision": "5d593e5ca5584f81377a3654abc9a22f87494f96",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-math_prism-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2913,15 +1646,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/calendar-71f57c8d-oracle-filter-20261114-v1",
-    "dataset_revision": "d885672abbb489b64ee04e2cb1ac60c0901b56f1",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-calendar-oracle-filtered",
-    "pipeline_version": "2026.11.15.1-code-final-qualification"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2934,15 +1658,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-arc-agi-python-inductive-212804e0-retained-20261116-v1",
-    "dataset_revision": "0238fe394ab32ee184023beef7613d6f2c7b33ca",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-arc_inductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2955,15 +1670,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-arc-agi-transductive-v3-07b4c830-retained-20261116-v1",
-    "dataset_revision": "7b8abdc1ec6722f42f84accabedcb20203255032",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-arc_transductive-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2976,15 +1682,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-competitive-coding-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-competitive-coding-v2-bfdf98ff-retained-20261113-v1",
-    "dataset_revision": "91c0435c11651d2e6514bb8fe6a5b91ef6463ba1",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-competitive_coding-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -2997,15 +1694,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-instruction-follow-aafde1e3-oracle-filtered-20261114-v2",
-    "dataset_revision": "5c2d64e5881bbe9c3fc94c6fdfb4a9c8db175e17",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-if_calendar-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3018,15 +1706,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-instruction-following-str-b2730ff5-retained-20261116-v1",
-    "dataset_revision": "d0d371fe41dc5205773179b6b48ece808dff1a1b",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-structured-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3039,15 +1718,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-instruction-following-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-instruction-following-v3-eb1ec2ad-retained-20261113-v1",
-    "dataset_revision": "018602fd89f3f9252e02b12263bbbf71845e2343",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-ifeval-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3060,15 +1730,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-knowledge-mcqa-v2-c3f31664-retained-20261113-v1",
-    "dataset_revision": "95625c078cbaeff09607c1786571cd6df6fb78da",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-knowledge_mcqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3081,15 +1742,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-knowledge-openqa-v4-308a6e22-retained-20261116-v1",
-    "dataset_revision": "97c65e928600f3251352ff67e3cdad5da7e70523",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "knowledge-openqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3102,15 +1754,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-math-openmathreaso-c006510f-oracle-filtered-20261114-v2",
-    "dataset_revision": "48079c75912680dd3d1381e5289e4a47556eb4dc",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-math_openreasoning-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3123,15 +1766,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-math-stack-overflow-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-math-stack-overflo-410a4406-oracle-filtered-20261114-v2",
-    "dataset_revision": "dbec3ca6aacfb8fc0574633646b22cd5706d8971",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-math_stack-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3144,15 +1778,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-multichallenge-advanced-v-185e593b-retained-20261116-v1",
-    "dataset_revision": "815ba090a64195fddf65b46ad8d906e21691eca2",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-multichallenge-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3165,15 +1790,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-reasoning-gym-v2": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-reasoning-gym-v2-bcaf1766-retained-20261116-v1",
-    "dataset_revision": "c697d5b390b641a891d412203c73a3703f21bb75",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-reasoning-gym-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3186,15 +1802,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-safety-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-safety-v3-f51d465c-retained-20261116-v1",
-    "dataset_revision": "9d1671022cee888859ae613ce125ab78cdce1fbd",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-safety-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3207,15 +1814,6 @@
    }
   },
   "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
-   "atlas": {
-    "dataset_repo": "open-athena/task-trove-laion-nemotron-gym-science-so-openq-v3-c1a06aab-retained-20261116-v1",
-    "dataset_revision": "cb5150519069e2b4f24dc987f45d8f72a9d8a566",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "science-openqa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-thoughts/TaskTrove",
@@ -3228,15 +1826,6 @@
    }
   },
   "TaskTrove:smartie-calibforge-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-smartie-calibforge-rebuilt-v1-a179f723-retained-20261116-v1",
-    "dataset_revision": "93f73c7fe618dc57a5527116044384515124fa18",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "calibforge-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
@@ -3249,15 +1838,6 @@
    }
   },
   "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261117-b-v1",
-    "dataset_revision": "de35b4c7a7ef7ce93194659bfb0143605555c6cd",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "codeforces-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
@@ -3270,15 +1850,6 @@
    }
   },
   "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-curriculum-easy-rebuilt-v1-37fbdc29-retained-20261117-v1",
-    "dataset_revision": "deb90b4be20f7de4e96a55ed442cf51c94c6defa",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "curriculum-easy-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
@@ -3291,15 +1862,6 @@
    }
   },
   "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-curriculum-medium-rebuilt-v1-58724ce9-retained-20261117-v1",
-    "dataset_revision": "c617e2f4ae58422d1c9068670dc8928377bfcf4f",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "curriculum-medium-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
@@ -3312,15 +1874,6 @@
    }
   },
   "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-e2egit-large-rebuilt-v1-7c5352ce-retained-20261117-v1",
-    "dataset_revision": "631ba820176a3fa4d89d35186924960d2a0e8e7b",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "e2egit-large-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
@@ -3333,15 +1886,6 @@
    }
   },
   "TaskTrove:tasktrove-e2egit-v2-rebuilt": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-e2egit-v2-rebuilt-1bb7f220-retained-20261117-v1",
-    "dataset_revision": "6325549349a1c5bda6c1e1013f50e894b77cd506",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "e2egit-v2-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
@@ -3354,15 +1898,6 @@
    }
   },
   "TaskTrove:tasktrove-knowledge-openqa-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-knowledge-openqa-qa-2b5961f4-retained-20261116-v1",
-    "dataset_revision": "9d3fbb17806c98a9d6c4299807ab586f3620cad9",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "knowledge-openqa-qa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-knowledge-openqa-qa-2b5961f4-retained-20261116-v1",
@@ -3373,15 +1908,6 @@
    }
   },
   "TaskTrove:tasktrove-math_gym-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-math-gym-qa-03ef831a-retained-2026.11.16.1-mathgym",
-    "dataset_revision": "2ec57f36b9ca674c30ec7a5fa514bebf242cc97d",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "math_gym-qa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-math-gym-qa-03ef831a-retained-2026.11.16.1-mathgym",
@@ -3392,15 +1918,6 @@
    }
   },
   "TaskTrove:tasktrove-math_openreasoning-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-math-openreasoning-qa-45247a4a-oracle-filtered-20261114-v2",
-    "dataset_revision": "5528a398ba2372d53f803ce3e93c6cca2f4b4aae",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "math_openreasoning-qa-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-math-openreasoning-qa-45247a4a-oracle-filtered-20261114-v2",
@@ -3411,15 +1928,6 @@
    }
   },
   "TaskTrove:tasktrove-math_oracle-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-math-oracle-qa-7f7f7b29-oracle-filtered-20261114-v2",
-    "dataset_revision": "6656fc7bfaa524198f8a52ae7db3165c69ab5301",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "math_oracle-qa-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-math-oracle-qa-7f7f7b29-oracle-filtered-20261114-v2",
@@ -3430,15 +1938,6 @@
    }
   },
   "TaskTrove:tasktrove-math_prism-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-math-prism-qa-9433b411-oracle-filtered-20261114-v2",
-    "dataset_revision": "12332f2b420313ff5cd635d0bd2ecf688b7db6ae",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "math_prism-qa-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-math-prism-qa-9433b411-oracle-filtered-20261114-v2",
@@ -3449,15 +1948,6 @@
    }
   },
   "TaskTrove:tasktrove-math_stack-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-math-stack-qa-dd13c545-oracle-filtered-20261114-v2",
-    "dataset_revision": "5c6818d70670ff2da80ff73fe062bba8c0937be2",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "math_stack-qa-retained-oracle-filtered",
-    "pipeline_version": "2026.11.14.2-final-private"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-math-stack-qa-dd13c545-oracle-filtered-20261114-v2",
@@ -3468,15 +1958,6 @@
    }
   },
   "TaskTrove:tasktrove-multifile-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-multifile-rebuilt-v1-76b6d3b9-retained-20261117-v1",
-    "dataset_revision": "4eccab275b61b30831b648a6bb8ec848f97296ad",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "multifile-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
@@ -3489,15 +1970,6 @@
    }
   },
   "TaskTrove:tasktrove-puzzles-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/tasktrove-tasktrove-puzzles-qa-ab46b3ff-retained-20261116-v1",
-    "dataset_revision": "4b557369b6c2db6b0dd00b56c13c8e43ea2fefdb",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "tasktrove-puzzles-qa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-tasktrove-puzzles-qa-ab46b3ff-retained-20261116-v1",
@@ -3508,15 +1980,6 @@
    }
   },
   "TaskTrove:tasktrove-safety-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-safety-qa-5f6ab15c-retained-20261116-v1",
-    "dataset_revision": "9da661b792767f41ed5b224b281035f62e4fba6a",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "safety-qa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-safety-qa-5f6ab15c-retained-20261116-v1",
@@ -3527,15 +1990,6 @@
    }
   },
   "TaskTrove:tasktrove-science-openqa-qa": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-science-openqa-qa-3c4aa6a7-retained-20261116-v1",
-    "dataset_revision": "0494a8d2c57f5ccd8d4ae7ef7307c44305df1209",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "science-openqa-qa-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/campaign-release-tasktrove-science-openqa-qa-3c4aa6a7-retained-20261116-v1",
@@ -3546,15 +2000,6 @@
    }
   },
   "TaskTrove:tasktrove-stack-pytest-rebuilt-v1": {
-   "atlas": {
-    "dataset_repo": "open-athena/campaign-release-tasktrove-stack-pytest-rebuilt-v1-54fb1ec9-retained-20261117-v1",
-    "dataset_revision": "9d961332bb341212b207dc9cd3ab30ae7a243d89",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "stack-pytest-v1-rebuilt-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
@@ -3567,15 +2012,6 @@
    }
   },
   "TerminalWorld:TerminalWorld": {
-   "atlas": {
-    "dataset_repo": "open-athena/terminalworld-terminalworld-a9818dbb-retained-20261124-b-final-tw-seven",
-    "dataset_revision": "7a6cfbda8afd30a91a60c27e0a2877141b0c611d",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "terminalworld-seven-native-execution-oracle-filtered",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/terminalworld-terminalworld-a9818dbb-retained-20261124-b-final-tw-seven",
@@ -3586,15 +2022,6 @@
    }
   },
   "agentica-org:deepscaler": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-deepscaler-3a809497-retained-20261113-v1",
-    "dataset_revision": "20c9b3dd39fb118e555f4b9e32f21dace4305879",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "deepscaler-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "agentica-org/DeepScaleR-Preview-Dataset",
@@ -3607,15 +2034,6 @@
    }
   },
   "di-zhang-fdu:aime_1983_2024": {
-   "atlas": {
-    "dataset_repo": "open-athena/marinskyrl-aime-1983-2024-f8228652-retained-20261123-v1",
-    "dataset_revision": "b5985013909c09431e8c604d5849c46678d09866",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "aime_1983_2024-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "di-zhang-fdu/AIME_1983_2024",
@@ -3628,15 +2046,6 @@
    }
   },
   "marin-community:mcp-atlas-easy": {
-   "atlas": {
-    "dataset_repo": "open-athena/mcp-atlas-easy-eval-20261123-b-v1",
-    "dataset_revision": "2ddca029a76af5b509105f9910066f822c711b98",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "mcp-atlas-easy-eval",
-    "pipeline_version": "mcp-atlas-easy-raw-json-stop-v1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/mcp-atlas-easy-eval-20261123-b-v1",
@@ -3647,15 +2056,6 @@
    }
   },
   "pafitis:hardmath@rhs": {
-   "atlas": {
-    "dataset_repo": "open-athena/pafitis-hardmath-rhs-83371b10-retained-2026.11.18.1",
-    "dataset_revision": "00d51df256e06f1a9c791312a1e59dd18ea7a99f",
-    "pipeline_files": [
-     "tasks.parquet"
-    ],
-    "pipeline_name": "hardmath_rhs-retained",
-    "pipeline_version": "2026.11.13.1"
-   },
    "blocker": "Pending the Atlas canonical and retained prebuilt readers on main: the Atlas admitted pin is a published TaskCompendium release whose reader and receipt bindings main does not carry yet, so re-pinning main's declaration would point its converter at a payload it cannot read. The reader port lands with the ingestion PRs; each waived source is recorded in the coverage STATUS.",
    "main": {
     "dataset_repo": "open-athena/pafitis-hardmath-rhs-83371b10-retained-2026.11.18.1",

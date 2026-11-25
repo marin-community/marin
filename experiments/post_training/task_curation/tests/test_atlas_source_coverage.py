@@ -7,8 +7,8 @@ The fixture pins one Atlas cut (origin/atlas-env-audit revision and the R40 admi
 set). Regenerate it whenever the Atlas admits more sources: the coverage test then
 fails until main declares the new sources, and the pin-parity test fails when a
 declared pin drifts from the Atlas admitted pin. A waiver records a known mismatch
-with its exact blocker; a waiver whose baseline moved, or whose mismatch is fixed,
-fails the test so the record cannot rot.
+with its exact main-side baseline and blocker; a waiver whose baseline moved, or
+whose mismatch is fixed, fails the test so the record cannot rot.
 """
 
 import json
@@ -20,6 +20,11 @@ from finestore.rl.source_identity import canonical_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 FIXTURE_PATH = Path(__file__).with_name("fixtures") / "atlas_source_pins.json"
+
+ATLAS_REVISION = "aa413cc1aa279dfc848031b22271b87543ea9c16"
+"""The origin/atlas-env-audit HEAD the fixture's admitted set was computed at."""
+R40_ARTIFACT_VERSION = "2026.11.25.1"
+"""The r40.json artifact version the fixture's admit set was read from."""
 
 
 def _fixture() -> dict:
@@ -42,7 +47,9 @@ def test_every_atlas_admitted_source_is_declared_on_main():
     """An Atlas-admitted source missing from the catalog fails the coverage test."""
     fixture = _fixture()
     declared = {canonical_source_id(source.info.id) for source in all_sources().values()}
-    missing = sorted(source_id for source_id in fixture["required_ids"] if canonical_source_id(source_id) not in declared)
+    missing = sorted(
+        source_id for source_id in fixture["required_ids"] if canonical_source_id(source_id) not in declared
+    )
     assert missing == []
 
 
@@ -60,7 +67,7 @@ def test_main_pins_match_the_atlas_admitted_pins():
         current = _durable_ref(sources[key])
         if key in waivers:
             waiver = waivers[key]
-            if current == waiver["atlas"]:
+            if current == atlas_ref:
                 stale_waivers.append(source_id)
             elif current != waiver["main"]:
                 moved_waivers.append(source_id)
@@ -72,15 +79,19 @@ def test_main_pins_match_the_atlas_admitted_pins():
     assert unwaived == [], f"pins differ from the Atlas admitted pins with no waiver: {unwaived}"
 
 
-def test_the_fixture_covers_one_exact_atlas_cut():
-    """The fixture names the Atlas revision and the R40 plan it was generated from."""
+def test_the_fixture_is_cut_to_one_atlas_revision():
+    """The fixture carries exactly the pinned Atlas cut and R40 plan version.
+
+    Regenerating the fixture against a newer cut updates these two expectations in
+    the same change, so a silently different cut cannot pass.
+    """
     fixture = _fixture()
-    assert len(fixture["atlas_revision"]) == 40
-    assert fixture["r40_plan"]["targets"]
-    assert fixture["required_ids"]
-    for source_id, origin in fixture["required_ids"].items():
-        assert origin["source"] in {"atlas-admitted", "r40-target"}, source_id
-        assert source_id in fixture["pins"]
+    assert fixture["atlas_revision"] == ATLAS_REVISION
+    assert fixture["r40_plan"]["artifact_version"] == R40_ARTIFACT_VERSION
+    assert sorted(fixture["r40_plan"]["targets"])
+    assert all(origin["source"] in {"atlas-admitted", "r40-target"} for origin in fixture["required_ids"].values())
+    for source_id, atlas_ref in fixture["pins"].items():
+        assert atlas_ref["dataset_repo"], source_id
 
 
 if __name__ == "__main__":

@@ -123,7 +123,9 @@ class SourceReference:
 EXCLUDED_TAG = "excluded"
 """The source tag that keeps a declared source out of admission."""
 ATLAS_ADMITTED_TAG = "atlas-admitted"
-"""The Atlas admits this source; the import path that would run it on main is still pending."""
+"""The source tag that marks a record the Atlas admits with its import pending."""
+ATLAS_ADMITTED_STATUS = "Atlas-admitted"
+"""The catalog status label projected for a pipeline-less source carrying the tag."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -337,7 +339,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 (
                     "Available"
                     if pipeline is not None
-                    else ("Atlas-admitted" if ATLAS_ADMITTED_TAG in tags else "Inventory")
+                    else (ATLAS_ADMITTED_STATUS if ATLAS_ADMITTED_TAG in tags else "Inventory")
                 ),
             ),
             pipeline=invocation,

@@ -38,6 +38,10 @@ from experiments.post_training.task_curation.source import (
 
 RECEIPTS_PATH = Path(__file__).with_name("atlas_license_receipts.json")
 
+TASKTROVE_UPSTREAM_REPO = "open-thoughts/TaskTrove"
+TASKTROVE_UPSTREAM_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
+TASKTROVE_UPSTREAM_URL = f"https://huggingface.co/datasets/{TASKTROVE_UPSTREAM_REPO}/tree/{TASKTROVE_UPSTREAM_REVISION}"
+
 
 @dataclass(frozen=True)
 class AtlasAdmission:
@@ -524,8 +528,8 @@ RECORDS = (
             "tion-publication-v1/publication/5066941295e4fe5409cc/result.json. Original train split only; "
             "exact native budgets and provider status required; original verifiers and oracles preserved. "
             "User ruling 2026-11-17 versions grader allocation to 1 CPU/1024 MiB/1024 MiB with network deny; "
-            "task allocation, prompt, grader logic and payload unchanged. Ruling: "
-            "/Users/benfeuer/Documents/experiments/active/atlas-rulings/pdbthink-daytona-limits-20261117.md. "
+            "task allocation, prompt, grader logic and payload unchanged. Ruling: the pdbthink Daytona "
+            "limits ruling of 2026-11-17 in the atlas-rulings record. "
             "Infrastructure-held rows remain uncounted (33651 total, including 32794 legacy-held); 4 source "
             "verifier timeouts excluded. NoP is not applicable to answer-graded tasks."
         ),
@@ -1098,7 +1102,8 @@ RECORDS = (
             "failure and one infrastructure hold remain uncounted, alongside the other incomplete DATA and "
             "LOCAL20GiB rows. Seed-zero SAMPLE reviews both retained tasks: BAD with one issue and zero "
             "missing. The git-nomad invocation-order/purge concern remains recorded verbatim; BAD alone never "
-            "rejects under task-curation.md499-503/624. Ten nearest-source pairs are distinct. No source "
+            "rejects under the source-status taxonomy of docs/references/task-curation.md (a typed QC "
+            "weakness never rejects a source by itself). Ten nearest-source pairs are distinct. No source "
             "repair, budget increase or new oracle trial is claimed."
         ),
         count=2,
@@ -1178,12 +1183,12 @@ RECORDS = (
         origin=SourceOrigin.TASKTROVE,
         upstream_dataset="DCAgent__exp_rpt_pymethods2test-large-v2",
         upstream_name="DCAgent__exp_rpt_pymethods2test-large-v2",
-        release_repo="open-thoughts/TaskTrove",
-        release_revision="02923004846e4e73862c20962f823a6d05100e7a",
+        release_repo=TASKTROVE_UPSTREAM_REPO,
+        release_revision=TASKTROVE_UPSTREAM_REVISION,
         build_path="Requirement Backfill",
         family="unit-test-gen",
         variant="backfilled-20261122",
-        upstream_url="https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+        upstream_url=TASKTROVE_UPSTREAM_URL,
         notes=(
             "Requirement-backfilled sub-population of TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2: "
             "python declared from the shipped sources on 4,951 tasks, network left not-stated after the "
@@ -1207,12 +1212,12 @@ RECORDS = (
         origin=SourceOrigin.TASKTROVE,
         upstream_dataset="DCAgent__exp_rpt_unitsyn-python-large-v2",
         upstream_name="DCAgent__exp_rpt_unitsyn-python-large-v2",
-        release_repo="open-thoughts/TaskTrove",
-        release_revision="02923004846e4e73862c20962f823a6d05100e7a",
+        release_repo=TASKTROVE_UPSTREAM_REPO,
+        release_revision=TASKTROVE_UPSTREAM_REVISION,
         build_path="Requirement Backfill",
         family="unit-test-gen",
         variant="backfilled-20261122",
-        upstream_url="https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+        upstream_url=TASKTROVE_UPSTREAM_URL,
         notes=(
             "Requirement-backfilled sub-population of TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2: "
             "python declared from the shipped sources on 4,949 tasks, network left not-stated after the "
