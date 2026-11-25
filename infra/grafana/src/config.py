@@ -259,7 +259,10 @@ class BridgeConfig:
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),
             cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_CACHE_TTL", "20")),
-            query_timeout_ms=int(os.environ.get("GRAFANA_BRIDGE_QUERY_TIMEOUT_MS", "20000")),
+            # Finelog's Query RPC enforces its own 30s deadline; failing earlier
+            # here only discards heavy-but-completing dashboard sources (the RL
+            # engine scan takes 10-25s over a 3h window).
+            query_timeout_ms=int(os.environ.get("GRAFANA_BRIDGE_QUERY_TIMEOUT_MS", "30000")),
             iris_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_IRIS_CACHE_TTL", "15")),
             github_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_GITHUB_CACHE_TTL", "60")),
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),

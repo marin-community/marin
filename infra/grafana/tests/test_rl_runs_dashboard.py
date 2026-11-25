@@ -964,3 +964,50 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_min
         }
         offered = _request_rows(store, query["url"], params)
         assert sorted(offered, key=lambda row: row["value"]) == [{"value": run} for run in sorted(wanted)]
+
+
+def test_the_job_and_execution_pickers_offer_what_the_producers_report(store) -> None:
+    """The Job and Execution pickers scan the three producer row names the Run picker
+    scans. On a run whose every row is a vLLM histogram sample -- 119M rows over 12h --
+    the unfiltered pickers scan all of them and error out, so a job or execution that
+    never reports a producer row must not be offered."""
+    other_job = "/atqamar/snowball-e6-muonh-0-attempt-1"
+    quiet_execution = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/9:attempt:9"
+    rows = [
+        _row(
+            service="marinskyrl",
+            name="phase_duration_seconds",
+            value=1.0,
+            moment=WINDOW_START + timedelta(minutes=5 * bucket),
+            seq=bucket,
+            run_id=RUN_ID,
+            job_id=job_id,
+            execution_uid=execution,
+            attributes={"phase": "train_step", "clock_domain": "critical_path", "outcome": "success"},
+        )
+        for bucket in range(2)
+        for job_id, execution in ((other_job, f"iris:{other_job}/0:attempt:0"), (JOB_ID, quiet_execution))
+    ]
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
+
+    variables = {variable["name"]: variable for variable in _dashboard()["templating"]["list"]}
+    substitutions = (
+        ("${cluster:sqlstring}", f"'{CLUSTER}'"),
+        ("${run:sqlstring}", f"'{RUN_ID}'"),
+        ("${job:sqlstring}", f"'{JOB_ID}'"),
+        ("${__from}", str(_WINDOW_START_MS)),
+        ("${__to}", str(_NOW_MS)),
+    )
+
+    def picker_rows(name: str) -> list[dict]:
+        query = variables[name]["query"]["infinityQuery"]
+        params = {}
+        for param in query["url_options"]["params"]:
+            value = param["value"]
+            for pattern, replacement in substitutions:
+                value = value.replace(pattern, replacement)
+            params[param["key"]] = value
+        return _request_rows(store, query["url"], params)
+
+    assert picker_rows("job") == [{"value": JOB_ID}]
+    assert picker_rows("execution") == [{"value": "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0"}]

@@ -385,6 +385,12 @@ The bridge raises either interval as needed to keep each trend within 360 points
 Execution panels require an Iris `job_id`. Runs without one show missing-job errors on the
 execution panels; the run-wide panels still render.
 
+The Job and Execution pickers scan the same three producer row names the Run picker does
+(`lifecycle`, `policy_step`, `rollout_call`), so a run with hundreds of millions of telemetry
+rows still answers them in a few seconds. The run-wide engine source reduces the run's vLLM
+counter, gauge, and histogram rows to one aggregate per series and bucket before it takes the
+reset-aware deltas, which keeps a 3h board under Finelog's 30s query deadline on a 119M-row run.
+
 Node-GPU detail uses `/v1/rl/gpu` for ranges of 7h or less. Longer ranges show
 "Zoom to 7h or less for GPU detail." without querying Finelog. The other run-wide
 panels use `/v1/rl/overview` and keep the selected window, up to seven days.

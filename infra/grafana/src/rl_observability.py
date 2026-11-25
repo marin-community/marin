@@ -173,16 +173,16 @@ LIMIT {RL_MAX_CORE_ROWS + 1}
 WITH engine_rows AS (
     SELECT * FROM "telemetry_v1.vllm" WHERE service = 'vllm'
     UNION ALL
-    SELECT * FROM "telemetry_v1.marinskyrl"
-    WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm'
-), selected AS (
-    SELECT timestamp_ms, seq, service, run_id, execution_uid, node_name, process_index,
-           name, resource_attributes_json, attributes_json, value,
-           value - LAG(value) OVER (
-               PARTITION BY service, run_id, execution_uid, node_name, process_index,
-                            name, resource_attributes_json, attributes_json
-               ORDER BY timestamp_ms, seq
-           ) AS delta
+    SELECT * FROM "telemetry_v1.marinskyrl" WHERE service = 'marinskyrl'
+), filtered AS (
+    -- Reduce the scan to the narrow per-series facts the deltas need before any
+    -- JSON work: the metric-name predicate prunes millions of rows cheaply, and
+    -- the run's trainer rows never carry these engine names.
+    SELECT service, execution_uid, node_name, process_index, name, timestamp_ms, value,
+           json_get(attributes_json, 'engine') AS engine,
+           json_get(attributes_json, 'finished_reason') AS finished_reason,
+           CASE WHEN service = 'vllm' OR json_get(attributes_json, 'metric_source') = 'vllm'
+                THEN 1 ELSE 0 END AS is_engine
     FROM engine_rows
     WHERE run_id = {run_sql}
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
@@ -191,14 +191,47 @@ WITH engine_rows AS (
                     'num_requests_waiting', 'kv_cache_usage_perc', 'prefix_cache_hits_total',
                     'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
            OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
+), sampled AS (
+    -- One row per series per bucket, the counter's end-of-bucket value on top.
+    -- Grouping here keeps LAG off the millions of scrape rows the filters select:
+    -- a per-sample window over them spills and misses the bridge query deadline.
+    SELECT {bucket} AS t,
+           service, execution_uid, node_name, process_index,
+           name, engine, finished_reason, is_engine,
+           SUM(value) AS sum_value,
+           COUNT(value) AS sample_count,
+           MIN(value) AS counter_start,
+           MAX(value) AS counter_end
+    FROM filtered
+    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+    -- An aggregate predicate, so the planner cannot push the is_engine check
+    -- back under the scan and evaluate its json_get per scanned row.
+    HAVING MIN(is_engine) = 1
+), lagged AS (
+    SELECT *, LAG(counter_end) OVER (
+               PARTITION BY service, execution_uid, node_name, process_index,
+                            name, engine, finished_reason
+               ORDER BY t
+           ) AS previous_end
+    FROM sampled
+), growth AS (
+    SELECT *,
+           -- A series' first bucket in the window has no predecessor: its growth is
+           -- the spread of its own samples, or nothing when one scrape stands alone.
+           CASE
+               WHEN previous_end IS NULL AND sample_count > 1 THEN counter_end - counter_start
+               WHEN previous_end IS NULL THEN NULL
+               WHEN counter_end >= previous_end THEN counter_end - previous_end
+               ELSE counter_end
+           END AS growth
+    FROM lagged
 )
-SELECT {bucket} AS t,
-       name,
-       json_get(attributes_json, 'finished_reason') AS finished_reason,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       SUM(GREATEST(delta, 0)) FILTER (WHERE delta IS NOT NULL) AS delta_sum
-FROM selected
+SELECT t, name,
+       finished_reason,
+       SUM(sum_value) AS sum_value,
+       SUM(sample_count) AS sample_count,
+       SUM(growth) AS delta_sum
+FROM growth
 GROUP BY 1, 2, 3
 ORDER BY t, name, finished_reason
 LIMIT {RL_MAX_ENGINE_ROWS + 1}
