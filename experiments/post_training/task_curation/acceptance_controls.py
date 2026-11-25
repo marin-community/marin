@@ -104,12 +104,15 @@ def original_pin(cohort_repo: str, cohort_revision: str) -> tuple[str, str]:
 
 def _runtime(task: TaskSpec, *, allow_network: bool) -> MachineRuntimeSpec:
     execution = task.execution_requirements
+    # The provider's per-sandbox row maxima bound every request (a larger
+    # request fails at creation); the control's semantics do not depend on the
+    # allocation size above what the harness uses.
     return MachineRuntimeSpec(
         backend=DAYTONA_BACKEND,
         network=NetworkPolicy.ALLOW if allow_network else NetworkPolicy.DENY,
-        cpus=execution.cpus if execution is not None and execution.cpus else None,
-        memory_mb=execution.memory_mb if execution is not None and execution.memory_mb else None,
-        storage_mb=execution.storage_mb if execution is not None and execution.storage_mb else None,
+        cpus=min(execution.cpus, 8) if execution is not None and execution.cpus else None,
+        memory_mb=min(execution.memory_mb, 32_768) if execution is not None and execution.memory_mb else None,
+        storage_mb=min(execution.storage_mb, 10_240) if execution is not None and execution.storage_mb else None,
         gpus=0,
         user=None,
         startup_timeout=600.0,
