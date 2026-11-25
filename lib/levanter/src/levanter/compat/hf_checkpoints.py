@@ -661,6 +661,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return dataclasses.replace(self, **replacements)  # type: ignore
 
+    def without_reference_checkpoint(self) -> "HFCheckpointConverter":
+        """Keep converter settings and clear the Hugging Face source for scratch export."""
+        return dataclasses.replace(self, reference_checkpoint=None)  # type: ignore
+
     def with_tokenizer_padded_to_match_model(
         self, ref: Optional[Union[str, RepoRef]] = None
     ) -> "HFCheckpointConverter":
