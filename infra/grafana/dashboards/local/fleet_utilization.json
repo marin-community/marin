@@ -1,0 +1,430 @@
+{
+  "uid": "marin-fleet-utilization",
+  "title": "Fleet utilization (prototype)",
+  "description": "CPU, memory and GPU use over time per cluster, and TPU VMs held. Three hub queries per load.",
+  "tags": [
+    "marin",
+    "prototype"
+  ],
+  "timezone": "utc",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "type": "custom",
+        "label": "Cluster",
+        "multi": true,
+        "includeAll": true,
+        "query": "marin,cw-rno2a,cw-us-east-02a,cw-us-east-08a",
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "bin",
+        "type": "custom",
+        "label": "Bin",
+        "query": "1 minute,5 minutes,15 minutes",
+        "current": {
+          "text": "1 minute",
+          "value": "1 minute"
+        },
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "GPUs held and busy",
+      "description": "Average GPUs the node agent sees (held) and SM-active GPUs (busy) per ${bin}, per CoreWeave cluster.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT cluster, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy_sm_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT cluster, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, sum(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_held, sum(CASE WHEN name = 'gpu_sm_active_ratio' THEN value ELSE 0 END) * 60.0  / date_part('epoch', INTERVAL '${bin}') AS gpus_busy_sm_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND cluster IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "gpus_held",
+              "text": "gpus_held",
+              "type": "number"
+            },
+            {
+              "selector": "gpus_busy_sm_active",
+              "text": "gpus_busy_sm_active",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CPU cores in use",
+      "description": "CPU cores in use per ${bin} per cluster: each running attempt's mean CPU from iris.task in the bin, summed. This panel's query also feeds the memory panel.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT cluster, bin, sum(cpu_cores) AS cpu_cores, sum(memory_bytes) AS memory_bytes FROM ( SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster,  date_bin(INTERVAL '${bin}', ts, TIMESTAMP '1970-01-01 00:00:00') AS bin, task_id, attempt_id,  avg(cpu_millicores) / 1000.0 AS cpu_cores, avg(memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2, 3, 4) WHERE cluster IN (${cluster:sqlstring}) GROUP BY 1, 2 ORDER BY 1, 2\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT cluster, bin, sum(cpu_cores) AS cpu_cores, sum(memory_bytes) AS memory_bytes FROM ( SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster,  date_bin(INTERVAL '${bin}', ts, TIMESTAMP '1970-01-01 00:00:00') AS bin, task_id, attempt_id,  avg(cpu_millicores) / 1000.0 AS cpu_cores, avg(memory_mb) * 1048576 AS memory_bytes FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2, 3, 4) WHERE cluster IN (${cluster:sqlstring}) GROUP BY 1, 2 ORDER BY 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cpu_cores",
+              "text": "cpu_cores",
+              "type": "number"
+            },
+            {
+              "selector": "memory_bytes",
+              "text": "memory_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "memory_bytes": true
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Memory in use",
+      "description": "Memory in use per ${bin} per cluster, summed over running attempts. Reuses the CPU panel's query.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Dashboard --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "datasource",
+            "uid": "-- Dashboard --"
+          },
+          "panelId": 2
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "cpu_cores": true
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "TPU VMs held",
+      "description": "TPU VMs the node agent sees per ${bin}, per cluster and TPU type. TPUs have no use signal; chips held is VMs times chips per VM of the type.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(*) * 60.0 / date_part('epoch', INTERVAL '${bin}') AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS cluster, date_bin(INTERVAL '${bin}', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(*) * 60.0 / date_part('epoch', INTERVAL '${bin}') AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "tpu_type",
+              "text": "tpu_type",
+              "type": "string"
+            },
+            {
+              "selector": "tpu_vms_held",
+              "text": "tpu_vms_held",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster",
+              "tpu_type"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "text",
+      "title": "By category",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "CPU, memory and GPU use by category needs the job tag column, which the controller does not write yet. Splitting by category joins every attempt to its job, the costly lookback, so it will likely come from a precomputed table rather than a live query."
+      }
+    }
+  ]
+}
