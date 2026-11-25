@@ -197,7 +197,8 @@ OpenAI-style `/v1/*` server) are unaffected.
 For relay 502s, use the JSON error body to identify the failing path.
 `upstream transport error: client error (Connect)` is emitted by the native proxy
 when it cannot connect to its upstream. Compare `proxy_responses_total` with `scope=total` in Finelog's
-`telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
+`telemetry_v1.iris.rpc` for the hub (`cluster` is `marin`, or empty in rows
+written before the hub named its cluster) and the peer. A peer 502
 increase shows that requests reached the peer proxy, where its upstream is the
 registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
 

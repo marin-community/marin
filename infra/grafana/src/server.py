@@ -105,6 +105,7 @@ from config import (
     BRIDGE_PORT,
     CLUSTERS,
     DEFAULT_OPERATOR_BEHAVIOR,
+    FINELOG_HUB_CLUSTER,
     FINELOG_SLOW_THRESHOLD_MS,
     GITHUB_REPO,
     HERO_OPERATOR_BEHAVIOR,
@@ -262,7 +263,6 @@ _DATASET_CONCURRENCY = 2
 _DATASET_WINDOW_BUCKET_MS = 15_000
 _DATASET_LIVE_WINDOW_TOLERANCE_MS = 60_000
 _FINELOG_FILTER_TOKEN = "finelog"
-_FINELOG_HUB_CLUSTER = "marin"
 
 
 def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
@@ -885,6 +885,7 @@ def create_app(
                 raise _BadRequest("bucket_ms must be an integer") from err
             try:
                 overview = vllm_overview_query(
+                    target.name,
                     identity_field,
                     identity,
                     round(start.timestamp() * 1000),
@@ -894,7 +895,7 @@ def create_app(
                 aligned_start, aligned_end = _aligned_dataset_window(overview.start_ms, overview.end_ms)
                 if (aligned_start, aligned_end) != (overview.start_ms, overview.end_ms):
                     overview = vllm_overview_query(
-                        identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
+                        target.name, identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
                     )
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
@@ -1042,10 +1043,10 @@ def create_app(
             return JSONResponse({"error": f"{err}; narrow the time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
-        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "fleet_health",
-            lambda: [finelog_sources[_FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
+            lambda: [finelog_sources[FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
         )
 
     def finelog_fleet_health(_: Request) -> JSONResponse:
@@ -1061,10 +1062,10 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
 
     def relay_status_rows():
-        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "relay_status",
-            lambda: finelog_sources[_FINELOG_HUB_CLUSTER].relay_status(),
+            lambda: finelog_sources[FINELOG_HUB_CLUSTER].relay_status(),
         )
 
     def finelog_relay_status(_: Request) -> JSONResponse:
@@ -1163,7 +1164,7 @@ def create_app(
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
         try:
-            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+            target = _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
             key = (name, _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
         except FinelogUnavailableError as err:
@@ -1506,17 +1507,17 @@ def create_app(
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route("/finelog/{cluster}/v1/zephyr/overview", zephyr_overview),
             Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
             Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),

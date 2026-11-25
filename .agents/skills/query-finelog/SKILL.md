@@ -84,11 +84,11 @@ WHERE name = 'requests_completed'
 
 ### Imported cumulative counter
 
-Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 60-second scrape before the visible window, preserve the complete series identity, and discard reset intervals.
+Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 60-second scrape before the visible window, preserve the complete series identity, and discard reset intervals. An empty `cluster` is the queried server's own row; name it after that server, so a series stays whole once the server stamps its name.
 
 ```sql
 WITH base AS (
-  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+  SELECT COALESCE(NULLIF(cluster, ''), '<this server''s cluster>') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
          timestamp_ms, seq, value
   FROM "telemetry_v1.vllm"

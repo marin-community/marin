@@ -6,6 +6,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
+from hero_runs import HUB_ORIGIN_CLUSTER_SQL
 
 _PRODUCER_FRESHNESS = timedelta(seconds=90)
 _STALL_AGE = timedelta(minutes=45)
@@ -24,7 +25,7 @@ def zephyr_progress_query(now: datetime) -> str:
     end = _sql_timestamp(now)
     return (
         "WITH filtered AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS origin_cluster, "
         "COALESCE(job_id, json_get(resource_attributes_json, 'job_id')) AS job, "
         "json_get(attributes_json, 'run') AS execution, value AS progress_time, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS producer_at "

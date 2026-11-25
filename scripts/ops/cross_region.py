@@ -314,15 +314,16 @@ def gcs_bearer_token() -> str:
 
 
 def iter_log_rows(
-    con: duckdb.DuckDBPyConnection, sources: Sequence[str], window: TimeWindow
+    con: duckdb.DuckDBPyConnection, sources: Sequence[str], window: TimeWindow, own_cluster: str | None
 ) -> Iterator[tuple[str, int, str]]:
     """Yield ``(key, epoch_ms, data)`` for in-window task log lines that mention ``gs://``.
 
     One query scans every source so DuckDB parallelizes across files and row
-    groups; matching rows stream back in batches. Only the hub's own rows are
-    kept: ``cluster`` is NULL or empty, as in finelog's forwarder. Rows forwarded
-    from other clusters belong to attempts that are not in this controller's
-    checkpoint.
+    groups; matching rows stream back in batches. Only the store's own rows are
+    kept: ``cluster`` is ``own_cluster``, the store's configured name, or NULL or
+    empty in rows written before it was named (``own_cluster`` is None while it is
+    unnamed). Rows forwarded from other clusters belong to attempts that are not
+    in this controller's checkpoint.
     """
     if not sources:
         return
@@ -331,11 +332,11 @@ def iter_log_rows(
         SELECT key, epoch_ms, data
         FROM read_parquet(?)
         WHERE epoch_ms >= ? AND epoch_ms < ?
-          AND (cluster IS NULL OR cluster = '')
+          AND COALESCE(cluster, '') IN ('', ?)
           AND key LIKE '/%:%'
           AND data LIKE '%gs://%'
         """,
-        [list(sources), window.start_ms, window.end_ms],
+        [list(sources), window.start_ms, window.end_ms, own_cluster or ""],
     )
     while batch := cursor.fetchmany(ROW_BATCH_SIZE):
         yield from batch
@@ -947,7 +948,7 @@ def run_analysis(
         gcs_scan_connection(TaskResources.from_environment()) as con,
         interrupt_at_pin_deadline(con, pin.max_query_time_ms, pinned_at),
     ):
-        summary = analyze(iter_log_rows(con, sources, window), db_path, window)
+        summary = analyze(iter_log_rows(con, sources, window, finelog_cfg.cluster), db_path, window)
     logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
     summary["local_db_path"] = str(db_path)
     summary["remote_logs_dir"] = f"{remote_log_dir}/{'/'.join(LOG_TABLE_PREFIX)}/{LOG_NAMESPACE}"

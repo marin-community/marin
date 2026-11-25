@@ -19,6 +19,7 @@ from math import isfinite
 import pyarrow as pa
 from hero_runs import (
     HERO_ROOT_PATTERNS,
+    HUB_ORIGIN_CLUSTER_SQL,
     LEVANTER_METRICS_TABLE,
     PHASE_ENROLLMENT_LOOKBACK,
     PHASE_METRIC,
@@ -158,7 +159,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """
     execution_predicates = [
         "("
-        f"COALESCE(NULLIF(cluster,''),'unknown') = {sql_string(run.cluster)} "
+        f"{HUB_ORIGIN_CLUSTER_SQL} = {sql_string(run.cluster)} "
         f"AND run_id = {sql_string(run.run_id)} "
         f"AND execution_uid = {sql_string(run.execution_uid)}"
         ")"
@@ -176,14 +177,14 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
         "WITH samples AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS origin_cluster, run_id, execution_uid, "
         "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
         f"WHERE {common_predicate} "
         f"AND name = '{PHASE_METRIC}' "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
         "UNION ALL "
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS origin_cluster, run_id, execution_uid, "
         "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
         f"WHERE {common_predicate} "
@@ -225,7 +226,7 @@ def retry_event_query(now: datetime) -> str:
     reasons = ", ".join(f"'{reason}'" for reason in _RETRY_REASONS)
     hero_tasks = " OR ".join(f"task_id LIKE '{pattern}/%'" for pattern in HERO_ROOT_PATTERNS)
     return (
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, task_id "
+        f"SELECT {HUB_ORIGIN_CLUSTER_SQL} AS cluster, task_id "
         'FROM "iris.task_event" '
         f"WHERE reason IN ({reasons}) AND ({hero_tasks}) "
         f"AND ts >= TIMESTAMP '{start}' AND ts < TIMESTAMP '{end}'"
