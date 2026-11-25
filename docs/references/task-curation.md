@@ -2702,6 +2702,12 @@ routes. The gate in `difficulty_preparation.py` accepts the GLM route and every
 `JUDGE_TIERS` model (`SERVED_JUDGE_MODELS`); a validated endpoint is confirmed
 at serving time by the judge probe and identity receipt.
 
+TPU campaign child jobs run on on-demand CPU workers in `us-central2`. Each
+reserves 4 CPU, 12 GiB RAM and 64 GiB disk at INTERACTIVE priority. Each attempt
+batch runs at most four grader workers. The required `device-type=cpu` constraint keeps grader
+image extraction and workspace files off TPU hosts' boot disks. Serving remains
+on TPUs, with the frozen TaskSpecs and source deadlines preserved.
+
 The reconciler schedules `RecheckExecutabilityAdmission` for every
 `EXECUTABILITY_ADMISSION_PENDING` source/solver cell, regardless of capability
 detail text. Cells using the same frozen SAMPLE panel share one bounded CPU job.

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from finestore.rl.difficulty import Solver
 from iris.client.client import IrisClient
-from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.constraints import Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_from_payload,
     action_id,
 )
+from experiments.post_training.task_curation.difficulty.regional import REGION
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 
 JOB_COMPONENT = "difficulty-reconcile-"
@@ -136,10 +137,21 @@ class IrisBackend:
                 )
             ),
             environment=EnvironmentSpec(env_vars={"DAYTONA_API_URL": DAYTONA_API_URL, "DAYTONA_TARGET": DAYTONA_TARGET}),
-            constraints=[
-                Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=name)
-                for name in sorted(set(self.excluded_cpu_tpu_names))
-            ]
+            constraints=(
+                (
+                    [
+                        region_constraint([REGION]),
+                        Constraint.create(key="device-type", op=ConstraintOp.EQ, value="cpu"),
+                        Constraint.create(key="preemptible", op=ConstraintOp.EQ, value="false"),
+                    ]
+                    if campaign is not None
+                    else []
+                )
+                + [
+                    Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=name)
+                    for name in sorted(set(self.excluded_cpu_tpu_names))
+                ]
+            )
             or None,
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,

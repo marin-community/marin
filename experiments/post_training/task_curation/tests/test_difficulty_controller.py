@@ -116,9 +116,12 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
 
 
 @pytest.mark.parametrize("default_parent", [False, True], ids=["controller-launch", "reproduce-default-parent"])
-@pytest.mark.parametrize("excluded_cpu_tpu_names", [(), ("blocked-slice",)])
+@pytest.mark.parametrize(
+    "regional_campaign,excluded_cpu_tpu_names",
+    [(False, ()), (True, ()), (True, ("blocked-slice",))],
+)
 def test_controller_can_delegate_child_profile_through_iris_client(
-    tmp_path, monkeypatch, default_parent, excluded_cpu_tpu_names
+    tmp_path, monkeypatch, default_parent, regional_campaign, excluded_cpu_tpu_names
 ):
     if not finelog_native_available():
         pytest.skip("finelog native server extension not available")
@@ -179,7 +182,7 @@ def test_controller_can_delegate_child_profile_through_iris_client(
             controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture")
         )
         monkeypatch.setattr(controller, "subprocess", SimpleNamespace(run=scheduler_submit))
-        if excluded_cpu_tpu_names:
+        if regional_campaign:
             monkeypatch.setattr(iris_backend, "campaign_record", lambda ledger: {})
         controller.launch_controller(
             "ledger",
@@ -223,6 +226,17 @@ def test_controller_can_delegate_child_profile_through_iris_client(
                     assert not constraint.is_soft
                     assert not evaluate_constraint(AttributeValue("blocked-slice"), constraint)
                     assert evaluate_constraint(AttributeValue("healthy-slice"), constraint)
+                placement = {c.key: Constraint.from_proto(c) for c in request.constraints}
+                if regional_campaign:
+                    assert evaluate_constraint(AttributeValue("cpu"), placement["device-type"])
+                    assert not evaluate_constraint(AttributeValue("tpu"), placement["device-type"])
+                    assert evaluate_constraint(AttributeValue("us-central2"), placement["region"])
+                    assert not evaluate_constraint(AttributeValue("us-east1"), placement["region"])
+                    assert evaluate_constraint(AttributeValue("false"), placement["preemptible"])
+                    assert not evaluate_constraint(AttributeValue("true"), placement["preemptible"])
+                    assert all(not placement[key].is_soft for key in ("device-type", "region", "preemptible"))
+                else:
+                    assert not {"device-type", "region", "preemptible"} & placement.keys()
                 assert backend.submit(action, manifest) == child
                 other = IrisBackend(client, parent, str(tmp_path / "other-ledger"))
                 other_manifest = tmp_path / "other-ledger/v1/actions" / manifest_path.name
