@@ -50,7 +50,7 @@ Run, with a known difference:
 
 | Benchmark | October | This policy |
 | --- | --- | --- |
-| CruxEval | no output cap | protocol cap 2,048 tokens |
+| CruxEval | no output cap; published accuracy on the output-direction items | protocol cap 2,048 tokens; primary metric is accuracy over both directions |
 | FinanceBench | no output cap | protocol cap 4,096 tokens |
 | NUPA | no output cap | protocol cap 256 tokens |
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
