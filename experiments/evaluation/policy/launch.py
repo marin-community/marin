@@ -8,9 +8,9 @@ from dataclasses import dataclass, replace
 
 from evalrecords.records import EvaluationSelection, PromptFormat
 from marin.evaluation.hardware import default_platform
-from taskcompendium.evaluation.spec import OperationKind
+from marin.evaluation.serving_config import resolved_serve_config
 
-from experiments.evaluation.curated import selection_dataset
+from experiments.evaluation.curated import resolve_selection, runs_agent, selection_dataset
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
@@ -30,11 +30,13 @@ class ServerGroup:
     evaluations: tuple[ResolvedPolicyEvaluation, ...]
 
 
+def _model_format(item: ResolvedPolicyEvaluation) -> PromptFormat:
+    return PromptFormat.CHAT if item.candidate.model.apply_chat_template else PromptFormat.COMPLETION
+
+
 def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe:
     """The catalog dataset, with its protocol, that the evaluation runs as for the candidate."""
-    model = item.candidate.model
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-    return selection_dataset(item.evaluation.selection, model_format)
+    return selection_dataset(item.evaluation.selection, _model_format(item))
 
 
 def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
@@ -45,13 +47,12 @@ def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
     return config.protocol.context_window
 
 
-def _server_window(item: ResolvedPolicyEvaluation) -> int:
+def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
     """Choose a server window from the declared benchmark window and policy context.
 
-    Benchmarks with a declared window request the candidate's served window; others request
-    a server at the policy context.
+    Benchmarks with a declared window request ``served``, the candidate's window after the checkpoint
+    clamps it; others request a server at the policy context.
     """
-    served = item.candidate.model.serve.max_model_len
     own = benchmark_window(item)
     if own is None:
         return item.context
@@ -65,13 +66,15 @@ def _server_window(item: ResolvedPolicyEvaluation) -> int:
     return served
 
 
-def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[ServerGroup, ...]:
-    """Group evaluations by the server window they need, keeping agent and single-turn runs apart."""
+def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | None) -> tuple[ServerGroup, ...]:
+    """Group evaluations by the server window they need, keeping agent and single-turn runs apart.
+
+    ``served`` is the candidate's served window as the launcher resolves it.
+    """
     groups: dict[tuple[int, bool], list[ResolvedPolicyEvaluation]] = {}
     for item in items:
-        config = evaluation_dataset(item)
-        agentic = config.protocol.operation is OperationKind.AGENT_EPISODE
-        groups.setdefault((_server_window(item), agentic), []).append(item)
+        agentic = runs_agent(resolve_selection(item.evaluation.selection, _model_format(item)))
+        groups.setdefault((_server_window(item, served), agentic), []).append(item)
     return tuple(
         ServerGroup(window=window, agentic=agentic, evaluations=tuple(members))
         for (window, agentic), members in groups.items()
@@ -109,7 +112,8 @@ def launch_specs(
             raise ValueError(f"{candidate.name} does not run {sorted(unknown)} under {policy.version}")
         resolved = tuple(item for item in resolved if item.evaluation.name in evaluations)
     specs = []
-    for group in server_groups(resolved):
+    served = resolved_serve_config(candidate.model).max_model_len
+    for group in server_groups(resolved, served):
         model = candidate.model
         if model.serve.max_model_len != group.window:
             model = replace(model, serve=replace(model.serve, max_model_len=group.window))

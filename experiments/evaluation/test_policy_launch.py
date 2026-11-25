@@ -16,11 +16,25 @@ RESOLVED = {item.evaluation.name: item for item in resolve(POLICY, QWEN)}
 SERVED = QWEN.model.serve.max_model_len
 
 
+@pytest.fixture
+def checkpoint_window(monkeypatch):
+    """Set the window the checkpoint clamps the candidate's served window to."""
+
+    def clamp(window: int) -> None:
+        monkeypatch.setattr(
+            "experiments.evaluation.policy.launch.resolved_serve_config",
+            lambda model: replace(model.serve, max_model_len=min(window, model.serve.max_model_len)),
+        )
+
+    clamp(SERVED)
+    return clamp
+
+
 def _windows(names: list[str], **contexts: int) -> set[tuple[int, bool, tuple[str, ...]]]:
     items = [replace(RESOLVED[name], context=contexts.get(name, RESOLVED[name].context)) for name in names]
     return {
         (group.window, group.agentic, tuple(item.evaluation.name for item in group.evaluations))
-        for group in server_groups(items)
+        for group in server_groups(items, SERVED)
     }
 
 
@@ -43,7 +57,7 @@ def test_a_context_that_disagrees_with_the_benchmark_window_is_rejected():
         _windows(["mrcr-32k"], **{"mrcr-32k": 30_000})
 
 
-def test_a_launch_covers_only_the_named_evaluations():
+def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
     specs = launch_specs(
         POLICY,
         QWEN,
@@ -54,6 +68,14 @@ def test_a_launch_covers_only_the_named_evaluations():
     assert sorted(selection.name for spec in specs for selection in spec.evals) == ["aime24", "swebench-verified"]
 
 
-def test_unknown_evaluations_are_rejected():
+def test_unknown_evaluations_are_rejected(checkpoint_window):
     with pytest.raises(ValueError, match="bixbench"):
         launch_specs(POLICY, QWEN, evaluations={"bixbench"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH)
+
+
+def test_a_checkpoint_that_clamps_the_served_window_below_an_agent_window_is_rejected(checkpoint_window):
+    checkpoint_window(16384)
+    with pytest.raises(ValueError, match="swebench-verified"):
+        launch_specs(
+            POLICY, QWEN, evaluations={"swebench-verified"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH
+        )
