@@ -8,6 +8,7 @@ from finestore.rl.curation import DaytonaSafety
 from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.source import (
+    ATLAS_ADMITTED_TAG,
     EXCLUDED_TAG,
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
@@ -99,6 +100,8 @@ def test_pipeline_less_sources_are_never_admitted_to_selection():
             assert status == "Deprecated"
         elif EXCLUDED_TAG in source.info.tags:
             assert status == "Excluded"
+        elif ATLAS_ADMITTED_TAG in source.info.tags:
+            assert status == "Atlas-admitted"
         else:
             assert status == "Inventory"
         assert source.name not in runnable

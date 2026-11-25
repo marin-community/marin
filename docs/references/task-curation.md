@@ -415,9 +415,18 @@ provenance URL, and `license_receipt` references the stage-0 license resolution
 that ingest and admission rest on (`RlDataSource.require_license` fails closed
 on it). The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
-visible in the Atlas with its evidence, but it is never admitted to selection and
-its measured Daytona and oracle evidence remains visible even without a pipeline.
+the deprecation reason. A source without a `pipeline` is `Inventory` unless it
+carries the `atlas-admitted` tag: `Atlas-admitted` records the Atlas's admission
+of a source whose import path on main is still pending. An Atlas-admitted record
+declares its pinned release, its stage-0 license receipt (resolved under its
+declared `intended_use`) and its typed restriction tier - open on every record
+here - in `datasets/atlas_admissions.py`; the receipts live beside it in
+`datasets/atlas_license_receipts.json`. The Atlas's canonical and retained
+prebuilt readers and the remaining receipt bindings land with the ingestion
+PRs; until then an Atlas-admitted source is never treated as runnable here.
+An `Inventory` source stays visible in the Atlas with its evidence, but it is
+never admitted to selection; its measured Daytona and oracle evidence remains
+visible even without a pipeline.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
