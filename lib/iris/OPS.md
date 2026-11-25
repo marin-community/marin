@@ -58,6 +58,13 @@ A controller restart deploys the current working tree, including uncommitted
 files, and leaves workers running. A full `iris cluster restart` destroys
 workers and jobs; never run it without express approval.
 
+For GCE controller rollouts, the operator needs the `marinInfra` project role
+alongside `marindev`, Token Creator on `iris-controller`, and Service Account
+User on the default Compute service account attached to the hub VM. The
+`marinInfra` role covers VM metadata writes, administrator OS Login, and IAP
+tunnels. Image pushes use GHCR credentials with `write:packages`; GCP IAM does
+not grant GHCR access. See [image deployment](docs/image-push.md#authentication).
+
 ```bash
 uv run --package marin-iris --extra controller iris \
   --cluster=<name> cluster controller restart

@@ -1,13 +1,14 @@
 //! Snapshot-bound index preparation at DataFusion's lazy file-opening boundary.
 
-use std::any::Any;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt::{self, Formatter};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arrow::array::RecordBatch;
 use datafusion::common::config::ConfigOptions;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::FileScanConfig;
@@ -19,9 +20,11 @@ use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{DisplayFormatType, SortOrderPushdownResult};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_datasource::morsel::{Morsel, MorselPlanner, Morselizer, PendingMorselPlanner};
 use datafusion_datasource::table_schema::TableSchema;
-use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{FileExtensions, PartitionedFile};
 use datafusion_datasource_parquet::ParquetFileReaderFactory;
+use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::indices::format::SectionKind;
@@ -84,17 +87,17 @@ impl FileSource for IndexedParquetSource {
         partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         Ok(Arc::new(IndexedFileOpener {
-            inner: self
-                .inner
-                .create_file_opener(object_store, config, partition)?,
+            inner: Arc::new(MorselFileOpener {
+                morselizer: Arc::from(self.inner.create_morselizer(
+                    object_store,
+                    config,
+                    partition,
+                )?),
+            }),
             inputs: Arc::clone(&self.inputs),
             metrics: self.inner.metrics().clone(),
             partition,
         }))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {
@@ -107,6 +110,13 @@ impl FileSource for IndexedParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.inner.filter()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
     }
 
     fn projection(&self) -> Option<&ProjectionExprs> {
@@ -173,12 +183,69 @@ impl FileSource for IndexedParquetSource {
 }
 
 fn required_physical_columns(expression: &dyn PhysicalExpr, columns: &mut BTreeSet<String>) {
-    if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+    if let Some(column) = expression.downcast_ref::<Column>() {
         columns.insert(column.name().to_owned());
     }
     for child in expression.children() {
         required_physical_columns(child.as_ref(), columns);
     }
+}
+
+/// Opens one file through a `Morselizer` as a single ordered batch stream.
+///
+/// DataFusion 55's `ParquetSource` plans files only through the Morsel API, but
+/// the indexed scan opens a covering projection and falls back to its source
+/// file, so it needs a per-file open. Morsels, planners and planner I/O are
+/// driven in the order DataFusion's `FileStream` uses, one I/O at a time.
+#[derive(Debug)]
+struct MorselFileOpener {
+    morselizer: Arc<dyn Morselizer>,
+}
+
+impl FileOpener for MorselFileOpener {
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+        let planner = self.morselizer.plan_file(file)?;
+        Ok(Box::pin(async move { Ok(morsel_batches(planner)) }))
+    }
+}
+
+struct MorselScan {
+    reader: Option<BoxStream<'static, Result<RecordBatch>>>,
+    morsels: VecDeque<Box<dyn Morsel>>,
+    planners: VecDeque<Box<dyn MorselPlanner>>,
+    pending: Option<PendingMorselPlanner>,
+}
+
+fn morsel_batches(planner: Box<dyn MorselPlanner>) -> BoxStream<'static, Result<RecordBatch>> {
+    let scan = MorselScan {
+        reader: None,
+        morsels: VecDeque::new(),
+        planners: VecDeque::from([planner]),
+        pending: None,
+    };
+    futures::stream::try_unfold(scan, |mut scan| async move {
+        loop {
+            if let Some(reader) = scan.reader.as_mut() {
+                match reader.next().await {
+                    Some(batch) => return Ok(Some((batch?, scan))),
+                    None => scan.reader = None,
+                }
+            } else if let Some(morsel) = scan.morsels.pop_front() {
+                scan.reader = Some(morsel.into_stream());
+            } else if let Some(pending) = scan.pending.take() {
+                scan.planners.push_back(pending.await?);
+            } else if let Some(planner) = scan.planners.pop_front() {
+                if let Some(mut plan) = planner.plan()? {
+                    scan.morsels.extend(plan.take_morsels());
+                    scan.planners.extend(plan.take_ready_planners());
+                    scan.pending = plan.take_pending_planner();
+                }
+            } else {
+                return Ok(None);
+            }
+        }
+    })
+    .boxed()
 }
 
 struct IndexedFileOpener {
@@ -240,12 +307,10 @@ async fn prepare_segment(
     metrics: &ExecutionPlanMetricsSet,
 ) -> Result<SegmentRead> {
     let segment = file
-        .extensions
-        .as_ref()
-        .and_then(|extension| extension.downcast_ref::<SegmentFile>())
+        .extension::<SegmentFile>()
         .ok_or_else(|| DataFusionError::Internal("indexed scan has no segment reference".into()))?
         .clone();
-    file.extensions = None;
+    file.extensions = FileExtensions::default();
     let deadline = inputs.scope.deadline().map_or(
         tokio::time::Instant::now() + OPTIONAL_INDEX_BUDGET,
         |deadline| deadline.min(tokio::time::Instant::now() + OPTIONAL_INDEX_BUDGET),
@@ -372,7 +437,7 @@ async fn prepare_segment(
         );
     }
     if let Some(access) = access {
-        file.extensions = Some(Arc::new(access));
+        file.extensions.insert(access);
     }
     Ok(SegmentRead::Source(file))
 }
@@ -490,7 +555,7 @@ async fn projection_file(
     file.range = None;
     file.statistics = None;
     file.ordering = None;
-    file.extensions = None;
+    file.extensions = FileExtensions::default();
     file.metadata_size_hint = None;
     let mut reader = inputs
         .readers

@@ -10,6 +10,7 @@ from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAIL
 
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
+from skyrl_train.io import io
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
@@ -83,6 +84,22 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
     assert tasks["math-b"]["success_rate"] == 0.0
     assert tasks["math-b"]["attempted"] == 2
     assert report["evaluation_tasks"]["25"][0]["success_rate"] == 1.0
+
+
+def test_grader_report_recovers_from_a_failed_write(tmp_path, monkeypatch):
+    export_path = str(tmp_path)
+    write_grader_report(export_path, "0", {"evaluation_duration_seconds": 1.0})
+
+    def unavailable_storage(_path, _payload):
+        raise OSError("Object storage unavailable")
+
+    with monkeypatch.context() as storage:
+        storage.setattr(io, "write_bytes_atomic", unavailable_storage)
+        write_grader_report(export_path, "1", {"evaluation_duration_seconds": 2.0})
+
+    write_grader_report(export_path, "2", {"evaluation_duration_seconds": 3.0})
+    report = json.loads((tmp_path / "grader_report.json").read_text())
+    assert report["evaluation_duration_seconds"] == {"0": 1.0, "2": 3.0}
 
 
 @pytest.mark.asyncio

@@ -124,6 +124,7 @@ class GraderReport(BaseModel):
     training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
     evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
     evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+    evaluation_duration_seconds: dict[str, FiniteFloat] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class AttemptSummary(BaseModel):
