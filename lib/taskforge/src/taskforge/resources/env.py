@@ -131,6 +131,8 @@ class _RecordedEnv(Env):
         self.closed = True
 
 
+TIMEOUT_EXIT_CODE = 124
+"""The exit code a command that hit its timeout reports, as GNU ``timeout`` does."""
 CONTAINED_TIMEOUT = 'if command -v timeout >/dev/null 2>&1; then exec timeout -k 5 "$1" sh -c "$2"; fi; exec sh -c "$2"'
 """Run ``$2`` under an in-container ``timeout`` of ``$1`` where the image has one."""
 BACKSTOP = 30.0
@@ -218,7 +220,7 @@ class ShellboxEnv(_RecordedEnv):
         elapsed = time.monotonic() - started
         # GNU timeout exits 124 at the limit, or 137 when its kill-after escalation was needed.
         killed = contained and result.exit_code == 137 and elapsed >= timeout
-        code = 124 if result.reason == ExitReason.TIMED_OUT or killed else result.exit_code
+        code = TIMEOUT_EXIT_CODE if result.reason == ExitReason.TIMED_OUT or killed else result.exit_code
         if code is None:
             raise Hold("environment terminated: command ended without an exit status")
         value = CommandResult(

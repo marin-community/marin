@@ -14,6 +14,7 @@ from taskforge.effects.events import Event, Resolved, ScopeEntered, ScopeExited,
 from taskforge.effects.log import JsonlSink, Record
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
+from taskforge.metrics import reason_class
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
@@ -21,7 +22,7 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.report import reason_class, report
+from taskforge.report import report
 from taskforge.resources.env import CommandResult, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
@@ -93,19 +94,25 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
         if len(records) > 1:
             sink.append_bytes(b"".join(sink._line(record) for record in records[1:]))
     lines = await report(str(tmp_path))
-    assert "terminal=accepted count=2" in lines
-    assert "terminal=held reason=Restart count=1" in lines
-    assert "terminal=abandoned reason=author stopped count=1" in lines
-    assert "accepted_per_hour window_hours=1 count=1 rate=1.000" in lines
-    assert "accepted_per_hour window_hours=6 count=1 rate=0.167" in lines
-    assert "accepted_per_hour window_hours=24 count=2 rate=0.083" in lines
-    assert "tokens role=author prompt=100 cached=20 completion=10" in lines
-    assert "tokens role=adversary prompt=100 cached=20 completion=10" in lines
-    assert "tokens role=solver prompt=40 cached=15 completion=7" in lines
-    assert "stage=author n=1 p50_seconds=20.000 p90_seconds=20.000" in lines
-    assert "event_gap=InferenceRequest n=2 p50_seconds=5.000 p90_seconds=10.000" in lines
-    assert "event_gap=WriteFile n=1 p50_seconds=3.000 p90_seconds=3.000" in lines
-    assert "terminal=accepted count=1" in await report(str(tmp_path), 1)
+    for line in (
+        "terminal=accepted count=2",
+        "terminal=held reason=Restart count=1",
+        "terminal=abandoned reason=author stopped count=1",
+        "accepted_per_hour window_hours=1 count=1 rate=1.000",
+        "accepted_per_hour window_hours=6 count=1 rate=0.167",
+        "accepted_per_hour window_hours=24 count=2 rate=0.083",
+        "tokens role=author prompt=100 cached=20 completion=10",
+        "tokens role=adversary prompt=100 cached=20 completion=10",
+        "tokens role=solver prompt=40 cached=15 completion=7",
+        "tokens_per_accepted role=solver prompt=20 cached=8 completion=4",
+        "stage=author n=1 p50=20.000 p90=20.000",
+        "event_gap=InferenceRequest n=2 p50=5.000 p90=10.000",
+        "event_gap=WriteFile n=1 p50=3.000 p90=3.000",
+    ):
+        assert f"origin=all {line}" in lines
+        assert f"origin=proposal {line}" in lines
+    assert not any(line.startswith("origin=source") for line in lines)
+    assert "origin=all terminal=accepted count=1" in await report(str(tmp_path), 1)
 
 
 async def test_report_empty_root_fails_closed(tmp_path: Path) -> None:

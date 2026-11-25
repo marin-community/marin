@@ -3,20 +3,21 @@
 
 import asyncio
 import math
-import re
 import time
-from collections import Counter, defaultdict
-from dataclasses import asdict
+from collections import Counter
+from collections.abc import Sequence
 
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 
-from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.log import JsonlSink, Status
+from taskforge.metrics import GAP_EVENTS, RUNNING, Origin, Role, WorkpieceMetrics, workpiece_metrics
+from taskforge.model.llm import Usage
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
-from taskforge.resources.inference import InferenceRequest
-from taskforge.resources.rollouts import SolverRollout
+
+ALL_ORIGINS = "all"
+ACCEPTANCE_WINDOW_HOURS = (1, 6, 24)
 
 
 def artifacts(path: str) -> tuple[Status, Workpiece]:
@@ -26,16 +27,54 @@ def artifacts(path: str) -> tuple[Status, Workpiece]:
         return status, WORKPIECE.validate_json(source.read())
 
 
-def reason_class(reason: str) -> str:
-    if reason.startswith("bug:"):
-        pattern = r"(?m)^\s*(?:[|+]\s*)*(?:\w+\.)*([A-Z]\w*)(?=:|$)"
-        types = re.findall(pattern, reason.removeprefix("bug:").strip())
-        types = [name for name in types if name not in {"Traceback", "ExceptionGroup", "BaseExceptionGroup"}]
-        return "bug:" + (types[0] if types else "unknown")
-    return reason.split(":", 1)[0].split(" <- ", 1)[0].strip()
+def quantiles(values: Sequence[float]) -> str:
+    """Nearest-rank p50 and p90 of ``values`` as report fields."""
+    ordered = sorted(values)
+    p50, p90 = (f"{ordered[math.ceil(len(ordered) * q) - 1]:.3f}" if ordered else "n/a" for q in (0.5, 0.9))
+    return f"n={len(ordered)} p50={p50} p90={p90}"
+
+
+def summary(rows: Sequence[WorkpieceMetrics], now: float, cutoff: float, since_hours: float | None) -> list[str]:
+    """Report lines for one group of workpieces."""
+    accepted = [row for row in rows if row.terminal == Terminal.ACCEPTED]
+    terminals = Counter(row.terminal for row in rows)
+    reasons = Counter((row.terminal, reason) for row in rows for reason in row.reasons)
+    lines = [f"workpieces count={len(rows)}"]
+    lines += [f"terminal={terminal} count={terminals[terminal]}" for terminal in (RUNNING, *Terminal)]
+    lines += [
+        f"terminal={terminal} reason={reason} count={count}" for (terminal, reason), count in sorted(reasons.items())
+    ]
+    for hours in ACCEPTANCE_WINDOW_HOURS:
+        stamps = [row.accepted_at for row in accepted if row.accepted_at is not None]
+        count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in stamps)
+        rate = count / min(hours, since_hours or hours)
+        lines.append(f"accepted_per_hour window_hours={hours} count={count} rate={rate:.3f}")
+    lines.append(f"accepted_without_author count={sum(row.author_sessions == 0 for row in accepted)}")
+    lines.append(f"author_sessions_per_accepted {quantiles([row.author_sessions for row in accepted])}")
+    lines.append(f"author_image_fallbacks count={sum(row.author_image_fallbacks for row in rows)}")
+    lines.append(f"command_timeouts count={sum(row.command_timeouts for row in rows)}")
+    for role in Role:
+        usage = sum((row.tokens.get(role, Usage()) for row in rows), Usage())
+        fields = {"prompt": usage.prompt_tokens, "cached": usage.cached_tokens, "completion": usage.completion_tokens}
+        lines.append(f"tokens role={role} " + " ".join(f"{name}={value}" for name, value in fields.items()))
+        if accepted:
+            per = " ".join(f"{name}={value / len(accepted):.0f}" for name, value in fields.items())
+            lines.append(f"tokens_per_accepted role={role} {per}")
+    finished = [row.finished - row.started for row in rows if row.terminal != RUNNING]
+    lines.append(f"end_to_end_seconds {quantiles(finished)}")
+    for name in ("initial", "final"):
+        rates = [getattr(row, f"{name}_solve_rate") for row in accepted]
+        lines.append(f"solve_rate_accepted measured={name} {quantiles([r for r in rates if r is not None])}")
+    for stage in Stage:
+        lines.append(f"stage={stage} {quantiles([v for row in rows for v in row.stage_seconds.get(stage, ())])}")
+    for event in GAP_EVENTS:
+        name = event.__name__
+        lines.append(f"event_gap={name} {quantiles([v for row in rows for v in row.event_gaps.get(name, ())])}")
+    return lines
 
 
 async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]:
+    """Summarize the workpieces under ``root``, overall and by origin, each line prefixed ``origin=``."""
     if since_hours is not None and (not math.isfinite(since_hours) or since_hours <= 0):
         raise ValueError("since-hours must be finite and positive")
     now = time.time()
@@ -44,77 +83,22 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     paths = await asyncio.to_thread(fs.glob, prefix + "/**/status.json")
     if not paths:
         raise ValueError(f"No workpiece status files at {root}")
-    counts, reasons = Counter[str](), Counter[tuple[str, str]]()
-    tokens: dict[str, Counter[str]] = defaultdict(Counter)
-    durations: dict[str, list[float]] = defaultdict(list)
-    accepted: list[float] = []
     gate = asyncio.Semaphore(32)
 
-    async def collect(path: str) -> None:
+    async def collect(path: str) -> WorkpieceMetrics | None:
         async with gate:
             directory = fs.unstrip_protocol(path).removesuffix("/status.json")
             (status, workpiece), records = await asyncio.gather(
                 asyncio.to_thread(artifacts, directory), JsonlSink(directory + "/events.jsonl").read()
             )
-            if not records or records[-1].wall_time < cutoff:
-                return
-            terminal = str(status.terminal or "running")
-            counts[terminal] += 1
-            if status.terminal in (Terminal.HELD, Terminal.ABANDONED):
-                last = workpiece.decisions[-1] if workpiece.decisions else None
-                for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
-                    reasons[terminal, reason] += 1
-            decision_time = None
-            scopes: dict[str, list[float]] = defaultdict(list)
-            previous = records[0].wall_time
-            for record in records:
-                event, stamp = record.event, record.wall_time
-                if isinstance(event, StageCompleted) and event.terminal is Terminal.ACCEPTED:
-                    decision_time = stamp
-                if isinstance(event, ScopeEntered):
-                    if event.name == "workpiece":
-                        scopes.clear()
-                    scopes[event.name].append(stamp)
-                elif isinstance(event, ScopeExited) and scopes[event.name]:
-                    start = scopes[event.name].pop()
-                    if event.name in Stage and stamp >= cutoff:
-                        durations[f"stage={event.name}"].append(max(0, stamp - start))
-                elif isinstance(event, Resolved) and not event.replayed and stamp >= cutoff:
-                    name = type(event.request).__name__
-                    if name in {"RunCommand", "WriteFile", "InferenceRequest"}:
-                        durations[f"event_gap={name}"].append(max(0, stamp - previous))
-                    if isinstance(event.request, InferenceRequest):
-                        adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
-                        role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
-                        tokens[role].update(asdict(event.value.usage))
-                    elif isinstance(event.request, SolverRollout):
-                        for conversation in event.value.rollout.conversations:
-                            for step in conversation.steps:
-                                tokens["solver"].update(
-                                    step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})
-                                )
-                previous = stamp
-            if status.terminal is Terminal.ACCEPTED and decision_time is not None:
-                accepted.append(decision_time)
+        if not records or records[-1].wall_time < cutoff:
+            return None
+        return workpiece_metrics(status, workpiece, records, since=cutoff)
 
-    await asyncio.gather(*(collect(path) for path in sorted(paths)))
-    lines = [f"workpieces={sum(counts.values())} since_hours={since_hours if since_hours is not None else 'all'}"]
-    lines += [f"terminal={terminal} count={counts[terminal]}" for terminal in ("running", *Terminal)]
-    lines += [
-        f"terminal={terminal} reason={reason} count={count}" for (terminal, reason), count in sorted(reasons.items())
-    ]
-    for hours in (1, 6, 24):
-        count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in accepted)
-        rate = count / min(hours, since_hours or hours)
-        lines.append(f"accepted_per_hour window_hours={hours} count={count} rate={rate:.3f}")
-    for role in ("author", "solver", "adversary", "judge"):
-        usage = " ".join(f"{name}={tokens[role][name + '_tokens']}" for name in ("prompt", "cached", "completion"))
-        lines.append(f"tokens role={role} {usage}")
-    for key in (
-        *[f"stage={stage}" for stage in Stage],
-        *[f"event_gap={name}" for name in ("RunCommand", "WriteFile", "InferenceRequest")],
-    ):
-        values = sorted(durations[key])
-        quantiles = [f"{values[math.ceil(len(values) * q) - 1]:.3f}" if values else "n/a" for q in (0.5, 0.9)]
-        lines.append(f"{key} n={len(values)} p50_seconds={quantiles[0]} p90_seconds={quantiles[1]}")
+    rows = [row for row in await asyncio.gather(*(collect(path) for path in sorted(paths))) if row is not None]
+    lines = [f"workpieces={len(rows)} since_hours={since_hours if since_hours is not None else 'all'}"]
+    groups = [(ALL_ORIGINS, rows), *((origin.value, [row for row in rows if row.origin is origin]) for origin in Origin)]
+    for name, group in groups:
+        if group or name == ALL_ORIGINS:
+            lines += [f"origin={name} {line}" for line in summary(group, now, cutoff, since_hours)]
     return tuple(lines)

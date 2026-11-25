@@ -40,6 +40,15 @@ def passed(grade: GradeResult) -> bool:
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
+def solved_trials(result: ValidationResult) -> int:
+    """Solver trials that passed; a trial cut off by its generation limit counts as unsolved."""
+    return sum(
+        passed(trial.grade)
+        for trial in result.solver
+        if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
+    )
+
+
 def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
     """Why acceptance stands without an adversary report; never author-facing findings."""
     return tuple(
@@ -122,11 +131,7 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         for finding in trial.findings
         if finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
     )
-    solved = sum(
-        passed(trial.grade)
-        for trial in result.solver
-        if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
-    )
+    solved = solved_trials(result)
     place = band.place(solved / len(result.solver))
     finding = f"{solved} of {len(result.solver)} trials solved: {place}"
     unstarted = tuple(
