@@ -10,6 +10,7 @@ import logging
 import math
 import re
 import statistics
+import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
