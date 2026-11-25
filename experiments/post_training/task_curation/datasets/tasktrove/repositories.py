@@ -9,6 +9,7 @@ private copies of the repository with restored trusted tests.
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
@@ -35,7 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -129,9 +130,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swe_rebench_task,
             version="3",
             info=SourceInfo(
-                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
+                upstream_name="DCAgent/swe_rebench_v2_patched_oracle-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=(
                     "agentic",
@@ -173,9 +177,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swesmith_task,
             version="4",
             info=SourceInfo(
-                id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                title="laion/swesmith-oracle-filtered-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__swesmith-oracle-filtered-v2",
+                upstream_name="laion/swesmith-oracle-filtered-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=12927,

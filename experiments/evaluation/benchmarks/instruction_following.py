@@ -9,6 +9,7 @@ IFBench keeps its source checkers and protocol.
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metric,
@@ -31,7 +32,7 @@ from experiments.evaluation.benchmarks.environments import (
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 IFEVAL_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
 IFBENCH_REVISION = "2e8a48de45ff3bf41242f927254ca81b59ca3ae2"
@@ -61,9 +62,12 @@ def instruction_following_evaluation(
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + name,
-            title=benchmark,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="instruction-following",
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
             count=population,

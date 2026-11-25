@@ -1,0 +1,568 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Permanent aliases for published source identities.
+
+Stored records written under historical IDs resolve to their generated catalog
+identity where they are read: recipes, corpora and published catalog rows keep
+their original keys, and the read boundary joins them onto the renamed
+declaration.
+"""
+
+SOURCE_ID_ALIASES: dict[str, str] = {
+    "MarinSkyRL:aime24": "HuggingFaceH4:aime24",
+    "MarinSkyRL:aime_1983_2024": "di-zhang-fdu:aime_1983_2024",
+    "MarinSkyRL:asdiv": "ASDiv:asdiv",
+    "MarinSkyRL:dapo_math": "BytedTsinghua-SIA:dapo_math",
+    "MarinSkyRL:deepscaler": "agentica-org:deepscaler",
+    "MarinSkyRL:gsm8k": "OpenAI:gsm8k",
+    "MarinSkyRL:hardmath": "pafitis:hardmath",
+    "MarinSkyRL:hendrycks_math": "EleutherAI:hendrycks_math",
+    "MarinSkyRL:math500": "HuggingFaceH4:math500",
+    "MarinSkyRL:numina_math": "AI-MO:numina_math",
+    "MarinSkyRL:rlvr_math": "AllenAI:rlvr_math",
+    "MarinSkyRL:svamp": "ChilleD:svamp",
+    "MarinSkyRL:apps": "CodeParrot:apps",
+    "MarinSkyRL:eurus2_code": "PRIME-RL:eurus2_code",
+    "MarinSkyRL:verifiable_code": "Open-R1:verifiable_code",
+    "MarinSkyRL:gretel_text_to_sql": "Gretel:gretel_text_to_sql",
+    "MarinSkyRL:nemotron_if": "Nemotron:nemotron_if",
+    "MarinSkyRL:rlvr_ifeval": "AllenAI:rlvr_ifeval",
+    "MarinSkyRL:gpqa": "GPQA:gpqa",
+    "MarinSkyRL:openscience": "Nemotron:openscience",
+    "MarinSkyRL:hh_rlhf/harmless-base": "Anthropic:hh_rlhf/harmless-base",
+    "MarinSkyRL:hh_rlhf/helpful-base": "Anthropic:hh_rlhf/helpful-base",
+    "MarinSkyRL:hh_rlhf/helpful-online": "Anthropic:hh_rlhf/helpful-online",
+    "MarinSkyRL:hh_rlhf/helpful-rejection-sampled": "Anthropic:hh_rlhf/helpful-rejection-sampled",
+    "MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": (
+        "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized"
+    ),
+    "MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+    "MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": (
+        "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned"
+    ),
+    "Task Trove:DCAgent__code-contests-noblock": "TaskTrove:DCAgent__code-contests-noblock",
+    "Task Trove:laion__codeforces-v3": "TaskTrove:laion__codeforces-v3",
+    "Task Trove:laion__nemotron-gym-competitive-coding-v2": "TaskTrove:laion__nemotron-gym-competitive-coding-v2",
+    "Task Trove:laion__exp_rpt_taco-v2": "TaskTrove:laion__exp_rpt_taco-v2",
+    "Task Trove:DCAgent__exp_rpt_curriculum-easy": "TaskTrove:DCAgent__exp_rpt_curriculum-easy",
+    "Task Trove:DCAgent__exp_rpt_curriculum-medium-v2": "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2",
+    "Task Trove:DCAgent__exp_rpt_e2egit-v2": "TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+    "Task Trove:DCAgent__exp_rpt_e2egit-large": "TaskTrove:DCAgent__exp_rpt_e2egit-large",
+    "Task Trove:DCAgent__exp_rpt_multifile-v3": "TaskTrove:DCAgent__exp_rpt_multifile-v3",
+    "Task Trove:DCAgent__exp_rpt_pymethods2test-v3": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+    "Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+    "Task Trove:DCAgent__exp_rpt_unitsyn-python-v4": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+    "Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+    "Task Trove:DCAgent__exp_rpt_stack-pytest-v2": "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2",
+    "Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+    "Task Trove:laion__nemotron-gym-structured-outputs-v4": "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
+    "Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2": "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+    "Task Trove:laion__swesmith-oracle-filtered-v2": "TaskTrove:laion__swesmith-oracle-filtered-v2",
+    "Task Trove:laion__nemotron-gym-math-v5": "TaskTrove:laion__nemotron-gym-math-v5",
+    "Task Trove:laion__nemotron-gym-math-openmathreasoning-v2": (
+        "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2"
+    ),
+    "Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2": "TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2",
+    "Task Trove:laion__nemo-prism-math-v3": "TaskTrove:laion__nemo-prism-math-v3",
+    "Task Trove:laion__nemotron-gym-math-stack-overflow-v3": "TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
+    "Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2": (
+        "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2": (
+        "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-safety-v3": "TaskTrove:laion__nemotron-gym-safety-v3",
+    "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2": (
+        "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2": (
+        "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2": (
+        "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2": (
+        "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2"
+    ),
+    "Task Trove:laion__wizardlm-orca-v4": "TaskTrove:laion__wizardlm-orca-v4",
+    "Task Trove:laion__nemotron-gym-knowledge-openqa-v4": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
+    "Task Trove:laion__nemotron-gym-science-so-openq-v3": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
+    "Task Trove:laion__nemotron-gym-knowledge-mcqa-v2": "TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2",
+    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "TaskTrove:laion__nemotron-gym-agent-calendar-v2",
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-v3": "TaskTrove:laion__nemotron-gym-instruction-following-v3",
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-multichallenge-advanced-v4": (
+        "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4"
+    ),
+    "Task Trove:laion__all-puzzles-v2": "TaskTrove:laion__all-puzzles-v2",
+    "Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2": (
+        "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-arc-agi-transductive-v3": "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3",
+    "MarinSkyRL:reasoning_gym": "Reasoning Gym:reasoning_gym",
+    "Task Trove:laion__nemotron-gym-reasoning-gym-v2": "TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
+    "MarinSkyRL:nemotron_ultra_mopd/hs3_en": "Nemotron:nemotron_ultra_mopd/hs3_en",
+    "MarinSkyRL:nemotron_ultra_mopd/hs3_multi": "Nemotron:nemotron_ultra_mopd/hs3_multi",
+    "MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn": "Nemotron:nemotron_ultra_mopd/hs3_multiturn",
+    "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": (
+        "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/safety_en": "Nemotron:nemotron_ultra_mopd/safety_en",
+    (
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparis"
+        "on_agent/SWE-Gym/SWE-Gym"
+    ): (
+        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym"
+    ),
+    (
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparis"
+        "on_agent/nebius/SWE-rebench-V2"
+    ): (
+        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": (
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": (
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": (
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": (
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": (
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": (
+        "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": (
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": (
+        "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation"
+    ),
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3": (
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3"
+    ),
+    "SnowballV01:structure-closure": "OpenAthena:structure-closure",
+    "SnowballV01:structure-closure/validation": "OpenAthena:structure-closure/validation",
+    "Campaign Release:tasktrove-code-contests-built-image": "TaskTrove:tasktrove-code-contests-built-image",
+    "Campaign Release:tasktrove-taco-built-image": "TaskTrove:tasktrove-taco-built-image",
+    "Campaign Release:smartie-calibforge-rebuilt-v1": "TaskTrove:smartie-calibforge-rebuilt-v1",
+    "Campaign Release:tasktrove-nl2bash-rebuilt-v1": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+    "Campaign Release:tasktrove-codeforces-rebuilt-v1": "TaskTrove:tasktrove-codeforces-rebuilt-v1",
+    "Campaign Release:tasktrove-competitive-coding-rebuilt-v1": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+    "Campaign Release:tasktrove-curriculum-easy-rebuilt-v1": "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+    "Campaign Release:tasktrove-curriculum-medium-rebuilt-v1": "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+    "Campaign Release:tasktrove-e2egit-v2-rebuilt": "TaskTrove:tasktrove-e2egit-v2-rebuilt",
+    "Campaign Release:tasktrove-e2egit-large-rebuilt-v1": "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+    "Campaign Release:tasktrove-multifile-rebuilt-v1": "TaskTrove:tasktrove-multifile-rebuilt-v1",
+    "Campaign Release:tasktrove-pymethods2test-rebuilt-v1": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+    "Campaign Release:tasktrove-pymethods2test-large-rebuilt-v1": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+    "Campaign Release:tasktrove-stack-pytest-rebuilt-v1": "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+    "Campaign Release:tasktrove-unitsyn-python-rebuilt-v1": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+    "Campaign Release:tasktrove-unitsyn-python-large-rebuilt-v1": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+    "Campaign Release:swesmith-verifier-repaired-v5": "TaskTrove:swesmith-verifier-repaired-v5",
+    "Campaign Release:tasktrove-math_oracle-qa": "TaskTrove:tasktrove-math_oracle-qa",
+    "Campaign Release:tasktrove-math_stack-qa": "TaskTrove:tasktrove-math_stack-qa",
+    "Campaign Release:tasktrove-math_openreasoning-qa": "TaskTrove:tasktrove-math_openreasoning-qa",
+    "Campaign Release:tasktrove-math_gym-qa": "TaskTrove:tasktrove-math_gym-qa",
+    "Campaign Release:tasktrove-math_prism-qa": "TaskTrove:tasktrove-math_prism-qa",
+    "Campaign Release:tasktrove-safety-qa": "TaskTrove:tasktrove-safety-qa",
+    "Campaign Release:tasktrove-knowledge-openqa-qa": "TaskTrove:tasktrove-knowledge-openqa-qa",
+    "Campaign Release:tasktrove-science-openqa-qa": "TaskTrove:tasktrove-science-openqa-qa",
+    # Historical publications whose declarations no longer exist in the current tree.
+    "Campaign Release:smartie-calibforge-shared-v2": "TaskTrove:smartie-calibforge-shared-v2",
+    "Campaign Release:smartie-swesmith-admitted": "TaskTrove:smartie-swesmith-admitted",
+    "Harbor Hub:skill2env": "Harbor Hub:skill2env/skill2env",
+    "Task Trove:DCAgent__exp_rle_adversarial-v6": "TaskTrove:DCAgent__exp_rle_adversarial-v6",
+    "Task Trove:DCAgent__exp_rpt_nemotron-cpp": "TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
+    "Task Trove:DCAgent__inferredbugs-sandboxes-verifier": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
+    "Task Trove:DCAgent__mix_h4_binary_easy": "TaskTrove:DCAgent__mix_h4_binary_easy",
+    "Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": (
+        "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3"
+    ),
+    "Task Trove:GAIR__OpenSWE__openswe_oss": "TaskTrove:GAIR__OpenSWE__openswe_oss",
+    "Task Trove:GAIR__OpenSWE__openswe_other": "TaskTrove:GAIR__OpenSWE__openswe_other",
+    "Task Trove:laion__codeelo-v2": "TaskTrove:laion__codeelo-v2",
+    "Task Trove:laion__exp_rpt_bugsinpy-v4": "TaskTrove:laion__exp_rpt_bugsinpy-v4",
+    "Task Trove:laion__exp_rpt_codenet-python-v4": "TaskTrove:laion__exp_rpt_codenet-python-v4",
+    "Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4": "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
+    "Task Trove:laion__exp_rpt_crosscodeeval-java-v3": "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
+    "Task Trove:laion__exp_rpt_crosscodeeval-python-v2": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+    "Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2": "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
+    "Task Trove:laion__exp_rpt_ghactions-v3": "TaskTrove:laion__exp_rpt_ghactions-v3",
+    "Task Trove:laion__exp_rpt_methods2test-large-v4": "TaskTrove:laion__exp_rpt_methods2test-large-v4",
+    "Task Trove:laion__exp_rpt_nemotron-junit-v6": "TaskTrove:laion__exp_rpt_nemotron-junit-v6",
+    "Task Trove:laion__exp_rpt_scaffold-v3": "TaskTrove:laion__exp_rpt_scaffold-v3",
+    "Task Trove:laion__exp_rpt_stack-cpp-v4": "TaskTrove:laion__exp_rpt_stack-cpp-v4",
+    "Task Trove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+    "Task Trove:laion__exp_rpt_stack-go-v5": "TaskTrove:laion__exp_rpt_stack-go-v5",
+    "Task Trove:laion__exp_rpt_stack-jest-v5": "TaskTrove:laion__exp_rpt_stack-jest-v5",
+    "Task Trove:laion__exp_rpt_stack-junit-v6": "TaskTrove:laion__exp_rpt_stack-junit-v6",
+    "Task Trove:laion__exp_rpt_stack-php-large-v9": "TaskTrove:laion__exp_rpt_stack-php-large-v9",
+    "Task Trove:laion__exp_rpt_stack-pytest-large-v3": "TaskTrove:laion__exp_rpt_stack-pytest-large-v3",
+    "Task Trove:laion__exp_rpt_stack-rspec-v4": "TaskTrove:laion__exp_rpt_stack-rspec-v4",
+    "Task Trove:laion__magicoder-v4": "TaskTrove:laion__magicoder-v4",
+    "Task Trove:laion__mix_h10_reward_proportional-v2": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+    "Task Trove:laion__mix_h11_single_skill_only-v2": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+    "Task Trove:laion__mix_h8_original_tests-v2": "TaskTrove:laion__mix_h8_original_tests-v2",
+    "Task Trove:laion__nemotron-gym-agentic-function-calling-pivot-v3": (
+        "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": (
+        "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-agentic-swe-pivot-v4": "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
+    "Task Trove:laion__nemotron-gym-cfbench-v4": "TaskTrove:laion__nemotron-gym-cfbench-v4",
+    "Task Trove:laion__nemotron-gym-identity-following-v4": "TaskTrove:laion__nemotron-gym-identity-following-v4",
+    "Task Trove:laion__nemotron-gym-instruction-following-adversarial-v5": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-citation-v2": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-freeform-v2": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-multiturnchat-v4": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4"
+    ),
+    "Task Trove:laion__nemotron-gym-inverse-ifeval-v4": "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
+    "Task Trove:laion__nemotron-gym-knowledge-web-search-mcqa-v2": (
+        "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-litmus-bench-v2": "TaskTrove:laion__nemotron-gym-litmus-bench-v2",
+    "Task Trove:laion__nemotron-gym-math-advanced-calculations-v4": (
+        "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4"
+    ),
+    "Task Trove:laion__nemotron-gym-multichallenge-vanilla-v3": (
+        "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-qa-abstention-v4": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
+    "Task Trove:laion__nemotron-gym-sysbench-v4": "TaskTrove:laion__nemotron-gym-sysbench-v4",
+    "Task Trove:laion__openswe-tasks-patched-v7-oracle-success": (
+        "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success"
+    ),
+    "Task Trove:laion__r2egym-patched-full-oracle-v3": "TaskTrove:laion__r2egym-patched-full-oracle-v3",
+    "Task Trove:laion__swegym-tasks-patched-validated-v5": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
+    "Task Trove:laion__toolscale-v4": "TaskTrove:laion__toolscale-v4",
+    "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": (
+        "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3"
+    ),
+    "Task Trove:R2E-Gym__R2E-Gym-V1": "TaskTrove:R2E-Gym__R2E-Gym-V1",
+    "Task Trove:SankalpKJ__nemotron-code-oracle-filtered": "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered",
+    "Task Trove:SWE-Gym__SWE-Gym": "TaskTrove:SWE-Gym__SWE-Gym",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+    # Aliases for published IDs the generated identity renamed. The checked-in
+    # rename join (tests/source_id_renames.json) asserts the table resolves every
+    # one of them to its exact target.
+    "Campaign Release:smartie-calibforge-admitted": "TaskTrove:smartie-calibforge-admitted",
+    "Campaign Release:smartie-swesmith-staged-v1": "TaskTrove:smartie-swesmith-staged-v1",
+    "Campaign Release:smartie-swesmith-staged-v2": "TaskTrove:smartie-swesmith-staged-v2",
+    "Checkpoint:agieval_lsat_ar": "lm-eval:agieval_lsat_ar",
+    "Checkpoint:bbh_cot_fewshot-boolean_expressions": "lm-eval:bbh_cot_fewshot-boolean_expressions",
+    "Checkpoint:bbh_cot_fewshot-causal_judgement": "lm-eval:bbh_cot_fewshot-causal_judgement",
+    "Checkpoint:bbh_cot_fewshot-date_understanding": "lm-eval:bbh_cot_fewshot-date_understanding",
+    "Checkpoint:bbh_cot_fewshot-disambiguation_qa": "lm-eval:bbh_cot_fewshot-disambiguation_qa",
+    "Checkpoint:bbh_cot_fewshot-dyck_languages": "lm-eval:bbh_cot_fewshot-dyck_languages",
+    "Checkpoint:bbh_cot_fewshot-formal_fallacies": "lm-eval:bbh_cot_fewshot-formal_fallacies",
+    "Checkpoint:bbh_cot_fewshot-geometric_shapes": "lm-eval:bbh_cot_fewshot-geometric_shapes",
+    "Checkpoint:bbh_cot_fewshot-hyperbaton": "lm-eval:bbh_cot_fewshot-hyperbaton",
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_five_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_five_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_seven_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_seven_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-logical_deduction_three_objects": (
+        "lm-eval:bbh_cot_fewshot-logical_deduction_three_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-movie_recommendation": "lm-eval:bbh_cot_fewshot-movie_recommendation",
+    "Checkpoint:bbh_cot_fewshot-multistep_arithmetic_two": "lm-eval:bbh_cot_fewshot-multistep_arithmetic_two",
+    "Checkpoint:bbh_cot_fewshot-navigate": "lm-eval:bbh_cot_fewshot-navigate",
+    "Checkpoint:bbh_cot_fewshot-object_counting": "lm-eval:bbh_cot_fewshot-object_counting",
+    "Checkpoint:bbh_cot_fewshot-penguins_in_a_table": "lm-eval:bbh_cot_fewshot-penguins_in_a_table",
+    "Checkpoint:bbh_cot_fewshot-reasoning_about_colored_objects": (
+        "lm-eval:bbh_cot_fewshot-reasoning_about_colored_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-ruin_names": "lm-eval:bbh_cot_fewshot-ruin_names",
+    "Checkpoint:bbh_cot_fewshot-salient_translation_error_detection": (
+        "lm-eval:bbh_cot_fewshot-salient_translation_error_detection"
+    ),
+    "Checkpoint:bbh_cot_fewshot-snarks": "lm-eval:bbh_cot_fewshot-snarks",
+    "Checkpoint:bbh_cot_fewshot-sports_understanding": "lm-eval:bbh_cot_fewshot-sports_understanding",
+    "Checkpoint:bbh_cot_fewshot-temporal_sequences": "lm-eval:bbh_cot_fewshot-temporal_sequences",
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_five_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_five_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_seven_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_seven_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-tracking_shuffled_objects_three_objects": (
+        "lm-eval:bbh_cot_fewshot-tracking_shuffled_objects_three_objects"
+    ),
+    "Checkpoint:bbh_cot_fewshot-web_of_lies": "lm-eval:bbh_cot_fewshot-web_of_lies",
+    "Checkpoint:bbh_cot_fewshot-word_sorting": "lm-eval:bbh_cot_fewshot-word_sorting",
+    "Checkpoint:commonsense_qa": "lm-eval:commonsense_qa",
+    "Checkpoint:copa": "lm-eval:copa",
+    "Checkpoint:gsm8k_cot": "lm-eval:gsm8k_cot",
+    "Checkpoint:humaneval-10shot": "Evalchemy:humaneval@10shot",
+    "Checkpoint:leaderboard_bbh-boolean_expressions": "lm-eval:leaderboard_bbh-boolean_expressions",
+    "Checkpoint:leaderboard_bbh-causal_judgement": "lm-eval:leaderboard_bbh-causal_judgement",
+    "Checkpoint:leaderboard_bbh-date_understanding": "lm-eval:leaderboard_bbh-date_understanding",
+    "Checkpoint:leaderboard_bbh-disambiguation_qa": "lm-eval:leaderboard_bbh-disambiguation_qa",
+    "Checkpoint:leaderboard_bbh-formal_fallacies": "lm-eval:leaderboard_bbh-formal_fallacies",
+    "Checkpoint:leaderboard_bbh-geometric_shapes": "lm-eval:leaderboard_bbh-geometric_shapes",
+    "Checkpoint:leaderboard_bbh-hyperbaton": "lm-eval:leaderboard_bbh-hyperbaton",
+    "Checkpoint:leaderboard_bbh-logical_deduction_five_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_five_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-logical_deduction_seven_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_seven_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-logical_deduction_three_objects": (
+        "lm-eval:leaderboard_bbh-logical_deduction_three_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-movie_recommendation": "lm-eval:leaderboard_bbh-movie_recommendation",
+    "Checkpoint:leaderboard_bbh-navigate": "lm-eval:leaderboard_bbh-navigate",
+    "Checkpoint:leaderboard_bbh-object_counting": "lm-eval:leaderboard_bbh-object_counting",
+    "Checkpoint:leaderboard_bbh-penguins_in_a_table": "lm-eval:leaderboard_bbh-penguins_in_a_table",
+    "Checkpoint:leaderboard_bbh-reasoning_about_colored_objects": (
+        "lm-eval:leaderboard_bbh-reasoning_about_colored_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-ruin_names": "lm-eval:leaderboard_bbh-ruin_names",
+    "Checkpoint:leaderboard_bbh-salient_translation_error_detection": (
+        "lm-eval:leaderboard_bbh-salient_translation_error_detection"
+    ),
+    "Checkpoint:leaderboard_bbh-snarks": "lm-eval:leaderboard_bbh-snarks",
+    "Checkpoint:leaderboard_bbh-sports_understanding": "lm-eval:leaderboard_bbh-sports_understanding",
+    "Checkpoint:leaderboard_bbh-temporal_sequences": "lm-eval:leaderboard_bbh-temporal_sequences",
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_five_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_five_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_seven_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_seven_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-tracking_shuffled_objects_three_objects": (
+        "lm-eval:leaderboard_bbh-tracking_shuffled_objects_three_objects"
+    ),
+    "Checkpoint:leaderboard_bbh-web_of_lies": "lm-eval:leaderboard_bbh-web_of_lies",
+    "Checkpoint:leaderboard_gpqa-diamond": "lm-eval:leaderboard_gpqa-diamond",
+    "Checkpoint:leaderboard_gpqa-extended": "lm-eval:leaderboard_gpqa-extended",
+    "Checkpoint:leaderboard_gpqa-main": "lm-eval:leaderboard_gpqa-main",
+    "Checkpoint:leaderboard_mmlu_pro": "lm-eval:leaderboard_mmlu_pro",
+    "Checkpoint:medmcqa": "lm-eval:medmcqa",
+    "Checkpoint:minerva_math-algebra": "lm-eval:minerva_math-algebra",
+    "Checkpoint:minerva_math-counting_and_probability": "lm-eval:minerva_math-counting_and_probability",
+    "Checkpoint:minerva_math-geometry": "lm-eval:minerva_math-geometry",
+    "Checkpoint:minerva_math-intermediate_algebra": "lm-eval:minerva_math-intermediate_algebra",
+    "Checkpoint:minerva_math-number_theory": "lm-eval:minerva_math-number_theory",
+    "Checkpoint:minerva_math-prealgebra": "lm-eval:minerva_math-prealgebra",
+    "Checkpoint:minerva_math-precalculus": "lm-eval:minerva_math-precalculus",
+    "Checkpoint:pubmedqa": "lm-eval:pubmedqa",
+    "Checkpoint:wsc273": "lm-eval:wsc273",
+    "Eval:arc-agi-2": "Evalchemy:arc-agi-2",
+    "Eval:facts-grounding-v2": "Evalchemy:facts-grounding-v2",
+    "Eval:genomeqa": "Evalchemy:genomeqa",
+    "Eval:lexam-mcq-4-de": "Evalchemy:lexam-mcq-4-de",
+    "Eval:lexam-mcq-4-en": "Evalchemy:lexam-mcq-4-en",
+    "Eval:medmcqa-cot": "Evalchemy:medmcqa-cot",
+    "Eval:mmlu-redux": "Evalchemy:mmlu-redux",
+    "Eval:pdbthink": "Evalchemy:pdbthink",
+    "Eval:physics-verified": "Evalchemy:physics-verified",
+    "Eval:supergpqa": "Evalchemy:supergpqa",
+    "Hugging Face:marcusm117/ProofNet-Verified": "marcusm117:ProofNet-Verified",
+    "Hugging Face:project-numina/NuminaMath-LEAN": "project-numina:NuminaMath-LEAN",
+    "LongBenchV2:no-thinking": "lm-eval:LongBench-v2@no-thinking",
+    "LongBenchV2:thinking": "lm-eval:LongBench-v2@thinking",
+    "NeMo:predicted-action": "Nemotron:predicted-action",
+    "Task Trove:AweAI-Team__CalibForge": "TaskTrove:AweAI-Team__CalibForge",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__code": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__code",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
+    "frontierscience-olympiad": "OpenAI:frontierscience-olympiad",
+    "frontierscience-research": "OpenAI:frontierscience-research",
+}
+
+
+def canonical_source_id(source_id: str) -> str:
+    """Resolve a published historical ID to its generated catalog identity."""
+    return SOURCE_ID_ALIASES.get(source_id, source_id)

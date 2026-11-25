@@ -14,6 +14,7 @@ import re
 import sys
 from pathlib import Path
 
+from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_markdown_answer
 from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
@@ -48,6 +49,8 @@ def main() -> None:
     with contextlib.redirect_stdout(sys.stderr):
         try:
             reward = score_reasoning_gym_answer(dataset, entry, answer)
+        except InvalidTask:
+            raise
         except Exception as error:
             # Check the reference when available; some datasets have no reference answer.
             reference = entry["answer"]

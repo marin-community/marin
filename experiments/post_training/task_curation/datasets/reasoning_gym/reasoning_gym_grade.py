@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import reasoning_gym
+from verifyit.grade import InvalidTask
 from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
@@ -58,6 +59,8 @@ def main() -> None:
         answer = candidate(ANSWER.read_text(errors="replace"))
         try:
             reward = score_reasoning_gym_answer(generation["task"], entry, answer)
+        except InvalidTask:
+            raise
         except Exception as error:
             # Check the reference when available; some datasets have no reference answer.
             reference = entry["answer"]

@@ -64,7 +64,6 @@ PREFERENCE_PAIR_ENV_CLASS = "preference_pair"
 class EvaluationRunner(StrEnum):
     TRAINING = "training"
     TASK = "task"
-    HARBOR = "harbor"
 
 
 def ftpo_requested(algorithm: Mapping[str, Any]) -> bool:

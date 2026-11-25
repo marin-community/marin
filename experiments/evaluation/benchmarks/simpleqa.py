@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     Metrics,
@@ -27,7 +28,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 # Includes the publisher's 2026-03-09 correction of the Lilongwe question ("latitude" to "longitude").
@@ -40,9 +41,12 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
     rows = 500 if mini else 4326
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + name,
-            title=benchmark,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=rows,
@@ -93,11 +97,15 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
     gpt-4.1-2025-04-14; runs name their own judge, so scores are comparable only under the same judge.
     """
     benchmark = "SimpleQAVerifiedThinking" if thinking else "SimpleQAVerified"
+    name = "simpleqa-verified-thinking" if thinking else "simpleqa-verified"
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + ("simpleqa-verified-thinking" if thinking else "simpleqa-verified"),
-            title=benchmark,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=SIMPLEQA_VERIFIED_ROWS,

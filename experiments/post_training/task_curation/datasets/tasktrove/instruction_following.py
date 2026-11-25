@@ -11,6 +11,7 @@ vacuous or contradictory schemas and conflicting public language requirements.
 import json
 import re
 
+from finestore.rl.status_taxonomy import DataRestriction
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
@@ -26,7 +27,7 @@ from verifyit.spec import Constraint, SchemaFormat
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
 STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
@@ -225,9 +226,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{IFEVAL_CONFIG}",
-                title="laion/nemotron-gym-instruction-following-v3",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset=IFEVAL_CONFIG,
+                upstream_name=IFEVAL_CONFIG,
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=46391,
@@ -249,9 +253,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{STRUCTURED_CONFIG}",
-                title="laion/nemotron-gym-instruction-following-structured-v3",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset=STRUCTURED_CONFIG,
+                upstream_name=STRUCTURED_CONFIG,
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=9437,

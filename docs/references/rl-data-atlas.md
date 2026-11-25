@@ -118,8 +118,13 @@ Marina user can release an update. By default, source must be a clean
 checkout at the current remote main. A Marina image deployment does not publish Atlas. A
 default release records its source commit and subtree hash in the immutable package;
 `release-status` reports whether that tree matches this checkout.
-Use `--allow-dirty` to explicitly release branch or uncommitted source without
-verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+
+Atlas cuts from an integration branch, so its releases pass
+`--release-branch <integration-branch>`: the guard verifies a clean checkout whose
+commit the remote branch already contains (its tip or any merged commit) and the
+release records the branch beside the source commit. `--allow-dirty` releases
+branch or uncommitted source without verified Git provenance and must not be used
+for Atlas releases; `release-status` then reports `unrecorded` from a clean checkout.
 
 The loader defaults to the published catalog in CoreWeave's `us-east-02a` bucket at
 `s3://marin-us-east-02a/marin/rl-data/catalog/production`.

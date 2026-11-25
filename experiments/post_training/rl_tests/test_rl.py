@@ -6,6 +6,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,6 +113,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
+    # Published train-long controls still contain defaults removed by the TaskSpec migration.
+    planned = configs["train-long"]
+    recorded = deepcopy(planned)
+    recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
+    del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
+    del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
+    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
+
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
     table = snowball_model.SNOWBALL
@@ -166,14 +175,8 @@ def test_plan_rejects_gated_preset_without_control_pin(selection):
             "trainer.train_batch_size=2",
             "lcm_dp_size=16",
         ),
-        (
-            "--plan",
-            ('terminal_bench={"harbor":{}}',),
-            "terminal_bench.harbor.eval_override_timeout_sec=180",
-            "Unknown Harbor task settings: ['eval_override_timeout_sec']",
-        ),
     ],
-    ids=["plan-batch-size", "run-batch-size", "plan-harbor-setting"],
+    ids=["plan-batch-size", "run-batch-size"],
 )
 def test_launcher_refuses_invalid_driver_settings(
     selection, preset_table, monkeypatch, capsys, mode, recipe_settings, override, reason
@@ -387,166 +390,60 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
-def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
     table = snowball_model.SNOWBALL
-    preset = table.by_name["train-long-harbor"]
-    with pytest.raises(click.BadParameter, match=r"Harbor evaluation requires generator\.enable_http_endpoint"):
-        snowball.build_experiment(preset, table=table, settings=("generator.enable_http_endpoint=false",))
-
-    wider_window = ("context_budget.serving_window_tokens=28672",)
-    paths = []
-    for index, (settings, output_cap) in enumerate((((), None), (wider_window, 4096), (wider_window, 28672))):
-        step = snowball.build_experiment(preset, table=table, settings=settings).runs[0]
-        path = tmp_path / f"harbor-{index}.yaml"
-        document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
-        if output_cap is not None:
-            callback = next(
-                row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
-            )
-            for cohort in callback["cohorts"]:
-                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = output_cap
-            if index == 1:
-                del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
-        path.write_text(yaml.safe_dump(document))
-        paths.append(str(path))
-    selected = native_json("--isolated", "--group", "harbor-test")(
+    preset = table.by_name["train-long-checkpoint-eval"]
+    spec = recipe.run_spec(preset, name="checkpoint-evaluation-coverage", model_name=table.model)
+    step = recipe.run_step(preset, spec)
+    path = tmp_path / "checkpoint-evaluation.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+    results = native_json()(
         """
-import asyncio, json, os, sys
+import asyncio, json, sys
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
-from harbor.models.job.config import JobConfig
-from omegaconf import OmegaConf
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
-from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.callbacks.builtin import create_callbacks_from_config
 
-config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:3]))
-try:
-    load_launch_config(Path(sys.argv[3]))
-except ValueError as error:
-    assert "Harbor output tokens must leave room for input" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted a reply cap equal to the serving window")
-
-windows = []
-for launch in (config, changed):
-    window = launch.skyrl.generator.engine_init_kwargs.max_model_len
-    windows.append(window)
-    harbor = next(row for row in launch.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort in harbor.cohorts:
-        job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
-        model_info = job.agents[0].kwargs["model_info"]
-        assert model_info["max_input_tokens"] == window, model_info
-        assert model_info.get("max_output_tokens", 0) < window, (model_info, window)
-        agent = job.agents[0]
-        verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
-        assert verifier_budget is not None
-        agent_budget = agent.override_setup_timeout_sec + agent.override_timeout_sec
-        assert agent_budget + verifier_budget < job.trial_attempt_timeout_sec
-        attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
-        assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
-assert windows[0] != windows[1]
-
-changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
-try:
-    create_callbacks_from_config(changed.skyrl)
-except ValueError as error:
-    assert "unrecognized-build" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted an unknown Daytona image build")
-
-selected = []
-for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
-    directory = Path(sys.argv[1]).parent / f"coverage-{index}"
+path = Path(sys.argv[1])
+config = load_launch_config(path)
+assert not config.skyrl.generator.enable_http_endpoint
+state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
+scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26),
+             (100, 100, 29, 29), (99, 99, 31, 30))
+results = []
+for index, (primary_attempted, primary_scored, bfcl_attempted, bfcl_scored) in enumerate(scenarios):
+    directory = path.parent / f"coverage-{index}"
     config.skyrl.trainer.ckpt_path = str(directory)
-    metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
-    harbor = next(row for row in config.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-    for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
-        prefix = f"eval/harbor/{cohort.name}/"
-        metrics.update({prefix + "num_attempted": 30, prefix + "num_scored": scored, prefix + "reward_sum": scored / 2})
+    config.skyrl.trainer.export_path = str(directory / "exports")
+    metrics = {
+        "eval/all/num_attempted": primary_attempted,
+        "eval/all/num_scored": primary_scored,
+        "eval/all/avg_verifier_score": 0.25,
+    }
+    for name, attempted, scored, average in (
+        ("bfcl_parity", bfcl_attempted, bfcl_scored, 1.0),
+        ("swebench_verified", 30, 28, 0.5),
+        ("openthoughts_tblite", 30, 30, 0.0),
+    ):
+        prefix = f"eval/{name}/all/"
+        metrics.update({prefix + "num_attempted": attempted, prefix + "num_scored": scored,
+                        prefix + "avg_verifier_score": average})
     handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
-    state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
     asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
-                                       trainer=SimpleNamespace(cfg=config.skyrl)))
-    selected.append((directory / "best_checkpoint.json").exists())
-
-worker = r'''
-import json, socket, sys, traceback
-from harbor.models.job.config import JobConfig
-expected = json.loads(sys.argv[2])
-connection = socket.socket(fileno=int(sys.argv[1]))
-with connection.makefile("rwb") as stream:
-    for line in stream:
-        message = json.loads(line)
-        try:
-            job = JobConfig.model_validate(message["cohort"]["job"])
-            if expected is None:
-                assert job.telemetry is None
-            else:
-                assert job.telemetry is not None
-                actual = {
-                    "endpoint": job.telemetry.endpoint.get_secret_value(),
-                    "root_run_uid": job.telemetry.root_run_uid,
-                    "execution_uid": job.telemetry.execution_uid,
-                    "serving_job_id": job.telemetry.serving_job_id,
-                }
-                assert actual == expected, (actual, expected)
-            response = {"id": message["id"], "metrics": {"num_attempted": 1, "num_scored": 1, "reward_sum": 1}}
-        except Exception:
-            response = {"id": message["id"], "error": traceback.format_exc()}
-        stream.write((json.dumps(response) + "\\n").encode())
-        stream.flush()
-'''
-
-async def check_runtime_handoff():
-    callback = next(item for item in create_callbacks_from_config(config.skyrl)
-                    if isinstance(item, HarborEvaluationCallback))
-    trainer = SimpleNamespace(
-        cfg=config.skyrl,
-        inference_engine_client=SimpleNamespace(
-            enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
-        ),
-    )
-    original_exec = asyncio.create_subprocess_exec
-    expected = None
-
-    async def start_worker(*args, **kwargs):
-        return await original_exec(sys.executable, "-c", worker, args[-1], json.dumps(expected), **kwargs)
-
-    asyncio.create_subprocess_exec = start_worker
-    try:
-        endpoint = "http://127.0.0.1:4318/iris-capability/v1/telemetry"
-        os.environ.update(
-            SKYRL_RUN_ID=str(config.run.id),
-            SKYRL_EXECUTION_UID="iris:uid-native",
-            IRIS_TASK_ID="/test/native/0:1",
-        )
-        for enabled in (True, False):
-            if enabled:
-                os.environ["SKYRL_TELEMETRY_ENDPOINT"] = endpoint
-            else:
-                os.environ.pop("SKYRL_TELEMETRY_ENDPOINT", None)
-            expected = {
-                "endpoint": endpoint,
-                "root_run_uid": str(config.run.id),
-                "execution_uid": "iris:uid-native",
-                "serving_job_id": "/test/native",
-            } if enabled else None
-            async with EvaluationPool(3) as pool:
-                metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
-            assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
-                       for cohort in callback.cohorts), metrics
-    finally:
-        asyncio.create_subprocess_exec = original_exec
-os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
-asyncio.run(check_runtime_handoff())
-print(json.dumps(selected))
+                                         trainer=SimpleNamespace(cfg=config.skyrl)))
+    record = directory / "best_checkpoint.json"
+    results.append(json.loads(record.read_text()) if record.exists() else None)
+print(json.dumps(results))
 """,
-        paths,
+        [str(path)],
     )
-    assert selected == [True, False, False]
+    chosen, *rejected = results
+    assert chosen["attempted"] == 190
+    assert chosen["scored"] == 184
+    assert chosen["accuracy"] == pytest.approx(65.75 / 184)
+    assert rejected == [None] * 4
 
 
 @pytest.mark.parametrize(
@@ -1269,6 +1166,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
+        # Same-size rewrites within one timestamp tick must load the new module.
+        Path(importlib.util.cache_from_source(str(path))).unlink(missing_ok=True)
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
         monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))

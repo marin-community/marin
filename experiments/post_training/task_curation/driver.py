@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -264,7 +265,7 @@ def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: 
     if corpus.population != population:
         raise click.UsageError("EvalLite requires a converted corpus; training selection requires an admitted corpus")
     return {
-        source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
+        canonical_source_id(source_id): ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
         for source_id, root in sorted(corpus.roots.items())
     }
 
@@ -655,7 +656,11 @@ def main(
         restored = _corpus_sources(corpus)
         assert embedding is not None
         # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
-        corpus_inventory = {row.id: row for row in restored.inventory}
+        corpus_inventory: dict[str, SourceDeclaration] = {}
+        for row in restored.inventory:
+            key = canonical_source_id(row.id)
+            if key not in corpus_inventory or row.id == key:
+                corpus_inventory[key] = row
         corpus_inventory.update({row.id: row for row in inventory})
         embedding(
             restored.roots,

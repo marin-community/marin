@@ -27,9 +27,12 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from verifyit.grade import InvalidTask
+
 script_path, config_path, answer_path = map(Path, sys.argv[1:4])
 bad_reference = sys.argv[4] == "bad_reference"
 bad_reply = sys.argv[5]
+failure = sys.argv[6]
 sys.path.insert(0, str(script_path.parent))
 sys.path.insert(0, str(script_path.parent / "scorers"))
 spec = importlib.util.spec_from_file_location("shipped_reasoning_gym_grade", script_path)
@@ -42,6 +45,8 @@ real_score = grader.score_reasoning_gym_answer
 
 def score(dataset, entry, candidate):
     if candidate == bad_reply:
+        if failure == "invalid_task":
+            raise InvalidTask("reasoning-gym entry requires an example answer")
         raise RuntimeError("scorer could not parse candidate")
     if bad_reference and candidate == entry["answer"]:
         return 0.0
@@ -52,19 +57,15 @@ grader.main()
 """
 
 
-def contract_for(script: Path) -> dict:
+def contract_for(script: Path, task: str) -> dict:
+    seed = generate.task_seed(task)
+    dataset = reasoning_gym.create_dataset(task, size=generate.ROWS_PER_TASK, seed=seed)
     if script.parent.name == "nemotron_ultra":
-        return {
-            "question": "Find the prime factorization of 835.",
-            "answer": "5 \u00d7 167",
-            "metadata": {"source_dataset": "prime_factorization"},
-        }
-    seed = generate.task_seed("prime_factorization")
-    dataset = reasoning_gym.create_dataset("prime_factorization", size=generate.ROWS_PER_TASK, seed=seed)
+        return generate.encoded(dataset[0])
     return {
         "entry": generate.encoded(dataset[0]),
         "generation": {
-            "task": "prime_factorization",
+            "task": task,
             "seed": seed,
             "index": 0,
             "config": generate.encoded(dataclasses.asdict(dataset.config)),
@@ -75,14 +76,19 @@ def contract_for(script: Path) -> dict:
 
 @pytest.mark.parametrize("script", SCRIPT_PATHS, ids=("generated", "nemotron_ultra"))
 @pytest.mark.parametrize(
-    ("candidate", "bad_reference", "expected"),
-    [(PROSE, False, 0.0), ("reference", False, 1.0), (PROSE, True, None)],
-    ids=("unparseable_candidate", "valid_answer", "broken_reference"),
+    ("task", "candidate", "bad_reference", "failure", "expected"),
+    [
+        ("prime_factorization", PROSE, False, "runtime_error", 0.0),
+        ("prime_factorization", "reference", False, "runtime_error", 1.0),
+        ("prime_factorization", PROSE, True, "runtime_error", None),
+        ("propositional_logic", PROSE, False, "invalid_task", None),
+    ],
+    ids=("unparseable_candidate", "valid_answer", "broken_reference", "invalid_task_with_null_answer"),
 )
-def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(
-    script, candidate, bad_reference, expected, tmp_path
+def test_reasoning_gym_grade_script_scores_or_reports_task_errors(
+    script, task, candidate, bad_reference, failure, expected, tmp_path
 ):
-    contract = contract_for(script)
+    contract = contract_for(script, task)
     entry = contract.get("entry", contract)
     answer = entry["answer"] if candidate == "reference" else candidate
     config_path = tmp_path / "config.json"
@@ -99,6 +105,7 @@ def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(
             str(answer_path),
             "bad_reference" if bad_reference else "valid_reference",
             PROSE,
+            failure,
         ],
         capture_output=True,
         text=True,

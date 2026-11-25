@@ -235,13 +235,17 @@ class _Recorder:
         ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
-        deadlines = self.deadlines
-        assert deadlines is not None
-        if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
-            deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
+        if current is None:
+            self.begin_turn_budget()
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
+
+    def begin_turn_budget(self) -> None:
+        deadlines = self.deadlines
+        assert deadlines is not None
+        if deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
+            deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
 
     async def reply(
         self,
@@ -529,7 +533,7 @@ async def _run_harness(
     """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
-    # The recorder sets both deadlines: the total one at the first request, the tool one after each turn.
+    # The recorder arms the total deadline when turns begin and the tool deadline after each turn.
     total, tool = asyncio.timeout(None), asyncio.timeout(None)
     try:
         async with total, tool:
@@ -591,7 +595,9 @@ async def harness_rollout(
     recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as released, AsyncExitStack() as stopped:
-        context = HarnessContext(task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id)
+        context = HarnessContext(
+            task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id, recorder.begin_turn_budget
+        )
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:

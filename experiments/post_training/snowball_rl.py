@@ -33,7 +33,7 @@ from experiments.post_training.rl_agentic_recipe import (
 )
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
-    HARBOR_EVALUATION,
+    CHECKPOINT_EVALUATION,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
@@ -225,6 +225,11 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_REPORTING_P40 = replace(
+    _ASYNC_P40,
+    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
+)
+
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
@@ -247,7 +252,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.22.3",
+    revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     default_speculative_decoding=_DSPARK,
@@ -264,7 +269,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -289,7 +294,7 @@ _TRAIN_LONG = _snowball(
     checkpoints="best",
     export="best",
     name="train-long",
-    recipe=_ASYNC_P40,
+    recipe=_REPORTING_P40,
     owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),
@@ -350,7 +355,7 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
+        gaps=tuple(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS),
     ),
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
@@ -491,9 +496,9 @@ _PRESETS = (
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
-        name="train-long-harbor",
-        harbor=HARBOR_EVALUATION,
-        gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
+        name="train-long-checkpoint-eval",
+        checkpoint_evaluation=CHECKPOINT_EVALUATION,
+        gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,

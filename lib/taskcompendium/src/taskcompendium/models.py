@@ -45,6 +45,8 @@ from verifyit.spec import (
     upgrade_judge_table,
 )
 
+SUBSET_LABEL = "subset_id"
+
 SCHEMA_VERSION = "0.31"
 UPGRADABLE_SCHEMA_VERSION = "0.30"
 """The one earlier TaskSpec schema that readers upgrade; every other version is rejected."""
@@ -1138,3 +1140,8 @@ class TaskSpec(BaseModel):
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
         return self
+
+
+def task_subset(task: TaskSpec) -> str:
+    """Return the reporting subset, using source provenance for unlabelled tasks."""
+    return task.labels.get(SUBSET_LABEL) or task.source.dataset
