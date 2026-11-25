@@ -1529,7 +1529,7 @@ def normalize_snapshot_declaration(
         pass
     generation = snapshot_declaration_generation(declaration)
     if generation == SNAPSHOT_SCHEMA_PRE_STAGE:
-        if pending_stage_of is None:
+        if pending_stage_of is None and declaration.get("status") == "Pending" and "stage" not in declaration:
             raise ValueError(
                 "served snapshot declaration is pre-stage Pending (schema"
                 f" {SNAPSHOT_SCHEMA_PRE_STAGE}); supply pending_stage_of to compute the"
@@ -1562,7 +1562,7 @@ def _current_reason_values() -> frozenset:
 _CURRENT_REASON_VALUES = _current_reason_values()
 
 
-def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage]) -> dict:
+def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage] | None) -> dict:
     """The qualified-v1 → current conversion, one named step per removed field.
 
     ``name`` — dropped: the schema removed the free-text field and derives the
@@ -1577,6 +1577,7 @@ def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str
     claims = normalized.get("exclusion_claims") or []
     normalized["exclusion_claims"] = [_normalize_legacy_claim(claim) for claim in claims]
     if normalized.get("status") == "Pending" and "stage" not in normalized:
+        assert pending_stage_of is not None
         normalized["stage"] = pending_stage_of(normalized["id"]).value
     return normalized
 

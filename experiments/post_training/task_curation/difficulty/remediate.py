@@ -8,8 +8,9 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
-from finestore.rl.curation import QualifiedSourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration, normalize_snapshot_declaration
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, DifficultyGap
+from marin.execution.artifact import RECORD_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 
@@ -32,6 +33,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_id,
     action_payload,
 )
+from experiments.post_training.task_curation.difficulty.regional import regional_worker
 from experiments.post_training.task_curation.difficulty.selection import selected_tasks
 from experiments.post_training.task_curation.difficulty.state import (
     REPAIR_BLOCKED,
@@ -56,6 +58,7 @@ from experiments.post_training.task_curation.difficulty_samples import (
 )
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_declared_judge_endpoint
 from experiments.post_training.task_curation.environment_artifacts import rebuild_artifact
+from experiments.post_training.task_curation.lexical_artifacts import population_for_census
 
 STATIC_ADMISSION_CAUSES = frozenset(
     {
@@ -162,19 +165,42 @@ def recheck_admission(action: RecheckExecutabilityAdmission, local: Path, ledger
 
 def freeze_panel(action: FreezeSamplePanel, ledger: str) -> dict:
     """Freeze a seed-zero sample of the current population and publish its verified queue."""
-    declaration = QualifiedSourceDeclaration.model_validate_json(action.declaration_json)
-    binding = declaration.actor_census_input
-    if declaration.id != action.source.source_id:
+    document = json.loads(action.declaration_json)
+    if document["id"] != action.source.source_id:
         raise ValueError("Panel repair belongs to another source")
-    if binding is None:
+    revision = declaration_population_revision(document)
+    if revision != action.source.registry_revision:
+        raise ValueError("Panel repair declaration differs from the planned population")
+    if document.get("actor_census_input") is None:
         return {
             "status": REPAIR_BLOCKED,
             "reason": GapReason.TASK_SPEC_FACTORY_PENDING,
             "detail": "Current served declaration lacks its exact input census; qualify the population first",
         }
-    revision = declaration_population_revision(declaration.model_dump(mode="json"))
-    if revision != action.source.registry_revision:
-        raise ValueError("Panel repair declaration differs from the planned population")
+    try:
+        declaration = QualifiedSourceDeclaration.model_validate(normalize_snapshot_declaration(document))
+    except ValueError as error:
+        return {"status": REPAIR_BLOCKED, "reason": GapReason.SOURCE_QUEUE_VALIDATION_FAILED, "detail": str(error)}
+    if declaration_population_revision(declaration.model_dump(mode="json")) != revision:
+        raise ValueError("Snapshot normalization changed the planned population")
+    if campaign_record(ledger) is not None:
+        regional_worker()
+        binding = declaration.actor_census_input
+        assert binding is not None
+        population = population_for_census(
+            str(StoragePath(binding.evidence_url).parent / RECORD_FILENAME), declaration.id
+        )
+        foreign = [
+            uri
+            for uri in (population.main_output_dir, population.specs_output_dir)
+            if uri.startswith("gs://") and not uri.startswith("gs://marin-us-central2/")
+        ]
+        if foreign:
+            return {
+                "status": REPAIR_BLOCKED,
+                "reason": GapReason.EXECUTABILITY_ADMISSION_PENDING,
+                "detail": "Population requires regional staging before panel freezing: " + ", ".join(foreign),
+            }
     root = StoragePath(ledger) / LEDGER_VERSION / "panel-builds" / action_id(action)
     inventory = inventory_source(declaration, str(root / "inventory"), None)
     source = prepare_sample(declaration, inventory, str(root / "samples"), None)

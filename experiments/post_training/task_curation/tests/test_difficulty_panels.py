@@ -6,6 +6,7 @@
 import json
 from dataclasses import replace
 
+import pytest
 from finestore.rl.curation import ActorCensusInput
 from finestore.rl.difficulty import Solver
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
@@ -14,10 +15,23 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 
 from experiments.post_training.task_curation.difficulty import catalog
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, execute_plan
+from experiments.post_training.task_curation.difficulty.importer import declaration_population_revision
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
-from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, action_id, plan
+from experiments.post_training.task_curation.difficulty.planner import (
+    AttemptBatch,
+    FreezeSamplePanel,
+    SourceAttempts,
+    action_id,
+    plan,
+)
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
-from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, Outcome, cell_state
+from experiments.post_training.task_curation.difficulty.state import (
+    REPAIR_BLOCKED,
+    CoveragePolicy,
+    GapReason,
+    Outcome,
+    cell_state,
+)
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_ABSENT_OMITTED,
     difficulty_task_contract,
@@ -31,7 +45,40 @@ from experiments.post_training.task_curation.tests.test_difficulty_reconciler im
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
-def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_path, monkeypatch, difficulty_source):
+@pytest.mark.parametrize(
+    "missing,reason",
+    [("census", GapReason.TASK_SPEC_FACTORY_PENDING), ("stage", GapReason.SOURCE_QUEUE_VALIDATION_FAILED)],
+)
+def test_snapshot_without_admission_evidence_records_blocked_panel(tmp_path, difficulty_source, missing, reason):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("panel")["lowered_task_spec"])["task"])
+    document = difficulty_source(task).declaration.model_dump(mode="json")
+    document["name"] = "removed-free-text-name"
+    if missing == "census":
+        document["actor_census_input"] = None
+    else:
+        document["status"] = "Pending"
+        document.pop("stage", None)
+        document["actor_census_input"] = ActorCensusInput(
+            dataset_id=document["dataset_id"],
+            dataset_revision=document["dataset_revision"],
+            converter_version=document["pipeline"]["version"],
+            converter_revision="fixture",
+            measured_tasks=1,
+            task_specs_sha256="a" * 64,
+            evidence_url=str(tmp_path / "census" / ".artifact.json"),
+        ).model_dump(mode="json")
+    source = SourceAttempts(document["id"], declaration_population_revision(document), (), "", "", ())
+    action = FreezeSamplePanel(source, ((source.source_id, Solver.SMALL),), json.dumps(document))
+    ledger = str(tmp_path / "ledger")
+    result = repair_action(action, tmp_path / "repair", ledger)
+    assert result["status"] == REPAIR_BLOCKED and result["reason"] == reason
+    assert catalog.published_panel_sources(ledger) == []
+
+
+@pytest.mark.parametrize("snapshot_name", [None, "removed-free-text-name"])
+def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(
+    tmp_path, monkeypatch, difficulty_source, snapshot_name
+):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("panel")["lowered_task_spec"])["task"])
     tasks = [
         task.model_copy(
@@ -84,6 +131,8 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
         }
     )
     served = {"id": declaration.id, "load_id": "frozen-load", "declaration": declaration.model_dump(mode="json")}
+    if snapshot_name is not None:
+        served["declaration"]["name"] = snapshot_name
 
     def query(_sql, _params):
         return {"rows": [served]}

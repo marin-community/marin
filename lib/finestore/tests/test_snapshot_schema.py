@@ -133,6 +133,18 @@ def test_pre_stage_form_converts_only_the_named_fields():
     assert QualifiedSourceDeclaration.model_validate(normalized).stage is PendingStage.MEASUREMENTS_PENDING
 
 
+@pytest.mark.parametrize("status,stage", [("Available", None), ("Pending", PendingStage.MEASUREMENTS_PENDING.value)])
+def test_removed_name_preserves_population_and_existing_stage_without_receipt_callback(status, stage):
+    document = {**_qualified_document("Marin:fixture", status=status), "name": "fixture-free-text"}
+    if stage is not None:
+        document["stage"] = stage
+    normalized = normalize_snapshot_declaration(document)
+    assert "name" not in normalized
+    for key in ("id", "current_release", "pipeline", "actor_census_input", "within_source_dedup"):
+        assert normalized.get(key) == document.get(key)
+    assert QualifiedSourceDeclaration.model_validate(normalized).stage == stage
+
+
 def test_pre_ruling_exclusion_reason_becomes_unspecified_legacy_verbatim():
     document = _qualified_document("Marin:fixture", status="Excluded")
     legacy_claim = {
