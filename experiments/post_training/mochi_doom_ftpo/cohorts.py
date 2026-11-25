@@ -17,12 +17,14 @@ import pyarrow.parquet as pq
 from finestore.rl.strata import MembershipState, SelectionDefinition, TaskStrata
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
+from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, task_prompt
 from skyrlrecipe.cohort_identity import cohort_hash, prompt_hash
 from taskcompendium.evaluation.corpus import parquet_rows
 from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, RawRow
-from taskcompendium.submission import conversation_messages
+from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.evaluation.micro210_policy import POLICY_REFERENCE, PREPARED_COMMIT, PREPARED_REPO, read_micro210_policy
@@ -64,7 +66,6 @@ class Candidate:
 
 
 def prompt_tokens(task: TaskSpec, tokenizer: PreTrainedTokenizerBase) -> list[int]:
-    messages = list(conversation_messages(task.context.events))
     kwargs = {"enable_thinking": True}
     last = task.context.events[-1]
     if isinstance(last, TextMessage) and last.role == "assistant":
@@ -72,17 +73,13 @@ def prompt_tokens(task: TaskSpec, tokenizer: PreTrainedTokenizerBase) -> list[in
             assistant_prefix_token_ids,
         )
 
+        prompt = assistant_prefix_prompt(task)
         return assistant_prefix_token_ids(
-            tokenizer,
-            messages,
-            {
-                "extra_body": {"continue_final_message": True, "add_generation_prompt": False},
-                "chat_template_kwargs": kwargs,
-            },
+            tokenizer, list(prompt.messages), {**prompt.options, "chat_template_kwargs": kwargs}
         )
-    tools = [{"type": "function", "function": tool.model_dump(exclude_none=True)} for tool in task.final_tools]
+    prompt = task_prompt(task, resolve_shell_tool(task, DEFAULT_SHELL_TOOL), ())
     return tokenizer.apply_chat_template(
-        messages, tools=tools or None, add_generation_prompt=True, return_dict=False, **kwargs
+        list(prompt.messages), tools=prompt.options.get("tools"), add_generation_prompt=True, return_dict=False, **kwargs
     )
 
 
@@ -274,6 +271,16 @@ def main() -> None:
         "sources": [source for source in admitted["sources"] if source["source_id"] in source_domains],
         "tokenizer": TOKENIZER,
         "tokenizer_revision": TOKENIZER_REVISION,
+        "prompt_rendering": {
+            "normal": "rolloutengine.harness.shell.task_prompt",
+            "assistant_prefix": "rolloutengine.harness.assistant_prefix.assistant_prefix_prompt",
+            "chat_template_kwargs": {"enable_thinking": True},
+            "shell_tool": DEFAULT_SHELL_TOOL.model_dump(mode="json"),
+        },
+        "supersedes": {
+            "manifest": str(StoragePath(REGIONAL_ROOT) / "cohorts" / "2026.11.24.1" / "manifest.json"),
+            "reason": "source-only prompt hashes omitted native answer-format instructions",
+        },
         "exclusions": [{"uri": uri} for uri in exclusion_sources],
         "heldout": [],
         "drops": dict(counts),

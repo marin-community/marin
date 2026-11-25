@@ -227,7 +227,7 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
 
 BASELINE = Preset(
     name="doom-baseline",
-    revision="2026.11.24.3",
+    revision="2026.11.24.4",
     recipe=Recipe(
         layout=BASELINE_LAYOUT,
         fixed_reply_tokens=None,
