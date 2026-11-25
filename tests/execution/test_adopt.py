@@ -55,6 +55,7 @@ def test_read_only_input_cannot_share_a_scheduled_output(tmp_path, monkeypatch, 
     ordered = (read_only, output) if read_only_first else (output, read_only)
     with pytest.raises(ValueError, match="both a read-only input and a step output"):
         run(*ordered)
+    assert not (tmp_path / "datasets/x/2026.06.28").exists()
 
 
 def test_readopt_different_source_warns(tmp_path, monkeypatch, caplog):

@@ -57,7 +57,7 @@ from marin.execution.artifact import (
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.remote import RemoteCallable
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, validate_output_ownership
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
@@ -445,8 +445,10 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     """
     provenance = Provenance.capture()
     memo: dict[int, StepSpec] = {}
+    steps = [_lower(h, provenance, memo) for h in handles]
+    validate_output_ownership(memo.values())
     StepRunner().run(
-        [_lower(h, provenance, memo) for h in handles],
+        steps,
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )

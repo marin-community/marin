@@ -129,6 +129,19 @@ def step_is_built(step: StepSpec) -> bool:
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
 
 
+def _record_output_mode(seen: dict[str, bool], step: StepSpec) -> None:
+    path = step.output_path
+    if seen.setdefault(path, step.read_only) != step.read_only:
+        raise ValueError(f"{path} is both a read-only input and a step output")
+
+
+def validate_output_ownership(steps: Iterable[StepSpec]) -> None:
+    """Check output ownership for a fully lowered graph before starting any steps."""
+    seen: dict[str, bool] = {}
+    for step in steps:
+        _record_output_mode(seen, step)
+
+
 def _expand_unseen(
     step: StepSpec,
     seen: dict[str, bool],
@@ -154,8 +167,7 @@ def _expand_unseen(
     def visit(s: StepSpec) -> None:
         path = s.output_path
         if path in seen:
-            if seen[path] != s.read_only:
-                raise ValueError(f"{path} is both a read-only input and a step output")
+            _record_output_mode(seen, s)
             return
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")

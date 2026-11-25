@@ -21,7 +21,6 @@ from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     all_to_all_element_count,
-    gate_endpoint_name,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
@@ -87,20 +86,11 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
 
-def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
-    first_head = JobInfo(JobName.from_wire("/test/coordinator/control-r0/0"))
-    first_worker = JobInfo(JobName.from_wire("/test/coordinator/control-r0/1"))
-    second_head = JobInfo(JobName.from_wire("/test/coordinator/control-r1/0"))
-    assert first_head.job_id.namespace == second_head.job_id.namespace
-    assert gate_endpoint_name(first_head) == gate_endpoint_name(first_worker)
-    assert gate_endpoint_name(first_head) != gate_endpoint_name(second_head)
-
-
 @pytest.mark.parametrize("mode_args", [(), ("--mode", "gate")], ids=["launcher", "gate"])
 def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, monkeypatch, mode_args):
     coordinator = JobName.root("test-user", "coordinator")
     first_job, second_job = coordinator.child("first"), coordinator.child("second")
-    addresses = {first_job: "127.0.0.1", second_job: "127.0.0.2"}
+    addresses = {(first_job, 0): "127.0.0.1", (second_job, 0): "127.0.0.2", (first_job, 1): "127.0.0.3"}
     endpoints = {}
 
     def register_endpoint(*, name, address, task_attempt, **_kwargs):
@@ -117,7 +107,7 @@ def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mo
 
     def run_task(job, rank, attempt=0):
         previous = get_job_info()
-        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job], attempt_id=attempt)
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job, attempt], attempt_id=attempt)
         set_job_info(info)
         try:
             with iris_ctx_scope(IrisContext.from_job_info(info, client)):

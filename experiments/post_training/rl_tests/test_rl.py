@@ -116,6 +116,12 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
+    trainer = planned["skyrl"]["trainer"]
+    assert trainer["use_sample_packing"]
+    for role in ("policy", "ref"):
+        geometry = trainer[role]["megatron_config"]
+        assert geometry["context_parallel_size"] == 2
+        assert geometry["transformer_config_kwargs"]["cp_comm_type"] == "all_gather"
     for name in ("train-medium-tools", "train-long-checkpoint-eval"):
         assert configs[name]["skyrl"]["trainer"]["policy"]["megatron_config"]["context_parallel_size"] == 1
     recorded = deepcopy(planned)
