@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
 
+from finestore.rl.rl_progress import GRADER_REPORTS_DIR
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 from pyarrow import parquet
 
@@ -59,7 +60,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
-from marinskyrl.hf_model import HuggingFaceModelCache
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
@@ -271,6 +272,9 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
             "val_data": list(config.inputs.validation_data),
             "checkpoint_root": str(config.artifacts.checkpoint_root),
             "export_root": str(config.artifacts.export_root),
+            "grader_report_dir": join_resource_path(
+                str(config.artifacts.export_root), GRADER_REPORTS_DIR, str(config.run.attempt_id)
+            ),
             "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
             "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
             "export_hf_artifact": bool(config.run.export_hf),

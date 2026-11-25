@@ -17,15 +17,18 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
     TaskResource,
 )
+from taskcompendium.runtime.grading import JUDGE_SPEC_PATH
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "pdbthink": ("pdbthink.py",),
     "genomeqa": ("genomeqa.py",),
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
@@ -44,6 +47,7 @@ DEPENDENCIES = {
     "nupa": ("nupa.py", "nupa_preparation.py"),
     "jee": ("jee.py", "amc.py"),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),
+    "arc_agi": ("arc_agi.py",),
     "ifeval": ("instructions.py", "instruction_spec.py"),
     "ifbench": ("instructions.py", "instruction_spec.py"),
 }
@@ -80,11 +84,15 @@ def source_package(
     judge: JudgeSpec | None = None,
     timeout: float = 60,
 ) -> GraderPackage:
-    """Package the pinned source scorer for a fresh Shellbox verifier machine."""
+    """Package the pinned source scorer for a fresh Shellbox verifier machine.
+
+    With a ``judge``, the scorer's command names the path where the runtime stages its contract.
+    """
+    judge_argv = () if judge is None else ("--judge-spec", JUDGE_SPEC_PATH)
     grader = ScriptGrader(
-        argv=("python3", "-m", "source_grader.main", scorer),
+        argv=("python3", "-m", "source_grader.main", scorer, *judge_argv),
         cwd="/tests",
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         judge=judge,
         empty_output=EmptyOutputPolicy.GRADE,
         answer_path="/app/answer.txt",

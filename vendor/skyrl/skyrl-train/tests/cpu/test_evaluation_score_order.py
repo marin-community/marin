@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExitCodeReward, ScriptGrader
+from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
@@ -203,12 +203,15 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     config = get_default_config()
     config.trainer.export_path = str(tmp_path)
     config.trainer.dump_eval_results = False
+    config.trainer.dump_grader_report = True
     config.generator.eval_n_samples_per_prompt = 1
     OmegaConf.update(config, "runtime", {"attempt_id": "eval-attempt", "model": "test-policy"}, force_add=True)
     task = text_task("validation-task")
     row = task_input(lowered_task(task), metric_class="script", data_source="validation")
     identity = TaskEvaluationIdentity(strata=TaskStrata(family="math", source="fixture"))
-    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity))
+    row = replace(
+        row, metadata=replace(row.metadata, evaluation_identity=identity, task_id=task.id, subset_id="math")
+    )
     loader = StatefulDataLoader([{"input": row}], collate_fn=list)
     tokenizer = SimpleNamespace(eos_token_id=2, decode=lambda _tokens: "answer")
     projection = WholeTaskProjection(config.generator, tokenizer)
@@ -228,6 +231,10 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
 
     async with EvaluationPool(concurrency=1) as pool:
         await evaluate(loader, SimpleNamespace(run=run), config, 0, tokenizer, evaluation_pool=pool)
+        named_loader = StatefulDataLoader([{"input": row}], collate_fn=list)
+        await evaluate(
+            named_loader, SimpleNamespace(run=run), config, 0, tokenizer, val_set_name="named", evaluation_pool=pool
+        )
 
     [saved] = read_evaluations(str(tmp_path), attempt_id="eval-attempt", step=0, evaluation="eval/")
     assert saved.task_id == task.id
@@ -236,6 +243,13 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     assert saved.model == "test-policy"
     [answer] = saved.answers
     assert answer.response_token_count == 1
+    report = json.loads((tmp_path / "grader_report.json").read_text())
+    assert set(report["evaluation"]) == {"0", "named/0"}
+    assert report["evaluation"]["named/0"][0]["subset_id"] == "math"
+    assert {
+        key: [(row["task_id"], row["success_rate"]) for row in rows]
+        for key, rows in report["evaluation_tasks"].items()
+    } == {"0": [(task.id, 1.0)], "named/0": [(task.id, 1.0)]}
 
 
 def test_task_timings_survive_projection_concatenation_and_row_selection():
@@ -251,7 +265,11 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
     for index, duration in enumerate((1.0, 3.0, 5.0, 101.0, None)):
         turn_count = 1 if duration == 101.0 else 2
         task = text_task(str(index)).model_copy(
-            update={"grader": ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT, reward=ExitCodeReward())}
+            update={
+                "grader": ScriptGrader(
+                    argv=("true",), placement=GraderMachine(environment=NATIVE_ENVIRONMENT), reward=ExitCodeReward()
+                )
+            }
         )
         inputs.append(
             task_input(

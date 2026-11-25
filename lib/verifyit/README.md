@@ -38,7 +38,7 @@ process exit after a verdict has been written.
 | `pytest` | pytest JSON report with required and protected tests |
 | `junit` | JUnit XML report |
 | `gotest` | `go test -json` events |
-| `judge` | reference-answer, checklist, label or pairwise rubric through a configured model endpoint |
+| `judge` | reference, checklist, labels or pairwise rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 `structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
@@ -64,6 +64,10 @@ Surrounding prose is ignored, including negation: `Definitely not 42` extracts `
 When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
+
+Default math references must parse as one whole LaTeX expression. Each member of a LIST
+reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
+such a row during conversion as `invalid_reference`.
 
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
@@ -103,27 +107,6 @@ newer subprocess with pytest and pytest-json-report installed in that interprete
 Startup errors retain their available traceback and module provenance: editable
 candidate failures score zero, while failures in protected code or with unknown
 provenance remain unscored.
-
-For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
-budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
-request when a reply ends with `finish_reason="length"`. `reasoning_effort`, when set, is sent with
-each request. Reference verdicts record `attempt_count` and `attempts` in `detail`; checklist
-verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
-and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
-`infra_error`, with the available attempt diagnostics in `detail`.
-
-For each model reply, the judge allows up to three API attempts (one request plus two retries) for transient
-HTTP or connection failures. It stops when that count or the shared 180-second budget, including retry delays,
-is exhausted. Set `transport_attempts` and `transport_budget` (seconds) in the judge spec to change those
-limits. `parse_attempts` limits requests for another reply after a malformed score or label.
-
-The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
-It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each
-reply's verdict is the last match of the first `verdict_patterns` entry that matches. `label_scores`
-gives assistant A's score for each verdict and `label_weights` counts a verdict as several games.
-The reward is the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats
-it and `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
-Arena-Hard's mean over games. A reply without a declared verdict is an `infra_error`.
 
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
@@ -170,6 +153,77 @@ classification: `unsolvable` earns one and every other mode earns zero. Callers 
 terminal action and its provenance before invoking this function. Refusal text and answer strings
 never count as ejections. In-process task validation retains invalid-task and infrastructure-error
 verdicts. File grading of `unsolvable` always scores zero because a file cannot establish an ejection.
+
+### Judge
+
+A `judge` spec prepares the answer, applies its deterministic gates, and then asks an
+OpenAI-compatible endpoint for a verdict.
+
+`candidate_steps` rewrite the answer, in order, before the IFEval `constraints`, the exact gates
+and the prompt. They apply to every rubric:
+
+- `{kind = "strip_reasoning_blocks"}` removes reasoning blocks, any text before the last closing
+  delimiter, outer whitespace and a final `<|eot_id|>`. An unclosed block leaves an empty answer.
+- `{kind = "strip_outer_whitespace"}` removes outer whitespace.
+- `{kind = "extract_group", pattern = "..."}` replaces the answer with the first group of the first
+  `re.search` match. Without a match, the answer is unchanged.
+
+The rubric decides how the prepared answer is scored:
+
+- `reference`: an answer equal to a reference after normalization (of its `\boxed{}` content, when
+  present) scores 1 without a model call, unless `exact_gate = false`. Otherwise the judge compares
+  the answer with `references` and replies `SCORE: 0`, `0.5` or `1`.
+- `checklist`: the judge answers one yes/no question per entry of `criteria`, with the `context`
+  file shown alongside the answer. The score is the fraction answered yes.
+- `labels`: an answer equal to one of `exact_gate_answers` scores as `exact_gate_label` without a
+  model call. Otherwise `system_prompt` and `prompt_template` are filled with `{question}`,
+  `{reference}` (the single entry of `references`) and `{candidate}`, and the score is the
+  `label_scores` entry for the label the judge replies with.
+- `answers` requests one JSON verdict per reference in a single reply. It scores 1 when every
+  reference is matched and reports the fraction matched as `detail.partial_credit`.
+- `pairwise`: ports Arena-Hard's comparison with the single baseline answer in `references`. The
+  judge receives two requests, with the baseline as assistant A and then as assistant B;
+  `prompt_template` places the answers with `{answer_a}` and `{answer_b}`. Each reply's verdict is
+  the last match of the first `verdict_patterns` entry that matches. `label_scores` gives assistant
+  A's score for each verdict and `label_weights` counts a verdict as several games. The reward is
+  the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats it and
+  `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
+  Arena-Hard's mean over games.
+
+`label_scan` sets how the `labels` rubric reads the label from the reply:
+
+- `literal`: the last line is the label, and no other declared label appears anywhere in the reply.
+- `lines`: the last line is the label, and no other declared label fills a whole line.
+- `whole`: the whole reply is the label.
+- `json`: the reply is a JSON object, optionally in a Markdown code fence, and its `label_field`
+  member is the label. A boolean member is read as the label `true` or `false`.
+
+`label_case = "upper"` matches labels and pairwise verdicts case-insensitively.
+`strip_reasoning_blocks` removes reasoning blocks from the judge's reply before the label or verdict
+is read. A `labels` reply that matches no label or more than one, and a `pairwise` reply without a
+declared verdict, are scored `infra_error`.
+
+The request options are:
+
+- `system_role` sends `system_prompt` as a `system` (default) or `developer` message.
+- `response_format` is sent with each `labels` request over Chat Completions.
+- `sampling` sets the judge request's temperature. It defaults to `{ temperature = 0.0 }`.
+  An empty table uses the endpoint defaults, as the `answers` rubric always does.
+- `api = "responses"` sends the `labels` rubric through the Responses API.
+- `reasoning_effort`, when set, is sent with each request.
+
+`max_completion_tokens` sets the initial request budget of every rubric (default `8192`).
+A positive `incomplete_retry_tokens` must exceed it and permits one larger
+request when a reply ends with `finish_reason="length"`. Reference verdicts record `attempt_count`
+and `attempts` in `detail`; checklist verdicts record them under each entry in `detail.criteria`.
+Each attempt contains `finish_reason` and `completion_tokens` (`null` when the endpoint omits
+usage). An exhausted retry remains `infra_error`, with the available attempt diagnostics in
+`detail`.
+
+For each model reply, the judge allows up to three API attempts (one request plus two retries)
+for transient HTTP or connection failures and shares a 180-second budget across them, including
+retry delays. Set `transport_attempts` and `transport_budget` (seconds) to change those limits.
+`parse_attempts` limits requests for another reply after a malformed score or label.
 
 ## Install and use
 

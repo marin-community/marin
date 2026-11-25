@@ -12,7 +12,7 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.pi import Pi
 from harbor.environments.factory import EnvironmentFactory
 from harbor.environments.capabilities import EnvironmentCapabilities
-from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.connection import DAYTONA_API_URL, DAYTONA_TARGET, DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
@@ -120,10 +120,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         service_shutdown_timeout=5,
         judge_model=None if model_caller is None else "fixture-judge",
     )
-    connections = {
-        name: DaytonaConnection(api_key=f"{name}-key", api_url=f"https://{name}.invalid/api", target=f"{name}-target")
-        for name in ("train", "eval")
-    }
+    connections = {name: DaytonaConnection(api_key=f"{name}-key") for name in ("train", "eval")}
     runtime = InstalledAgentRuntime(
         settings,
         AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
@@ -197,11 +194,10 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
 
     assert len(attempted) == 1
     selected = connections[phase]
-    assert (attempted[0].api_key, attempted[0].api_url, attempted[0].target) == (
-        selected.api_key,
-        selected.api_url,
-        selected.target,
-    )
+    # The ambient DAYTONA_* variables set above must not reach the client.
+    assert attempted[0].api_key == selected.api_key
+    assert attempted[0].api_url == DAYTONA_API_URL == "https://app.daytona.io/api"
+    assert attempted[0].target == DAYTONA_TARGET == "us"
     if declarative:
         assert len(allocations) == 1
         assert isinstance(allocations[0], daytona.CreateSandboxFromImageParams)

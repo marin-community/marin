@@ -13,7 +13,7 @@ from functools import partial
 from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader
+from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, grader_environment
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     Confidence,
@@ -121,7 +121,7 @@ def contract_signature(audit: TaskAudit) -> str:
     execution_contract = None
     entrypoint_digest = None
     if isinstance(grader, ScriptGrader):
-        execution_contract = grader.model_dump(mode="json", exclude={"environment"})
+        execution_contract = grader.model_dump(mode="json", exclude={"placement": {"environment"}})
     elif isinstance(grader, VerifyitGrader) and grader.mode in {"script", "stdio", "pytest", "junit", "gotest"}:
         execution_contract = dict(grader.parameters)
         if grader.mode == "script":
@@ -137,7 +137,8 @@ def contract_signature(audit: TaskAudit) -> str:
                 if key in grader.contract
             },
         }
-    environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    environment = grader_environment(grader)
+    placement = grader.placement if isinstance(grader, VerifyitGrader | ScriptGrader) else None
     return canonical_sha256(
         {
             "grader_kind": grader.kind,
@@ -147,6 +148,7 @@ def contract_signature(audit: TaskAudit) -> str:
             "answer_type": task.answer_type,
             "answer_format": task.answer_format.model_dump(mode="json"),
             "environment": task.environment_requirements.model_dump(mode="json"),
+            "grader_placement": None if placement is None else placement.kind,
             "grader_environment": None if environment is None else environment.model_dump(mode="json"),
             "output_paths": task.output_paths,
         }

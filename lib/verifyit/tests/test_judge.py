@@ -9,15 +9,21 @@ from pathlib import Path
 
 import httpx
 import pytest
+import tomli_w
 from verifyit.grade import GradingInfraError, InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
 from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
+    ExtractGroup,
     JudgeCompletionPolicy,
+    JudgeSamplingParams,
     JudgeSpec,
+    StripOuterWhitespace,
+    StripReasoningBlocks,
     parse_spec,
     render_spec,
+    spec_to_table,
 )
 
 # The dataset's own reference answer, apostrophe included: the gate must fold case, spacing and
@@ -576,14 +582,14 @@ def test_label_parse_retry_preserves_context_and_attempt_diagnostics(fake_judge,
 )
 def test_label_judge_can_exclude_candidate_reasoning(tmp_path, fake_judge, candidate, final_answer):
     fake_judge.replies = ["[[A=B]]"]
-    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    spec = _label_spec(candidate_steps=(StripReasoningBlocks(),))
     result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, candidate))
     assert result.reward == 1.0
     assert fake_judge.prompts == [f"A: reference answer\nB: {final_answer}"]
 
 
 def test_unfinished_candidate_reasoning_is_an_empty_answer(tmp_path, fake_judge):
-    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    spec = _label_spec(candidate_steps=(StripReasoningBlocks(),))
     result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "<think>unfinished"))
     assert (result.reward, result.detail) == (0.0, {"reason": "no_output"})
     assert fake_judge.requests == []
@@ -902,7 +908,7 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
         label_scores={"CORRECT": 1, "INCORRECT": 0},
         max_completion_tokens=1024,
         reasoning_effort="low",
-        temperature=None,
+        sampling=JudgeSamplingParams(),
         parse_attempts=1,
     )
     path = tmp_path / "verifier.toml"
@@ -1016,6 +1022,50 @@ def test_label_exact_gate_roundtrip_uses_declared_reward_without_provider(fake_j
     result = grade_judge.grade_judge_candidate(spec, "Original Answer", gate_candidate="original answer")
     assert result.reward == 1.0
     assert "Original Answer" in fake_judge.prompts[-1]
+
+
+@pytest.mark.parametrize(
+    "reply,reward,status",
+    [
+        ('{"judgment": "CORRECT", "explanation": "Same figures."}', 1, Status.SCORED),
+        ('```json\n{"judgment": "incorrect", "explanation": "Not CORRECT."}\n```', 0, Status.SCORED),
+        ('```\n{"explanation": "Matches.", "judgment": "Correct"}', 1, Status.SCORED),
+        ("The answer is CORRECT.", 0, Status.INFRA_ERROR),
+        ('{"judgment": "PARTIALLY CORRECT"}', 0, Status.INFRA_ERROR),
+        ('{"judgment": ["CORRECT"]}', 0, Status.INFRA_ERROR),
+        ('{"judgment": "INCORRECT", "judgment": "CORRECT"}', 0, Status.INFRA_ERROR),
+    ],
+)
+def test_json_labels_read_one_member_of_a_fenced_or_bare_object(tmp_path, fake_judge, reply, reward, status):
+    fake_judge.replies = [reply]
+    spec = _label_spec(
+        api="responses",
+        system_prompt="",
+        strip_reasoning_blocks=False,
+        label_scan="json",
+        label_field="judgment",
+        label_case="upper",
+        label_scores={"CORRECT": 1, "INCORRECT": 0},
+    )
+    path = tmp_path / "verifier.toml"
+    path.write_text(render_spec(spec))
+    result = run(path, _workspace(tmp_path, "candidate"))
+    assert (result.reward, result.status) == (reward, status)
+
+
+def test_stripped_candidate_reaches_the_gate_and_the_prompt_without_outer_whitespace(fake_judge):
+    spec = _label_spec(
+        system_prompt="",
+        label_scores={"A": 1.0, "B": 0.0},
+        exact_gate_answers=("reference answer",),
+        exact_gate_label="A",
+        candidate_steps=(StripOuterWhitespace(),),
+    )
+    assert grade_judge.grade_judge_candidate(spec, "reference answer\n").detail["gate"] == "exact"
+    assert not fake_judge.requests
+    fake_judge.replies = ["B"]
+    assert grade_judge.grade_judge_candidate(spec, " \tother answer\n\n").reward == 0.0
+    assert fake_judge.prompts == ["A: reference answer\nB: other answer"]
 
 
 def test_label_exact_gate_validates_reference_and_table_before_provider_avoidance(fake_judge):
@@ -1132,6 +1182,146 @@ def test_answers_judge_scores_strictly_with_one_verdict_per_reference(
             ),
         }
     ]
+
+
+BOOLEAN_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Verdict",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"same": {"type": "boolean"}},
+            "required": ["same"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _boolean_spec(**overrides) -> JudgeSpec:
+    return _label_spec(
+        system_prompt='Reply as {{"same": <bool>}}.',
+        system_role="developer",
+        response_format=BOOLEAN_FORMAT,
+        sampling=JudgeSamplingParams(),
+        strip_reasoning_blocks=False,
+        label_scan="json",
+        label_field="same",
+        label_scores={"true": 1.0, "false": 0.0},
+        empty_output=EmptyOutputPolicy.GRADE,
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize(
+    "answer,judged",
+    [
+        ("<answer>0.0002</answer>\n", "0.0002"),
+        ("Done.\n<answer>12</answer>\n", "12"),
+        ("<answer>a</answer> or <answer>b</answer>", "a</answer> or <answer>b"),
+        ("<answer>\n7\n</answer>", "<answer>\n7\n</answer>"),
+        ("7, no tags\n", "7, no tags\n"),
+        ("<answer></answer>", ""),
+    ],
+)
+def test_extract_group_selects_the_judged_answer_of_a_structured_request(tmp_path, fake_judge, answer, judged):
+    fake_judge.replies = ['{"same": true}']
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_boolean_spec(candidate_steps=(ExtractGroup(r"<answer>(.*)</answer>"),))))
+
+    result = run(spec_path, _workspace(tmp_path, answer))
+
+    assert (result.status, result.reward) == (Status.SCORED, 1.0)
+    [request] = fake_judge.requests
+    assert request == {
+        "model": "fake/judge-9b",
+        "messages": [
+            {"role": "developer", "content": 'Reply as {"same": <bool>}.'},
+            {"role": "user", "content": f"A: reference answer\nB: {judged}"},
+        ],
+        "max_completion_tokens": 8192,
+        "response_format": BOOLEAN_FORMAT,
+    }
+
+
+@pytest.mark.parametrize(
+    "reply,reward,status",
+    [
+        ('{"same": true}', 1.0, Status.SCORED),
+        ('{"same": false}', 0.0, Status.SCORED),
+        ('{"same": 1}', 0.0, Status.INFRA_ERROR),
+        ('{"same": null}', 0.0, Status.INFRA_ERROR),
+        ("true", 0.0, Status.INFRA_ERROR),
+    ],
+)
+def test_json_labels_read_a_boolean_member_as_its_json_literal(tmp_path, fake_judge, reply, reward, status):
+    fake_judge.replies = [reply]
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_boolean_spec()))
+
+    result = run(spec_path, _workspace(tmp_path, "candidate"))
+
+    assert (result.reward, result.status) == (reward, status)
+
+
+ANSWER_TAG = ExtractGroup(r"<answer>(.*?)</answer>")
+
+
+@pytest.mark.parametrize(
+    "steps,answer,judged",
+    [
+        ((), " <think>draft</think> <answer>final</answer>\n", " <think>draft</think> <answer>final</answer>\n"),
+        ((StripOuterWhitespace(),), " <answer> 7 </answer>\n", "<answer> 7 </answer>"),
+        ((ANSWER_TAG,), " <answer> 7 </answer>\n", " 7 "),
+        ((ANSWER_TAG, StripOuterWhitespace()), " <answer> 7 </answer>\n", "7"),
+        ((ANSWER_TAG,), "7, no tags", "7, no tags"),
+        ((StripReasoningBlocks(), ANSWER_TAG), "<think><answer>draft</answer></think><answer>final</answer>", "final"),
+        ((ANSWER_TAG, StripReasoningBlocks()), "<think><answer>draft</answer></think><answer>final</answer>", "draft"),
+    ],
+)
+def test_candidate_steps_rewrite_the_answer_in_order_before_the_prompt(tmp_path, fake_judge, steps, answer, judged):
+    fake_judge.replies = ["[[A=B]]"]
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_label_spec(system_prompt="", candidate_steps=steps)))
+
+    result = run(spec_path, _workspace(tmp_path, answer))
+
+    assert (result.status, result.reward) == (Status.SCORED, 1.0)
+    assert fake_judge.prompts == [f"A: reference answer\nB: {judged}"]
+
+
+@pytest.mark.parametrize("temperature", [0.0, 0.7, None])
+def test_judge_sampling_round_trips_through_toml_and_sends_only_set_members(tmp_path, fake_judge, temperature):
+    fake_judge.replies = ["[[A=B]]"]
+    spec = _label_spec(sampling=JudgeSamplingParams(temperature=temperature))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+
+    result = run(spec_path, _workspace(tmp_path, "candidate"))
+
+    assert parse_spec(spec_path.read_text()) == spec
+    assert result.status is Status.SCORED
+    [request] = fake_judge.requests
+    if temperature is None:
+        assert "temperature" not in request
+    else:
+        assert request["temperature"] == temperature
+
+
+@pytest.mark.parametrize("strip,temperature,expected", [(True, 0.7, 0.7), (False, "API default", None)])
+def test_legacy_judge_toml_preserves_candidate_preprocessing_and_sampling(strip, temperature, expected):
+    current = _label_spec(
+        candidate_steps=(StripReasoningBlocks(),) if strip else (),
+        sampling=JudgeSamplingParams(temperature=expected),
+    )
+    legacy = spec_to_table(current)
+    del legacy["candidate_steps"]
+    del legacy["sampling"]
+    legacy["strip_candidate_reasoning_blocks"] = strip
+    legacy["temperature"] = temperature
+
+    assert parse_spec(tomli_w.dumps(legacy)) == current
 
 
 ARENA_LABELS = {"A>>B": 1.0, "A>B": 1.0, "A=B": 0.5, "B>A": 0.0, "B>>A": 0.0}

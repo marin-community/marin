@@ -107,15 +107,13 @@ to the SDK's ambient account selection:
 ```bash
 # RL account used by training.
 : "${DAYTONA_RL_API_KEY:?Load the dedicated RL key through the configured secret provider}"
-export DAYTONA_TARGET="<the configured target>"
 
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
   --api-key-env DAYTONA_RL_API_KEY inventory
 ```
 
 Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
-used for validation builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
-overrides `DAYTONA_API_URL`.
+used for validation builds.
 
 Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
@@ -283,6 +281,20 @@ exception and preserve it separately from model errors. After any backend or
 snapshot change, run the campaign's end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
+
+Shellbox creates each sandbox with a 15-minute auto-stop and deletion on stop,
+and an open machine renews the sandbox's activity every five minutes. Daytona
+does not count a running command as activity. A sandbox stops only when its
+owning process stops renewing it, and Daytona then deletes it. Many stopped
+`shellbox-` sandboxes that each lived 15 to 20 minutes mean the renewal is
+missing. Long commands then fail mid-trial with `failed to resolve container IP
+... Is the Sandbox started?`. A provider failure on a sandbox that is no longer
+started surfaces as `MachineTerminated`. So does a timed-out command that Shellbox
+cannot stop or clean up, because Shellbox then closes the machine. A lost
+provider connection, or a 502, 503 or 504 from Daytona's proxy for a started
+sandbox, surfaces as `ConnectionError`. A sandbox whose disk is too full to
+start a command surfaces as `MachineDiskFull`. Curated evaluations record these
+errors as retryable infrastructure.
 
 Hard termination can orphan in-flight sandboxes. Reap only sandboxes proven idle
 and covered by cleanup authority. Correlate provider IDs/labels with the owning

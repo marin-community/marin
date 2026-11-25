@@ -5,6 +5,7 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from finestore.admin import drop_table
@@ -26,13 +27,13 @@ from finestore.eval import (
     sample_to_archive_row,
     samples_schema,
 )
-from finestore.layout import OnConflict
+from finestore.layout import TABLE_INCARNATIONS_FEATURE, OnConflict, TableNameConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from marin.evaluation.rollouts import normalize_rollouts
 
 
-def test_rollouts_preserve_evalchemy_superseding_sample_table(tmp_path):
+def test_first_rollout_normalization_preserves_archive_compatibility(tmp_path):
     root = str(tmp_path / "evalchemy")
     sample = EvalSample(task="gsm8k", doc_id="0", kind=SampleKind.GENERATION, prompt_text="2+2?", output="4")
     with DataStore.open(root, writer_id="evalchemy") as store:
@@ -52,6 +53,9 @@ def test_rollouts_preserve_evalchemy_superseding_sample_table(tmp_path):
     reader = ReadView(root)
     assert list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE)) == original
     assert [row["content"] for row in reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)] == ["2+2?", "4"]
+    assert reader.token is not None
+    manifest = json.loads(Path(reader.token.manifest_path).read_text())
+    assert TABLE_INCARNATIONS_FEATURE not in manifest["required_features"]
 
 
 def test_evalchemy_samples_normalize_to_one_conversation_across_grading_filters(tmp_path):
@@ -210,6 +214,56 @@ def test_rollouts_replace_same_count_source_shards_and_remove_old_conversations(
     completed = ReadView(root).token
     normalize_rollouts(root, writer_id="unchanged")
     assert ReadView(root).token == completed
+
+
+def test_rollouts_rebuild_after_renaming_a_source_with_the_same_row_commit(tmp_path):
+    root = str(tmp_path / "archive")
+    with DataStore.open(root, writer_id="source") as store:
+        for name, output in ((ARCHIVE_SAMPLES_TABLE, "old"), ("next_samples", "new")):
+            table = store.table(
+                name,
+                primary_key=SAMPLES_MERGE_KEY,
+                schema=samples_schema(),
+                schema_version=SCHEMA_VERSION,
+            )
+            table.append(
+                sample_to_archive_row(
+                    EvalSample(task="qa", doc_id="1", kind=SampleKind.GENERATION, prompt_text="Question?", output=output)
+                )
+            )
+        store.flush()
+
+    normalize_rollouts(root, writer_id="initial")
+    with DataStore.open(root, writer_id="source-move") as store:
+        with store.transaction() as transaction:
+            transaction.rename_table("next_samples", ARCHIVE_SAMPLES_TABLE, on_conflict=TableNameConflict.REPLACE)
+    normalize_rollouts(root, writer_id="rebuilt")
+
+    rows = ReadView(root).iter_rows(ARCHIVE_ROLLOUTS_TABLE)
+    assert [row["content"] for row in rows] == ["Question?", "new"]
+
+
+def test_failed_rollout_rebuild_keeps_previous_output(tmp_path):
+    root = str(tmp_path / "archive")
+    with EvaluationStore.open(root, writer_id="initial-source") as store:
+        store.add_sample(EvalSample(task="qa", doc_id="1", kind=SampleKind.GENERATION, output="old"))
+        store.seal()
+    normalize_rollouts(root, writer_id="initial-output")
+    published = ReadView(root)
+    source_paths = {shard.path for shard in published.list_shards(ARCHIVE_SAMPLES_TABLE)}
+
+    with EvaluationStore.open(root, writer_id="new-source") as store:
+        store.add_sample(EvalSample(task="qa", doc_id="2", kind=SampleKind.GENERATION, output="new"))
+    before_rebuild = ReadView(root)
+    (new_path,) = {shard.path for shard in before_rebuild.list_shards(ARCHIVE_SAMPLES_TABLE)} - source_paths
+    Path(new_path).unlink()
+
+    with pytest.raises(FileNotFoundError):
+        normalize_rollouts(root, writer_id="failing-output")
+
+    current = ReadView(root)
+    assert current.token == before_rebuild.token
+    assert list(current.iter_rows(ARCHIVE_ROLLOUTS_TABLE)) == list(published.iter_rows(ARCHIVE_ROLLOUTS_TABLE))
 
 
 def test_rollout_completion_survives_source_compaction(tmp_path):
