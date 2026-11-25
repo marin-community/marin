@@ -268,7 +268,10 @@ _ROOT_JOB_DISK_GB = 512
 # root) rerun `resume` at the same version, so sealed steps skip; a deterministic
 # code failure burns the cap and the root fails with the node's error.
 _ROOT_JOB_MAX_RETRIES_FAILURE = 2
-_ROOT_JOB_MAX_RETRIES_PREEMPTION = 2
+_ROOT_JOB_MAX_RETRIES_PREEMPTION = 8
+# The cumulative failed-attempt cap: interruption retries (preemption, node loss, a
+# killed hung root) burn it before the root fails with the node's error.
+_ROOT_JOB_MAX_TASK_FAILURES = 6
 _ROOT_JOB_TIMEOUT_HOURS = 24
 
 
@@ -412,6 +415,7 @@ def _submit_root(args, *, verb: str) -> int:
                     timeout=Duration.from_hours(_ROOT_JOB_TIMEOUT_HOURS),
                     max_retries_failure=_ROOT_JOB_MAX_RETRIES_FAILURE,
                     max_retries_preemption=_ROOT_JOB_MAX_RETRIES_PREEMPTION,
+                    max_task_failures=_ROOT_JOB_MAX_TASK_FAILURES,
                 )
         job_id = str(job.job_id)
         print(f"SUBMITTED {verb} {plan.release_id}@{plan.artifact_version} bundle={revision[:12]} job={job_id}")
