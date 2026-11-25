@@ -158,6 +158,9 @@ R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS | {
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    # The Workplace admission landed after the 2026-11-24 freeze ruling: R40's source
+    # set is frozen at the cut, so the newly admitted population routes to R41.
+    "Nvidia:Nemotron-RL-agent-workplace_assistant",
 }
 
 PENDING_MEASUREMENT_SOURCES = (
@@ -173,6 +176,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *facet_terminal.sources(),
     *endless.cohort_source(),
     *pymethods2test.sources(),
+    *workplace.sources(),
     *(
         source
         for source in campaign_releases.sources()
