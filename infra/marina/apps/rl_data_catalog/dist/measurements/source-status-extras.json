@@ -1,1550 +1,1920 @@
 {
-    "consumer_inputs": {
-        "Evalchemy:simpleqa": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Evalchemy:simpleqa",
-                "dataset_id": "basicv8vc/SimpleQA",
-                "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
-                "task_specs_sha256": "672b8d112a4e7ff39622b9366a851927caf4c97efbeee12b8f390c82fa00af15",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4326,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 4326},
-            },
-            "consumer_decision": null,
-        },
-        "Evalchemy:simpleqa-mini": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Evalchemy:simpleqa-mini",
-                "dataset_id": "basicv8vc/SimpleQA",
-                "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
-                "task_specs_sha256": "2354b94ffabf2e3ad92beef208ad31d40d941d567416e7596c7f4f4f7265c4e3",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 500,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 500},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__exp_rpt_taco-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__exp_rpt_taco-v2",
-                "dataset_id": "open-athena/taco-laion-ede8bc2f-oracle-filter-20261114-v1",
-                "dataset_revision": "77909f8c8049f881c0b6d33f536347eec88bbc4b",
-                "task_specs_sha256": "be8ff4439a5774c3df71b28abb653887118ff97a0d56db6456ef1eed79d3b47a",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 5063,
-                "failed_tasks": 5063,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 5063},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 5063},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
-                "dataset_id": "open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1",
-                "dataset_revision": "abf6368f9988a3a97745684fb6c3aa488f2ffa40",
-                "task_specs_sha256": "7561573cbcac1d3b6727fef0262595bbdd2e890ef7a1c1c80759dfe5337789f7",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 496,
-                "failed_tasks": 496,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 496},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 496},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
-                "dataset_id": "open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1",
-                "dataset_revision": "9bb2b58153faa81e9ef156425be4054cffefe0e4",
-                "task_specs_sha256": "fbbe5e18b597bcb4ce9fb3d48b43accc394b10b642a66a38a6e7bd4e02b7573d",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4951,
-                "failed_tasks": 4951,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 4951},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 4951},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
-                "dataset_id": "open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1",
-                "dataset_revision": "8ecfda4d934131068163ba45e7a59f15d2f722bc",
-                "task_specs_sha256": "0dcca5ba61b0c43b7845cd314876c788e705bfa30ca307e155b0dac21bdefe37",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 487,
-                "failed_tasks": 487,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 487},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 487},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
-                "dataset_id": "open-athena/unitsyn-large-bc301818-oracle-filter-20261114-v1",
-                "dataset_revision": "2e229e8c80f561969c1cab87e4ccbc7fb049ce87",
-                "task_specs_sha256": "c2e2c2083b68736d682f2603985520a087e3ed9d253f5651a281e5f62a1f6815",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4949,
-                "failed_tasks": 4949,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 4949},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 4949},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-                "dataset_id": "open-athena/nl2bash-cleaned-85b437bd-oracle-filter-20261114-v1",
-                "dataset_revision": "780889d966a2913b2e70b0a35a32b11740f31c01",
-                "task_specs_sha256": "6740ba4fbebe499054e905ca43249bc91b2a29e7bb91fb6147c685008226d735",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1422,
-                "failed_tasks": 1422,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 1422},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 1422},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__nemotron-gym-safety-v3": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__nemotron-gym-safety-v3",
-                "dataset_id": "open-athena/task-trove-laion-nemotron-gym-safety-v3-f51d465c-retained-20261116-v1",
-                "dataset_revision": "9d1671022cee888859ae613ce125ab78cdce1fbd",
-                "task_specs_sha256": "251b54d039268a2a85cca287fba652d7e317480123938cdbedb1d5ec40bb6a38",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 89066,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 89066},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
-                "dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-openqa-v4-308a6e22-retained-20261116-v1",
-                "dataset_revision": "97c65e928600f3251352ff67e3cdad5da7e70523",
-                "task_specs_sha256": "ad0bd75c109eaacabbb3dfa282d4302af7d5a8d781c41902e95e5ae2aac07e38",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 122357,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 122357},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
-                "dataset_id": "open-athena/task-trove-laion-nemotron-gym-science-so-openq-v3-c1a06aab-retained-20261116-v1",
-                "dataset_revision": "cb5150519069e2b4f24dc987f45d8f72a9d8a566",
-                "task_specs_sha256": "21e85b137de8bfc74c793e37631f96c88c88493df5b7370433cdf6db771a0eec",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 150644,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 150644},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__nemotron-gym-agent-calendar-v2",
-                "dataset_id": "open-athena/calendar-71f57c8d-oracle-filter-20261114-v1",
-                "dataset_revision": "d885672abbb489b64ee04e2cb1ac60c0901b56f1",
-                "task_specs_sha256": "023b38fde2ca1f4169e1842abdfdc14ea19c07ac1aa783f3bf05302eb27104d4",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2699,
-                "failed_tasks": 58,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 58},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 58},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4",
-                "dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-advanced-v-185e593b-retained-20261116-v1",
-                "dataset_revision": "815ba090a64195fddf65b46ad8d906e21691eca2",
-                "task_specs_sha256": "617600d3e91d23747206196270d7ad171dd5fbaef1ebc2c318d173f0fedb592d",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1068,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1068},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-04b49f98-retained-20261113-v1",
-                "dataset_revision": "5213fe5132ae8a2d548fce5224fe3530bc23c03b",
-                "task_specs_sha256": "f16545b03bb754c995d8f9247e57d60cf830f3cb4d00ca1a2b14fa05e8039a75",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 496,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 496},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-c82c21c7-retained-20261113-v1",
-                "dataset_revision": "4fac18c420496b79ae685db55d1bf577661c3eb5",
-                "task_specs_sha256": "e5cc79fff0c9322c0fd5a3b635d4136f3c10e42cbd7ca54bd89a6020bfe531be",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1840,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1840},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-abste-f8b6719c-retained-20261113-v1",
-                "dataset_revision": "c370a53be3f94b841e4d42c3ac704f40de914efc",
-                "task_specs_sha256": "e7f960164f13a2eaade15fdb15b0b4303a5b5e88b71674a70e2a4f72ff23e68c",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2299,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2299},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-instr-ca5c0fe9-retained-20261116-v1",
-                "dataset_revision": "b9af11e658996aa3ba9164af9e43eceb687a72b5",
-                "task_specs_sha256": "4ade3bf7c51756999795a9743547749eff7921d4e22ce169a14e690634dc11f9",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 10409,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 10409},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-jailb-24bcf489-retained-20261113-v1",
-                "dataset_revision": "d8ccaddb782540e0d47d21979c6d5c872a283829",
-                "task_specs_sha256": "2306b6d97ce7af909801604491bb1a3094bc1fc2cca38937b8542be1f62164cc",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1121,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1121},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
-            "consumer_requirements": ["tool_provider"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261113-v1",
-                "dataset_revision": "58788dfb8bcf550cdbf671f3a79f45072bd5f7d4",
-                "task_specs_sha256": "f54f2a571884f08262078998fd337a11e24fd1ad2bffad732cfe9605f51b094b",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 5790,
-                "failed_tasks": 5790,
-                "failures": {"CONSUMER_TOOL_UNREGISTERED": 5790},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"tool_provider": 5790},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-multi-880000d8-retained-20261113-v1",
-                "dataset_revision": "9d6809b3eb420ac17fda833301833868e815a6a8",
-                "task_specs_sha256": "1a332c92725f2af2bd62d4bb94f277e840aa6a8585250c6b90273fc542a5e5e0",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1184,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1184},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-toolc-8380bd8d-retained-20261113-v1",
-                "dataset_revision": "4a5a5c5767f67a5f9e383e2be351088acac4f780",
-                "task_specs_sha256": "08a05362f7578f492c6c36cb43f87b708ee29bdaf504c0083ef0e3681cb98f74",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2264,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2264},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-language-mixing-hs3-ult-3543235c-retained-20261113-v1",
-                "dataset_revision": "a1e25bae044f96f89b9ff64c0c3bb42d8fd6c569",
-                "task_specs_sha256": "d078e162505a25b1d0c6a1d4b966deca4dc440efb2f03968ddb0e17d9a6e3982",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4599,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 4599},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-abst-e337b8da-retained-20261113-v1",
-                "dataset_revision": "53156b631c6fca7bca1a5693ea18d95936881b22",
-                "task_specs_sha256": "8616bc2c46852a484cdeb2311f8c6978ef132f9dddb14f577c4c098ac03c8a6f",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2299,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2299},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-inst-c40988ec-retained-20261116-v1",
-                "dataset_revision": "460eb6ad0fc7fe41bf9a817ee52e75652d19515b",
-                "task_specs_sha256": "c7689115850760f3adfb8989d8ee13aaf367634658cae509687291c197cf60b2",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 11828,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 11828},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-jail-abb8e2df-retained-20261113-v1",
-                "dataset_revision": "899f77568c704d9566b1096fa6e61d80a2ae3937",
-                "task_specs_sha256": "dd32cfdee627542d5e1c41e76606abc051649e90025b7e2f27a7907e4020bbc3",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1121,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1121},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
-            "consumer_requirements": ["tool_provider"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1",
-                "dataset_revision": "67aedfe8fbf07c229c650fad4231d710fd533264",
-                "task_specs_sha256": "e6a66616b156b8d6fb055ef2a295e58bce908c2be1a200a8b4c921edcc04062d",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 5790,
-                "failed_tasks": 5790,
-                "failures": {"CONSUMER_TOOL_UNREGISTERED": 5790},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"tool_provider": 5790},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-mult-ffee8901-retained-20261113-v1",
-                "dataset_revision": "d9413e7871b01a6c1ba18f5cc3aa3e298b85476c",
-                "task_specs_sha256": "b351741e37f53ba37d7350ca67f670ffd4737a129729ef488b8ed8892d75384d",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1184,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1184},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-f13b621a-retained-20261113-v1",
-                "dataset_revision": "9513d0693219e0b64552aa66a455ffe8a02d55f9",
-                "task_specs_sha256": "7bbfd2fa33630d449fb8b927df7f884adf545c22f72b962682128ce4792ffb05",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 502,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 502},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-dadb8d84-retained-20261113-v1",
-                "dataset_revision": "94f9b6ba1d9321da9ce2c71223d9c488670c5c37",
-                "task_specs_sha256": "d6776dab0ee7f2a5c23b20f5112d48147249ec6b9092fc8c5b5da184397f00cb",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2016,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2016},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-                "dataset_id": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
-                "dataset_revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
-                "task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 20035,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 20035},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-tool-a81e18bc-retained-20261113-v1",
-                "dataset_revision": "f60c55a31f8594d730cb3ebf0452e15649451dc4",
-                "task_specs_sha256": "b65f2dc20f346d0a5fb0597303216e460e16bc91b3177e0a235940a90441fb60",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2879,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2879},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-language-mixing-hs3-ult-2432d731-retained-20261113-v1",
-                "dataset_revision": "4460ab0d74fa0a88179a593b90f3071cb68e7c7d",
-                "task_specs_sha256": "03b6d903e5be9a1b03742d446b99e0787253bd84904b89cae62829e438ece656",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4566,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 4566},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-abst-70ba04b2-retained-20261113-v1",
-                "dataset_revision": "0d22e0bfff07a835d5d5f9819c13e10695bacc68",
-                "task_specs_sha256": "5e8db4e82491e871a37b8091075acc73ea261f3ba7201be714570374d4b9d578",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2299,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2299},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-inst-e325790a-retained-20261116-v1",
-                "dataset_revision": "b714f4f176f207b72ac14161fcb256701a963e12",
-                "task_specs_sha256": "28e1b9df7323667584c75940589145cc22280122e4d59c29be7311da0f8709c0",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 10409,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 10409},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-jail-ce00a4a2-retained-20261113-v1",
-                "dataset_revision": "11b739ff62ca9550041be46c08db95855a4ea6b5",
-                "task_specs_sha256": "26d335c2da2a7de20c7f946f72c73e06dda9f82c3dcaa90152ceeea90aeed5d2",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1121,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1121},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
-            "consumer_requirements": ["tool_provider"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261113-v1",
-                "dataset_revision": "05bf78e253069fe041f7b0b51a2e94f49905c0dd",
-                "task_specs_sha256": "9e565e562b5eb3b09e9c8995b1907a81f8d1dddb6f7ac0972b93e1812089812c",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 5790,
-                "failed_tasks": 5790,
-                "failures": {"CONSUMER_TOOL_UNREGISTERED": 5790},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"tool_provider": 5790},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-mult-6d1481e0-retained-20261113-v1",
-                "dataset_revision": "b41bd6a505fcb3c48203f0f6a1bcbf04ee4b9991",
-                "task_specs_sha256": "82b573bbd82710bfad75a452e50fe82cfb83f4b9176ac575ff3feaa34e44465a",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1184,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 1184},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-472bc3c6-retained-20261113-v1",
-                "dataset_revision": "5846f671af0c8d50731251bd240bf94c404a3e1c",
-                "task_specs_sha256": "edc575891af13a0cb13e8a32bb09cfdde73d81324295a4db1cd82dbede674777",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 502,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 502},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-aceb95ea-retained-20261113-v1",
-                "dataset_revision": "813142924ae8ea9dfe54c3072012f18e209be32c",
-                "task_specs_sha256": "b50d3b7b305dd0414dd690e31e4edc5bdbe0fecb81fd3eeba764d2c27e7c0ced",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2016,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2016},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-                "dataset_id": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
-                "dataset_revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
-                "task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 20035,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 20035},
-            },
-            "consumer_decision": null,
-        },
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
-                "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-tool-4af876a3-retained-20261113-v1",
-                "dataset_revision": "bb8052bb05631c6c58b95d94f85de241d1f97f89",
-                "task_specs_sha256": "73c5f994398062ac8651e20abd6c83fff732704089a934414aed7371b26a0ae1",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2264,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 2264},
-            },
-            "consumer_decision": null,
-        },
-        "OpenResearcher:OpenResearcher-Dataset": {
-            "consumer_requirements": ["custom_judge", "tool_provider"],
-            "consumer_receipt": {
-                "source_id": "OpenResearcher:OpenResearcher-Dataset",
-                "dataset_id": "open-athena/openresearcher-openresearcher-dataset-8d7d09e1-retained-20261116-b-v1",
-                "dataset_revision": "5bee39eb26e0fae3e797d9523ac1b8012f5b95a3",
-                "task_specs_sha256": "4b12e9039840a80e51e3b20a769300ba03448b937b521509ee563ba4f7345c7f",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 283,
-                "failed_tasks": 283,
-                "failures": {"CONSUMER_TOOL_UNREGISTERED": 283},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 283, "tool_provider": 283},
-            },
-            "consumer_decision": null,
-        },
-        "FWeindel:validated-tasks/mimo_v1": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "FWeindel:validated-tasks/mimo_v1",
-                "dataset_id": "open-athena/fweindel-validated-tasks-mimo-v1-local-images-20261122-b-v1",
-                "dataset_revision": "9efbd74114d232e5d3607af847c75418a1a798d8",
-                "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 2509,
-                "failed_tasks": 2509,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 2509},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json",
-                "requirements": {"execution": 2509},
-            },
-            "consumer_decision": {
-                "source_id": "FWeindel:validated-tasks/mimo_v1",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
-                "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
-                "status": "Pending",
-                "user_ruling": "Coordinator ruling 2026-11-23 (r39): MiMo stays Pending and is not admitted in r39; it ships with the six admitted sources. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 2,509 census tasks: 2,501 daytona-assigned tasks fail with 'Unresolved Docker build context must be built and pinned before execution', 8 tasks require the local backend, and the grader role is absent on all 2,509. The r39 catalog load blocked admission on exactly this finding. The consumer receipt staged beside this decision records the same frozen population (task_specs_sha256 68eb433d...) with the survey as its evidence. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 2,501 daytona-assigned tasks; (2) reconcile the 8 local-only tasks with the daytona deployment tier; (3) declare the grader environment. Until the repair lands, the source queues as Admission pending.",
-            },
-        },
-        "TaskTrove:tasktrove-taco-built-image": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-taco-built-image",
-                "dataset_id": "open-athena/taco-built-084a8cc3-oracle-filter-20261114-v1",
-                "dataset_revision": "8ffd075257ae0dc529ba702387ec64f668d9fe21",
-                "task_specs_sha256": "022151e16e8ed6974d52a8e114df64c7e99b25969d3556ee6552869692b37f8e",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 5065,
-                "failed_tasks": 5065,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 5065},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 5065},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
-                "dataset_id": "open-athena/pymethods-rebuilt-25759320-oracle-filter-20261114-v1",
-                "dataset_revision": "95ea72e37d858bc2ffe610b47eb3504a5709aebe",
-                "task_specs_sha256": "ed89e66cd759dde1dc9fc06ae148f65b09bac79bbb253cda6ec8d1a806edcc36",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 496,
-                "failed_tasks": 496,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 496},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 496},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
-                "dataset_id": "open-athena/pymethods-large-rebuilt-e427daf9-oracle-filter-20261114-v1",
-                "dataset_revision": "fa9bb22a398fe874c0f202f4144f747dd9f63377",
-                "task_specs_sha256": "67a740edafb047966d9a4146bf54b9ecff462d9718262cc0ed351b5c845684b4",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4951,
-                "failed_tasks": 4951,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 4951},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 4951},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-                "dataset_id": "open-athena/unitsyn-rebuilt-64168374-oracle-filter-20261114-v1",
-                "dataset_revision": "38b6f99077d1cd3028ba0924bb8b65c12eae676b",
-                "task_specs_sha256": "3b8f8fd5b7af65f8fc686c270cd6e48d0468d95aca6626058cb93760bf67e7f5",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4950,
-                "failed_tasks": 4950,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 4950},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 4950},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
-                "dataset_id": "open-athena/unitsyn-large-rebuilt-228cc082-oracle-filter-20261114-v1",
-                "dataset_revision": "443caaf3a83c8f3de3706fe5851a13c625be60fe",
-                "task_specs_sha256": "b0f5df60a7fec9a7752889e9f8fb66e8446dacae3645f4789bc61b8286ab0674",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4951,
-                "failed_tasks": 4951,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 4951},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 4951},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-safety-qa": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-safety-qa",
-                "dataset_id": "open-athena/campaign-release-tasktrove-safety-qa-5f6ab15c-retained-20261116-v1",
-                "dataset_revision": "9da661b792767f41ed5b224b281035f62e4fba6a",
-                "task_specs_sha256": "0132dd1aa78aa2f1007f1a9fb165b87d1eb2a08622d1cd2fcb249312136e641b",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 44939,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 44939},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-knowledge-openqa-qa": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-knowledge-openqa-qa",
-                "dataset_id": "open-athena/campaign-release-tasktrove-knowledge-openqa-qa-2b5961f4-retained-20261116-v1",
-                "dataset_revision": "9d3fbb17806c98a9d6c4299807ab586f3620cad9",
-                "task_specs_sha256": "93377fa2a6d3c4cd8503302aa9bfe1a282ba19530982083ee356ffe831b12308",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 122314,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 122314},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:tasktrove-science-openqa-qa": {
-            "consumer_requirements": ["custom_judge"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:tasktrove-science-openqa-qa",
-                "dataset_id": "open-athena/campaign-release-tasktrove-science-openqa-qa-3c4aa6a7-retained-20261116-v1",
-                "dataset_revision": "0494a8d2c57f5ccd8d4ae7ef7307c44305df1209",
-                "task_specs_sha256": "f145a9d35365dd22787116f8d97c51ea5aa81c6f62d71677ebce1cb4747ae064",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 150644,
-                "failed_tasks": 0,
-                "failures": {},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"custom_judge": 150644},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
-                "dataset_id": "open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1",
-                "dataset_revision": "5c1270d7d2ec851e65d360e8efe752c556fe14ea",
-                "task_specs_sha256": "d2be0bcd4d4015862364676e122441c3cdf6661e666e2d9a6d94c88ce05c9cdb",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 500,
-                "failed_tasks": 500,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 500},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 500},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118",
-                "dataset_id": "open-athena/atlas-repair-nl2bash-20261118-oracle-filter-v1",
-                "dataset_revision": "4cf30f2874864d8549c7adfa7f6516cf414825a5",
-                "task_specs_sha256": "0a2af1037e04af2b2c2ba9a018192cb79cb5b09f48926bbcb7e7e1405852db45",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 372,
-                "failed_tasks": 372,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 372},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 372},
-            },
-            "consumer_decision": null,
-        },
-        "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118",
-                "dataset_id": "open-athena/atlas-repair-pymethods-20261118-oracle-filter-v1",
-                "dataset_revision": "3699e8ea33bda5774a045db8a25f09aa878628a8",
-                "task_specs_sha256": "d37145420f2513b07a71c1cc9738fe5cab602fd59dc2b782c1043387fdccaaa2",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 3754,
-                "failed_tasks": 3754,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 3754},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 3754},
-            },
-            "consumer_decision": null,
-        },
-        "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": {
-            "consumer_requirements": ["execution", "verifier_allocation"],
-            "consumer_receipt": {
-                "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
-                "dataset_id": "open-athena/atlas-oracle-d1db546524910beec34d-20261117of1",
-                "dataset_revision": "01e2027f9d1dd8ec6703ec615febcc9f503e342e",
-                "task_specs_sha256": "bb1e11fc05d7fa80d82b4e651d046aac0f357cb5ce8e5421a82bc7d03e41cd64",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1130,
-                "failed_tasks": 12,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 12},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 12, "verifier_allocation": 1130},
-            },
-            "consumer_decision": null,
-        },
-        "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
-                "dataset_id": "open-athena/atlas-oracle-9aff2d3c617cfc6eeb3d-20261120swev3of3",
-                "dataset_revision": "eae149f26e655a5ca40139f80d1b95ac4bda2044",
-                "task_specs_sha256": "6939018302a9e933b8e9aa97f8a0a332756144423ba7ff2da23499ff3d437843",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 1929,
-                "failed_tasks": 1929,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 1929},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json",
-                "requirements": {"execution": 1929},
-            },
-            "consumer_decision": {
-                "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "task_specs_sha256": "6939018302a9e933b8e9aa97f8a0a332756144423ba7ff2da23499ff3d437843",
-                "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
-                "status": "Pending",
-                "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): Scale-SWE stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 1,929 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 1,929. The r39 catalog load would block admission on exactly this finding. The source's prior consumer receipt (20261120 scoped consumer-runtime audit, same census binding, 0 failed in the pinned consumer sandbox) emitted no typed finding, so it is re-measured by the frozen backend survey: the receipt now records all 1,929 tasks execution-unsupported with the survey as evidence, and the prior measurement remains in the registry history and the audit artifact. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 1,929 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending.",
-            },
-        },
-        "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
-            "consumer_requirements": ["execution"],
-            "consumer_receipt": {
-                "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
-                "dataset_id": "open-athena/atlas-oracle-561824bdbebffb3f53d9-20261120swev3of3",
-                "dataset_revision": "0ac72bdc13f4aa0ba2a4c1a4c077fc82722e5b31",
-                "task_specs_sha256": "66bfbacc22a65832ee3d84783c36f6d5705d221ce170991716c5dd53a25281cf",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 4264,
-                "failed_tasks": 11,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 11},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 11},
-            },
-            "consumer_decision": {
-                "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "task_specs_sha256": "66bfbacc22a65832ee3d84783c36f6d5705d221ce170991716c5dd53a25281cf",
-                "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
-                "status": "Pending",
-                "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): SWE-Lego stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 4,264 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 4,264. The r39 catalog load blocked admission on exactly this finding. The source's existing consumer receipt (20261120 scoped consumer-runtime audit, same census binding) emits the matching typed finding (11 execution-unsupported tasks in the pinned consumer runtime) and is kept unchanged. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 4,264 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending.",
-            },
-        },
-        "RST:laion/rts-1k-rootless-apptainer": {
-            "consumer_requirements": ["execution", "verifier_allocation"],
-            "consumer_receipt": {
-                "source_id": "RST:laion/rts-1k-rootless-apptainer",
-                "dataset_id": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-20261117of1",
-                "dataset_revision": "3fe05149a182c3d9ab141ccc7ef2b8fb27b44d00",
-                "task_specs_sha256": "2ed30e1e135ee8c66e37e9c89992be96f6e42cbcc92adaf069e2f9afd3273e26",
-                "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
-                "checked_tasks": 623,
-                "failed_tasks": 616,
-                "failures": {"CONSUMER_EXECUTION_UNSUPPORTED": 616},
-                "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
-                "requirements": {"execution": 616, "verifier_allocation": 623},
-            },
-            "consumer_decision": null,
-        },
+  "consumer_inputs": {
+    "Evalchemy:simpleqa": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Evalchemy:simpleqa",
+        "dataset_id": "basicv8vc/SimpleQA",
+        "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
+        "task_specs_sha256": "672b8d112a4e7ff39622b9366a851927caf4c97efbeee12b8f390c82fa00af15",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4326,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 4326
+        }
+      },
+      "consumer_decision": null
     },
-    "pending": [
-        {
-            "id": "TerminalWorld:TerminalWorld",
-            "display_name": "TerminalWorld \u00b7 TerminalWorld",
-            "status": "Pending",
-            "origin": "TerminalWorld",
-            "upstream_dataset": "TerminalWorld",
-            "upstream_url": "https://huggingface.co/datasets/terminalworld/TerminalWorld/tree/364549435c0fc130eaf0ccfc047a8a698c72643c",
-            "notes": "TRAIN under user decision relayed by coordinator, 2026-11-22: TerminalWorld is not a known benchmark. The Hugging Face split=test config naming does not make it EVAL. Ingest as TRAIN and use standard decontamination to handle any overlap. The upstream config is full and its named split remains test. Verified (200) and sample (20) are exact subsets and are not appended as separate training populations. Native prompts, canary comments, task.toml budgets, environment, tests and original solutions remain unchanged. Manifest comparisons ignore only terminal CR/LF characters; native prompt bytes are retained. Use ruling: experiments/post_training/task_curation/datasets/terminalworld/intended-use.json.",
-            "stage": "Intake queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "harbor",
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-        {
-            "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
-            "display_name": "Nemotron \u00b7 Nemotron-Cascade-2-RL-data/IF-RL",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "Nemotron-Cascade-2-RL-data",
-            "upstream_url": null,
-            "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
-            "stage": "Intake queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-        {
-            "id": "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL",
-            "display_name": "Nemotron \u00b7 Nemotron-Cascade-2-RL-data/SWE-RL",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "Nemotron-Cascade-2-RL-data",
-            "upstream_url": null,
-            "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
-            "stage": "Intake queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-        {
-            "id": "marcusm117:ProofNet-Verified",
-            "display_name": "marcusm117 \u00b7 ProofNet-Verified",
-            "status": "Pending",
-            "origin": "marcusm117",
-            "upstream_dataset": "ProofNet-Verified",
-            "upstream_url": null,
-            "notes": "Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
-            "stage": "Intake queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "eval",
-            "task_format": null,
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-        {
-            "id": "project-numina:NuminaMath-LEAN",
-            "display_name": "project-numina \u00b7 NuminaMath-LEAN",
-            "status": "Pending",
-            "origin": "project-numina",
-            "upstream_dataset": "NuminaMath-LEAN",
-            "upstream_url": null,
-            "notes": "Competition problems with human Lean statements and proofs; the proofs are golden controls.",
-            "stage": "Intake queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": null,
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-        {
-            "id": "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
-            "display_name": "SWE-rebench \u00b7 ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
-            "status": "Pending",
-            "origin": "SWE-rebench",
-            "upstream_dataset": "ibragim-bad/SWE-rebench-V2.1",
-            "upstream_url": null,
-            "notes": "Repaired from the original author's re-verified ibragim-bad/SWE-rebench-V2.1@26c0145ded93168b0d5d095420155901ad2d5a2f (license PASS cc-by-4.0); ten consolidated shared base images replace the per-task digest-pinned images, the upstream combine.Dockerfile.j2 build step becomes the declared task-start setup, and the source's own Harbor verifier grades behind the SWE_REBENCH shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel unchanged). Fidelity-gated per group against the upstream digest images before the full population run; per-version toolchains and interpreter provisioning are declared base properties. Pending qualification.",
-            "stage": "Measurements pending",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "harbor",
-            "method_tags": ["RL"],
-            "reasons": [],
-        },
-    ],
-    "stages": {
-        "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued",
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "Lexical remediation queued",
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "Lexical remediation queued",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "Lexical remediation queued",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "Lexical remediation queued",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "Lexical remediation queued",
-        "TaskTrove:smartie-calibforge-shared-v2": "Lexical remediation queued",
-        "FWeindel:validated-tasks/mimo_v1": "Admission pending",
-        "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": "Admission pending",
-        "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": "Admission pending",
+    "Evalchemy:simpleqa-mini": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Evalchemy:simpleqa-mini",
+        "dataset_id": "basicv8vc/SimpleQA",
+        "dataset_revision": "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94",
+        "task_specs_sha256": "2354b94ffabf2e3ad92beef208ad31d40d941d567416e7596c7f4f4f7265c4e3",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 500,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 500
+        }
+      },
+      "consumer_decision": null
     },
-    "remediation_queue": [
-        {
-            "id": "di-zhang-fdu:aime_1983_2024",
-            "display_name": "di-zhang-fdu \u00b7 aime_1983_2024",
-            "status": "Pending",
-            "origin": "di-zhang-fdu",
-            "upstream_dataset": "aime_1983_2024",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination measurement and private-release admission receipt are missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
+    "TaskTrove:laion__exp_rpt_taco-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__exp_rpt_taco-v2",
+        "dataset_id": "open-athena/taco-laion-ede8bc2f-oracle-filter-20261114-v1",
+        "dataset_revision": "77909f8c8049f881c0b6d33f536347eec88bbc4b",
+        "task_specs_sha256": "be8ff4439a5774c3df71b28abb653887118ff97a0d56db6456ef1eed79d3b47a",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 5063,
+        "failed_tasks": 5063,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 5063
         },
-        {
-            "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "nemotron_ultra_mopd",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-            "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "nemotron_ultra_mopd",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-            "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "nemotron_ultra_rlvr1",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-            "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "nemotron_ultra_rlvr2",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-            "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-            "status": "Pending",
-            "origin": "Nemotron",
-            "upstream_dataset": "nemotron_ultra_rlvr2",
-            "upstream_url": null,
-            "notes": "",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "taskspec",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "TaskTrove:smartie-calibforge-shared-v2",
-            "display_name": "TaskTrove \u00b7 smartie-calibforge-shared-v2",
-            "status": "Pending",
-            "origin": "TaskTrove",
-            "upstream_dataset": "smartie-calibforge-shared-v2",
-            "upstream_url": "https://huggingface.co/datasets/open-athena/task-trove/tree/3b6c5b5533f1b702163f365b7ce869b834cb2994/releases/calibforge-shared-20261017-v2",
-            "notes": "324 environment-admitted CalibForge tasks split 259 train / 65 validation. Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's provisioning records (snapshot-capacity-check) report the cohort needing 23 image/resource snapshot variants (19 on the retained training slice), over the ten-snapshot budget. The public lowered payloads pin only two verifier contexts and carry no per-task resource shapes, so the variants are invisible there; admission checks cover fixture equivalence and setup and verifier execution, and oracle solution execution was waived. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
-            "stage": "Lexical remediation queued",
-            "dataset_id": null,
-            "dataset_revision": null,
-            "use": "train",
-            "task_format": "harbor",
-            "method_tags": ["RL"],
-            "reasons": [
-                {
-                    "reason": "lexical-remediation-required",
-                    "evidence": {
-                        "kind": "check-output",
-                        "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-                        "uri": null,
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-    ],
-    "metadata_exclusions": [
-        {
-            "id": "GPUMODE:kernelbot-data",
-            "display_name": "GPUMODE \u00b7 kernelbot-data",
-            "status": "Excluded",
-            "origin": "GPUMODE",
-            "upstream_dataset": "GPUMODE/kernelbot-data",
-            "upstream_url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "GPUMODE/kernelbot-data",
-            "dataset_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "license-ban",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": 'Ban registry 2026.11.16.1 at pin 4159cf6b2c6bab208be6dda885d6d87631cc16df: user rejected the required model-license reciprocity condition for plain OpenMDW-1.1 releases; checker rule E1 ESCALATE, LICENSE quote "June 9 Researcher Reciprocity License"; issue 11497.',
-                        "uri": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "CyBench:andyzorigin-cybench",
-            "display_name": "CyBench \u00b7 andyzorigin-cybench",
-            "status": "Excluded",
-            "origin": "CyBench",
-            "upstream_dataset": "andyzorigin/cybench",
-            "upstream_url": "https://github.com/andyzorigin/cybench",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "andyzorigin/cybench",
-            "dataset_revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "license-ban",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Checker receipt F1 FAIL at pin ca483c6443f17a20ba7d6bac3d274859a1721e51: the harness is Apache-2.0 but the benchmark/project-sekai-ctf/sekaictf-2022 task content is CC BY-NC-SA 4.0 (quoted from its LICENSE.content.md); issue 11497.",
-                        "uri": "https://github.com/andyzorigin/cybench/blob/ca483c6443f17a20ba7d6bac3d274859a1721e51/benchmark/project-sekai-ctf/sekaictf-2022/LICENSE.content.md",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "HAL:princeton-pli-hal-harness",
-            "display_name": "HAL \u00b7 princeton-pli-hal-harness",
-            "status": "Excluded",
-            "origin": "HAL",
-            "upstream_dataset": "princeton-pli/hal-harness",
-            "upstream_url": "https://github.com/princeton-pli/hal-harness",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "princeton-pli/hal-harness",
-            "dataset_revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "license-missing",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Checker receipt F2 FAIL at pin 16bb03ebc11577fb5ea6dc8bb6c968387085e6aa: no LICENSE or COPYING file in the pinned repository tree; issue 11497.",
-                        "uri": "https://api.github.com/repos/princeton-pli/hal-harness/git/trees/16bb03ebc11577fb5ea6dc8bb6c968387085e6aa?recursive=1",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "MiroVerse:miromind-ai-MiroVerse-v0.1",
-            "display_name": "MiroVerse \u00b7 miromind-ai-MiroVerse-v0.1",
-            "status": "Excluded",
-            "origin": "MiroVerse",
-            "upstream_dataset": "miromind-ai/MiroVerse-v0.1",
-            "upstream_url": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "miromind-ai/MiroVerse-v0.1",
-            "dataset_revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "license-ban",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Checker receipt F1 FAIL at pin 11fbf325f6eda37b34f519d1ba7268f40f469ac6: dataset card declares license cc-by-nc-4.0; issue 11497.",
-                        "uri": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/11fbf325f6eda37b34f519d1ba7268f40f469ac6/README.md",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "MAI-Gym:tasks",
-            "display_name": "MAI-Gym \u00b7 tasks",
-            "status": "Excluded",
-            "origin": "MAI-Gym",
-            "upstream_dataset": "Tongyi-MAI/MAI-Gym",
-            "upstream_url": "https://github.com/Tongyi-MAI/MAI-Gym",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "Tongyi-MAI/MAI-Gym",
-            "dataset_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "license-ban",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Ban registry 2026.11.16.1 at pin dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9 (classification missing): no license grant for the apps or task data at the pinned repository; issue 11497 and issue 10231 discussion.",
-                        "uri": "https://github.com/Tongyi-MAI/MAI-Gym/tree/dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                }
-            ],
-        },
-        {
-            "id": "OpenGCUA:trajectories",
-            "display_name": "OpenGCUA \u00b7 trajectories",
-            "status": "Excluded",
-            "origin": "OpenGCUA",
-            "upstream_dataset": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
-            "upstream_url": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
-            "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
-            "stage": null,
-            "dataset_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
-            "dataset_revision": "no published trajectory pin",
-            "use": null,
-            "task_format": null,
-            "method_tags": [],
-            "reasons": [
-                {
-                    "reason": "not-rl-task-data",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Upstream has no RL task data; harness/trajectories only. CANDIDATES STATE.md (new-rl-data-ingest): no RL task data to ingest. The code is an Apache-2.0 GUI agent harness, not a task set. Its trajectories are unlicensed (ROADMAP: licensing 'will be documented') and are mostly closed-model outputs, so they carry provider output terms. Don't train on them.",
-                        "uri": "https://github.com/Tongyi-MAI/OpenGCUA",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                },
-                {
-                    "reason": "license-ban",
-                    "evidence": {
-                        "kind": "receipt",
-                        "message": "Ban registry 2026.11.16.1: no trajectory-data license; Apache-2.0 applies to the harness code; issue 11497.",
-                        "uri": "https://github.com/Tongyi-MAI/OpenGCUA/tree/55c33aea792b48b9c1330a514bfcc8f6d3ecc704",
-                        "sha256": null,
-                        "expected": null,
-                    },
-                },
-            ],
-        },
-    ],
-    "reason_explanations": {
-        "license-ban": {
-            "label": "License ban",
-            "meaning": "The pinned upstream or publisher license is banned for training use.",
-            "clears": "A license receipt the ban registry accepts, with the registry updated off the ban list.",
-        },
-        "license-missing": {
-            "label": "License missing",
-            "meaning": "No license declaration exists in the pinned upstream primary evidence.",
-            "clears": "A recorded permissive grant or license receipt established at the pin.",
-        },
-        "not-rl-task-data": {
-            "label": "Not RL task data",
-            "meaning": "The upstream provides no RL task data; it ships harness code or trajectories only.",
-            "clears": "A republished upstream that contains usable RL task data.",
-        },
-        "oracle-filtration-retained-zero": {
-            "label": "Oracle filtration retained zero",
-            "meaning": "Oracle filtration over the full population admitted zero tasks.",
-            "clears": "A republished conversion whose filtration admits more than zero tasks, with a publication-seal receipt.",
-        },
-        "actor-census-missing": {
-            "label": "Actor census missing",
-            "meaning": "No actor census evidence exists for the source at all.",
-            "clears": "The QUICK actor-census receipt bound at the current pin.",
-        },
-        "actor-census-stale": {
-            "label": "Actor census stale",
-            "meaning": "The actor census measured a different dataset pin or converter than the configured input.",
-            "clears": "A re-measured census receipt at the current dataset pin and converter version.",
-        },
-        "retained-population-empty": {
-            "label": "Retained population empty",
-            "meaning": "The retained population at the current pin is empty.",
-            "clears": "A nonempty retained population at the current pin.",
-        },
-        "grading-census-incomplete": {
-            "label": "Grading census incomplete",
-            "meaning": "The grading census does not cover the complete retained population.",
-            "clears": "A grading census receipt covering every retained task.",
-        },
-        "grading-census-counts-incomplete": {
-            "label": "Grading census counts incomplete",
-            "meaning": "The grading census's typed counts do not sum to the retained population.",
-            "clears": "A grading census receipt whose required, declared, status and reason counts cover the population.",
-        },
-        "grader-missing": {
-            "label": "Grader missing",
-            "meaning": "Admitted tasks lack runnable graders.",
-            "clears": "A grading census receipt with zero missing-grader tasks.",
-        },
-        "lexical-receipt-missing": {
-            "label": "Lexical receipt missing",
-            "meaning": "Evaluation use lacks a measured lexical receipt at the current dataset pin.",
-            "clears": "A lexical receipt measured at the current pin for the declared use.",
-        },
-        "lexical-remediation-required": {
-            "label": "Lexical remediation required",
-            "meaning": "Training use lacks a clean or remediated private-release receipt at the current pin.",
-            "clears": "A remediated private-release decontamination receipt bound to the current pin.",
-        },
-        "oversight-missing": {
-            "label": "Oversight missing",
-            "meaning": "No oversight evidence exists at all: neither a QUICK conversion receipt nor a SAMPLE or FULL review receipt with recorded verification.",
-            "clears": "A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification.",
-        },
-        "agentic-task-format-missing": {
-            "label": "Agentic task format missing",
-            "meaning": "An agentic source declares no accepted task format.",
-            "clears": "A declared TaskCompendium or Harbor task format (or grandfathered registration).",
-        },
-        "snapshot-identity-missing": {
-            "label": "Snapshot identity missing",
-            "meaning": "No production snapshot identity measurement exists.",
-            "clears": "The snapshot identity measurement receipt at the current pin.",
-        },
-        "execution-requirement-missing": {
-            "label": "Execution requirement missing",
-            "meaning": "No execution-requirement measurement exists for the population.",
-            "clears": "The execution-requirement measurement receipt.",
-        },
-        "grader-defect": {
-            "label": "Grader defect",
-            "meaning": "A recorded grader or oracle defect makes the population's reward untrustworthy.",
-            "clears": "A republished grader that passes the recorded defect check.",
-        },
-        "contamination-risk": {
-            "label": "Contamination risk",
-            "meaning": "A known canary or contamination exposure is present in the source.",
-            "clears": "A decontamination receipt that removes the recorded exposure.",
-        },
-        "duplicate-of-source": {
-            "label": "Duplicate",
-            "meaning": "The population duplicates another admitted source's population.",
-            "clears": "A distinct-population ruling recorded against the other source.",
-        },
-        "unspecified-legacy": {
-            "label": "Needs ruling",
-            "meaning": "A legacy exclusion tag with no recoverable typed reason; transitional.",
-            "clears": "A user ruling recorded as a typed reason; this reason must not persist.",
-        },
-        "environment-artifact-missing": {
-            "label": "Environment artifact missing",
-            "meaning": "A declared environment artifact does not exist in any region.",
-            "clears": "Rebuilding the artifact in-region and binding its receipt; exclusion applies only when it is unrebuildable.",
-        },
-        "no-supported-backend": {
-            "label": "No supported backend",
-            "meaning": "No available backend can run the population's contracts, per the backend survey's per-source capabilities.",
-            "clears": "A backend survey recording supported execution for at least one backend at the current pin.",
-        },
-        "grader-judge-unavailable": {
-            "label": "Judge unavailable",
-            "meaning": "The population's judge route is unqualified: no judge-model tier or judge API qualifies.",
-            "clears": "Re-pinning to a JUDGE_TIERS tier through private remediation and running that version; exclusion applies only when no tier qualifies.",
-        },
-        "invalid-reference": {
-            "label": "Invalid reference",
-            "meaning": "The population references an expected target that does not exist in its frozen sample.",
-            "clears": "A faithfully repaired private remediation version whose references resolve.",
-        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 5063
+        }
+      },
+      "consumer_decision": null
     },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+        "dataset_id": "open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1",
+        "dataset_revision": "abf6368f9988a3a97745684fb6c3aa488f2ffa40",
+        "task_specs_sha256": "7561573cbcac1d3b6727fef0262595bbdd2e890ef7a1c1c80759dfe5337789f7",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 496,
+        "failed_tasks": 496,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 496
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 496
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+        "dataset_id": "open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1",
+        "dataset_revision": "9bb2b58153faa81e9ef156425be4054cffefe0e4",
+        "task_specs_sha256": "fbbe5e18b597bcb4ce9fb3d48b43accc394b10b642a66a38a6e7bd4e02b7573d",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4951,
+        "failed_tasks": 4951,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 4951
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 4951
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+        "dataset_id": "open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1",
+        "dataset_revision": "8ecfda4d934131068163ba45e7a59f15d2f722bc",
+        "task_specs_sha256": "0dcca5ba61b0c43b7845cd314876c788e705bfa30ca307e155b0dac21bdefe37",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 487,
+        "failed_tasks": 487,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 487
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 487
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+        "dataset_id": "open-athena/unitsyn-large-bc301818-oracle-filter-20261114-v1",
+        "dataset_revision": "2e229e8c80f561969c1cab87e4ccbc7fb049ce87",
+        "task_specs_sha256": "c2e2c2083b68736d682f2603985520a087e3ed9d253f5651a281e5f62a1f6815",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4949,
+        "failed_tasks": 4949,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 4949
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 4949
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+        "dataset_id": "open-athena/nl2bash-cleaned-85b437bd-oracle-filter-20261114-v1",
+        "dataset_revision": "780889d966a2913b2e70b0a35a32b11740f31c01",
+        "task_specs_sha256": "6740ba4fbebe499054e905ca43249bc91b2a29e7bb91fb6147c685008226d735",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1422,
+        "failed_tasks": 1422,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 1422
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 1422
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__nemotron-gym-safety-v3": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__nemotron-gym-safety-v3",
+        "dataset_id": "open-athena/task-trove-laion-nemotron-gym-safety-v3-f51d465c-retained-20261116-v1",
+        "dataset_revision": "9d1671022cee888859ae613ce125ab78cdce1fbd",
+        "task_specs_sha256": "251b54d039268a2a85cca287fba652d7e317480123938cdbedb1d5ec40bb6a38",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 89066,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 89066
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
+        "dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-openqa-v4-308a6e22-retained-20261116-v1",
+        "dataset_revision": "97c65e928600f3251352ff67e3cdad5da7e70523",
+        "task_specs_sha256": "ad0bd75c109eaacabbb3dfa282d4302af7d5a8d781c41902e95e5ae2aac07e38",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 122357,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 122357
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
+        "dataset_id": "open-athena/task-trove-laion-nemotron-gym-science-so-openq-v3-c1a06aab-retained-20261116-v1",
+        "dataset_revision": "cb5150519069e2b4f24dc987f45d8f72a9d8a566",
+        "task_specs_sha256": "21e85b137de8bfc74c793e37631f96c88c88493df5b7370433cdf6db771a0eec",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 150644,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 150644
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__nemotron-gym-agent-calendar-v2",
+        "dataset_id": "open-athena/calendar-71f57c8d-oracle-filter-20261114-v1",
+        "dataset_revision": "d885672abbb489b64ee04e2cb1ac60c0901b56f1",
+        "task_specs_sha256": "023b38fde2ca1f4169e1842abdfdc14ea19c07ac1aa783f3bf05302eb27104d4",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2699,
+        "failed_tasks": 58,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 58
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 58
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4",
+        "dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-advanced-v-185e593b-retained-20261116-v1",
+        "dataset_revision": "815ba090a64195fddf65b46ad8d906e21691eca2",
+        "task_specs_sha256": "617600d3e91d23747206196270d7ad171dd5fbaef1ebc2c318d173f0fedb592d",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1068,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1068
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-04b49f98-retained-20261113-v1",
+        "dataset_revision": "5213fe5132ae8a2d548fce5224fe3530bc23c03b",
+        "task_specs_sha256": "f16545b03bb754c995d8f9247e57d60cf830f3cb4d00ca1a2b14fa05e8039a75",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 496,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 496
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-c82c21c7-retained-20261113-v1",
+        "dataset_revision": "4fac18c420496b79ae685db55d1bf577661c3eb5",
+        "task_specs_sha256": "e5cc79fff0c9322c0fd5a3b635d4136f3c10e42cbd7ca54bd89a6020bfe531be",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1840,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1840
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-abste-f8b6719c-retained-20261113-v1",
+        "dataset_revision": "c370a53be3f94b841e4d42c3ac704f40de914efc",
+        "task_specs_sha256": "e7f960164f13a2eaade15fdb15b0b4303a5b5e88b71674a70e2a4f72ff23e68c",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2299,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2299
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-instr-ca5c0fe9-retained-20261116-v1",
+        "dataset_revision": "b9af11e658996aa3ba9164af9e43eceb687a72b5",
+        "task_specs_sha256": "4ade3bf7c51756999795a9743547749eff7921d4e22ce169a14e690634dc11f9",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 10409,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 10409
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-jailb-24bcf489-retained-20261113-v1",
+        "dataset_revision": "d8ccaddb782540e0d47d21979c6d5c872a283829",
+        "task_specs_sha256": "2306b6d97ce7af909801604491bb1a3094bc1fc2cca38937b8542be1f62164cc",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1121,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1121
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
+      "consumer_requirements": [
+        "tool_provider"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261113-v1",
+        "dataset_revision": "58788dfb8bcf550cdbf671f3a79f45072bd5f7d4",
+        "task_specs_sha256": "f54f2a571884f08262078998fd337a11e24fd1ad2bffad732cfe9605f51b094b",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 5790,
+        "failed_tasks": 5790,
+        "failures": {
+          "CONSUMER_TOOL_UNREGISTERED": 5790
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "tool_provider": 5790
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-multi-880000d8-retained-20261113-v1",
+        "dataset_revision": "9d6809b3eb420ac17fda833301833868e815a6a8",
+        "task_specs_sha256": "1a332c92725f2af2bd62d4bb94f277e840aa6a8585250c6b90273fc542a5e5e0",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1184,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1184
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-toolc-8380bd8d-retained-20261113-v1",
+        "dataset_revision": "4a5a5c5767f67a5f9e383e2be351088acac4f780",
+        "task_specs_sha256": "08a05362f7578f492c6c36cb43f87b708ee29bdaf504c0083ef0e3681cb98f74",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2264,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2264
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-language-mixing-hs3-ult-3543235c-retained-20261113-v1",
+        "dataset_revision": "a1e25bae044f96f89b9ff64c0c3bb42d8fd6c569",
+        "task_specs_sha256": "d078e162505a25b1d0c6a1d4b966deca4dc440efb2f03968ddb0e17d9a6e3982",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4599,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 4599
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-abst-e337b8da-retained-20261113-v1",
+        "dataset_revision": "53156b631c6fca7bca1a5693ea18d95936881b22",
+        "task_specs_sha256": "8616bc2c46852a484cdeb2311f8c6978ef132f9dddb14f577c4c098ac03c8a6f",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2299,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2299
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-inst-c40988ec-retained-20261116-v1",
+        "dataset_revision": "460eb6ad0fc7fe41bf9a817ee52e75652d19515b",
+        "task_specs_sha256": "c7689115850760f3adfb8989d8ee13aaf367634658cae509687291c197cf60b2",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 11828,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 11828
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-jail-abb8e2df-retained-20261113-v1",
+        "dataset_revision": "899f77568c704d9566b1096fa6e61d80a2ae3937",
+        "task_specs_sha256": "dd32cfdee627542d5e1c41e76606abc051649e90025b7e2f27a7907e4020bbc3",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1121,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1121
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
+      "consumer_requirements": [
+        "tool_provider"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261113-v1",
+        "dataset_revision": "67aedfe8fbf07c229c650fad4231d710fd533264",
+        "task_specs_sha256": "e6a66616b156b8d6fb055ef2a295e58bce908c2be1a200a8b4c921edcc04062d",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 5790,
+        "failed_tasks": 5790,
+        "failures": {
+          "CONSUMER_TOOL_UNREGISTERED": 5790
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "tool_provider": 5790
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-mult-ffee8901-retained-20261113-v1",
+        "dataset_revision": "d9413e7871b01a6c1ba18f5cc3aa3e298b85476c",
+        "task_specs_sha256": "b351741e37f53ba37d7350ca67f670ffd4737a129729ef488b8ed8892d75384d",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1184,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1184
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-f13b621a-retained-20261113-v1",
+        "dataset_revision": "9513d0693219e0b64552aa66a455ffe8a02d55f9",
+        "task_specs_sha256": "7bbfd2fa33630d449fb8b927df7f884adf545c22f72b962682128ce4792ffb05",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 502,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 502
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-dadb8d84-retained-20261113-v1",
+        "dataset_revision": "94f9b6ba1d9321da9ce2c71223d9c488670c5c37",
+        "task_specs_sha256": "d6776dab0ee7f2a5c23b20f5112d48147249ec6b9092fc8c5b5da184397f00cb",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2016,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2016
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+        "dataset_id": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
+        "dataset_revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
+        "task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 20035,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 20035
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-tool-a81e18bc-retained-20261113-v1",
+        "dataset_revision": "f60c55a31f8594d730cb3ebf0452e15649451dc4",
+        "task_specs_sha256": "b65f2dc20f346d0a5fb0597303216e460e16bc91b3177e0a235940a90441fb60",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2879,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2879
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-language-mixing-hs3-ult-2432d731-retained-20261113-v1",
+        "dataset_revision": "4460ab0d74fa0a88179a593b90f3071cb68e7c7d",
+        "task_specs_sha256": "03b6d903e5be9a1b03742d446b99e0787253bd84904b89cae62829e438ece656",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4566,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 4566
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-abst-70ba04b2-retained-20261113-v1",
+        "dataset_revision": "0d22e0bfff07a835d5d5f9819c13e10695bacc68",
+        "task_specs_sha256": "5e8db4e82491e871a37b8091075acc73ea261f3ba7201be714570374d4b9d578",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2299,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2299
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-inst-e325790a-retained-20261116-v1",
+        "dataset_revision": "b714f4f176f207b72ac14161fcb256701a963e12",
+        "task_specs_sha256": "28e1b9df7323667584c75940589145cc22280122e4d59c29be7311da0f8709c0",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 10409,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 10409
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-jail-ce00a4a2-retained-20261113-v1",
+        "dataset_revision": "11b739ff62ca9550041be46c08db95855a4ea6b5",
+        "task_specs_sha256": "26d335c2da2a7de20c7f946f72c73e06dda9f82c3dcaa90152ceeea90aeed5d2",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1121,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1121
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
+      "consumer_requirements": [
+        "tool_provider"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261113-v1",
+        "dataset_revision": "05bf78e253069fe041f7b0b51a2e94f49905c0dd",
+        "task_specs_sha256": "9e565e562b5eb3b09e9c8995b1907a81f8d1dddb6f7ac0972b93e1812089812c",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 5790,
+        "failed_tasks": 5790,
+        "failures": {
+          "CONSUMER_TOOL_UNREGISTERED": 5790
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "tool_provider": 5790
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-mult-6d1481e0-retained-20261113-v1",
+        "dataset_revision": "b41bd6a505fcb3c48203f0f6a1bcbf04ee4b9991",
+        "task_specs_sha256": "82b573bbd82710bfad75a452e50fe82cfb83f4b9176ac575ff3feaa34e44465a",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1184,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 1184
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-472bc3c6-retained-20261113-v1",
+        "dataset_revision": "5846f671af0c8d50731251bd240bf94c404a3e1c",
+        "task_specs_sha256": "edc575891af13a0cb13e8a32bb09cfdde73d81324295a4db1cd82dbede674777",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 502,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 502
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-aceb95ea-retained-20261113-v1",
+        "dataset_revision": "813142924ae8ea9dfe54c3072012f18e209be32c",
+        "task_specs_sha256": "b50d3b7b305dd0414dd690e31e4edc5bdbe0fecb81fd3eeba764d2c27e7c0ced",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2016,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2016
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+        "dataset_id": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
+        "dataset_revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
+        "task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 20035,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 20035
+        }
+      },
+      "consumer_decision": null
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-tool-4af876a3-retained-20261113-v1",
+        "dataset_revision": "bb8052bb05631c6c58b95d94f85de241d1f97f89",
+        "task_specs_sha256": "73c5f994398062ac8651e20abd6c83fff732704089a934414aed7371b26a0ae1",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2264,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 2264
+        }
+      },
+      "consumer_decision": null
+    },
+    "OpenResearcher:OpenResearcher-Dataset": {
+      "consumer_requirements": [
+        "custom_judge",
+        "tool_provider"
+      ],
+      "consumer_receipt": {
+        "source_id": "OpenResearcher:OpenResearcher-Dataset",
+        "dataset_id": "open-athena/openresearcher-openresearcher-dataset-8d7d09e1-retained-20261116-b-v1",
+        "dataset_revision": "5bee39eb26e0fae3e797d9523ac1b8012f5b95a3",
+        "task_specs_sha256": "4b12e9039840a80e51e3b20a769300ba03448b937b521509ee563ba4f7345c7f",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 283,
+        "failed_tasks": 283,
+        "failures": {
+          "CONSUMER_TOOL_UNREGISTERED": 283
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 283,
+          "tool_provider": 283
+        }
+      },
+      "consumer_decision": null
+    },
+    "FWeindel:validated-tasks/mimo_v1": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "FWeindel:validated-tasks/mimo_v1",
+        "dataset_id": "open-athena/fweindel-validated-tasks-mimo-v1-local-images-20261122-b-v1",
+        "dataset_revision": "9efbd74114d232e5d3607af847c75418a1a798d8",
+        "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 2509,
+        "failed_tasks": 2509,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 2509
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json",
+        "requirements": {
+          "execution": 2509
+        }
+      },
+      "consumer_decision": {
+        "source_id": "FWeindel:validated-tasks/mimo_v1",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
+        "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+        "status": "Pending",
+        "user_ruling": "Coordinator ruling 2026-11-23 (r39): MiMo stays Pending and is not admitted in r39; it ships with the six admitted sources. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 2,509 census tasks: 2,501 daytona-assigned tasks fail with 'Unresolved Docker build context must be built and pinned before execution', 8 tasks require the local backend, and the grader role is absent on all 2,509. The r39 catalog load blocked admission on exactly this finding. The consumer receipt staged beside this decision records the same frozen population (task_specs_sha256 68eb433d...) with the survey as its evidence. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 2,501 daytona-assigned tasks; (2) reconcile the 8 local-only tasks with the daytona deployment tier; (3) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+      }
+    },
+    "TaskTrove:tasktrove-safety-qa": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:tasktrove-safety-qa",
+        "dataset_id": "open-athena/campaign-release-tasktrove-safety-qa-5f6ab15c-retained-20261116-v1",
+        "dataset_revision": "9da661b792767f41ed5b224b281035f62e4fba6a",
+        "task_specs_sha256": "0132dd1aa78aa2f1007f1a9fb165b87d1eb2a08622d1cd2fcb249312136e641b",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 44939,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 44939
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:tasktrove-knowledge-openqa-qa": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:tasktrove-knowledge-openqa-qa",
+        "dataset_id": "open-athena/campaign-release-tasktrove-knowledge-openqa-qa-2b5961f4-retained-20261116-v1",
+        "dataset_revision": "9d3fbb17806c98a9d6c4299807ab586f3620cad9",
+        "task_specs_sha256": "93377fa2a6d3c4cd8503302aa9bfe1a282ba19530982083ee356ffe831b12308",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 122314,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 122314
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:tasktrove-science-openqa-qa": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:tasktrove-science-openqa-qa",
+        "dataset_id": "open-athena/campaign-release-tasktrove-science-openqa-qa-3c4aa6a7-retained-20261116-v1",
+        "dataset_revision": "0494a8d2c57f5ccd8d4ae7ef7307c44305df1209",
+        "task_specs_sha256": "f145a9d35365dd22787116f8d97c51ea5aa81c6f62d71677ebce1cb4747ae064",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 150644,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "custom_judge": 150644
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+        "dataset_id": "open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1",
+        "dataset_revision": "5c1270d7d2ec851e65d360e8efe752c556fe14ea",
+        "task_specs_sha256": "d2be0bcd4d4015862364676e122441c3cdf6661e666e2d9a6d94c88ce05c9cdb",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 500,
+        "failed_tasks": 500,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 500
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 500
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118",
+        "dataset_id": "open-athena/atlas-repair-nl2bash-20261118-oracle-filter-v1",
+        "dataset_revision": "4cf30f2874864d8549c7adfa7f6516cf414825a5",
+        "task_specs_sha256": "0a2af1037e04af2b2c2ba9a018192cb79cb5b09f48926bbcb7e7e1405852db45",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 372,
+        "failed_tasks": 372,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 372
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 372
+        }
+      },
+      "consumer_decision": null
+    },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118",
+        "dataset_id": "open-athena/atlas-repair-pymethods-20261118-oracle-filter-v1",
+        "dataset_revision": "3699e8ea33bda5774a045db8a25f09aa878628a8",
+        "task_specs_sha256": "d37145420f2513b07a71c1cc9738fe5cab602fd59dc2b782c1043387fdccaaa2",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 3754,
+        "failed_tasks": 3754,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 3754
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 3754
+        }
+      },
+      "consumer_decision": null
+    },
+    "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": {
+      "consumer_requirements": [
+        "execution",
+        "verifier_allocation"
+      ],
+      "consumer_receipt": {
+        "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
+        "dataset_id": "open-athena/atlas-oracle-d1db546524910beec34d-20261117of1",
+        "dataset_revision": "01e2027f9d1dd8ec6703ec615febcc9f503e342e",
+        "task_specs_sha256": "bb1e11fc05d7fa80d82b4e651d046aac0f357cb5ce8e5421a82bc7d03e41cd64",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1130,
+        "failed_tasks": 12,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 12
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 12,
+          "verifier_allocation": 1130
+        }
+      },
+      "consumer_decision": null
+    },
+    "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+        "dataset_id": "open-athena/atlas-oracle-9aff2d3c617cfc6eeb3d-20261120swev3of3",
+        "dataset_revision": "eae149f26e655a5ca40139f80d1b95ac4bda2044",
+        "task_specs_sha256": "6939018302a9e933b8e9aa97f8a0a332756144423ba7ff2da23499ff3d437843",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 1929,
+        "failed_tasks": 1929,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 1929
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json",
+        "requirements": {
+          "execution": 1929
+        }
+      },
+      "consumer_decision": {
+        "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "task_specs_sha256": "6939018302a9e933b8e9aa97f8a0a332756144423ba7ff2da23499ff3d437843",
+        "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+        "status": "Pending",
+        "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): Scale-SWE stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 1,929 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 1,929. The r39 catalog load would block admission on exactly this finding. The source's prior consumer receipt (20261120 scoped consumer-runtime audit, same census binding, 0 failed in the pinned consumer sandbox) emitted no typed finding, so it is re-measured by the frozen backend survey: the receipt now records all 1,929 tasks execution-unsupported with the survey as evidence, and the prior measurement remains in the registry history and the audit artifact. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 1,929 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+      }
+    },
+    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
+      "consumer_requirements": [
+        "execution"
+      ],
+      "consumer_receipt": {
+        "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "dataset_id": "open-athena/atlas-oracle-561824bdbebffb3f53d9-20261120swev3of3",
+        "dataset_revision": "0ac72bdc13f4aa0ba2a4c1a4c077fc82722e5b31",
+        "task_specs_sha256": "66bfbacc22a65832ee3d84783c36f6d5705d221ce170991716c5dd53a25281cf",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 4264,
+        "failed_tasks": 11,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 11
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 11
+        }
+      },
+      "consumer_decision": {
+        "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "task_specs_sha256": "66bfbacc22a65832ee3d84783c36f6d5705d221ce170991716c5dd53a25281cf",
+        "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+        "status": "Pending",
+        "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): SWE-Lego stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 4,264 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 4,264. The r39 catalog load blocked admission on exactly this finding. The source's existing consumer receipt (20261120 scoped consumer-runtime audit, same census binding) emits the matching typed finding (11 execution-unsupported tasks in the pinned consumer runtime) and is kept unchanged. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 4,264 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+      }
+    },
+    "RST:laion/rts-1k-rootless-apptainer": {
+      "consumer_requirements": [
+        "execution",
+        "verifier_allocation"
+      ],
+      "consumer_receipt": {
+        "source_id": "RST:laion/rts-1k-rootless-apptainer",
+        "dataset_id": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-20261117of1",
+        "dataset_revision": "3fe05149a182c3d9ab141ccc7ef2b8fb27b44d00",
+        "task_specs_sha256": "2ed30e1e135ee8c66e37e9c89992be96f6e42cbcc92adaf069e2f9afd3273e26",
+        "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+        "checked_tasks": 623,
+        "failed_tasks": 616,
+        "failures": {
+          "CONSUMER_EXECUTION_UNSUPPORTED": 616
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
+        "requirements": {
+          "execution": 616,
+          "verifier_allocation": 623
+        }
+      },
+      "consumer_decision": null
+    }
+  },
+  "pending": [
+    {
+      "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
+      "display_name": "Nemotron \u00b7 Nemotron-Cascade-2-RL-data/IF-RL",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "Nemotron-Cascade-2-RL-data",
+      "upstream_url": null,
+      "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL",
+      "display_name": "Nemotron \u00b7 Nemotron-Cascade-2-RL-data/SWE-RL",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "Nemotron-Cascade-2-RL-data",
+      "upstream_url": null,
+      "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "marcusm117:ProofNet-Verified",
+      "display_name": "marcusm117 \u00b7 ProofNet-Verified",
+      "status": "Pending",
+      "origin": "marcusm117",
+      "upstream_dataset": "ProofNet-Verified",
+      "upstream_url": null,
+      "notes": "Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "eval",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "project-numina:NuminaMath-LEAN",
+      "display_name": "project-numina \u00b7 NuminaMath-LEAN",
+      "status": "Pending",
+      "origin": "project-numina",
+      "upstream_dataset": "NuminaMath-LEAN",
+      "upstream_url": null,
+      "notes": "Competition problems with human Lean statements and proofs; the proofs are golden controls.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
+      "display_name": "SWE-rebench \u00b7 ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
+      "status": "Pending",
+      "origin": "SWE-rebench",
+      "upstream_dataset": "ibragim-bad/SWE-rebench-V2.1",
+      "upstream_url": null,
+      "notes": "Repaired from the original author's re-verified ibragim-bad/SWE-rebench-V2.1@26c0145ded93168b0d5d095420155901ad2d5a2f (license PASS cc-by-4.0); ten consolidated shared base images replace the per-task digest-pinned images, the upstream combine.Dockerfile.j2 build step becomes the declared task-start setup, and the source's own Harbor verifier grades behind the SWE_REBENCH shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel unchanged). Fidelity-gated per group against the upstream digest images before the full population run; per-version toolchains and interpreter provisioning are declared base properties. Pending qualification.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123",
+      "display_name": "TaskTrove \u00b7 laion__nemotron-gym-identity-following-v4@repaired-20261123",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__nemotron-gym-identity-following-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Repaired full population of TaskTrove:laion__nemotron-gym-identity-following-v4: every task carried a false 'Marin trained and developed by researchers from NVIDIA' persona in its prompt, embedded rubric, verifier principle and archived judge config; rule identity-repair-20261123-v2 replaces exactly those strings (Stanford and Open Athena attribution) with everything else byte-identical. The parent source stays Excluded (NO_SUPPORTED_BACKEND, ruling 2026-11-17) until this variant's admission receipts bind.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__stackexchange-codereview-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-codereview-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__stackexchange-overflow-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-overflow-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__stackexchange-superuser-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-superuser-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+      "display_name": "TaskTrove \u00b7 laion__stackexchange-unix-sandboxes-verified-v2",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__stackexchange-unix-sandboxes-verified-v2",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:laion__wizardlm-orca-v4",
+      "display_name": "TaskTrove \u00b7 laion__wizardlm-orca-v4",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "laion__wizardlm-orca-v4",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
+      "display_name": "FACET-Terminal \u00b7 FACET-Terminal/FACET-Terminal-Tasks-6k",
+      "status": "Pending",
+      "origin": "FACET-Terminal",
+      "upstream_dataset": "FACET-Terminal/FACET-Terminal-Tasks-6k",
+      "upstream_url": "https://huggingface.co/datasets/FACET-Terminal/FACET-Terminal-Tasks-6k/tree/b2d02645932e3989c8332a41e57d0f0855de7002",
+      "notes": "Canonical TaskSpecs at the contract-repair pin; pending the repaired chain's controls re-derivation, SAMPLE qualification and admission.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "FWeindel:validated-tasks/endless",
+      "display_name": "FWeindel \u00b7 validated-tasks/endless",
+      "status": "Pending",
+      "origin": "FWeindel",
+      "upstream_dataset": "validated-tasks",
+      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec",
+      "notes": "The verified original-pair cohort (2,069 of the 2,079 census tasks; the ten nop-only v2 rows never completed original oracle pairs). The declared conversion reproduces the sealed cohort's task identities and bytes exactly except one grader field: the shell quiesce script carries the shellbox keeper-payload guard landed after the cohort was built (taskcompendium 2026-11-24); The verified original-pair cohort's stable row locators, extracted from the sealed oracle-filter cohort (endless_v2: 1,948 + endless_v3: 121); the declared conversion selects exactly these rows. The admission serves the sealed release bytes, and the census, lexical and dedup receipts bind the sealed cohort. Per-folder license evidence stays bound per folder (the repackager ruling). Coordinator disposition 2026-11-24 15:35 EST: the sealed pre-guard quiesce is the machine-keeper-killing variant on pre-PID-1 shellbox, so the sealed-bytes admission stands only after the landed keeper PID 1 fix (atlas-env-audit dc44e1740b) is verified in-region on one sealed Endless task grading on the LOCAL tier; until then the source does not mark Available. If the fix had not been landed in time, the disposition was to re-release with the current converter's keeper-safe quiesce (ids unchanged; SAMPLE re-run on the new task_specs_sha).",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "FWeindel:validated-tasks/pymethods2test_v1",
+      "display_name": "FWeindel \u00b7 validated-tasks/pymethods2test_v1",
+      "status": "Pending",
+      "origin": "FWeindel",
+      "upstream_dataset": "validated-tasks",
+      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/pymethods2test_v1",
+      "notes": "The complete raw validated-task population at the repackager pin (intake census 574937d678632ded: 4,990 rows, every row stages 1,2,3,4 passed, 0 duplicates). Every row is a complete native Harbor package; conversion keeps the original package bytes and Dockerfile build and binds the SHARED grader and RootDeliveryContract at conversion (rule C 2026-11-24), so the population enters later stages with no contract-less row. The upstream license and lineage scan is HELD: the recorded CANDIDATES P1 basis (license PASS on the original upstream) does not resolve to a checkable receipt, and the revision-history scan awaits the user ruling on license-less early revisions. No publication or admission claim.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-competitive-coding-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-competitive-coding-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "13,969 competitive-coding tasks: the 2026.11.13.1 retained release published from the tasktrove-competitive-coding-v1-taskcompendium-20261112 conversion (13,973 converted; the release's exact-duplicate selection kept 13,969), measured at the pinned upstream revision laion__nemotron-gym-competitive-coding-v2 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. The 2026.11.17.1 census repair re-measured the release pin with every TaskSpec byte identical to the original conversion (content-identity receipts), and the 2026.11.18.1-r1 retained re-publication selects this pin after one lexical-flag drop. 1,739 rows were refused for gold leaked into the instruction and one as a reviewed defect; refused rows are the conversion's own reviewed outcome classes. Withdrawn reward-only claim: setup fidelity matches on every converted row and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-code-contests-built-image",
+      "display_name": "TaskTrove \u00b7 tasktrove-code-contests-built-image",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-code-contests-built-image",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. Republish with converter version 4 and robust SAMPLE/FULL controls before admission. 8222 tasks retain the exact built output of their archived environment for both actor and grader. Registry manifests were read back and pulled image IDs matched the local builds. The private release includes setup fidelity, stdio parity, sampled liveness, retained exclusions and frozen build contexts. No oracle solution or model-quality assessment ran",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-taco-built-image",
+      "display_name": "TaskTrove \u00b7 tasktrove-taco-built-image",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-taco-built-image",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. Republish with converter version 4 and robust SAMPLE/FULL controls before admission. 5116 tasks retain the exact built output of their archived environment for both actor and grader. Registry manifests were read back and pulled image IDs matched the local builds. The private release includes setup fidelity, stdio parity, sampled liveness, retained exclusions and frozen build contexts. No oracle solution or model-quality assessment ran",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-nl2bash-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-nl2bash-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "1,498 nl2bash tasks converted to run in the environment their archives specify: the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and its RUN steps replay as setup commands, one distinct environment across the cohort. Measured at the pinned upstream revision DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ 02923004846e4e73862c20962f823a6d05100e7a: zero refusals, zero substitutions. Withdrawn reward-only claim: setup fidelity matches on all 1,498 rows and 20 of 20 sampled verifiers return a negative verdict on an empty submission at this revision. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-pymethods2test-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-pymethods2test-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "500 pymethods2test tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-v3 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-pymethods2test-large-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-pymethods2test-large-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-large-v2 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-unitsyn-python-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-unitsyn-python-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "Excluded: this release contains the large Unitsyn population rather than the 491-row small cohort. 4,991 tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-v4 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+      "display_name": "TaskTrove \u00b7 tasktrove-unitsyn-python-large-rebuilt-v1",
+      "status": "Pending",
+      "origin": "TaskTrove",
+      "upstream_dataset": "tasktrove-unitsyn-python-large-rebuilt-v1",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-large-v2 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr1",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    }
+  ],
+  "stages": {
+    "FWeindel:validated-tasks/mimo_v1": "Admission pending"
+  },
+  "remediation_queue": [],
+  "metadata_exclusions": [
+    {
+      "id": "Nemotron:Nemotron-RL-knowledge-web_search-mcqa",
+      "display_name": "Nemotron \u00b7 Nemotron-RL-knowledge-web_search-mcqa",
+      "status": "Excluded",
+      "origin": "Nemotron",
+      "upstream_dataset": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+      "upstream_url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+      "notes": "Excluded under the 2026-11-23 third-party credential ruling; design issue https://github.com/marin-community/marin/issues/12082. The native Google Search server requires google_api_key and google_cx. No credentials or substitute search tool are provisioned. Offline conversion retained all 2,929 rows; the unchanged native verifier scored all correct boxed answers 1 and wrong boxed answers 0. Blank replies produced native parsed_option validation errors, preserved as errors. Offline evidence admits no tasks: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/native-web-search-conversion-v1/result.json (SHA-256 1c8770707d536e1728eb4c37a17416807c08ee43bd178b41db763b1e9476922e).",
+      "stage": null,
+      "dataset_id": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+      "dataset_revision": "41028dbc9e06eb388ba99f9fb7a0078123b564c3",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "third-party-credentials-required",
+          "evidence": {
+            "kind": "receipt",
+            "message": "The pinned config binds this dataset to the google_search resource server. Its app.py requires google_api_key and google_cx and calls Google Custom Search JSON API; app SHA-256 76f8ccd53e0346fdd791c283f6b5be2585f4efc61e9d57b8058ee19ddf919ceb. No live credential provisioning is approved; design and clearing criteria are in #12082.",
+            "uri": "https://github.com/NVIDIA-NeMo/Gym/blob/39d2bde61e426f93e4bc00c0255fc1d839f859e6/resources_servers/google_search/configs/google_search.yaml",
+            "sha256": "bde849d0b28a4ba24bbb7fdb2c3c951f14c9bfc66727940acba322dbd7e8f848",
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "GPUMODE:kernelbot-data",
+      "display_name": "GPUMODE \u00b7 kernelbot-data",
+      "status": "Excluded",
+      "origin": "GPUMODE",
+      "upstream_dataset": "GPUMODE/kernelbot-data",
+      "upstream_url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "GPUMODE/kernelbot-data",
+      "dataset_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1 at pin 4159cf6b2c6bab208be6dda885d6d87631cc16df: user rejected the required model-license reciprocity condition for plain OpenMDW-1.1 releases; checker rule E1 ESCALATE, LICENSE quote \"June 9 Researcher Reciprocity License\"; issue 11497.",
+            "uri": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "CyBench:andyzorigin-cybench",
+      "display_name": "CyBench \u00b7 andyzorigin-cybench",
+      "status": "Excluded",
+      "origin": "CyBench",
+      "upstream_dataset": "andyzorigin/cybench",
+      "upstream_url": "https://github.com/andyzorigin/cybench",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "andyzorigin/cybench",
+      "dataset_revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F1 FAIL at pin ca483c6443f17a20ba7d6bac3d274859a1721e51: the harness is Apache-2.0 but the benchmark/project-sekai-ctf/sekaictf-2022 task content is CC BY-NC-SA 4.0 (quoted from its LICENSE.content.md); issue 11497.",
+            "uri": "https://github.com/andyzorigin/cybench/blob/ca483c6443f17a20ba7d6bac3d274859a1721e51/benchmark/project-sekai-ctf/sekaictf-2022/LICENSE.content.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "HAL:princeton-pli-hal-harness",
+      "display_name": "HAL \u00b7 princeton-pli-hal-harness",
+      "status": "Excluded",
+      "origin": "HAL",
+      "upstream_dataset": "princeton-pli/hal-harness",
+      "upstream_url": "https://github.com/princeton-pli/hal-harness",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "princeton-pli/hal-harness",
+      "dataset_revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-missing",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F2 FAIL at pin 16bb03ebc11577fb5ea6dc8bb6c968387085e6aa: no LICENSE or COPYING file in the pinned repository tree; issue 11497.",
+            "uri": "https://api.github.com/repos/princeton-pli/hal-harness/git/trees/16bb03ebc11577fb5ea6dc8bb6c968387085e6aa?recursive=1",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "MiroVerse:miromind-ai-MiroVerse-v0.1",
+      "display_name": "MiroVerse \u00b7 miromind-ai-MiroVerse-v0.1",
+      "status": "Excluded",
+      "origin": "MiroVerse",
+      "upstream_dataset": "miromind-ai/MiroVerse-v0.1",
+      "upstream_url": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "miromind-ai/MiroVerse-v0.1",
+      "dataset_revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F1 FAIL at pin 11fbf325f6eda37b34f519d1ba7268f40f469ac6: dataset card declares license cc-by-nc-4.0; issue 11497.",
+            "uri": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/11fbf325f6eda37b34f519d1ba7268f40f469ac6/README.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "MAI-Gym:tasks",
+      "display_name": "MAI-Gym \u00b7 tasks",
+      "status": "Excluded",
+      "origin": "MAI-Gym",
+      "upstream_dataset": "Tongyi-MAI/MAI-Gym",
+      "upstream_url": "https://github.com/Tongyi-MAI/MAI-Gym",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "Tongyi-MAI/MAI-Gym",
+      "dataset_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1 at pin dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9 (classification missing): no license grant for the apps or task data at the pinned repository; issue 11497 and issue 10231 discussion.",
+            "uri": "https://github.com/Tongyi-MAI/MAI-Gym/tree/dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "OpenGCUA:trajectories",
+      "display_name": "OpenGCUA \u00b7 trajectories",
+      "status": "Excluded",
+      "origin": "OpenGCUA",
+      "upstream_dataset": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "upstream_url": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "dataset_revision": "no published trajectory pin",
+      "use": null,
+      "method_tags": [],
+      "reasons": [
+        {
+          "reason": "not-rl-task-data",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Upstream has no RL task data; harness/trajectories only. CANDIDATES STATE.md (new-rl-data-ingest): no RL task data to ingest. The code is an Apache-2.0 GUI agent harness, not a task set. Its trajectories are unlicensed (ROADMAP: licensing 'will be documented') and are mostly closed-model outputs, so they carry provider output terms. Don't train on them.",
+            "uri": "https://github.com/Tongyi-MAI/OpenGCUA",
+            "sha256": null,
+            "expected": null
+          }
+        },
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1: no trajectory-data license; Apache-2.0 applies to the harness code; issue 11497.",
+            "uri": "https://github.com/Tongyi-MAI/OpenGCUA/tree/55c33aea792b48b9c1330a514bfcc8f6d3ecc704",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    }
+  ],
+  "reason_explanations": {
+    "license-ban": {
+      "label": "License ban",
+      "meaning": "The pinned upstream or publisher license is banned for training use.",
+      "clears": "A license receipt the ban registry accepts, with the registry updated off the ban list."
+    },
+    "license-missing": {
+      "label": "License missing",
+      "meaning": "No license declaration exists in the pinned upstream primary evidence.",
+      "clears": "A recorded permissive grant or license receipt established at the pin."
+    },
+    "not-rl-task-data": {
+      "label": "Not RL task data",
+      "meaning": "The upstream provides no RL task data; it ships harness code or trajectories only.",
+      "clears": "A republished upstream that contains usable RL task data."
+    },
+    "oracle-filtration-retained-zero": {
+      "label": "Oracle filtration retained zero",
+      "meaning": "Oracle filtration over the full population admitted zero tasks.",
+      "clears": "A republished conversion whose filtration admits more than zero tasks, with a publication-seal receipt."
+    },
+    "actor-census-missing": {
+      "label": "Actor census missing",
+      "meaning": "No actor census evidence exists for the source at all.",
+      "clears": "The QUICK actor-census receipt bound at the current pin."
+    },
+    "actor-census-stale": {
+      "label": "Actor census stale",
+      "meaning": "The actor census measured a different dataset pin or converter than the configured input.",
+      "clears": "A re-measured census receipt at the current dataset pin and converter version."
+    },
+    "retained-population-empty": {
+      "label": "Retained population empty",
+      "meaning": "The retained population at the current pin is empty.",
+      "clears": "A nonempty retained population at the current pin."
+    },
+    "grading-census-incomplete": {
+      "label": "Grading census incomplete",
+      "meaning": "The grading census does not cover the complete retained population.",
+      "clears": "A grading census receipt covering every retained task."
+    },
+    "grading-census-counts-incomplete": {
+      "label": "Grading census counts incomplete",
+      "meaning": "The grading census's typed counts do not sum to the retained population.",
+      "clears": "A grading census receipt whose required, declared, status and reason counts cover the population."
+    },
+    "grader-missing": {
+      "label": "Grader missing",
+      "meaning": "Admitted tasks lack runnable graders.",
+      "clears": "A grading census receipt with zero missing-grader tasks."
+    },
+    "lexical-receipt-missing": {
+      "label": "Lexical receipt missing",
+      "meaning": "Evaluation use lacks a measured lexical receipt at the current dataset pin.",
+      "clears": "A lexical receipt measured at the current pin for the declared use."
+    },
+    "lexical-remediation-required": {
+      "label": "Lexical remediation required",
+      "meaning": "Training use lacks a clean or remediated private-release receipt at the current pin.",
+      "clears": "A remediated private-release decontamination receipt bound to the current pin."
+    },
+    "oversight-missing": {
+      "label": "Oversight missing",
+      "meaning": "No oversight evidence exists at all: neither a QUICK conversion receipt nor a SAMPLE or FULL review receipt with recorded verification.",
+      "clears": "A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification."
+    },
+    "not-taskspec-converted": {
+      "label": "Not TaskSpec converted",
+      "meaning": "The source's admitted population carries no verified TaskSpec conversion receipt for its admitted revision: its declared shape is not an executable TaskSpec population, so the RL runtime cannot serve it.",
+      "clears": "A verified TaskSpec conversion receipt covering the admitted revision \u2014 the conversion census bound at the admitted pin with the declared TaskSpec shape \u2014 produced by the required conversion stage."
+    },
+    "agentic-task-format-missing": {
+      "label": "Agentic task format missing",
+      "meaning": "An agentic source declares no accepted task format.",
+      "clears": "A declared TaskSpec task format (or grandfathered registration)."
+    },
+    "snapshot-identity-missing": {
+      "label": "Snapshot identity missing",
+      "meaning": "No production snapshot identity measurement exists.",
+      "clears": "The snapshot identity measurement receipt at the current pin."
+    },
+    "execution-requirement-missing": {
+      "label": "Execution requirement missing",
+      "meaning": "No execution-requirement measurement exists for the population.",
+      "clears": "The execution-requirement measurement receipt."
+    },
+    "grader-defect": {
+      "label": "Grader defect",
+      "meaning": "A recorded grader or oracle defect makes the population's reward untrustworthy.",
+      "clears": "A republished grader that passes the recorded defect check."
+    },
+    "contamination-risk": {
+      "label": "Contamination risk",
+      "meaning": "A known canary or contamination exposure is present in the source.",
+      "clears": "A decontamination receipt that removes the recorded exposure."
+    },
+    "duplicate-of-source": {
+      "label": "Duplicate",
+      "meaning": "The population duplicates another admitted source's population.",
+      "clears": "A distinct-population ruling recorded against the other source."
+    },
+    "unspecified-legacy": {
+      "label": "Needs ruling",
+      "meaning": "A legacy exclusion tag with no recoverable typed reason; transitional.",
+      "clears": "A user ruling recorded as a typed reason; this reason must not persist."
+    },
+    "environment-artifact-missing": {
+      "label": "Environment artifact missing",
+      "meaning": "A declared environment artifact does not exist in any region.",
+      "clears": "Rebuilding the artifact in-region and binding its receipt; exclusion applies only when it is unrebuildable."
+    },
+    "no-supported-backend": {
+      "label": "No supported backend",
+      "meaning": "No available backend can run the population's contracts, per the backend survey's per-source capabilities.",
+      "clears": "A backend survey recording supported execution for at least one backend at the current pin."
+    },
+    "grader-judge-unavailable": {
+      "label": "Judge unavailable",
+      "meaning": "The population's judge route is unqualified: no judge-model tier or judge API qualifies.",
+      "clears": "Re-pinning to a JUDGE_TIERS tier through private remediation and running that version; exclusion applies only when no tier qualifies."
+    },
+    "invalid-reference": {
+      "label": "Invalid reference",
+      "meaning": "The population references an expected target that does not exist in its frozen sample.",
+      "clears": "A faithfully repaired private remediation version whose references resolve."
+    },
+    "third-party-credentials-required": {
+      "label": "Third-party credentials required",
+      "meaning": "Tasks call live third-party services whose credentials are not provisioned.",
+      "clears": "An approved credential-provisioning design tracked in #12082 and a qualifier run with fixture credentials bound only to owned verifier/service jobs."
+    }
+  }
 }

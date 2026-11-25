@@ -59,6 +59,7 @@ from experiments.post_training.task_curation.datasets.pdbthink import tasks as p
 from experiments.post_training.task_curation.datasets.polaris import tasks as polaris
 from experiments.post_training.task_curation.datasets.prime_intellect import swe as prime_swe
 from experiments.post_training.task_curation.datasets.prime_intellect.multiswe import convert as prime_multiswe
+from experiments.post_training.task_curation.datasets.pymethods2test import tasks as pymethods2test
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
@@ -170,6 +171,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
     *facet_terminal.sources(),
     *endless.cohort_source(),
+    *pymethods2test.sources(),
     *(
         source
         for source in campaign_releases.sources()
