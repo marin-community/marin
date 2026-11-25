@@ -727,7 +727,6 @@ def run_lint_review(
         return 0
     merge_base, stat = resolved
 
-    # Apply catalog floors before computing leads or starting agents.
     diff_stats = _diff_numstat(merge_base)
     changed_lines = diff_stats[1] + diff_stats[2]
     runnable = []
