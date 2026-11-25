@@ -1242,8 +1242,10 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
+    settings = ("trainer.max_steps=3", "trainer.project_name=fixture-project")
+    set_args = [arg for setting in settings for arg in ("--set", setting)]
     built = snowball.build_experiment(
-        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
+        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=settings
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
     _json(source / "exports/best_checkpoint.json", {"step": 2})
@@ -1281,6 +1283,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert completed is not None and completed.index is not None
         assert completed.result is not None and completed.result.state == "succeeded"
         assert completed.index.model == table.model and completed.index.preset == preset.name
+        assert completed.index.wandb_project == "fixture-project"
         assert completed.native.config["iris"]["allocation"]["disk"] == "3TB"
         assert completed.native.config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
         assert completed.issue is None
@@ -1320,8 +1323,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "http://127.0.0.1:55777",
         "--max-concurrent",
         "3",
-        "--set",
-        "trainer.max_steps=3",
+        *set_args,
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
     default_module = model_entry_fixture.__spec__.name
@@ -1468,7 +1470,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     write_skyrl_run_record(
         source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None, attempt_id=completed_id
     )
-    planning_args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--set", "trainer.max_steps=3"]
+    planning_args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, *set_args]
     result = invoke_with_preflight_stub(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
@@ -1491,7 +1493,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
     live = snowball.build_experiment(
-        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=settings
     )
     assert live.runs[0].name != built.runs[0].name
     with monkeypatch.context() as live_record:
