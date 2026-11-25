@@ -21,6 +21,7 @@ from experiments.post_training.long_loop.launch_validation import validate_launc
 from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService, run_with_retrieval
 from experiments.post_training.long_loop.round_runner import (
     DRAFTS,
+    adopted_rl_evaluation,
     adopted_round_resolved_plan,
     adopted_round_rl,
     load_round,
@@ -59,6 +60,41 @@ ROUND_DIR = Path(__file__).parents[1] / "rounds"
 RL_ROUNDS = [
     path for path in sorted(ROUND_DIR.glob("*.yaml")) if "recipe" in yaml.safe_load(path.read_text()).get("rl", {})
 ]
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_adopted_rl_exports_selected_policy_before_frozen_evaluation(local_round, tmp_path):
+    spec = dataclasses.replace(
+        local_round,
+        evaluation="frozen-micro210",
+        evaluation_profile="mochi-gb200-cw-us-east-08a",
+        rl=dataclasses.replace(
+            local_round.rl,
+            export_hf=True,
+            retained_checkpoints=1,
+            recipe=copy.deepcopy(local_round.rl.recipe),
+        ),
+    )
+    spec.rl.recipe["trainer"]["hf_export_checkpoint"] = "best"
+    training = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "rl"), str(tmp_path), deps=training.deps, runtime_args=training.runtime_args
+    )
+    config = training.build_config(context)
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert config.export_hf
+    assert launch["skyrl"]["trainer"]["hf_export_checkpoint"] == "best"
+    assert launch["artifacts"]["resume_checkpoint_count"] == 1
+    evaluation = adopted_rl_evaluation(spec, training)
+    assert training in graph_handles([evaluation])
+    evaluation_context = StepContext.for_run(
+        str(tmp_path / "eval"), str(tmp_path), deps=evaluation.deps, runtime_args=evaluation.runtime_args
+    )
+    run = evaluation.build_config(dataclasses.replace(evaluation_context, is_fingerprint=True))
+    assert run.model_manifest_filename == ".marinskyrl-model-manifest.json"
+    assert run.serving_profile.role_plan.num_nodes * run.serving_profile.role_plan.gpus_per_node == 16
+    assert run.serving_profile.execution.target_cluster == "cw-us-east-08a"
+    assert run.evaluation.record().policy_reference.revision == "2026.11.23-together"
 
 
 @pytest.fixture

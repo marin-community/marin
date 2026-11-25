@@ -272,6 +272,7 @@ def build_run(
     data_sha256: str | None = None,
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
+    export_hf: bool = False,
     openresearcher_service: OpenResearcherService | None = None,
     gpu_variant: str = "GB200",
     curriculum: RlCurriculum | None = None,
@@ -413,7 +414,7 @@ def build_run(
             curriculum=curriculum,
         ),
         execution or profile.execution,
-        export_hf=False,
+        export_hf=export_hf,
     )
     if openresearcher_service is not None:
         launch = retrieval_launch(openresearcher_service, execution or profile.execution)

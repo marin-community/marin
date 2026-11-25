@@ -42,7 +42,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.experiment.cli import build_options_with_runner
 from marin.rl.cli import submit_or_run
 from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
-from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLRolePlan
+from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLPolicyModel, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -50,7 +50,12 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import merge_mappings, set_path
 
-from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
+from experiments.evaluation.micro210 import (
+    Micro210ServingProfile,
+    ServingProfileName,
+    micro210_artifact_step,
+    registered_serving_profile,
+)
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
@@ -92,7 +97,7 @@ from experiments.post_training.long_loop.mochi_sft import (
     resolve_mochi_sft,
     run_mochi_sft,
 )
-from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
+from experiments.post_training.long_loop.nvl72 import RETENTION, MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.openresearcher_service import (
     OpenResearcherService,
     retrieval_launch,
@@ -256,6 +261,8 @@ class RoundRl:
     validation data is that materialization, never an adopted parquet."""
     max_steps: int
     selection_eligibility: str
+    export_hf: bool = False
+    retained_checkpoints: int = -1
     native_checkpoint: str | None = None
     gpu_variant: str = "GB200"
     recipe_patch: FilePin | None = None
@@ -275,6 +282,8 @@ class AdoptedRlRound:
     storage: RoundStorage
     adopted_model: RoundAdoptedHf
     rl: RoundRl
+    evaluation: str | None = None
+    evaluation_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -723,6 +732,8 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         max_new_tokens=recipe["context_budget"]["max_new_tokens_per_turn"],
         gpu_variant=rl.gpu_variant,
         curriculum=curriculum,
+        export_hf=rl.export_hf,
+        retention=dataclasses.replace(RETENTION, resume_checkpoint_count=rl.retained_checkpoints),
     )
     original_build = step.build_config
 
@@ -750,6 +761,19 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         )
         step = dataclasses.replace(step, expected_fingerprint=step.fingerprint())
     return step
+
+
+def adopted_rl_evaluation(spec: AdoptedRlRound, training: ArtifactStep) -> ArtifactStep:
+    """Evaluate the RL-selected HF export through the frozen Micro210 pipeline."""
+    if spec.evaluation != "frozen-micro210" or spec.evaluation_profile is None or not spec.rl.export_hf:
+        raise ValueError("An adopted RL evaluation requires frozen-micro210, a serving profile and HF export")
+    return micro210_artifact_step(
+        SkyRLPolicyModel(training),
+        name=f"{spec.name}/micro210",
+        version=spec.version,
+        serving_profile=registered_serving_profile(ServingProfileName(spec.evaluation_profile)),
+        model_manifest_filename=MODEL_MANIFEST_FILENAME,
+    )
 
 
 def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
@@ -1134,8 +1158,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         )
         return terminal
     if isinstance(round_spec, AdoptedRlRound):
-        if through != "rl":
-            raise click.UsageError("An adopted RL round requires --through rl")
+        if through not in {"rl", "eval"}:
+            raise click.UsageError("An adopted RL round requires --through rl or eval")
         os.environ.update(
             MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
         )
@@ -1150,6 +1174,11 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
             model_config=(StoragePath(round_spec.adopted_model.uri) / "config.json").read_bytes(),
             check_vocabulary=True,
         )
+        if through == "eval":
+            terminal = adopted_rl_evaluation(round_spec, terminal)
+            # The selected model does not exist before RL. Its vocabulary is
+            # verified by the evaluator's regional CPU gate after HF export.
+            validate_graph(terminal, validation_output / "evaluation-plan", round_spec.storage.output_prefix)
         return terminal
     if isinstance(round_spec, AdoptedHfRound):
         if through != "eval":
