@@ -50,7 +50,6 @@ TERMINAL_BENCH_2 = HarborDataset(
     title="Terminal-Bench 2.0",
     source=huggingface_packages("DCAgent2/terminal_bench_2", "693231ec029249e7c91ed2e414bcc9c45d7cd879"),
     version=VERSION,
-    count=89,
     attempt_timeout=TERMINAL_BENCH_ATTEMPT_TIMEOUT,
 )
 SWEBENCH_VERIFIED = HarborDataset(
@@ -59,7 +58,6 @@ SWEBENCH_VERIFIED = HarborDataset(
     title="SWE-bench Verified",
     source=huggingface_packages("DCAgent/swebench-verified", "0e4345c345395a3371f0b79d891a59fdbf74e9a8"),
     version=VERSION,
-    count=500,
 )
 SWEBENCH_VERIFIED_100 = HarborDataset(
     recipe="swebench-verified-100",
@@ -69,7 +67,6 @@ SWEBENCH_VERIFIED_100 = HarborDataset(
         "DCAgent2/swebench-verified-random-100-folders", "0c553bd6d05d451907afb8db31dba84759ccc993"
     ),
     version=VERSION,
-    count=100,
     images=SWEBENCH_VERIFIED.recipe,
 )
 OT_TBLITE = HarborDataset(
@@ -78,7 +75,6 @@ OT_TBLITE = HarborDataset(
     title="OpenThoughts-TBLite",
     source=huggingface_packages("DCAgent/dev_set_v2", "377118ff3031c934f5a647ae2c425eb74eef3b21"),
     version=VERSION,
-    count=100,
 )
 BFCL_PARITY = HarborDataset(
     recipe="bfcl-parity",
@@ -86,7 +82,6 @@ BFCL_PARITY = HarborDataset(
     title="BFCL parity",
     source=huggingface_packages("DCAgent2/bfcl-parity", "c43075f07c969fa30658d28f7f48c3bc9f2b02b2"),
     version=VERSION,
-    count=123,
 )
 GAIA = HarborDataset(
     recipe="gaia",
@@ -94,7 +89,6 @@ GAIA = HarborDataset(
     title="GAIA",
     source=huggingface_packages("DCAgent/gaia_127", "55a2fa83dfaaba08f95e6a8f07fb2edfa4353856"),
     version=VERSION,
-    count=127,
 )
 AIDER_POLYGLOT = HarborDataset(
     recipe="aider-polyglot",
@@ -102,7 +96,6 @@ AIDER_POLYGLOT = HarborDataset(
     title="Aider polyglot",
     source=huggingface_packages("DCAgent2/aider_polyglot", "6d5c1dcdc69752027347bc25b524b70b771404c7"),
     version=VERSION,
-    count=225,
 )
 OPENAI_SDK = "openai==2.24.0"
 # FinanceAgent's retrieve_information tool calls its model through LiteLLM, which has had compromised
@@ -146,7 +139,6 @@ FINANCEAGENT = HarborDataset(
     title="FinanceAgent",
     source=huggingface_packages("DCAgent/financeagent_terminal", "86f788bc2fe544de818f26a71e7f91c247dd39e9"),
     version=JUDGED_VERSION,
-    count=50,
     rule=financeagent_answer,
     requires_judge=True,
     edits=FINANCEAGENT_EDITS,
@@ -157,7 +149,6 @@ MEDAGENTBENCH = HarborDataset(
     title="MedAgentBench",
     source=huggingface_packages("DCAgent/medagentbench", "d25e5bd284ebdd812c21a6430598e9d7a73589ec"),
     version=VERSION,
-    count=300,
 )
 AIME_AGENT = HarborDataset(
     recipe="aime-agent",
@@ -171,7 +162,6 @@ AIME_AGENT = HarborDataset(
         root="datasets/aime",
     ),
     version=VERSION,
-    count=60,
 )
 SIMPLEQA_AGENT = HarborDataset(
     recipe="simpleqa-agent",
@@ -185,7 +175,6 @@ SIMPLEQA_AGENT = HarborDataset(
         root="datasets/simpleqa",
     ),
     version=JUDGED_VERSION,
-    count=4326,
     rule=simpleqa_answer,
     requires_judge=True,
 )
@@ -200,7 +189,6 @@ TERMINAL_BENCH_2_1 = HarborDataset(
         read=package_rows,
     ),
     version=VERSION,
-    count=89,
     attempt_timeout=TERMINAL_BENCH_ATTEMPT_TIMEOUT,
 )
 LONG_MAX_INPUT_TOKENS = 65536
@@ -233,7 +221,6 @@ OT_TBLITE_3TRIAL = HarborDataset(
         root="",
     ),
     version=VERSION,
-    count=100,
     images=OT_TBLITE.recipe,
 )
 DS_1000_MINI_200_PACKAGES = frozenset(
@@ -261,7 +248,6 @@ DS_1000_MINI_200 = HarborDataset(
         packages=DS_1000_MINI_200_PACKAGES,
     ),
     version="2026.11.25",
-    count=200,
 )
 BFCL_PARITY_PI = HarborDataset(
     recipe="bfcl-parity-1.0-pi",
@@ -275,7 +261,6 @@ BFCL_PARITY_PI = HarborDataset(
         root="datasets/bfcl_parity",
     ),
     version=VERSION,
-    count=123,
     images=BFCL_PARITY.recipe,
 )
 BIXBENCH = HarborDataset(
@@ -290,7 +275,6 @@ BIXBENCH = HarborDataset(
         root="datasets/bixbench-cli-marin-corrections-1",
     ),
     version=JUDGED_VERSION,
-    count=205,
     rule=bixbench_answer,
     requires_judge=True,
 )
@@ -307,7 +291,6 @@ SWEBENCH_VERIFIED_MINI_SWE = HarborDataset(
         root="datasets/swebench-verified",
     ),
     version=VERSION,
-    count=500,
     images=SWEBENCH_VERIFIED.recipe,
 )
 BIXBENCH_PI = PiAgent(version="0.87.1", setup_timeout=360, compaction_reserve_tokens=2 * LONG_MAX_OUTPUT_TOKENS)

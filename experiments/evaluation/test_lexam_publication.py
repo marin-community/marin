@@ -55,7 +55,7 @@ def test_publication_renders_lexam_prompts_for_one_language(tmp_path, benchmark,
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
     )
     recipe = source_recipe(dataset.recipe, {}, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": len(expected)})
+    protocol = dataset.protocol
     output = tmp_path / "output"
     client = LocalClient()
     try:

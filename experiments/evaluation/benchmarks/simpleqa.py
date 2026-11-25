@@ -33,12 +33,10 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 # Includes the publisher's 2026-03-09 correction of the Lilongwe question ("latitude" to "longitude").
 SIMPLEQA_VERIFIED_REVISION = "0dc97e0d28d8233463e005cdc4475cc2a13ba2dc"
-SIMPLEQA_VERIFIED_ROWS = 1000
 
 
 def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCorpusRecipe]:
     name = "simpleqa-mini" if mini else "simpleqa"
-    rows = 500 if mini else 4326
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -81,7 +79,6 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
                 metrics=Metrics.CLASSIFICATION,
                 primary_metric="accuracy",
                 summary=SummaryKind.CLASSIFICATION,
-                expected_population=rows,
             ),
             simpleqa_item,
         ),
@@ -143,7 +140,6 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
                 metrics=Metrics.CLASSIFICATION,
                 primary_metric="accuracy",
                 summary=SummaryKind.CLASSIFICATION,
-                expected_population=SIMPLEQA_VERIFIED_ROWS,
             ),
             simpleqa_verified_item,
         ),

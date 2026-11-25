@@ -29,7 +29,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
     return [
         lm_eval_text_generation(
             dataset=QuestionAnsweringDataset(
-                name="gsm8k", source=GSM8K_SOURCE, population=1319, pool_file="main/train-00000-of-00001.parquet"
+                name="gsm8k", source=GSM8K_SOURCE, pool_file="main/train-00000-of-00001.parquet"
             ),
             shots=(5, 0),
             grader=MATH_GRADER,
@@ -44,7 +44,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     name="gsm8k_cot",
                     benchmark="gsm8k_cot",
                     source=GSM8K_SOURCE,
-                    population=1319,
                     template=gsm8k_cot_template(),
                     metrics=("exact_match,flexible-extract", "exact_match,strict-match"),
                     sampling=Sampling(

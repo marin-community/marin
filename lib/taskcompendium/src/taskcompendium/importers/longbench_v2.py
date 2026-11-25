@@ -29,7 +29,6 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
-LONGBENCH_V2_POPULATION = 503
 LONGBENCH_V2_LENGTHS = ("short", "medium", "long")
 LONGBENCH_V2_LENGTH_LABEL = "longbench.length"
 LONGBENCH_V2_DIFFICULTY_LABEL = "longbench.difficulty"

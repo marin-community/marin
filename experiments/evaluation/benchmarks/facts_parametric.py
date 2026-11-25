@@ -37,7 +37,6 @@ FACTS_PARAMETRIC_URL = (
     "FACTS-Parametric-public.csv?datasetVersionNumber=2"
 )
 FACTS_PARAMETRIC_SHA256 = "23fdc39d681656c87c6790b158f3d3a54f335903691a3285599c67a1578439f8"
-FACTS_PARAMETRIC_POPULATION = 1052
 VERSION = "2026.11.23"
 
 
@@ -61,7 +60,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(*Metrics.CLASSIFICATION, Metric(name="unknown", kind=MetricKind.BINARY, higher_is_better=False)),
         primary_metric="accuracy",
         summary=SummaryKind.CLASSIFICATION,
-        expected_population=FACTS_PARAMETRIC_POPULATION,
     )
     source = evaluation_source(
         name="facts-parametric",

@@ -19,9 +19,6 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
-# Full population of the pinned openai/mrcr revision, before run-time eligibility.
-MRCR_SOURCE_POPULATION = 2400
-
 
 @cache
 def official_tokenizer():

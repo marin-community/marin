@@ -98,7 +98,6 @@ def multiple_choice_evaluation(
     name: str,
     benchmark: str,
     source: HfSource | UrlSource,
-    population: int,
     template: ChoiceTemplate,
     metrics: tuple[LikelihoodMetric, ...],
     subject: str = "",
@@ -140,7 +139,6 @@ def multiple_choice_evaluation(
                 primary_metric=metrics[-1].name,
                 num_fewshot=policy.shots,
                 summary=SummaryKind.MEAN,
-                expected_population=population,
                 likelihood_metrics=metrics,
             ),
             partial(choice_item, subject=subject),
@@ -154,7 +152,6 @@ def lm_eval_multiple_choice(
     name: str,
     benchmark: str,
     source: HfSource,
-    population: int,
     template: HarnessTemplate,
     normalizations: tuple[LikelihoodNormalization, ...],
     version: str,
@@ -217,7 +214,6 @@ def lm_eval_multiple_choice(
                 primary_metric=names[normalizations[0]],
                 num_fewshot=template.num_fewshot,
                 summary=SummaryKind.MEAN,
-                expected_population=population,
                 likelihood_metrics=tuple(
                     LikelihoodMetric(
                         name=names[value],
@@ -240,7 +236,6 @@ def text_generation_evaluation(
     name: str,
     benchmark: str,
     source: HfSource,
-    population: int,
     template: GenerationTemplate,
     metrics: tuple[str, ...],
     sampling: Sampling,
@@ -277,7 +272,6 @@ def text_generation_evaluation(
                 primary_metric=metrics[0],
                 num_fewshot=template.fewshot.shots,
                 summary=SummaryKind.MEAN,
-                expected_population=population,
             ),
             generation_item,
         ),
@@ -289,7 +283,6 @@ def text_generation_evaluation(
 class QuestionAnsweringDataset:
     name: str
     source: HfSource
-    population: int
     pool_file: str
 
 
@@ -345,7 +338,6 @@ def _compile_lm_eval_text_generation(
                 ),
                 primary_metric=primary_metric,
                 summary=SummaryKind.MEAN,
-                expected_population=dataset.population,
             ),
             item_builder=generation_item,
             protocol_name="harness",

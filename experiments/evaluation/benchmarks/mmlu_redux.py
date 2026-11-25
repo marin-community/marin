@@ -32,7 +32,6 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 ZEROEVAL_DATA_REVISION = "a100ff81ecec0ed983dd3f0038d6d6bb2ab3dc1c"
 MMLU_REDUX_FILE = "mmlu-redux/test-00000-of-00001.parquet"
-MMLU_REDUX_POPULATION = 2778
 VERSION = "2026.11.17"
 
 
@@ -53,7 +52,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=MMLU_REDUX_POPULATION,
     )
     source = evaluation_source(
         name="mmlu-redux",

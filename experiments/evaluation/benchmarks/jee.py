@@ -65,7 +65,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     metrics=(Metric(name="accuracy", kind=MetricKind.CONTINUOUS, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=515,
                 ),
                 item_builder=jee_item,
             ),

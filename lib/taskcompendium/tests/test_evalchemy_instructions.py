@@ -122,7 +122,6 @@ def test_instruction_publication_preserves_prompt_channel_and_private_constraint
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.WEIGHTED_MEAN,
-        expected_population=1,
     )
     output = str(tmp_path / "published")
     client = LocalClient()

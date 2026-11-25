@@ -37,7 +37,7 @@ def test_genomeqa_publication(tmp_path, monkeypatch):
     recipe = source_recipe(dataset.recipe, {"prompt": str(source)}, environment)
     monkeypatch.setitem(FORMAT_BY_SHA256, hashlib.sha256(parquet.read_bytes()).hexdigest(), "binary")
     recipe = replace(recipe, source=replace(recipe.source, patterns=(binary,)))
-    protocol = dataset.protocol.model_copy(update={"expected_population": 1})
+    protocol = dataset.protocol
     output = str(tmp_path / "published")
     client = LocalClient()
     try:
