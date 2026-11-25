@@ -19,9 +19,16 @@ The dataset rows come from `ibragim-bad/SWE-rebench-V2.1` (CC BY 4.0), pinned at
 The renderer keeps the upstream task format and tests, subject to the grader change below.
 
 The vendored `grade.py.tmpl` adds `unscorable: true` and an `UNSCORABLE` log line
-when no test IDs are expected and the parsed log is empty. Upstream's
+when no named test results were parsed, even when the config expects test IDs.
+Package build-error markers do not count as named results. Upstream's
 `normalized_passed_subset` already requires a nonempty expected set, so the
-grader exits nonzero and `test.sh` leaves reward at zero in both versions.
+grader exits nonzero and `test.sh` leaves reward at zero. A parsed error also
+prevents a resolved verdict.
+
+The vendored Go parser strips the package prefix from `go test -json` test
+results so they match the published config IDs. Package-level `ok` and JSON
+`pass` lines remain summaries, not named results. When multiple packages emit
+the same test name, a failure or skip takes precedence over a pass.
 
 The vendored `log_parsers.py` also changes `parse_java_mvn`: upstream marks every
 class seen in a `Running` line as passed when no result was parsed. This copy

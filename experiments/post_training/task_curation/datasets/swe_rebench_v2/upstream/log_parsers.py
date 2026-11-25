@@ -673,13 +673,18 @@ GO_JSON_STATUSES = {
 }
 
 
+GO_STATUS_PRIORITY = {
+    TestStatus.PASSED: 0,
+    TestStatus.SKIPPED: 1,
+    TestStatus.FAILED: 2,
+    TestStatus.ERROR: 3,
+}
+
+
 def _parse_go_json_event(event: dict[str, object]) -> tuple[str, TestStatus] | None:
     action = event.get("Action")
     test_name = event.get("Test")
     if isinstance(test_name, str) and test_name:
-        package = event.get("Package")
-        if isinstance(package, str) and package:
-            test_name = f"{package}::{test_name}"
         status = GO_JSON_STATUSES.get(action) if isinstance(action, str) else None
         return (test_name, status) if status is not None else None
 
@@ -697,35 +702,29 @@ def _parse_go_json_event(event: dict[str, object]) -> tuple[str, TestStatus] | N
 
 
 def parse_log_gotest(log: str) -> ParsedTestLog:
-    """
-    Parser for test logs generated with 'go test'
-
-    Args:
-        log (str): log content
-        test_spec (TestSpec): test spec (unused)
-    Returns:
-        dict: test case to test status mapping
-    """
-    test_status_map = {}
+    """Parse named results from verbose or JSON `go test` output."""
+    test_status_map: ParsedTestLog = {}
 
     for line in log.split("\n"):
         stripped = line.strip()
         match = GO_TEST_RE.match(stripped)
         if match:
             status, test_name, _duration = match.groups()
-            test_status_map[test_name] = GO_TEST_STATUSES[status]
+            result = test_name, GO_TEST_STATUSES[status]
+        elif stripped.startswith("{"):
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            result = _parse_go_json_event(event)
+        else:
             continue
 
-        if not stripped.startswith("{"):
+        if result is None:
             continue
-        try:
-            event = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-
-        result = _parse_go_json_event(event)
-        if result is not None:
-            test_name, status = result
+        test_name, status = result
+        current = test_status_map.get(test_name)
+        if current is None or GO_STATUS_PRIORITY[status] > GO_STATUS_PRIORITY[current]:
             test_status_map[test_name] = status
 
     return test_status_map
