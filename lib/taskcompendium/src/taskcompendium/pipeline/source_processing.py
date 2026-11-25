@@ -509,7 +509,7 @@ def _census_payload_rows(run: _SourceRun, sample: RawSample) -> RawSample:
     counts = count_source_files(files, spec.format)
     if any(count is None for count in counts.values()):
         return sample
-    measured = sum(counts.values())
+    measured = sum(count for count in counts.values() if count is not None)
     if sample.population_count != measured:
         raise ValueError(
             f"The staged payload holds {measured} rows but the source reader produced {sample.population_count}"
