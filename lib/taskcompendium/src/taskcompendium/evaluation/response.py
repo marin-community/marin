@@ -10,6 +10,7 @@ Evalchemy's ``final_only`` content policy: graders such as LLM judges see the
 final answer and never the reasoning, even when the final answer is empty.
 """
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -18,6 +19,8 @@ from taskcompendium.evaluation.spec import ResponseSelection
 
 
 def completion_text(message: Mapping[str, Any], stop_reason: str, selection: ResponseSelection) -> str:
+    if selection == "provider_response":
+        return json.dumps({"message": dict(message), "finish_reason": stop_reason}, allow_nan=False)
     content = message.get("content") or ""
     reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
     if selection == "final_only":

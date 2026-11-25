@@ -74,10 +74,9 @@ def test_starting_checkpoint_requires_automatic_recovery(tmp_path: Path, overrid
         assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
 
 
-@pytest.mark.parametrize("entrypoint", ["generate", "terminal_bench_generate"])
-def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str) -> None:
+def test_generation_rejects_starting_checkpoint(tmp_path: Path) -> None:
     raw = raw_launch_config()
-    raw["skyrl"]["entrypoint"] = entrypoint
+    raw["skyrl"]["entrypoint"] = "generate"
     raw["inputs"]["starting_checkpoint"] = {"uri": "s3://seed/global_step_2", "identity": "seed@2:abc"}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -307,32 +306,6 @@ def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypat
         inference_placement.verified_inference_replica_placements(reports, **kwargs)
 
 
-def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
-    raw = raw_launch_config()
-    task = {
-        "git_url": "https://example.org/tasks.git",
-        "git_commit_id": "b" * 40,
-        "path": "datasets/bfcl_parity/example-task",
-    }
-    raw["run"]["export_hf"] = False
-    raw["skyrl"]["trainer"]["callbacks"] = [
-        {
-            "type": "harbor_evaluation",
-            "daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
-            "cohorts": [{"name": "bfcl_parity", "reward_key": "reward", "job": {"tasks": [task]}}],
-            "timeout": 600,
-            "minimum_coverage": 0.9,
-            "minimum_native_coverage": 0.99,
-        }
-    ]
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw))
-
-    config = load_launch_config(path)
-    resolved_task = config.skyrl.trainer.callbacks[0].cohorts[0].job.tasks[0]
-    assert OmegaConf.to_container(resolved_task) == task
-
-
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = raw_launch_config()
     raw["skyrl"]["trainer"].update(ckpt_interval=1)
@@ -465,7 +438,7 @@ def test_composed_launch_rejects_kl_switches(tmp_path: Path, switch: str) -> Non
     [
         ("standard", 0, "sync"),
         ("standard", 2, "async"),
-        ("terminal_bench", 1, "async"),
+        ("taskcompendium", 1, "async"),
         ("generate", 0, None),
     ],
 )
@@ -589,6 +562,22 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
+    selection_identity = "fixture@2026.11.19.1"
+    selection_path = tmp_path / "staged-selection"
+    if entrypoint == "standard":
+        document["skyrl"]["data"] = {"kind": "parquet"}
+        document["inputs"].update(
+            data_kind="parquet",
+            train_data=[
+                {
+                    "kind": "directory",
+                    "uri": "s3://fixture/selection",
+                    "identity": selection_identity,
+                    "local_path": str(selection_path),
+                    "relative_path": "train.parquet",
+                }
+            ],
+        )
     contents = yaml.safe_dump(document).encode()
 
     path = materialize_launch_config(
@@ -619,6 +608,9 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     def workload(config):
         assert read_attempt(export_root, "attempt-1") is not None
         assert config.runtime.iris_job_id == "/tests/bootstrap-trainer"
+        if entrypoint == "standard":
+            assert config.runtime.prepared_task_cache.identity == selection_identity
+            assert config.runtime.prepared_task_cache.path == str(selection_path / "train.parquet")
         if fail:
             raise RuntimeError("workload initialization failed")
         with Tracking("project", "display-name", config.trainer.logger, config) as tracker:
@@ -654,6 +646,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     attempt = read_attempt(export_root, "attempt-1")
     assert attempt is not None
     runtime = attempt.native.config["skyrl"]["runtime"]
+    assert "prepared_task_cache" not in runtime
     assert {key: runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
         "run_id": "smoke",
         "attempt_id": "attempt-1",
@@ -669,6 +662,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     skyrl_entrypoint.run_config(destination)
     final = read_attempt(export_root, "attempt-1")
     assert final is not None
+    assert final.native.config == attempt.native.config
     if not records_enabled:
         assert final.iris_job_id == "/tests/bootstrap-trainer" and final.metrics_started_at is None
         assert read_attempt_metrics(export_root, "attempt-1") == {}
@@ -874,27 +868,34 @@ def test_additional_evaluation_data_is_staged_and_bound_in_training_driver(
     assert stored["sampling_params"] == observed["request"]
 
 
-def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:
+def test_source_recipe_rejects_retired_harbor_settings(tmp_path: Path) -> None:
     raw = raw_launch_config()
     raw["skyrl"]["terminal_bench_config"] = {"installed_agent": {"agent": {"name": "pi"}}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
-    with pytest.raises(ValueError, match="terminal_bench_config.*terminal_bench"):
+    with pytest.raises(ValueError, match="terminal_bench_config"):
         load_launch_config(path)
 
 
-def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_path: Path) -> None:
+@pytest.mark.parametrize("thinking_format", ["qwen-chat-template", "unsupported"])
+def test_native_agent_settings_survive_launch_composition(tmp_path: Path, thinking_format: str) -> None:
     raw = raw_launch_config()
-    raw["skyrl"]["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-    raw["skyrl"]["terminal_bench"] = {"installed_agent": {"agent": {"name": "pi"}}}
+    harnesses = {
+        "pi": {"version": "0.87.0", "thinking": "minimal", "thinking_format": thinking_format, "setup_timeout": 120},
+        "terminus-2": {"max_main_turns": 50, "setup_timeout": 60},
+    }
+    raw["skyrl"]["environment"] = {"task_sessions": {"agent_harnesses": harnesses}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
+    if thinking_format == "unsupported":
+        with pytest.raises(ValueError, match="pi.thinking_format"):
+            load_launch_config(path)
+        return
     resolved = load_launch_config(path)
-    destination = resolved.skyrl.terminal_bench_config.installed_agent.output_path
-    assert destination == "s3://runs/smoke/attempts/trajectories/installed-agents"
     OmegaConf.save(resolved, path)
-    assert load_launch_config(path).skyrl.terminal_bench_config.installed_agent.output_path == destination
+    reloaded = load_launch_config(path)
+    assert OmegaConf.to_container(reloaded.skyrl.environment.task_sessions.agent_harnesses) == harnesses
 
 
 def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Path) -> None:

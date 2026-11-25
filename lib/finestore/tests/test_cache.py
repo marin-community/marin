@@ -45,26 +45,29 @@ _CACHE_PROCESS = textwrap.dedent(
 
     import finestore.cache as cache_module
     from finestore.cache import PersistentKvCache
-    from finestore.store import DataStore
+    from finestore.layout import FineStoreLayout
+    from rigging.filesystem.conditional_object import LocalConditionalObject
     from rigging.filesystem.storage_path import StoragePath
 
     root, mode = sys.argv[1:]
     StoragePath.is_remote = property(lambda self: True)
     cache_module._EXIT_FLUSH_TIMEOUT = 0.05 if mode == "stall" else 1.0
-    real_commit = DataStore._commit_transaction
+    cache = PersistentKvCache.at(root)
+    head_path = FineStoreLayout(cache.location()).head_path
+    real_write = LocalConditionalObject.write
     commit_started = threading.Event()
     release_commit = threading.Event()
 
-    def commit(store, rows):
-        commit_started.set()
-        if mode == "stall":
-            threading.Event().wait()
-        else:
+    def wait_to_publish(head, data, *, expected_version):
+        if head.path == head_path:
+            commit_started.set()
+            if mode == "stall":
+                threading.Event().wait()
             release_commit.wait()
-        return real_commit(store, rows)
+        return real_write(head, data, expected_version=expected_version)
 
-    DataStore._commit_transaction = commit
-    PersistentKvCache.at(root).store("kernel", b"object-code")
+    LocalConditionalObject.write = wait_to_publish
+    cache.store("kernel", b"object-code")
     if not commit_started.wait(timeout=3):
         raise RuntimeError("cache commit did not start")
     if mode != "stall":

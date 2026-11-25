@@ -9,9 +9,9 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import uuid
 from collections.abc import Iterable, Iterator
 
-from finestore.admin import drop_table
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -28,6 +28,7 @@ from finestore.eval import (
     sample_from_archive_row,
 )
 from finestore.eval_rollouts import participant_type_for_role, rollout_records_from_sample
+from finestore.layout import TableMetadata, TableNameConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -102,14 +103,16 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
 def _source_fingerprints(reader: ReadView) -> dict[str, str]:
     fingerprints = {}
     for table in _SOURCE_TABLES:
+        version = reader.table_content_version(table)
         source = {
-            "metadata_path": reader.table_metadata_path(table),
-            # Appends and rebuilt tables get fresh row commits; compaction
-            # preserves them even when sealing rewrites the physical shards.
-            "row_commit_upper_bound": max(
-                (shard.row_commit_upper_bound for shard in reader.list_shards(table)), default=0
-            ),
+            "metadata_path": version.metadata_path,
+            "row_commit_upper_bound": version.row_commit_upper_bound,
         }
+        # Omit zero values to preserve fingerprints written before these fields existed.
+        if version.incarnation:
+            source["incarnation"] = version.incarnation
+        if version.history_floor:
+            source["history_floor"] = version.history_floor
         fingerprints[table] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     return fingerprints
 
@@ -132,21 +135,24 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
         ),
         rollout_records_from_steps(_step_rows(reader)),
     )
-    # The evaluator owns its source tables and their conflict policy; register only our output.
     with DataStore.open(root, writer_id=writer_id) as store:
-        if ARCHIVE_ROLLOUTS_TABLE in reader.table_names():
-            drop_table(root, ARCHIVE_ROLLOUTS_TABLE)
-        table = store.table(
-            ARCHIVE_ROLLOUTS_TABLE,
-            schema=rollouts_schema(),
-            primary_key=ROLLOUTS_MERGE_KEY,
-            schema_version=ROLLOUT_SCHEMA_VERSION,
-        )
-        for record in records:
-            table.append(record.model_dump(mode="json"))
-        store.write_object(
-            _COMPLETE_OBJECT,
-            json.dumps(completion, sort_keys=True).encode(),
-            metadata={"content_type": "application/json"},
-        )
+        with store.transaction(base=reader) as transaction:
+            transaction.require_unchanged(*_SOURCE_TABLES)
+            first = next(records, None)
+            if first is None:
+                transaction.drop_table(ARCHIVE_ROLLOUTS_TABLE)
+            else:
+                temporary = f"{ARCHIVE_ROLLOUTS_TABLE}_staging_{uuid.uuid4().hex}"
+                table = transaction.create_table(
+                    temporary,
+                    metadata=TableMetadata(primary_key=ROLLOUTS_MERGE_KEY, schema_version=ROLLOUT_SCHEMA_VERSION),
+                    schema=rollouts_schema(),
+                )
+                table.extend(record.model_dump(mode="json") for record in itertools.chain((first,), records))
+                transaction.rename_table(temporary, ARCHIVE_ROLLOUTS_TABLE, on_conflict=TableNameConflict.REPLACE)
+            transaction.write_object(
+                _COMPLETE_OBJECT,
+                json.dumps(completion, sort_keys=True).encode(),
+                metadata={"content_type": "application/json"},
+            )
         store.seal()

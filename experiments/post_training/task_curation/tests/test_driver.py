@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -38,7 +39,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -62,7 +63,13 @@ def catalog(monkeypatch, tmp_path):
             **{
                 name: RlDataSource(
                     pipeline=process_rows,
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset=name,
+                        upstream_name=name,
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    ),
                     config=pipeline,
                 )
                 for name, pipeline in pipelines.items()

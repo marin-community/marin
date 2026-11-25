@@ -35,6 +35,7 @@ from rolloutengine.models import ContextRecovery, RolloutLimits
 
 logger = logging.getLogger(__name__)
 
+PI_HARNESS = "pi"
 PROVIDER = "hosted_vllm"
 """Pi's provider name for the policy model, Harbor's name for a hosted vLLM endpoint."""
 RELAY_PORT = 8788
@@ -448,6 +449,7 @@ async def run_pi(
 ) -> None:
     """Check the image's Pi, then run it on the task's instruction with the model relay.
 
+    When setup has its own deadline, the turn budget starts as soon as setup completes.
     Pi's non-zero exit and its context-length failure end the agent normally, so the engine grades Pi's work, as
     Harbor runs its verifier after them. A signal kill or an authentication failure fails the attempt, as does an
     exit after the relay could not reach the policy model's tokenizer, with the tokenizer's error.
@@ -471,6 +473,8 @@ async def run_pi(
                 await agent.setup()
         except TimeoutError as error:
             raise TimeoutError(f"Pi setup timed out after {options.setup_timeout} seconds") from error
+        if options.setup_timeout is not None:
+            context.begin_turn_budget()
         try:
             await agent.run(instruction)
         except (AgentKilledBySignalError, ModelAuthenticationError):
