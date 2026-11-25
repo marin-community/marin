@@ -116,6 +116,8 @@ def test_hero_paged_decode_matches_full_forward(sliding_window, rope_fused):
         _assert_mixed_paged_decode_matches_forward(model)
 
 
+# The first engine.generate call compiles the generation loop on each CI worker.
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("prompt_length", [3, 4])
 @jax.default_matmul_precision("highest")
 def test_hero_engine_clones_preserve_convolution_history(prompt_length):
