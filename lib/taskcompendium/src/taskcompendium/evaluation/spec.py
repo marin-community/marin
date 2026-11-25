@@ -194,7 +194,7 @@ class CohortOrder(StrEnum):
 
     ``SHUFFLED`` sorts rows by a hash of their source row, so a limit selects a fixed uniform sample. The hash
     keys on the row's file position, so the sample is fixed per corpus revision: an upstream insert or delete
-    reshuffles which rows a limit selects, and also changes the protocol's expected population.
+    reshuffles which rows a limit selects.
     """
 
     SOURCE = "source"
