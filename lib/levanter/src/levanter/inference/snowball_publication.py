@@ -54,5 +54,4 @@ def publish_snowball_checkpoint(
         candidate = jax.tree.map(match_array, candidate, active)
         return candidate
 
-    staged = context.stage_policy(restore, expected_version=expected_serving_version, policy_id=policy_id)
-    return context.install_policy(staged)
+    return server.publish(restore, expected_version=expected_serving_version, policy_id=policy_id)
