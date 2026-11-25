@@ -525,11 +525,7 @@ def configure_prefixes(engine: Engine, prefixes: tuple[str, ...]) -> None:
             return
         if not inventory_was_complete:
             # Batches committed while the inventory was incomplete were not published.
-            affected.update(
-                conn.execute(
-                    sqlalchemy.select(record_sources.c.run_id).where(record_sources.c.run_id.is_not(None))
-                ).scalars()
-            )
+            affected.update(_sourced_run_ids(conn))
         _materialize_runs(conn, {run_id for run_id in affected if run_id is not None})
 
 
@@ -560,6 +556,12 @@ def _inventory_complete(conn: Connection) -> bool:
         .where(record_prefixes.c.active.is_(True), record_prefixes.c.last_success_at.is_(None))
     ).scalar_one()
     return missing == 0
+
+
+def _sourced_run_ids(conn: Connection) -> set[str]:
+    return set(
+        conn.execute(sqlalchemy.select(record_sources.c.run_id).where(record_sources.c.run_id.is_not(None))).scalars()
+    )
 
 
 def _catalog_run_ids(conn: Connection, run_ids: set[str]) -> set[str]:
@@ -736,7 +738,8 @@ def record_observations(
         for batch in batched(invalid_inserts, _CATALOG_BATCH_SIZE):
             conn.execute(record_sources.insert().values(list(batch)))
 
-        # Until every prefix has listed once, finish_prefix_listing publishes runs instead.
+        # Until every prefix has listed once, a prefix's listing or the configuration change that
+        # completes the inventory publishes runs instead.
         if _inventory_complete(conn):
             _materialize_runs(conn, affected)
 
@@ -798,11 +801,7 @@ def finish_prefix_listing(
         )
         inventory_is_complete = _inventory_complete(conn)
         if inventory_is_complete and not inventory_was_complete:
-            affected.update(
-                conn.execute(
-                    sqlalchemy.select(record_sources.c.run_id).where(record_sources.c.run_id.is_not(None))
-                ).scalars()
-            )
+            affected.update(_sourced_run_ids(conn))
         elif not inventory_is_complete:
             affected.update(
                 conn.execute(
