@@ -19,7 +19,6 @@ import re
 import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -216,7 +215,7 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
     rows: dict[str, tuple[AttemptReceipt, str | None]] = {}
 
     def read_batch(path: StoragePath) -> list[AttemptReceipt]:
-        return [AttemptReceipt(**json.loads(line)) for line in path.read_text().splitlines()]
+        return [AttemptReceipt.model_validate_json(line) for line in path.read_text().splitlines()]
 
     paths = sorted((path for path in root.ls() if path.name.endswith(".jsonl")), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
@@ -226,7 +225,7 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
                 prior, _ = rows.setdefault(receipt.attempt_id, (receipt, address))
                 if prior != receipt:
                     raise ValueError(f"Conflicting records for attempt {receipt.attempt_id}")
-    return [{**asdict(receipt), "address": address} for receipt, address in rows.values()]
+    return [{**receipt.model_dump(mode="json"), "address": address} for receipt, address in rows.values()]
 
 
 def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:

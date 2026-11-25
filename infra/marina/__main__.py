@@ -46,7 +46,7 @@ from marina.host_bindings import (
     host_resource_slug,
     normalize_hostname,
 )
-from marina.releases import require_current_main
+from marina.releases import require_release_checkout
 from marina.runtime import JobRunner, load_runtime_config
 
 PROJECT = "hai-gcp-models"
@@ -145,7 +145,7 @@ def host_list(config: pulumi.Config, key: str) -> list[str]:
 
 def main() -> None:
     if pulumi.get_stack() == "marin-marina" and not pulumi.runtime.is_dry_run():
-        require_current_main(Path(__file__).resolve().parents[2])
+        require_release_checkout(Path(__file__).resolve().parents[2])
     config = pulumi.Config()
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):

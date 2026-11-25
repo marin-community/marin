@@ -18,7 +18,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
 from rigging.task_errors import ErrorCategory, error_category
-from shellbox.machine import MachineFactory
+from shellbox.machine import ExitReason, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
@@ -383,8 +383,13 @@ def _retryable_agent_attempt(result: TrainingRollout) -> bool:
     failure = result.failure
     if failure is None or result.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}:
         return False
-    if result.grade.diagnostics.get("cleanup_errors") or failure.diagnostics.get("setup_exit_code"):
+    if result.grade.diagnostics.get("cleanup_errors"):
         return False
+    if failure.diagnostics.get("setup_reason") == ExitReason.TIMED_OUT:
+        return True
+    setup_exit = failure.diagnostics.get("setup_exit_code")
+    if isinstance(setup_exit, int):
+        return setup_exit < 0 or setup_exit >= 128
     status = failure.diagnostics.get("provider_status_code", failure.diagnostics.get("status_code"))
     if isinstance(status, int):
         return status in (409, 429) or 500 <= status < 600

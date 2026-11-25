@@ -3,7 +3,6 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import asdict
 from typing import Any
 
 from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
@@ -55,7 +54,7 @@ def attempt_receipt(
         attempt_id=attempt_id,
         task_id=task.id,
         task_digest=task_digest if task_digest is not None else canonical_sha256(task.model_dump(mode="json")),
-        outcome=grade.status,
+        outcome=Outcome.INFRA_ERROR if setup_failed else grade.status,
         grading_failure=grade.failure,
         exception_type=failure.exception_type if failure is not None else None,
         error=None if graded else _diagnostic_tail(grade.error, _ERROR_CHARS),
@@ -76,7 +75,8 @@ def write_attempt_receipts(export_path: str, receipts: Sequence[AttemptReceipt])
     if not receipts:
         return
     payload = "".join(
-        json.dumps(asdict(row), sort_keys=True) + "\n" for row in sorted(receipts, key=lambda row: row.attempt_id)
+        json.dumps(row.model_dump(mode="json"), sort_keys=True) + "\n"
+        for row in sorted(receipts, key=lambda row: row.attempt_id)
     )
     directory = StoragePath(export_path) / ATTEMPT_RECEIPTS_DIRECTORY
     directory.mkdirs()

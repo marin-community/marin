@@ -5,9 +5,12 @@ import asyncio
 import json
 import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import httpx
 import openai
@@ -17,6 +20,7 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from evalrecords.rollout_results import terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fray.local_backend import LocalClient
 from marin.rollouts import evaluation
 from marin.rollouts.evaluation import (
@@ -1864,3 +1868,87 @@ async def test_judged_reuse_keeps_retried_responses_in_the_source_and_the_regrad
         assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 0)
         assert raw["reused_response_from_retry"] == 0
         assert raw[REUSED_FROM_RUN]["result_blob"] == stored[key][0]["result_blob"]
+
+
+def commit_count(root):
+    return json.loads((Path(root) / "HEAD").read_text())["sequence"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attempts_share_commits(tmp_path, run_config):
+    questions = tuple(f"colors/{index}" for index in range(12))
+    config = run_config.model_copy(update={"source_limit": None, "concurrency": len(questions)})
+    corpus = publish_colors_corpus(tmp_path, "many", questions=questions)
+    output = str(tmp_path / "run")
+
+    await run_evaluation((corpus,), output, config, ScriptedModel(dict.fromkeys(questions, "red")), machine_factories={})
+
+    evidence = terminal_evidence(output)
+    assert len(evidence) == 3 * len(questions)
+    assert {attempt["outcome"] for attempt, _ in evidence.values()} == {"graded"}
+    # Committed one by one, the selections, started rows and terminal evidence would take three commits per attempt.
+    assert commit_count(output) < len(evidence)
+
+
+def write_blob(name, data, transaction):
+    transaction.write_object(name, data)
+
+
+def fail_write(_transaction):
+    raise ValueError("unserializable evidence")
+
+
+@contextmanager
+def held_writer(root, **store_options):
+    """A writer whose thread stays busy until the block's writes are queued, so they share one batch."""
+    release = threading.Event()
+    with DataStore.open(root, **store_options) as store, ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(release.wait)
+        yield evaluation._EvaluationWriter(store, executor), release.set
+
+
+@pytest.mark.asyncio
+async def test_a_failing_write_fails_only_its_own_caller(tmp_path):
+    root = str(tmp_path / "run")
+    blobs = {f"evidence/{index}.json": bytes([index]) for index in range(5)}
+    with held_writer(root) as (writer, release):
+        writes = [writer.commit(partial(write_blob, name, data)) for name, data in blobs.items()]
+        results = asyncio.gather(*writes[:2], writer.commit(fail_write), *writes[2:], return_exceptions=True)
+        await asyncio.sleep(0)
+        release()
+        outcomes = await results
+
+    assert [type(outcome) for outcome in outcomes] == [type(None)] * 2 + [ValueError] + [type(None)] * 3
+    reader = ReadView(root)
+    assert {name: reader.read_blob(name) for name in blobs} == blobs
+
+
+@pytest.mark.asyncio
+async def test_writes_over_the_transaction_budget_are_all_committed(tmp_path):
+    root = str(tmp_path / "run")
+    # Each small blob fits the budget alone but not with another; the large one fits no bounded transaction.
+    blobs = {f"evidence/{index}.json": bytes([index]) * 600 for index in range(4)} | {"evidence/large.json": b"x" * 5000}
+    with held_writer(root, max_buffer_bytes=1_000) as (writer, release):
+        results = asyncio.gather(*(writer.commit(partial(write_blob, name, data)) for name, data in blobs.items()))
+        await asyncio.sleep(0)
+        release()
+        await results
+
+    reader = ReadView(root)
+    assert {name: reader.read_blob(name) for name in blobs} == blobs
+
+
+@pytest.mark.asyncio
+async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_closes(tmp_path):
+    root = str(tmp_path / "run")
+    with held_writer(root) as (writer, release):
+        caller = asyncio.create_task(writer.commit(partial(write_blob, "evidence/terminal.json", b"graded")))
+        await asyncio.sleep(0)
+        caller.cancel()
+        await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release()
+
+    assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"
