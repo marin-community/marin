@@ -8,7 +8,6 @@ through its ``ModelSession``, which records the exact tokens and applies the tur
 The harness does not grade: the engine grades the rollout with the task's grader after the harness ends.
 """
 
-import warnings
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -65,12 +64,6 @@ class HarnessContext:
     rollout_id: str
     begin_turn_budget: Callable[[], None]
     """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
-
-    @property
-    def run_id(self) -> str:
-        """Deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31."""
-        warnings.warn("HarnessContext.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
-        return self.rollout_id
 
 
 class ModelSession(Protocol):

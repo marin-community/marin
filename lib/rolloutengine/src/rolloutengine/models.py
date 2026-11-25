@@ -4,7 +4,6 @@
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
 import json
-import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -217,12 +216,6 @@ class Rollout:
     """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the harness ends."""
     failure: RolloutFailure | None = None
     """For an interrupted attempt: the exception type and the operation that failed."""
-
-    @property
-    def run_id(self) -> str:
-        """Deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31."""
-        warnings.warn("Rollout.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
-        return self.rollout_id
 
 
 @dataclass(frozen=True)
@@ -466,12 +459,6 @@ class RolloutEvent:
     index: int
     emitted_at: float
     payload: RolloutEventPayload
-
-    @property
-    def run_id(self) -> str:
-        """Deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31."""
-        warnings.warn("RolloutEvent.run_id is deprecated; read rollout_id", DeprecationWarning, stacklevel=2)
-        return self.rollout_id
 
 
 class RolloutObserver(Protocol):

@@ -6,7 +6,6 @@
 import asyncio
 import time
 import uuid
-import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
@@ -112,7 +111,6 @@ class RolloutEngine:
         *,
         rollout_id: str | None = None,
         verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
-        run_id: str | None = None,
     ) -> GradedRollout:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
@@ -123,13 +121,7 @@ class RolloutEngine:
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
         ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
-        ``run_id`` is a deprecated alias of ``rollout_id`` for callers outside this repository; remove after 2026-12-31.
         """
-        if run_id is not None:
-            if rollout_id is not None:
-                raise TypeError("Pass rollout_id, not both rollout_id and its deprecated alias run_id")
-            warnings.warn("run_task(run_id=...) is deprecated; pass rollout_id", DeprecationWarning, stacklevel=2)
-            rollout_id = run_id
         self.check(spec)
         harness = self.harnesses[spec.harness]
         rollout_id = uuid.uuid4().hex if rollout_id is None else rollout_id

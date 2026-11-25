@@ -3004,19 +3004,6 @@ async def test_attempts_without_a_rollout_id_keep_their_events_apart():
     assert [result.rollout.rollout_id for result in results] == list(dict.fromkeys(rollout_ids))
 
 
-async def test_run_id_is_a_deprecated_alias_of_rollout_id():
-    observer = RecordingObserver()
-    runner = engine(ReplayModel([{"role": "assistant", "content": "12"}]), observer=observer)
-    with pytest.warns(DeprecationWarning):
-        result = await runner.engine.run_task(rollout_spec(arithmetic_task()), runner.model, run_id="attempt")
-    with pytest.warns(DeprecationWarning):
-        assert result.rollout.run_id == observer.events[0].run_id == "attempt"
-    with pytest.raises(TypeError):
-        await runner.engine.run_task(
-            rollout_spec(arithmetic_task()), runner.model, rollout_id="attempt", run_id="attempt"
-        )
-
-
 async def test_observer_failure_leaves_the_rollout_unchanged():
     class FailingObserver:
         async def on_event(self, event: RolloutEvent) -> None:
