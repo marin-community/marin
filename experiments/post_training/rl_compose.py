@@ -688,7 +688,7 @@ def run_step(
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
-    required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    required_env = ("WANDB_ENTITY",) if wandb_entity else ()
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
     required_env += tuple(_recipe_env(config))

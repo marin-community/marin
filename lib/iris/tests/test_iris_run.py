@@ -47,10 +47,11 @@ def test_load_env_vars_invalid_key():
 
 
 def test_run_refuses_credential_environment_flag_before_submission(recorded_job_submissions):
-    result = _invoke_run(["-e", "HF_TOKEN", "fixture-credential"])
-    assert result.exit_code == 2
-    assert "HF_TOKEN" in result.output and "--secret" in result.output
-    assert "fixture-credential" not in result.output
+    for name in ("HF_TOKEN", "AWS_SECRET_ACCESS_KEY", "CW_KEY_ID"):
+        result = _invoke_run(["-e", name, "fixture-credential"])
+        assert result.exit_code == 2
+        assert name in result.output and "--secret" in result.output
+        assert "fixture-credential" not in result.output
     assert not recorded_job_submissions
 
     result = _invoke_run(["-e", "HF_TOKEN_PATH", "/tmp/token-file", "-e", "CANARY_TARGET_TOKENS", "400"])

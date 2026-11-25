@@ -53,12 +53,14 @@ def _execution() -> IrisSkyRLExecution:
 
 
 def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WANDB_API_KEY", "ambient-wandb-fixture")
+    execution = dataclasses.replace(_execution(), coordinator_secret_sources=(("WANDB_API_KEY", "env:WANDB_API_KEY"),))
     cluster_config, request = _coordinator_request(
-        [_step(_execution())],
+        [_step(execution)],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run", "--max-concurrent", "3"),
         Path("/workspace/marin"),
-        {"DAYTONA_API_KEY": "secret"},
+        {"DAYTONA_API_KEY": "secret", "WANDB_API_KEY": "selected-wandb-fixture"},
     )
 
     assert cluster_config == "lib/iris/config/marin.yaml"
@@ -67,6 +69,8 @@ def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) 
     assert request.resources.ram == "16GB"
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
+    assert request.environment.secrets["WANDB_API_KEY"] == "selected-wandb-fixture"
+    assert "WANDB_API_KEY" not in request.environment.env_vars
     assert request.timeout == Duration.from_hours(18)
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"

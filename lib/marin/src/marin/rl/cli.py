@@ -163,7 +163,7 @@ def _coordinator_request(
     secrets = {}
     for name, source in sources.items():
         try:
-            value = resolve_secret_spec(source).value
+            value = resolve_secret_spec(source, environ=env_vars).value
         except SecretResolutionError:
             unavailable.add(name)
             continue

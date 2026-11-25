@@ -42,7 +42,7 @@ COREWEAVE_SECRET_NAMES = ("CW_KEY_ID", "CW_KEY_SECRET")
 AWS_CREDENTIALS_FILENAME = ".aws-credentials"
 _FORWARDED_SECRET_NAMES = ("HF_TOKEN", "WANDB_API_KEY", *COREWEAVE_SECRET_NAMES)
 _SECRET_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
-_CREDENTIAL_NAME_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_?key|credential)$", re.IGNORECASE)
+_CREDENTIAL_NAME_RE = re.compile(r"(?:^|_)(?:token|secret|password|api_?key|access_?key|credential)$", re.IGNORECASE)
 
 # A scheme-shaped prefix (``foo:``): used to tell an unknown-scheme reference
 # (raise) apart from a bare literal secret (also raise, different message).
@@ -86,7 +86,7 @@ def validate_secret_name(name: str) -> None:
 
 def looks_like_credential(name: str) -> bool:
     """Identify environment names that conventionally carry credential values."""
-    return _CREDENTIAL_NAME_RE.search(name) is not None
+    return name.upper() in COREWEAVE_SECRET_NAMES or _CREDENTIAL_NAME_RE.search(name) is not None
 
 
 def list_secret_names(*, directory: Path | None = None) -> tuple[str, ...]:
@@ -175,11 +175,11 @@ def is_secret_reference(value: str) -> bool:
     return value.startswith((ENV_SCHEME, FILE_SCHEME, GCP_SECRET_SCHEME))
 
 
-def _fetch_env(ref: str) -> str | None:
+def _fetch_env(ref: str, environ: Mapping[str, str] | None = None) -> str | None:
     name = ref[len(ENV_SCHEME) :]
     if not name:
         raise SecretResolutionError(f"{ref!r}: env reference has an empty variable name")
-    value = os.environ.get(name)
+    value = (os.environ if environ is None else environ).get(name)
     return value.strip() if value is not None else None
 
 
@@ -233,10 +233,10 @@ _FETCHERS: dict[str, Callable[[str], str | None]] = {
 }
 
 
-def _fetch(ref: str) -> str | None:
+def _fetch(ref: str, *, environ: Mapping[str, str] | None = None) -> str | None:
     for scheme, fetch in _FETCHERS.items():
         if ref.startswith(scheme):
-            return fetch(ref)
+            return _fetch_env(ref, environ) if scheme == ENV_SCHEME else fetch(ref)
     if _SCHEME_SHAPED_RE.match(ref):
         raise SecretResolutionError("unknown secret-source scheme (expected env: / file: / gcp-secret://)")
     raise SecretResolutionError(
@@ -258,7 +258,7 @@ def _scheme_of(ref: str) -> str:
     return "unknown"
 
 
-def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
+def resolve_secret_spec(spec: str | Sequence[str], *, environ: Mapping[str, str] | None = None) -> ResolvedSecret:
     """Resolve an ordered secret path, first PRESENT source wins.
 
     Raises `SecretResolutionError` if a source is configured-but-erroring, if a
@@ -268,7 +268,7 @@ def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
     if not refs:
         raise SecretResolutionError("empty secret spec: no sources to resolve")
     for ref in refs:
-        value = _fetch(ref)  # None ⇒ ABSENT (next); raise ⇒ FAILED (propagate)
+        value = _fetch(ref, environ=environ)  # None ⇒ ABSENT (next); raise ⇒ FAILED (propagate)
         if value is not None:
             logger.info("resolved a secret from a %s source", _scheme_of(ref))
             return ResolvedSecret(value=value, source=ref)
