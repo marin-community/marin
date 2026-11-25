@@ -30,6 +30,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from finestore.rl.source_identity import canonical_source_id
+
 FIXTURE = Path(__file__).with_name("fixtures") / "atlas_source_pins.json"
 R40_PLAN = "experiments/post_training/task_curation/release_stages/plans/r40.json"
 
@@ -121,8 +123,6 @@ def main() -> int:
     required = {row["id"]: {"source": "atlas-admitted"} for row in audit.values() if row["status"] == "Available"}
     for target in r40["targets"]:
         required.setdefault(target, {"source": "r40-target"})
-
-    from finestore.rl.source_identity import canonical_source_id
 
     main_canon = {canonical_source_id(source_id): source_id for source_id in main}
     pins, blockers, waivers = {}, {}, {}
