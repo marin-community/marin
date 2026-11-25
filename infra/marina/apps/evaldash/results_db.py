@@ -487,6 +487,7 @@ def configure_prefixes(engine: Engine, prefixes: tuple[str, ...]) -> None:
     configured = {prefix: priority for priority, prefix in enumerate(prefixes)}
     with engine.begin() as conn:
         _lock_catalog(conn)
+        inventory_was_complete = _inventory_complete(conn)
         current = {row["prefix"]: dict(row) for row in conn.execute(sqlalchemy.select(record_prefixes)).mappings().all()}
         changed_prefixes = {
             prefix
@@ -520,8 +521,16 @@ def configure_prefixes(engine: Engine, prefixes: tuple[str, ...]) -> None:
         retired = set(current) - set(configured)
         if retired:
             conn.execute(record_prefixes.update().where(record_prefixes.c.prefix.in_(retired)).values(active=False))
-        if _inventory_complete(conn):
-            _materialize_runs(conn, {run_id for run_id in affected if run_id is not None})
+        if not _inventory_complete(conn):
+            return
+        if not inventory_was_complete:
+            # Batches committed while the inventory was incomplete were not published.
+            affected.update(
+                conn.execute(
+                    sqlalchemy.select(record_sources.c.run_id).where(record_sources.c.run_id.is_not(None))
+                ).scalars()
+            )
+        _materialize_runs(conn, {run_id for run_id in affected if run_id is not None})
 
 
 def mark_prefix_failed(engine: Engine, prefix: str, probe_at: datetime, error: str) -> None:
