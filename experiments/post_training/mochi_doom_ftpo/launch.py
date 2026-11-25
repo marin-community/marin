@@ -38,7 +38,7 @@ from experiments.post_training.rl_presets import (
     Training,
 )
 
-QUALIFIED_VERSION = "2026.11.25.1"
+QUALIFIED_VERSION = "2026.11.25.2"
 QUALIFIED_TASKS = f"{SELECTION_NAME}-targets@{QUALIFIED_VERSION}"
 # Frozen from the sealed baseline and recorded in the qualified selection recipe.
 TARGET_GROUPS = {"math": 21, "code32k": 11, "rgym32k": 11, "mcq32k": 11, "struct32k": 10}

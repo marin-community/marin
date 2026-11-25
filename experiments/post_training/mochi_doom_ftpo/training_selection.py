@@ -131,6 +131,8 @@ def main() -> None:
     parent_summary = json.loads((parent / "summary.json").read_text())
     recipe = {
         **parent_summary["recipe"],
+        "version": args.version,
+        "parent_cohort_version": VERSION,
         "baseline": {"uri": args.baseline, "sha256": hashlib.sha256(baseline_bytes).hexdigest()},
         "target_status": baseline["target_status"],
         "groups_per_family": groups,
@@ -161,7 +163,10 @@ def main() -> None:
             ),
         ],
     }
-    for suffix, rows in (("-targets", train), ("-targets-math", [row for row in train if row["family"] == "math"])):
+    for suffix, rows, quotas in (
+        ("-targets", train, groups),
+        ("-targets-math", [row for row in train if row["family"] == "math"], {"math": TRAIN_BATCH_SIZE}),
+    ):
         name = SELECTION_NAME + suffix
         for root in (
             StoragePath(REGIONAL_ROOT) / "selections" / name / args.version,
@@ -172,7 +177,7 @@ def main() -> None:
                 name,
                 args.version,
                 {"train": rows, "validation": pilot, "full_validation": full, **panels},
-                recipe,
+                {**recipe, "groups_per_family": quotas},
                 "sealed baseline targets; per-update groups recorded in recipe",
             )
     logger.info(
