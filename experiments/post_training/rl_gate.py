@@ -11,7 +11,7 @@ import re
 import statistics
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
+from finestore.rl.run_records import AttemptRecord
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -962,20 +963,52 @@ def _gate_artifact(
 
 
 def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateReport]:
+    target = gate_target(step)
+    name = target.evidence_name(read_skyrl_attempt)
+    return replace(step, name=name)
+
+
+class GateTarget(BaseModel):
+    """The fixed gate address and inputs committed at submission."""
+
+    name: str
+    version: str
+    candidates: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+    def evidence_name(self, read_attempt: Callable[[str], AttemptRecord | None]) -> str:
+        return self.name + "-evidence-" + _gate_attempt_digest(self.candidates, self.outputs, read_attempt)
+
+    def stored_path(self, prefix: str) -> str:
+        return prefix_join(prefix, f"{self.evidence_name(read_stored_skyrl_attempt)}/{self.version}")
+
+
+def gate_target(step: ArtifactStep[GateReport]) -> GateTarget:
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    candidates = config["run_paths"]
-    run_paths = step.runtime_args["paths"]["run_paths"]
+    return GateTarget(
+        name=step.runtime_args["name"],
+        version=step.version,
+        candidates=tuple(config["run_paths"]),
+        outputs=tuple(step.runtime_args["paths"]["run_paths"]),
+    )
+
+
+def _gate_attempt_digest(
+    candidates: Sequence[str],
+    run_paths: Sequence[str],
+    read_attempt: Callable[[str], AttemptRecord | None],
+) -> str:
     attempts = []
     for identity, path in zip(candidates, run_paths, strict=True):
         try:
-            receipt = read_skyrl_attempt(path)
+            receipt = read_attempt(path)
         except (FileNotFoundError, SkyRLReceiptLookupError):
             state, attempt = "unresolved", None
         else:
             state = receipt.native.result.state if receipt else None
             attempt = receipt.native.config["run"]["attempt_id"] if receipt else None
         attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
-    return replace(step, name=step.runtime_args["name"] + "-evidence-" + fingerprint_hash(canonical_json(attempts)))
+    return fingerprint_hash(canonical_json(attempts))
 
 
 def gate_step(
