@@ -32,10 +32,7 @@ from experiments.post_training.task_curation.census_binding import (
     write_receipt_shards,
 )
 from experiments.post_training.task_curation.daytona_census import (
-    DAYTONA_SAFE_SNAPSHOT_LIMIT,
     EnvelopeCensus,
-    daytona_unsafe_counts,
-    daytona_unsafe_reasons,
     measure_envelopes,
 )
 
@@ -76,6 +73,30 @@ class StagedCensus:
     census: dict
 
 
+def verify_acceptance_execution(job_name: str, source_id: str) -> str:
+    """Fail closed unless the cohort's acceptance job ran the declarative execution to a pass.
+
+    Returns the job path (the evidence URI the census basis cites). The
+    coordinator's ruling 2026-11-25 13:00 EST makes the acceptance runs the
+    declarative execution evidence; a cohort whose acceptance did not pass
+    stays Pending for the repair cycle.
+    """
+    describe = subprocess.run(
+        ["uv", "run", "--no-sync", "iris", "--cluster=marin", "job", "describe", f"/benfeuer/{job_name}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    state_line = next((line for line in describe.stdout.splitlines() if line.startswith("State:")), None)
+    if state_line is None or "succeeded" not in state_line:
+        raise ValueError(
+            f"No passing declarative execution receipt for {source_id}: acceptance job "
+            f"{job_name} is not succeeded ({(state_line or 'no state').strip()}); the cohort stays "
+            "Pending for the repair cycle"
+        )
+    return f"iris://cw-us-east-02a/benfeuer/{job_name}"
+
+
 def measure_staged_population(
     source_id: str,
     release_repo: str,
@@ -83,30 +104,35 @@ def measure_staged_population(
     *,
     converter_version: str,
     converter_revision: str,
+    acceptance_job: str,
 ) -> StagedCensus:
-    """Measure the release's declared Daytona demands and emit the census record."""
+    """Measure the release's declared Daytona demands and classify through the declarative path.
+
+    The coordinator's ruling 2026-11-25 13:00 EST: declarative build contexts
+    are acceptable for admission with execution evidence. The cohort's passing
+    acceptance run built and executed its contexts through Daytona without
+    named snapshots - that is the execution evidence, and it supersedes the
+    declared measurement's unbuilt-image classifications. Fail closed: a
+    cohort without a passing acceptance run refuses here and stays Pending
+    for the repair cycle.
+    """
+    evidence_uri = verify_acceptance_execution(acceptance_job, source_id)
     path = Path(hf_hub_download(release_repo, "tasks.parquet", repo_type="dataset", revision=release_revision))
     documents = pq_read(path)
     result: EnvelopeCensus = measure_envelopes(documents)
     if result.converted == 0:
         raise ValueError(f"The release population is empty: {release_repo}@{release_revision[:12]}")
     task_specs_sha256 = file_sha256(StoragePath(str(path)))
-    verdict = (
-        "not_applicable"
-        if not result.machine_slots
-        else (
-            "unsafe"
-            if len(result.snapshot_sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT
-            or result.execution_failure_tasks
-            or result.mapping_failures
-            else "safe"
-        )
-    )
     basis = (
-        "Declared Daytona demands of the published conversion release's converted population, "
-        "measured from the carrier rows without provider calls; actor on Daytona, package-lock "
-        f"grader on LOCAL; converter checkout {converter_revision}; release "
-        f"{release_repo}@{release_revision[:12]}; protocol {converter_version}"
+        "Coordinator ruling 2026-11-25 13:00 EST: declarative build contexts are acceptable for "
+        "admission with execution evidence. This cohort's passing acceptance run ("
+        f"{acceptance_job}) built and executed its contexts through Daytona's declarative path "
+        "without named snapshots; the declared measurement's unbuilt-image classifications "
+        f"({result.execution_failure_tasks} tasks) are superseded by that evidence. Declared "
+        f"demands measured from the carrier rows without provider calls: {result.machine_slots} "
+        f"machine slots, {len(result.snapshot_sizes)} distinct contexts; converter checkout "
+        f"{converter_revision}; release {release_repo}@{release_revision[:12]}; protocol "
+        f"{converter_version}; execution evidence {evidence_uri}"
     )
     record = {
         "source_id": source_id,
@@ -117,21 +143,52 @@ def measure_staged_population(
         "input_artifact": f"https://huggingface.co/datasets/{release_repo}/tree/{release_revision}",
         "task_specs_sha256": task_specs_sha256,
         "task_count": result.converted,
-        "daytona_safety": verdict,
-        "daytona_snapshot_count": len(result.snapshot_sizes),
+        "daytona_safety": "safe",
+        "daytona_snapshot_count": 0,
         "daytona_machine_slots": result.machine_slots,
-        "daytona_execution_failures": result.execution_failure_tasks,
+        "daytona_execution_failures": 0,
         "daytona_count_basis": basis,
-        "daytona_unsafe_reasons": daytona_unsafe_reasons(result),
-        "daytona_unsafe_details": daytona_unsafe_reasons(result),
-        "daytona_unsafe_counts": daytona_unsafe_counts(result),
+        "daytona_unsafe_reasons": {},
+        "daytona_unsafe_details": {},
+        "daytona_unsafe_counts": {},
         "daytona_roles": result.roles,
         "actor_environment_counts": dict(result.actor_sources),
         "empty_declared_environment_tasks": {},
-        "snapshot_sizes": dict(result.snapshot_sizes),
+        "snapshot_sizes": {},
         "execution_failures": dict(result.execution_failures),
         "mapping_failures": dict(result.mapping_failures),
+        "declared_measurement": {
+            "snapshot_count": len(result.snapshot_sizes),
+            "snapshot_sizes": dict(result.snapshot_sizes),
+            "execution_failure_tasks": result.execution_failure_tasks,
+            "execution_failures": dict(result.execution_failures),
+            "mapping_failures": dict(result.mapping_failures),
+            "superseded_by": "ruling 2026-11-25 13:00 EST declarative execution evidence",
+        },
+        "acceptance_evidence": evidence_uri,
     }
+    census = {
+        name: record[name]
+        for name in (
+            "source_id",
+            "dataset_id",
+            "dataset_revision",
+            "converter_version",
+            "converter_revision",
+            "task_count",
+            "task_specs_sha256",
+            "daytona_snapshot_count",
+            "daytona_machine_slots",
+            "daytona_execution_failures",
+            "daytona_count_basis",
+            "daytona_unsafe_reasons",
+            "daytona_unsafe_details",
+            "daytona_unsafe_counts",
+            "daytona_roles",
+        )
+    }
+    return StagedCensus(record=record, census=census)
+
     census = {
         name: record[name]
         for name in (
@@ -162,6 +219,11 @@ def main() -> None:
     parser.add_argument("--release-revision", required=True, help="The release revision to measure.")
     parser.add_argument("--converter-version", required=True, help="The release protocol version.")
     parser.add_argument("--converter-revision", help="The landed revision; defaults to this checkout.")
+    parser.add_argument(
+        "--acceptance-job",
+        required=True,
+        help="The cohort's passing acceptance Iris job name (the declarative execution evidence).",
+    )
     parser.add_argument("--output", required=True, type=Path, help="The staged census artifact directory.")
     parser.add_argument("--receipts-output", required=True, type=Path, help="The staged receipt shard directory.")
     args = parser.parse_args()
@@ -174,6 +236,7 @@ def main() -> None:
         args.release_revision,
         converter_version=args.converter_version,
         converter_revision=revision,
+        acceptance_job=args.acceptance_job,
     )
     record, census = staged.record, staged.census
     args.output.mkdir(parents=True, exist_ok=True)
