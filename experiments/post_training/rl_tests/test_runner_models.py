@@ -400,6 +400,15 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     monkeypatch.setattr(sys, "argv", [module, *argv])
     monkeypatch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(module, loader=None))
     submitted = []
+    watch_deadlines = []
+
+    def follow_detached(entry_module, watch):
+        assert entry_module == module
+        assert watch.job == "/fixture/sft-then-rl"
+        watch_deadlines.append(watch.timeout_seconds)
+        return str(Path("/tmp") / "fixture-publication.log")
+
+    monkeypatch.setattr(rl, "_follow_detached", follow_detached)
 
     def submit(entry_module, handles, _max_concurrent, env, *, argv):
         assert entry_module == module
@@ -461,6 +470,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     for _ in range(2):
         assert entry() == 0
     assert submitted == [(submitted[0][0], argv)] * 2
+    declared = (MOCHI if model == "mochi" else SNOWBALL).by_name["train-long"].recipe.layout
+    assert watch_deadlines == [(declared.coordinator_timeout_hours + (20 if model == "snowball" else 0)) * 3600] * 2
 
 
 @pytest.mark.parametrize(

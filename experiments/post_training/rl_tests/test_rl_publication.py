@@ -288,6 +288,15 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
 
     assert family_identity(row) == family_identity(baseline) and family_identity(row) is not None
     outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
+    index, item = next((i, item) for i, item in enumerate(outputs) if item.step == preset.updates)
+    unanswered = item.answers[0].model_copy(update={"verification_status": "unavailable", "verifier_score": None})
+    rewritten = item.model_copy(update={"answers": [unanswered, *item.answers[1:]]})
+    replace_evaluations(source, [*outputs[:index], rewritten, *outputs[index + 1 :]])
+    fewer_answers = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert fewer_answers.evaluation_task_set == baseline.evaluation_task_set
+    assert fewer_answers.evaluation_protocol_identity == baseline.evaluation_protocol_identity
+    assert family_identity(fewer_answers) != family_identity(baseline)
+
     changed = [
         (
             item.model_copy(update={"strata": item.strata.model_copy(update={"family": "alternate-family"})})

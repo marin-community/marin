@@ -170,6 +170,8 @@ def _run_name(
     resume_step: int | None,
 ) -> str:
     if control:
+        if replicate is None:
+            raise ValueError("a control output requires a replicate")
         return f"checkpoints/{table.namespace}/controls/{preset.name}-{provenance.tree_hash}-{control}-r{replicate}"
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
@@ -640,6 +642,7 @@ class _PublicationWatch(BaseModel):
     preset: str
     outputs: tuple[str, ...]
     gate_required: bool
+    timeout_seconds: float
     service_url: str | None
     issue: int | None = None
 
@@ -654,6 +657,7 @@ def _publication_watch(
         preset=preset.name,
         outputs=tuple(step.path(prefix) for step in run.runs),
         gate_required=run.gate is not None,
+        timeout_seconds=preset.recipe.layout.coordinator_timeout_hours * 3600,
         service_url=service_url,
         issue=issue,
     )
@@ -677,7 +681,7 @@ def _watch_publication(
 ) -> tuple[JobState, rl_publication.PublicationOutcome, str | None]:
     preset = table.by_name[watch.preset]
     published = set()
-    deadline = time.monotonic() + preset.recipe.layout.coordinator_timeout_hours * 3600
+    deadline = time.monotonic() + watch.timeout_seconds
     with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
         parent = client.job(JobName.from_wire(watch.job))
         while True:
@@ -688,7 +692,7 @@ def _watch_publication(
                 break
             if time.monotonic() >= deadline:
                 raise click.ClickException(
-                    f"Timed out waiting for {watch.job}. Repeat the original command with --wait."
+                    f"Timed out waiting for {watch.job}. Check its Iris state before resubmitting with --wait."
                 )
             time.sleep(_PUBLICATION_POLL_SECONDS)
     gate_path = None

@@ -294,6 +294,7 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
+    tasks=_DEFAULT_TASKS,
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
@@ -500,6 +501,7 @@ _PRESETS = (
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
+        tasks=_DEFAULT_TASKS,
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="eval-short",
         checkpoints="none",
