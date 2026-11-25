@@ -5,7 +5,8 @@
 
 A Zephyr job over the item table plants copies of sampled items, in several forms, into real
 record text, and checks stage 1 on each: does the planted record hold the item's key 1, read as
-stage 1 reads records? It also writes, for a subset of items, the planted positives and planted
+stage 1 reads records, and does it hold key 1 or key 2? Copies with small edits (``edited_forms``)
+are checked by stage 1 only. It also writes, for a subset of items, the planted positives and planted
 negatives (a changed or missing choice, a changed number or sign, choices far from the question)
 as candidate pairs, which ``score.py`` scores with the frozen classifier.
 """
@@ -36,10 +37,48 @@ MIN_HOST = 2 * CONTEXT + FAR
 NUMBER = re.compile(r"\d+")
 PUNCTUATION = re.compile(r"[^\w\s]")
 SIGNS = (("+", "-"), ("-", "+"), ("<", ">"), (">", "<"))
+WORD = re.compile(r"\w+")
+# Words that replace a word of the item in an edited copy.
+REPLACEMENTS = ("apple", "river", "seven", "blue", "market", "garden", "silver", "window")
+DELETED_SHARE = 0.1
 
 
 def lettered(question: str, choices: list[str]) -> str:
     return question + "".join(f"\n{LABELS[i]}. {choice}" for i, choice in enumerate(choices))
+
+
+def edited_forms(item: dict[str, Any], rng: random.Random) -> dict[str, str]:
+    """Copies with small edits (typos, changed words, deleted words), in the plain layout.
+
+    These are copies under the rubric (an edited copy), so stage 1 should send them to stage 2. Paraphrases and
+    changed numbers are not here: the first needs a model, and the second makes a different item.
+    """
+    text = lettered(item["question"], list(item["choices"]))
+    if passage := item.get("passage") or "":
+        text = f"{passage}\n\n{text}"
+    words = WORD.findall(text)
+    # Words of two or more characters, so that a choice label ("B") stays as it is.
+    every = [i for i, word in enumerate(words) if len(word) >= 2]
+    swappable = [i for i in every if any(a != b for a, b in zip(words[i], words[i][1:], strict=False))]
+
+    def pick(pool: list[int], count: int) -> set[int]:
+        return set(rng.sample(pool, min(count, len(pool))))
+
+    def swap(word: str) -> str:
+        j = rng.choice([j for j in range(len(word) - 1) if word[j] != word[j + 1]])
+        return word[:j] + word[j + 1] + word[j] + word[j + 2 :]
+
+    def edit(chosen: set[int], change: Callable[[str], str]) -> str:
+        position = iter(range(len(words)))
+        return WORD.sub(lambda m: change(m.group()) if next(position) in chosen else m.group(), text)
+
+    return {
+        "typo_1": edit(pick(swappable, 1), swap),
+        "typos_3": edit(pick(swappable, 3), swap),
+        "word_changed_1": edit(pick(every, 1), lambda _: rng.choice(REPLACEMENTS)),
+        "words_changed_3": edit(pick(every, 3), lambda _: rng.choice(REPLACEMENTS)),
+        "words_deleted_10pct": edit({i for i in every if rng.random() < DELETED_SHARE}, lambda _: ""),
+    }
 
 
 def positive_forms(item: dict[str, Any], other_choice: str, rng: random.Random) -> dict[str, str]:
@@ -108,11 +147,22 @@ def make_plant(
     output: str, keys_path: str, hosts_path: str, per_eval: int, scored_per_eval: int, width: int = WINDOW
 ) -> Callable:
     def plant(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
-        keys = read_frame(keys_path, ["id", "key1_hash"])
+        keys = read_frame(keys_path, ["id", "key1_hash", "key2_hash", "key2_count"])
         key_of: dict[str, set[int]] = {}
-        for item_id, key in zip(keys["id"], keys["key1_hash"].to_numpy(dtype="uint64").tolist(), strict=True):
-            if key:
-                key_of.setdefault(item_id, set()).add(key)
+        # Key 1 and, where no reference record holds it, key 2 (the guard of the extra key streams).
+        either_of: dict[str, set[int]] = {}
+        columns = (
+            keys["id"],
+            keys["key1_hash"].to_numpy(dtype="uint64").tolist(),
+            keys["key2_hash"].to_numpy(dtype="uint64").tolist(),
+            keys["key2_count"].tolist(),
+        )
+        for item_id, key1, key2, key2_count in zip(*columns, strict=True):
+            if key1:
+                key_of.setdefault(item_id, set()).add(key1)
+                either_of.setdefault(item_id, set()).add(key1)
+            if key1 and key2 and key2_count == 0:
+                either_of[item_id].add(key2)
         hosts = [text for text in read_frame(hosts_path, ["text"])["text"] if text and len(text) >= MIN_HOST]
         rng = random.Random(shard.shard_idx)
         for path in paths:
@@ -130,16 +180,24 @@ def make_plant(
                 other_choice = (list(other["choices"]) or [other["question"][:80]])[0]
                 host = rng.choice(hosts)
                 before, after = host[:CONTEXT], host[CONTEXT : 2 * CONTEXT]
+                either = either_of[item["id"]]
                 for form, text in positive_forms(item, other_choice, rng).items():
                     record = f"{before}\n{text}\n{after}"
                     reading = reading_with_key(record, key, width)
                     found = reading is not None
                     counts[f"{form}|planted"] += 1
                     counts[f"{form}|found"] += found
+                    counts[f"{form}|found_either"] += found or holds_key(record, either, width)
                     if not found:
                         misses.append({"id": item["id"], "eval": item["eval"], "form": form})
                     if number < scored_per_eval:
                         pairs.append({**_pair(item, reading or record), "form": form, "planted": "positive"})
+                # Edited copies: stage 1 only, counted apart from the layout forms.
+                for form, text in edited_forms(item, rng).items():
+                    record = f"{before}\n{text}\n{after}"
+                    counts[f"edited/{form}|planted"] += 1
+                    counts[f"edited/{form}|found"] += holds_key(record, key, width)
+                    counts[f"edited/{form}|found_either"] += holds_key(record, either, width)
                 if number < scored_per_eval:
                     far = host[2 * CONTEXT : 2 * CONTEXT + FAR]
                     for form, text in negative_forms(item, other_choice, far).items():

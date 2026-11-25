@@ -60,7 +60,7 @@ The research steps in this directory:
 | Silver negatives: real candidates with low word overlap | `labels.py silver` | one parquet |
 | Fine-tuning (one H100) | `train.py` | `model/`, `results.json`, `test_scores.parquet` |
 | Scoring pairs with one saved model | `score.py` | one parquet |
-| Planted copies in 14 forms, stage 1 and stage 2 (gate G2) | `planted.py` | `stats/*.json`, `pairs/*.parquet` |
+| Planted copies in 14 layouts and 5 edits, stage 1 and stage 2 (gate G2) | `planted.py` | `stats/*.json`, `pairs/*.parquet` |
 
 Pairs and label rows store an item id. Training, scoring and context synthesis read the item's texts
 from the item table (`pair_text.item_texts`), so a fix of the table reaches every stored label.
@@ -141,6 +141,7 @@ Each production setting, with the check that chose it. The checks and their labe
 | Precision floor | weighted precision >= 0.75, item-clustered bootstrap 5% bound >= 0.65 | Set by the user for recall-first removal, in place of a 5% bound of 0.95, which the models met only near cutoff 0.99, with recall about 0.62 (set 14) |
 | Key width (`WINDOW`) | 20 characters | Width comparison on the same 41,350 planted items: planted recall 0.985 / 0.966 / 0.952 / 0.944 at widths 10 / 13 / 16 / 20, for 6.1e9 / 1.5e9 / 1.3e8 / 4.2e7 catalog candidates (about 3,900 / 970 / 83 / 27 H100-hours). No width reached full planted recall; the misses are the same kinds at every width (mostly ZhoBLiMP sentence pairs laid out numbered or as JSON, accepted as a limit), so the cheapest width is used |
 | Key streams | question; unlettered question with choices for a short question; passage, each kept only when no reference record holds it | Planted recall 0.944 -> 0.960 (Markdown 0.858 -> 0.999) |
+| Matched keys | key 1 of each stream | Key 1 or key 2 (key 2 only where no reference record holds it): planted recall 0.960 -> 0.962, edited copies +0.05 to +0.13 (below); on 209 real copies that key 1 misses it catches 25, since both keys come from the same 16 sampled windows; key 2 without that guard gives about 73 times the pairs on a 61,882-record sample ([logbook](https://github.com/marin-community/marin-logbooks/issues/81)) |
 | Readings | as is, JSON escapes read once and twice | Planted copies escaped once and twice: stage-1 recall 1.000 |
 | Template-free windows, shared tie order | windows outside each eval's shared prefix and suffix; ties to the window that the fewest items hold | Clear copies of the block rule with a candidate: 99.0% (GSM8K 100%) against 79.8% (GSM8K 46%), at 1.44 times the pairs; planted recall 95.98% |
 | Reference sample (`REFERENCE_SHARDS_PER_SOURCE`, `REFERENCE_SEED`) | 2 shards per source, seed 11 | The reference sample of every measured key build; not varied |
@@ -204,6 +205,20 @@ key), so a separator between them (a number, a JSON field name) breaks every win
 stage-2 check (iteration 13, cutoff 0.9) no planted passage without its question was flagged; real
 records are less clean (see the limits). With the production keys (windows outside the eval template, ties to the window that the fewest items
 share), stage 1 finds 95.98% (96.02% with the earlier keys on the same item table).
+
+**Edited copies (stage 1).** `planted.py` also plants each of the 41,151 items in the plain layout with small
+edits. An edit inside the key's window hides the copy from stage 2; the 64% recall on edited copies under
+Validation counts only copies that got a candidate.
+
+| Edit | Key 1 | Key 1 or key 2 |
+|---|---|---|
+| Typo (two letters swapped) in 1 word | 0.869 | 0.924 |
+| Typos in 3 words | 0.701 | 0.785 |
+| 1 word changed | 0.845 | 0.899 |
+| 3 words changed | 0.685 | 0.769 |
+| 10% of words deleted | 0.740 | 0.873 |
+
+Paraphrased and translated copies are not planted.
 
 **Validation.** Two sets, weighted to their pools, with an item-clustered stratified bootstrap 5% bound.
 Set 19: 1,239 pairs from 114 measure shards that no earlier step used (every flag of iteration 15, a
@@ -311,6 +326,20 @@ a copy.
   and digits (BBH 552: multi-step arithmetic and boolean expressions such as "not ( True ) and ( True )
   is"; ZhoBLiMP 477; AGIEval 15, Gaokao math cloze items that are mostly LaTeX).
 - **ZhoBLiMP copies in a numbered or JSON layout are not found** (see the planted copies above).
+- **Key 1 can sit on a join that the eval built, which natural copies lack.** A survey of 24.6 million
+  records (160 sampled shards) compared key 1 with a rule that needs half of an item's question windows.
+  Stage 2 at 0.6 removes 157 records that key 1 never sent it: mostly ASDiv (the "Question:" label inside
+  the item), MMLU high-school math and MMLU-Pro (the question joined to its rendered choices), SQuAD
+  completion (the cloze stem after the passage), HumanEval (a signature without type hints) and HellaSwag (the
+  category label joined to the title). Scaled to the catalog this is at most about 120,000 records; the
+  sample over-weights small sources. A key set spread over the question caught 78 of 79 such misses on 80
+  shards at 0.44 times the pairs; it is measured in the
+  [logbook](https://github.com/marin-community/marin-logbooks/issues/81), not in production.
+- **Encoded copies are not read.** URL percent-encoding, HTML tags or `&nbsp;` between words, base64 and
+  `\xNN` escapes change every window across them (planted recall 0.000-0.002). Decoding them in 42.8 million
+  surveyed records found 12 copies in 5 records (SQuAD passages URL-encoded in model-card widget links, DROP
+  questions split by HTML tags, an MMLU question with HTML entities), about 2,000 catalog records.
+- **Paraphrased and translated copies are not measured.** No planted form or survey covers them.
 - **Records with a passage but not its question are removed** for SQuAD, DROP, QQP, QNLI and RACE: at
   0.5 their removals have precision 0.05-0.58 (set 20), and they hold most of the 22,362 removals of the
   16 families below 0.6.
