@@ -33,6 +33,11 @@ _UPSERT = text(
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
+        WHEN :older_publication
+          AND rl_runs.record -> 'commit' IS NOT NULL
+          AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record || jsonb_build_object(
+            'issue', COALESCE(NULLIF(rl_runs.record -> 'issue', 'null'::jsonb), EXCLUDED.record -> 'issue')
+          )
         ELSE EXCLUDED.record || (
             SELECT jsonb_object_agg(key, COALESCE(NULLIF(EXCLUDED.record -> key, 'null'::jsonb),
                                                   rl_runs.record -> key, 'null'::jsonb))
@@ -65,6 +70,7 @@ def create_api(services):
 
     @api.post("/runs")
     def publish(record: dict[str, Any]) -> dict:
+        older_publication = "evaldash_run_ids" in record and "commit" not in record
         record.pop("evaldash_run_ids", None)
         try:
             encoded = json.dumps(record, allow_nan=False)
@@ -78,12 +84,15 @@ def create_api(services):
         try:
             with engine.begin() as connection:
                 incoming = summary.model_dump(mode="json")
+                if older_publication:
+                    del incoming["commit"]
                 stored = connection.execute(
                     _UPSERT,
                     {
                         "run_id": summary.run_id,
                         "attempt_id": summary.attempt_id,
-                        "record": summary.model_dump_json(),
+                        "record": json.dumps(incoming, allow_nan=False),
+                        "older_publication": older_publication,
                         "retained_fields": list(_RETAINED_FIELDS),
                     },
                 ).scalar_one()
@@ -103,6 +112,8 @@ def create_api(services):
                             repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
+                if "commit" not in stored:
+                    del normalized["commit"]
                 if normalized != stored:
                     connection.execute(
                         text(
@@ -112,11 +123,11 @@ def create_api(services):
                         {
                             "run_id": summary.run_id,
                             "attempt_id": summary.attempt_id,
-                            "record": summary.model_dump_json(),
+                            "record": json.dumps(normalized, allow_nan=False),
                         },
                     )
-                if "evaldash_run_ids" in record and "preset_version" not in record:
-                    return {key: normalized[key] for key in record}
+                if older_publication:
+                    return record
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]

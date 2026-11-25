@@ -1,8 +1,10 @@
 const SVG = 'http://www.w3.org/2000/svg';
 const score = (value) => `${(100 * value).toFixed(1)}%`;
 const time = (run) => Date.parse(run.completed_at ?? run.started_at ?? run.run_date);
+const isBaseCommit = (run) => run.base_commit != null && (run.commit === run.base_commit
+  || /^[0-9a-f]{7,40}$/.test(run.commit ?? '') && run.base_commit.startsWith(run.commit));
 const isMainControl = (run) => run.is_control === true
-  && run.branch === 'main' && run.dirty === false && run.base_commit != null && run.commit === run.base_commit && run.status === 'succeeded';
+  && run.branch === 'main' && run.dirty === false && isBaseCommit(run) && run.status === 'succeeded';
 
 function metrics(run) {
   const scores = new Map();

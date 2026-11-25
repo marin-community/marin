@@ -85,9 +85,15 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "pr_number",
             "coordinator_iris_job_id",
             "elapsed_excluding_eval_seconds",
+            "base_commit",
+            "base_preset_version",
+            "commit",
+            "evaluation_data_identity",
+            "launch_config",
+            "settings",
         }
     }
-    assert publish(main_publication).keys() == main_publication.keys()
+    assert publish(main_publication | {"evaldash_run_ids": None}) == main_publication
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -105,8 +111,6 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
-    for evaldash_ids in (None, ["existing-evaluation"]):
-        assert publish(changed | {"evaldash_run_ids": evaldash_ids}) == changed
     config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
     assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
     control_row = changed | {"is_control": True}
@@ -198,6 +202,39 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
+    rich = changed | {
+        "commit": "a" * 40,
+        "settings": ["trainer.max_steps=25"],
+        "is_control": True,
+        "evaluations": [
+            {
+                "metric": "eval_lite@25/family_mean",
+                "role": "slice",
+                "run": 0.7,
+                "n_run": 1,
+                "n_control": 0,
+                "evaluation_score": {
+                    "profile": "eval_lite",
+                    "step": 25,
+                    "statistic": "family_mean",
+                    "final": True,
+                    "comparability": "example-comparison",
+                },
+            }
+        ],
+    }
+    assert publish(rich)["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    for evaldash_ids in (None, ["existing-evaluation"]):
+        previous_format = main_publication | {
+            "preset_version": "same-version",
+            "is_control": False,
+            "evaldash_run_ids": evaldash_ids,
+        }
+        assert publish(previous_format)["attempt_id"] == changed["attempt_id"]
+        served = next(row for row in client.get(api_path).json()["runs"] if row["attempt_id"] == changed["attempt_id"])
+        assert served["issue"] == changed["issue"]
+        assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
+        assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "status: literal_error" in skipped["test/bad-status"]

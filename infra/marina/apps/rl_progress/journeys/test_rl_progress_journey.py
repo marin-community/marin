@@ -169,6 +169,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         )
     ]
     controls[0]["run_id"] = controls[1]["run_id"] = "shared-index-run"
+    controls[0]["commit"] = controls[0]["base_commit"][:10]
     branch = attempt("branch-at-first-preset", 5, 0.55) | {
         "branch": "experiment",
         "is_control": False,
