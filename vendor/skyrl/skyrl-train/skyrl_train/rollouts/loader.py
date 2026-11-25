@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -56,13 +56,9 @@ class JudgedGroup:
 
 
 class PromptOrder(Protocol):
-    """The dataset rows the loader offers, in order; an adaptive order learns from each step's judged groups."""
+    """The dataset rows the loader offers, in order."""
 
     def next_index(self) -> int: ...
-
-    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        """Fold one training step's judged groups into the order and return its metrics."""
-        ...
 
     def state_dict(self) -> dict[str, Any]: ...
 
@@ -92,9 +88,6 @@ class SeededPasses:
         index = self._order[self._position]
         self._position += 1
         return index
-
-    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        return {}
 
     def state_dict(self) -> dict[str, Any]:
         return {"epoch": self._epoch, "position": self._position}
@@ -149,6 +142,7 @@ class PromptLoader:
         max_unusable_groups: int,
         families: Mapping[str, str] | None = None,
         family_minimums: Mapping[str, int] | None = None,
+        observe_judged: Callable[[Sequence[JudgedGroup]], dict[str, float]] | None = None,
     ):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
@@ -165,6 +159,7 @@ class PromptLoader:
         self._families = dict(families or {})
         self._family_minimums = dict(family_minimums or {})
         self._order = order
+        self._observe_judged = observe_judged
         self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
         for uid in sorted(self._families, key=self._uid_rows.__getitem__):
             self._family_rows[self._families[uid]].append(self._uid_rows[uid])
@@ -287,7 +282,7 @@ class PromptLoader:
         )
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        """Report one training step's judged groups to the prompt order and return its metrics.
+        """Advance quarantine and notify any sampler that learns at admission.
 
         Each call is one training step: prompts whose quarantine has run out become available again. The metrics
         include how many stale prompts used up their regenerations since the previous call and how many prompts are
@@ -296,8 +291,9 @@ class PromptLoader:
         self._step += 1
         self._quarantined = {uid: release for uid, release in self._quarantined.items() if release > self._step}
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
+        sampling = self._observe_judged(groups) if self._observe_judged is not None else {}
         return {
-            **self._order.observe(groups),
+            **sampling,
             STALE_RETRIES_EXHAUSTED_METRIC: float(exhausted),
             QUARANTINED_PROMPTS_METRIC: float(len(self._quarantined)),
         }

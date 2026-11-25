@@ -13,7 +13,6 @@ from omegaconf import OmegaConf
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.contextual_sampling import PromptThompsonOrder
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext, prompt_order_from_config
@@ -50,7 +49,6 @@ def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluatio
     training = dataset("train", [text_task("too-long", prompt="x" * 300), *tasks])
     validation = dataset("validation", [text_task("validation", prompt="Find a quotient.", source="math")])
     order = prompt_order_from_config(config, training, held_out=[validation])
-    assert isinstance(order, PromptThompsonOrder)
     assert {training.label(order.next_index()) for _ in range(3)} == {task.id for task in tasks}
 
     private_changes = [
@@ -64,6 +62,10 @@ def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluatio
     duplicate = text_task("another-task-id", prompt="Compute 1 plus one.", source="math")
     with pytest.raises(ValueError, match="held-out public prompt"):
         prompt_order_from_config(config, training, held_out=[validation, dataset("duplicate", [duplicate])])
+
+    config.data.sampling.reversion_mass = 1.0
+    with pytest.raises(ValueError, match=r"data.sampling.reversion_mass.*Set it to 0"):
+        prompt_order_from_config(config, training, held_out=[validation])
 
 
 @pytest.mark.parametrize("kind,epsilon", [("adaptive-source", 0.2), ("adaptive-source-thompson", 0.05)])

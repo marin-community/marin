@@ -43,7 +43,7 @@ class Sampling(Section):
     """adaptive-source and prompt-thompson reserve this fraction for reference shares. adaptive-source-thompson,
     thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization."""
     reversion_mass: int | float = field(0.0)
-    "per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak"
+    "bin curriculum pseudo-evidence per step toward the weight-curve peak"
     instance_decay: int | float = field(0.7)
     "per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)"
     prior_alpha: int | float = field(1.0)

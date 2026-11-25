@@ -377,7 +377,7 @@ def select_heldout(full: tuple[TaskSpec, ...], recipe: SelectionRecipe) -> Heldo
 def _panel_source_records(
     source: HeldoutSource, grader_environments: Mapping[str, EnvironmentRequirements]
 ) -> Iterator[tuple[TaskSpec, str]]:
-    """Keep the published JSON for identity since parsing can upgrade a TaskSpec."""
+    """Pair each task with the JSON used for identity. Preserve raw JSON for published TaskSpec rows."""
     root, count = StoragePath(source.uri), 0
     if source.format == PanelFormat.EVALUATION:
         tasks = map(_chat_panel_task, evaluation_cases(source.uri))

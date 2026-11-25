@@ -313,7 +313,9 @@ A useful dispatch has a fully verified group with normalized score spread of at 
 after the optimizer, with generated tokens charged for discarded, unverified, and
 untrained groups. Checkpoints retain the acquisition window, model, and random state.
 SkyRL checks the prepared held-out prompts for overlap before training and collects
-sampler feedback from training rollouts only.
+sampler feedback from training rollouts only. Use `data.sampling.decay` to discount older
+observations. The bin curriculum's `reversion_mass` must be zero for prompt Thompson
+and adaptive source orders.
 
 Set `data.sampling.kind=adaptive-source` to favor sources whose answers receive different
 verifier scores within a prompt group. `source_column` selects the prepared row label

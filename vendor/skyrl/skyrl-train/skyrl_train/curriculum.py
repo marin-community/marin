@@ -51,6 +51,18 @@ class SamplingKind(StrEnum):
     GRADE_PRIOR = "grade-prior"
 
 
+ADAPTIVE_SOURCE_KINDS = (SamplingKind.ADAPTIVE_SOURCE, SamplingKind.ADAPTIVE_SOURCE_THOMPSON)
+
+
+def validate_sampling_reversion(config: DictConfig) -> None:
+    """Reject curriculum pseudo-evidence on sampler policies that use their own priors."""
+    if config.reversion_mass and (config.kind in ADAPTIVE_SOURCE_KINDS or config.kind in PromptAcquisition):
+        raise ValueError(
+            f"data.sampling.reversion_mass applies to bin curricula. Set it to 0 for {config.kind}. "
+            "data.sampling.decay controls how quickly older observations lose weight."
+        )
+
+
 class WeightingKind(StrEnum):
     """Weight curve applied to the Thompson-drawn pass rate p of each bin.
 

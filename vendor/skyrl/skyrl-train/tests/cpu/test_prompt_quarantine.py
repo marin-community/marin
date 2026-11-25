@@ -56,7 +56,9 @@ def test_adaptive_loader_scans_past_live_rows_and_resumes_a_stale_retry():
             prior_alpha=1,
             prior_beta=1,
         )
-        return PromptLoader(Prompts(2), order, batch_size=1, max_stale_retries=1, max_unusable_groups=2)
+        return PromptLoader(
+            Prompts(2), order, batch_size=1, max_stale_retries=1, max_unusable_groups=2, observe_judged=order.observe
+        )
 
     prompts = make_loader()
     group = prompts.next_prompt(live={"0"})

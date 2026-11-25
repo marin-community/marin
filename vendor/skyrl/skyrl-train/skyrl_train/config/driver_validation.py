@@ -36,6 +36,7 @@ from skyrl_train.config.validation import (
     validate_training_settings,
 )
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
+from skyrl_train.curriculum import validate_sampling_reversion
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
 from skyrl_train.group_admission import (
     BUILTIN_GROUP_ADVANTAGE_CONTRACTS,
@@ -567,6 +568,8 @@ def validate_driver_config(
 
     normalize_logging_backends(cfg)
     validate_rollout_launch(cfg, operation)
+    if operation is EntrypointOperation.TRAIN:
+        validate_sampling_reversion(cfg.data.sampling)
     validate_cfg(cfg, check_runtime_resources=check_runtime_resources)
     if check_runtime_resources:
         from skyrl_train.utils.progress import configure_progress

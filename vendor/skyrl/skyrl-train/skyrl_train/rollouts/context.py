@@ -40,7 +40,13 @@ from skyrl_train.contextual_sampling import (
     PublicPrompt,
     public_prompt_digest,
 )
-from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
+from skyrl_train.curriculum import (
+    ADAPTIVE_SOURCE_KINDS,
+    CurriculumConfig,
+    CurriculumOrder,
+    SamplingKind,
+    validate_sampling_reversion,
+)
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
@@ -159,6 +165,7 @@ def prompt_order_from_config(
     seed = sampling.seed if sampling.seed is not None else config.trainer.seed
     batch_size = config.trainer.train_batch_size
     kind = SamplingKind(sampling.kind)
+    validate_sampling_reversion(sampling)
     if kind is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
     if kind in PromptAcquisition:
@@ -182,7 +189,7 @@ def prompt_order_from_config(
             epsilon=sampling.epsilon,
             reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
         )
-    if kind in (SamplingKind.ADAPTIVE_SOURCE, SamplingKind.ADAPTIVE_SOURCE_THOMPSON):
+    if kind in ADAPTIVE_SOURCE_KINDS:
         if config.generator.n_samples_per_prompt < 2:
             raise ValueError("adaptive-source requires at least two samples per prompt")
         return AdaptiveSourceOrder(
@@ -250,6 +257,10 @@ def _record_admission(admission: Admission, trace_rollouts: bool, step: int, max
     record_rollout_buffer(admission.ready_count, max_untrained_groups)
 
 
+def _record_sampling_feedback(step: int) -> None:
+    record_event("sampling_feedback_observed", {"feedback_batch": step, "observed_unix_ns": time.time_ns()})
+
+
 def record_sampling_training(batch: RolloutBatchMetadata, nonzero_advantage_tokens: collections.Counter[str]) -> None:
     """Emit one optimizer-input receipt for each selected group, including groups with zero signal."""
     for group in batch.groups:
@@ -289,7 +300,8 @@ class TrainingContext:
         *,
         rollout_spans: bool,
         grader_report_path: str | None = None,
-        adaptive_order: AdaptiveSourceOrder | PromptThompsonOrder | None = None,
+        assign_sampling_source: Callable[[str], str] | None = None,
+        observe_after_optimizer: Callable[[int, Sequence[PromptFeedback]], dict[str, float]] | None = None,
     ):
         self.loader = loader
         self.config = config
@@ -297,7 +309,8 @@ class TrainingContext:
         self._workers = workers
         self._rollout_spans = rollout_spans
         self._grader_report_path = grader_report_path
-        self._adaptive_order = adaptive_order
+        self._assign_sampling_source = assign_sampling_source
+        self._observe_after_optimizer = observe_after_optimizer
         self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
@@ -370,6 +383,7 @@ class TrainingContext:
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
         order = prompt_order_from_config(config, dataset, held_out=held_out)
+        assign_source = order.assign if isinstance(order, (AdaptiveSourceOrder, PromptThompsonOrder)) else None
         return cls(
             PromptLoader(
                 dataset,
@@ -379,6 +393,7 @@ class TrainingContext:
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
                 family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
+                observe_judged=order.observe if isinstance(order, (AdaptiveSourceOrder, CurriculumOrder)) else None,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -388,7 +403,8 @@ class TrainingContext:
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
-            adaptive_order=order if isinstance(order, (AdaptiveSourceOrder, PromptThompsonOrder)) else None,
+            assign_sampling_source=assign_source,
+            observe_after_optimizer=order.finish_step if isinstance(order, PromptThompsonOrder) else None,
         )
 
     def start(self) -> None:
@@ -475,7 +491,8 @@ class TrainingContext:
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
         sampling_dispositions: list[GroupDisposition] = []
-        tracks_prompt_feedback = isinstance(self._adaptive_order, PromptThompsonOrder)
+        sampling_receipts_enabled = self._assign_sampling_source is not None
+        tracks_prompt_feedback = self._observe_after_optimizer is not None
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
@@ -497,16 +514,13 @@ class TrainingContext:
                     raise ValueError("selected batch group indices are not ordered from zero")
                 await self._write_grader_report()
                 sampling_metrics = self.loader.observe(admission.selection.judged)
-                if isinstance(self._adaptive_order, AdaptiveSourceOrder):
-                    record_event(
-                        "sampling_feedback_observed",
-                        {"feedback_batch": admission.batch_id, "observed_unix_ns": time.time_ns()},
-                    )
+                if sampling_receipts_enabled and not tracks_prompt_feedback:
+                    _record_sampling_feedback(admission.batch_id)
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
                     {**admission.selection.metrics, **sampling_metrics},
-                    sampling_receipts_enabled=self._adaptive_order is not None,
+                    sampling_receipts_enabled=sampling_receipts_enabled,
                     sampling_dispositions=tuple(sampling_dispositions),
                 )
 
@@ -516,7 +530,7 @@ class TrainingContext:
         """Update the prompt policy only once optimizer participation is known."""
         if counts is not None:
             record_sampling_training(batch, counts)
-        if not isinstance(self._adaptive_order, PromptThompsonOrder):
+        if self._observe_after_optimizer is None:
             return {}
         feedback = []
         for outcome in batch.sampling_dispositions:
@@ -536,11 +550,8 @@ class TrainingContext:
                     ),
                 )
             )
-        metrics = self._adaptive_order.finish_step(batch.batch_id, feedback)
-        record_event(
-            "sampling_feedback_observed",
-            {"feedback_batch": batch.batch_id, "observed_unix_ns": time.time_ns()},
-        )
+        metrics = self._observe_after_optimizer(batch.batch_id, feedback)
+        _record_sampling_feedback(batch.batch_id)
         return metrics
 
     async def state_dict(self) -> TrainingContextState:
@@ -635,8 +646,8 @@ class TrainingContext:
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
                 request = self._request_spec.request(prompt, lease.policy_step)
-                if self._adaptive_order is not None:
-                    prompt = {**prompt, SAMPLING_SOURCE: self._adaptive_order.assign(prompt["uid"])}
+                if self._assign_sampling_source is not None:
+                    prompt = {**prompt, SAMPLING_SOURCE: self._assign_sampling_source(prompt["uid"])}
                     metadata = prompt["input"].metadata
                     identity = metadata.evaluation_identity
                     record_event(

@@ -21,6 +21,7 @@ from experiments.post_training.task_curation import qwen_sampler_lab
 TASKS = f"{qwen_sampler_lab.NAME}@{qwen_sampler_lab.VERSION}"
 QWEN = ArtifactHfModel(qwen3_0_6b, relative_path="")
 RESPONSE_TOKENS = 4096
+PROMPT_EXPLORATION = 0.20
 LAYOUT = Layout(
     name="qwen-h100x2",
     workload=Training(replace(role_plan(batch_size=16, group_size=4, micro_train_batch_size=4), colocate_all=True)),
@@ -94,7 +95,11 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int
         revision="2026.11.25.2",
         tasks=TASKS,
         model=QWEN,
-        recipe=Recipe(LAYOUT, fixed_reply_tokens=None, config=config),
+        recipe=Recipe(
+            replace(LAYOUT, job_timeout_seconds=2700) if updates == 32 else LAYOUT,
+            fixed_reply_tokens=None,
+            config=config,
+        ),
         updates=updates,
         measured=range(1, updates + 1),
         seed=seed,
@@ -117,9 +122,9 @@ QWEN_SAMPLER = ModelPresets(
         for arm, kind, epsilon in (
             ("fixed", "adaptive-source", 1.0),
             ("thompson", "adaptive-source-thompson", 0.05),
-            ("source-only", "prompt-thompson-source", 0.20),
-            ("contextual", "prompt-thompson-contextual", 0.20),
-            ("cost-aware", "prompt-thompson-cost-aware", 0.20),
+            ("source-only", "prompt-thompson-source", PROMPT_EXPLORATION),
+            ("contextual", "prompt-thompson-contextual", PROMPT_EXPLORATION),
+            ("cost-aware", "prompt-thompson-cost-aware", PROMPT_EXPLORATION),
         )
     ),
     control_pins={},

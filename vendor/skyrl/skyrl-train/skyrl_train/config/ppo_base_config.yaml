@@ -18,7 +18,7 @@ data:
     # adaptive-source and prompt-thompson reserve this fraction for reference shares.
     # adaptive-source-thompson, thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization.
     epsilon: 0.05
-    reversion_mass: 0.0 # per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak
+    reversion_mass: 0.0 # bin curriculum pseudo-evidence per step toward the weight-curve peak
     instance_decay: 0.7 # per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)
     prior_alpha: 1.0 # Beta prior for thompson (informative rate) and learnability (pass rate)
     prior_beta: 1.0

@@ -203,17 +203,38 @@ the usual Iris hub and W&B credentials.
 export MARIN_PREFIX=s3://marin-us-east-02a/marin
 uv run python -m experiments.post_training.task_curation.qwen_sampler_lab --run
 uv run python -m experiments.post_training.qwen_sampler --preset smoke-fixed \
-  --version 2026.11.25.1 --issue 12201 --priority interactive --plan
+  --version 2026.11.25.2 --issue 12201 --priority interactive --plan
 ```
 
-Replace `--plan` with `--run --wait` to execute. Choose `smoke-fixed` or `smoke-thompson` for four
-updates and `pilot-fixed` or `pilot-thompson` for 32. Each update draws 16 groups of four completions.
-Greedy validation runs at the start and end. The 64-token response cap, non-thinking chat template
-and disabled checkpoint and trajectory exports keep short runs focused on sampler behavior.
+Replace `--plan` with `--run --wait` to execute. The `smoke-*` presets run four updates and the
+`pilot-*` presets run 32. Each update draws 16 groups of four completions. Greedy validation runs
+at the start and end. The pinned Qwen tokenizer template enables thinking, with up to 4,096 output
+tokens in a 4,608-token window. The presets skip native checkpoints, model exports, and trajectory
+retention.
 The model and tokenizer come from the regional Qwen artifact at revision `c1899de`. SkyRL caches
 the lowered and tokenized training rows across sampler policies with the same immutable data,
 tokenizer, task settings and preparation code. Compare elapsed time from submission, worker start
 and first optimizer update when measuring the cost of an iteration.
+
+For frozen-policy sampler replay, point the client at an existing Iris vLLM endpoint serving
+`s3://marin-us-east-02a/marin/models/Qwen--Qwen3-0-6B--c1899de`. Set the serving context limit
+above the largest generation cap plus the input prompt. The default panel uses 16 train-only
+prompts per family and difficulty, with two four-completion groups per prompt.
+
+```bash
+uv run python -m experiments.post_training.qwen_sampler_replay \
+  --endpoint /serve/qwen-sampler-replay --cap 4096 --seed 20261127 --output qwen-replay
+```
+
+The client writes scored responses and a manifest with the frozen weights, tokenizer and template
+hashes, data version and sampling seeds. Use this bank to replay sampler decisions against fixed
+outcomes. Online RL generates fresh rollouts from the current policy.
+
+The first replay bank contains 1,152 responses from 144 distinct train-only prompts, covering 16
+prompts in each family and difficulty cell. Its manifest, per-cell counts, cap comparison, and
+ShellSim spot checks are at
+`s3://marin-us-east-02a/marin/rl-data/replay-banks/qwen-sampler-lab/2026.11.25.1/`.
+[Open the replay bank in Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Freplay-banks%2Fqwen-sampler-lab%2F2026.11.25.1%2F).
 
 ## Four-source Snowball sampler experiment
 

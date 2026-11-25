@@ -12,6 +12,8 @@ from experiments.post_training.rl_presets import ModelPresets, Preset
 from experiments.post_training.snowball_rl import DATAKIT_SFT_2026_09_21, SNOWBALL
 from experiments.post_training.task_curation.snowball_sampler_selection import EVAL_LITE, PILOT
 
+SOURCE_EXPLORATION = 0.20
+
 
 def sampler_preset(stage: str, updates: int, arm: str, exploration: float) -> Preset:
     base = SNOWBALL.by_name["train-long"].with_updates(updates)
@@ -54,9 +56,9 @@ SAMPLER = ModelPresets(
     namespace="snowball-sampler",
     presets=(
         sampler_preset("smoke", 4, "fixed", 1.0),
-        sampler_preset("smoke", 4, "adaptive", 0.2),
+        sampler_preset("smoke", 4, "adaptive", SOURCE_EXPLORATION),
         sampler_preset("pilot", 20, "fixed", 1.0),
-        sampler_preset("pilot", 20, "adaptive", 0.2),
+        sampler_preset("pilot", 20, "adaptive", SOURCE_EXPLORATION),
         sampler_preset("pilot", 20, "thompson", 0.05),
     ),
     control_pins={},

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 import math
 import random
 from typing import Any
 
 import datasets
-
-from skyrl_train.rollouts.loader import JudgedGroup
 
 ROUTE_COLUMN = "teacher_route"
 
@@ -76,9 +74,6 @@ class DomainWeightedOrder:
         index = self.window[self.window_position]
         self.window_position += 1
         return index
-
-    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        return {}
 
     def _take(self, route: str, count: int) -> list[int]:
         selected: list[int] = []

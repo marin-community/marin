@@ -75,6 +75,7 @@ class PromptFeedback:
 
     @property
     def useful(self) -> bool:
+        """Check for full verification, score spread of at least 0.05, and nonzero training advantage."""
         if not self.fully_verified or not self.nonzero_advantage_tokens:
             return False
         scores = [score for score in self.verified_scores or () if score is not None]
@@ -104,11 +105,26 @@ def public_prompt_features(text: str) -> NDArray[np.float64]:
     return np.concatenate((shape, 1.5 * lexical))
 
 
-class PromptThompsonOrder:
-    """Select distinct windows using one joint draw from a discounted logistic fit.
+def _prompt_features(
+    prompts: Sequence[PublicPrompt], sources: Sequence[str], acquisition: PromptAcquisition
+) -> NDArray[np.float64]:
+    source_rows = np.searchsorted(sources, [prompt.source for prompt in prompts])
+    indicators = np.column_stack((np.ones(len(prompts)), np.eye(len(sources))[source_rows]))
+    if acquisition is PromptAcquisition.SOURCE:
+        return indicators
+    features = np.stack([public_prompt_features(prompt.text) for prompt in prompts])
+    for source_index in range(len(sources)):
+        rows = source_rows == source_index
+        features[rows] -= features[rows].mean(axis=0)
+    return np.column_stack((indicators, features))
 
-    The acquisition mechanism is shared across all variants. Source-only and contextual
-    vary the fitted feature matrix. Cost-aware contextual uses the fitted cost to rank candidates.
+
+class PromptThompsonOrder:
+    """Rank distinct training prompts by sampled probability of useful optimizer input.
+
+    Source-only ranks prompts from the same source equally. Contextual ranking also
+    uses public prompt text. Cost-aware ranking gives additional weight to prompts
+    predicted to spend fewer generated tokens.
     """
 
     def __init__(
@@ -158,14 +174,7 @@ class PromptThompsonOrder:
         self._assigned: Counter[str] = Counter()
         self._seen: set[str] = set()
 
-        source_rows = np.searchsorted(self._sources, self._row_sources)
-        self._features = np.column_stack((np.ones(len(prompts)), np.eye(len(self._sources))[source_rows]))
-        if acquisition is not PromptAcquisition.SOURCE:
-            features = np.stack([public_prompt_features(prompt.text) for prompt in prompts])
-            for source_index in range(len(self._sources)):
-                rows = source_rows == source_index
-                features[rows] -= features[rows].mean(axis=0)
-            self._features = np.column_stack((self._features, features))
+        self._features = _prompt_features(prompts, self._sources, acquisition)
         dimension = self._features.shape[1]
         self._prior = np.eye(dimension) * _PRIOR_PRECISION
         self._precision = self._prior.copy()
@@ -195,10 +204,6 @@ class PromptThompsonOrder:
         source = self._row_sources[self._rows[uid]]
         self._assigned[source] += 1
         return source
-
-    def observe(self, groups: Sequence[object]) -> dict[str, float]:
-        # Loader judgments precede optimization. Feedback enters through finish_step.
-        return {}
 
     def _draw_window(self) -> list[int]:
         coefficients = np.linalg.solve(self._precision, self._info)
@@ -240,7 +245,6 @@ class PromptThompsonOrder:
         leases = {group.lease_id for group in groups}
         if len(leases) != len(groups) or self._seen.intersection(leases):
             raise ValueError("A dispatched group can contribute Thompson feedback only once")
-        rows = [self._rows[group.uid] for group in groups]
         if any(
             not 0 < group.dispatch_step <= step
             or group.generated_tokens < 0
@@ -248,26 +252,10 @@ class PromptThompsonOrder:
             for group in groups
         ):
             raise ValueError("Thompson feedback requires a prior or current training dispatch and nonnegative costs")
-        age = self._decay ** (step - self._last_step)
-        self._precision = self._prior + age * (self._precision - self._prior)
-        self._info *= age
-        self._cost_precision = self._prior + age * (self._cost_precision - self._prior)
-        self._cost_info *= age
+        labels = np.array([group.useful for group in groups], dtype=float)
+        self._fit(step, groups, labels)
         self._last_step = step
         self._seen.update(leases)
-
-        features = self._features[rows]
-        labels = np.array([group.useful for group in groups], dtype=float)
-        weights = np.power(self._decay, step - np.array([group.dispatch_step for group in groups], dtype=int))
-        old_logits = features @ np.linalg.solve(self._precision, self._info)
-        probability = self._probabilities(old_logits)
-        curvature = probability * (1 - probability)
-        self._precision += features.T @ ((weights * curvature)[:, None] * features)
-        self._info += features.T @ (weights * (labels - probability + curvature * old_logits))
-        costs = np.array([group.generated_tokens for group in groups])
-        log_costs = np.log((costs + 1) / (self._reference_tokens + 1))
-        self._cost_precision += features.T @ (weights[:, None] * features)
-        self._cost_info += features.T @ (weights * log_costs)
 
         metrics = {
             "sampling/groups": float(len(groups)),
@@ -279,6 +267,25 @@ class PromptThompsonOrder:
         }
         self._assigned.clear()
         return metrics
+
+    def _fit(self, step: int, groups: Sequence[PromptFeedback], labels: NDArray[np.float64]) -> None:
+        features = self._features[[self._rows[group.uid] for group in groups]]
+        costs = np.array([group.generated_tokens for group in groups])
+        weights = np.power(self._decay, step - np.array([group.dispatch_step for group in groups], dtype=int))
+        age = self._decay ** (step - self._last_step)
+        self._precision = self._prior + age * (self._precision - self._prior)
+        self._info *= age
+        self._cost_precision = self._prior + age * (self._cost_precision - self._prior)
+        self._cost_info *= age
+
+        old_logits = features @ np.linalg.solve(self._precision, self._info)
+        probability = self._probabilities(old_logits)
+        curvature = probability * (1 - probability)
+        self._precision += features.T @ ((weights * curvature)[:, None] * features)
+        self._info += features.T @ (weights * (labels - probability + curvature * old_logits))
+        log_costs = np.log((costs + 1) / (self._reference_tokens + 1))
+        self._cost_precision += features.T @ (weights[:, None] * features)
+        self._cost_info += features.T @ (weights * log_costs)
 
     def state_dict(self) -> dict[str, Any]:
         return {
