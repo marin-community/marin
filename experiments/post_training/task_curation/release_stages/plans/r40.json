@@ -1,5 +1,5 @@
 {
-  "artifact_version": "2026.11.24.21",
+  "artifact_version": "2026.11.24.22",
   "catalog_root": "s3://marin-us-east-02a/marin/rl-data/catalog/production",
   "catalog_target_load_id": "54405be9b4db4c2d9828549469abe759",
   "curriculum_target_load_id": "cbe58f5c9e2142b294986479c6f457c2",
@@ -415,7 +415,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "r40",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v21",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v22",
   "removed_sources": [
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
@@ -449,7 +449,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "c5061d766113357f3b79a1ab7fc9c7a079700b83",
+  "source_revision": "d244ab23d124dadd41e31beede3abaaa186750f0",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k",
