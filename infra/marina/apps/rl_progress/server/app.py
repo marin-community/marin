@@ -127,7 +127,15 @@ def create_api(services):
                         },
                     )
                 if older_publication:
-                    return record
+                    response = {key: normalized[key] for key in record}
+                    groups = (
+                        response.get("evaluations", ()),
+                        (response.get("gate_result") or {}).get("comparisons", ()),
+                    )
+                    for group in groups:
+                        for comparison in group:
+                            comparison.pop("evaluation_score", None)
+                    return response
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]

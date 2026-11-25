@@ -396,9 +396,15 @@ def _declared_evaluations(preset: presets.Preset) -> tuple[StoredEvaluation, ...
 
 
 def _recorded_evaluations(
-    preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs
+    preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs, *, gate_profiles: bool = False
 ) -> tuple[StoredEvaluation, ...]:
-    declarations = inputs.evaluation_profiles or ()
+    declarations = inputs.evaluation_profiles
+    if declarations is None and gate_profiles:
+        declarations = _declared_evaluations(preset)
+        primary_files = {source.relative_path for source in launch.validation_data}
+        if preset.evaluations and f"{preset.evaluations[0].file}.parquet" not in primary_files:
+            declarations = tuple(row for row in declarations if not row.primary)
+    declarations = declarations or ()
     by_name = {profile.name: profile for profile in declarations if not profile.primary}
     profiles = []
     if launch.validation_data:
@@ -495,8 +501,6 @@ def read_measurements(
             inputs = read_run_inputs(path)
         except FileNotFoundError:
             inputs = RunInputs(preset_name=preset.name)
-    if gate_profiles and inputs.evaluation_profiles is None:
-        inputs = inputs.model_copy(update={"evaluation_profiles": _declared_evaluations(preset)})
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
@@ -510,7 +514,7 @@ def read_measurements(
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
     launch = read_recorded_launch(terminal)
-    profiles = _recorded_evaluations(preset, launch, inputs)
+    profiles = _recorded_evaluations(preset, launch, inputs, gate_profiles=gate_profiles)
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {

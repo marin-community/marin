@@ -71,28 +71,32 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(running)["status"] == "running"
     assert publish(sparse) == record
     assert publish(running) == record
-    main_publication = {
-        key: value
-        for key, value in record.items()
-        if key
-        not in {
-            "native_run_id",
-            "preset_version",
-            "is_control",
-            "user",
-            "branch",
-            "dirty",
-            "pr_number",
-            "coordinator_iris_job_id",
-            "elapsed_excluding_eval_seconds",
-            "base_commit",
-            "base_preset_version",
-            "commit",
-            "evaluation_data_identity",
-            "launch_config",
-            "settings",
+    main_publication = copy.deepcopy(
+        {
+            key: value
+            for key, value in record.items()
+            if key
+            not in {
+                "native_run_id",
+                "preset_version",
+                "is_control",
+                "user",
+                "branch",
+                "dirty",
+                "pr_number",
+                "coordinator_iris_job_id",
+                "elapsed_excluding_eval_seconds",
+                "base_commit",
+                "base_preset_version",
+                "commit",
+                "evaluation_data_identity",
+                "launch_config",
+                "settings",
+            }
         }
-    }
+    )
+    for comparison in main_publication["gate_result"]["comparisons"]:
+        comparison.pop("evaluation_score", None)
     assert publish(main_publication | {"evaldash_run_ids": None}) == main_publication
     failed = record | {
         "attempt_id": "native-second",
@@ -230,7 +234,10 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "is_control": False,
             "evaldash_run_ids": evaldash_ids,
         }
-        assert publish(previous_format)["attempt_id"] == changed["attempt_id"]
+        response = publish(previous_format)
+        assert response["attempt_id"] == changed["attempt_id"]
+        assert response["issue"] == changed["issue"] and response["status"] == rich["status"]
+        assert "evaluation_score" not in response["evaluations"][0]
         served = next(row for row in client.get(api_path).json()["runs"] if row["attempt_id"] == changed["attempt_id"])
         assert served["issue"] == changed["issue"]
         assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)

@@ -329,7 +329,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             **kwargs,
         )
 
-    for control in write_controls(write_control, preset.name):
+    controls = write_controls(write_control, preset.name)
+    for control in controls:
         path = control / RUN_INPUTS_FILENAME
         old_inputs = json.loads(path.read_text())
         del old_inputs["evaluation_profiles"]
@@ -675,6 +676,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
+    with edit_receipt(controls[0]) as receipt:
+        receipt["result"]["provenance"].update(branch="main", dirty=False, base_commit=pin.commit)
     command = CliRunner().invoke(
         publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
     )
