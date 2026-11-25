@@ -160,6 +160,21 @@ def test_runs_far_outside_expectations_are_flagged_but_stay_valid(tmp_path, evid
     assert bool(run_warnings(evidence)) is flagged
 
 
+def _selection(index: int, status: SelectionStatus, reason: str | None, max_tokens: int | None) -> dict:
+    return Selection(
+        dataset="d",
+        source_row=f"row:{index}",
+        source_ordinal=index,
+        status=status,
+        reason=reason,
+        rank=index,
+        context_window=1000,
+        max_tokens=max_tokens,
+        prompt_tokens=None,
+        reference_tokens=None,
+    ).model_dump(mode="json")
+
+
 def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0, rows: int | None = None) -> None:
     """Write a single-turn run archive whose items have the given output caps and reply lengths.
 
@@ -181,20 +196,7 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
         with store.transaction() as transaction:
             for index, (cap, tokens) in enumerate(caps_and_tokens):
                 row = f"row:{index}"
-                transaction.table(SELECTIONS_TABLE).add(
-                    Selection(
-                        dataset="d",
-                        source_row=row,
-                        source_ordinal=index,
-                        status=SelectionStatus.SELECTED,
-                        reason=None,
-                        rank=index,
-                        context_window=1000,
-                        max_tokens=cap,
-                        prompt_tokens=None,
-                        reference_tokens=None,
-                    ).model_dump(mode="json")
-                )
+                transaction.table(SELECTIONS_TABLE).add(_selection(index, SelectionStatus.SELECTED, None, cap))
                 transaction.table(ATTEMPTS_TABLE).add(
                     Attempt(
                         dataset="d",
@@ -213,18 +215,7 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
                 )
             for index in range(len(caps_and_tokens), len(caps_and_tokens) + excluded):
                 transaction.table(SELECTIONS_TABLE).add(
-                    Selection(
-                        dataset="d",
-                        source_row=f"row:{index}",
-                        source_ordinal=index,
-                        status=SelectionStatus.EXCLUDED,
-                        reason="context_window",
-                        rank=index,
-                        context_window=1000,
-                        max_tokens=None,
-                        prompt_tokens=None,
-                        reference_tokens=None,
-                    ).model_dump(mode="json")
+                    _selection(index, SelectionStatus.EXCLUDED, "context_window", None)
                 )
             total = len(caps_and_tokens) + excluded if rows is None else rows
             run = {
