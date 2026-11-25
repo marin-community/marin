@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
+from pydantic import AfterValidator, Field, NonNegativeInt, PlainSerializer, PositiveInt
 
-from .model import FrozenMap, NumberMap, OpenMap, Section, SectionMap, thaw, unset_field
+from .model import FrozenMap, NumberMap, Section, SectionMap, field, thaw, unset_field
 from .sampling import EvalSamplingParams
+
+DAYTONA_EVAL_BACKEND = "daytona-eval"
 
 
 class TeacherModel(Section):
@@ -117,12 +119,24 @@ class DistillationTokenBudgetCallback(Section):
     token_budget: PositiveInt
 
 
+class EvaluationCoverage(Section):
+    expected_tasks: PositiveInt
+    minimum_scored_tasks: NonNegativeInt
+
+
+class PooledCheckpointEvaluation(Section):
+    primary: EvaluationCoverage
+    cohorts: SectionMap[EvaluationCoverage]
+    timeout: PositiveInt
+
+
 class EvaluationCallback(Section):
     type: Literal["evaluation"]
     eval_steps: int = unset_field()
     eval_on_train_end: bool = unset_field()
     eval_before_train: bool = unset_field()
     additional_evaluations: SectionMap[EvaluationProfile] | None = unset_field()
+    checkpoint_scores: PooledCheckpointEvaluation | None = unset_field()
     metric_groups: Annotated[Mapping[str, tuple[str, ...]], AfterValidator(FrozenMap), PlainSerializer(thaw)] | None = (
         unset_field()
     )
@@ -134,21 +148,6 @@ class ReferenceLikelihoodCallback(Section):
     reference_paths: tuple[str, ...]
     output_path: str
     batch_size: PositiveInt = unset_field()
-
-
-class HarborEvaluationCohort(Section):
-    name: str
-    job: OpenMap
-    reward_key: str
-
-
-class HarborEvaluationCallback(Section):
-    type: Literal["harbor_evaluation"]
-    cohorts: tuple[HarborEvaluationCohort, ...]
-    timeout: int | float
-    minimum_coverage: int | float
-    minimum_native_coverage: int | float
-    daytona_api_key_env: str
 
 
 class HFModelSaveCallback(Section):
@@ -198,6 +197,13 @@ class InferenceStatsCallback(Section):
     sinks: None = unset_field()
 
 
+class TrainerMemoryProfile(Section):
+    enabled: bool = field(False)
+    max_sequence_length: PositiveInt = unset_field()
+    valid_token_counts: tuple[PositiveInt, ...] = unset_field()
+    minimum_headroom_fraction: float = unset_field()
+
+
 LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
 CorrectionRule = Annotated[TokenRule | SequenceRule, Field(discriminator="kind")]
@@ -208,7 +214,6 @@ Callback = Annotated[
     | DistillationTokenBudgetCallback
     | EvaluationCallback
     | ReferenceLikelihoodCallback
-    | HarborEvaluationCallback
     | HFModelSaveCallback
     | DatabaseRegistrationCallback
     | RefModelUpdateCallback

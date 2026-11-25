@@ -85,6 +85,8 @@ class _Tracked:
     # each would repeat the same line per retry and per re-notification.
     linked_session: str | None = None
     resolved: bool = False
+    delivery_failed: bool = False
+    failure_notice_posted: bool = False
 
 
 class ThreadLog:
@@ -125,6 +127,11 @@ class ThreadLog:
             tracked.posted_at = now
             tracked.expires_at = now + self._ttl
 
+    def refresh(self, key: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.expires_at = time.monotonic() + self._ttl
+
     def mark_firing(self, key: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
@@ -135,6 +142,8 @@ class ThreadLog:
         tracked = self._threads.get(key)
         if tracked is not None:
             tracked.resolved = True
+            tracked.delivery_failed = False
+            tracked.failure_notice_posted = False
             self.mark_posted(key)
 
     def mark_linked(self, key: str, session_id: str) -> None:
@@ -155,6 +164,25 @@ class SlackAnnouncer:
         # states, including a new alert instance from a replacement job.
         self._threads = ThreadLog(ttl=THREAD_TTL, max_entries=MAX_TRACKED_THREADS)
 
+    def mark_delivery_succeeded(self, thread_key: str) -> None:
+        tracked = self._threads.peek(thread_key)
+        if tracked is not None:
+            tracked.delivery_failed = False
+            tracked.failure_notice_posted = False
+
+    async def report_delivery_failure(
+        self, client: httpx.AsyncClient, thread_key: str, error: LoomAlertDeliveryError
+    ) -> None:
+        """Tell an alert thread once that Loom delivery is failing."""
+        tracked = self._threads.peek(thread_key)
+        if tracked is None:
+            return
+        tracked.delivery_failed = True
+        if tracked.failure_notice_posted:
+            return
+        posted = await self.post(client, f"No Loom triage session opened for this alert: {error}", thread=tracked.thread)
+        tracked.failure_notice_posted = posted is not None
+
     async def announce(
         self,
         client: httpx.AsyncClient,
@@ -173,6 +201,11 @@ class SlackAnnouncer:
             if tracked.resolved:
                 await self.post(client, "Firing again after resolution.", thread=tracked.thread)
                 self._threads.mark_firing(thread_key)
+                return tracked.thread
+            # A failed Loom delivery makes Grafana retry the same webhook for
+            # longer than the quiet period. Those retries are not new alerts.
+            if tracked.delivery_failed:
+                self._threads.refresh(thread_key)
                 return tracked.thread
             # Grafana retries a failed webhook within seconds, and re-notifies an
             # unresolved alert on its repeat_interval. Both land here; only the
@@ -342,7 +375,7 @@ class LoomAlertClient:
         except httpx.HTTPStatusError as err:
             raise await self._report_delivery_failure(
                 client,
-                thread,
+                thread_key,
                 LoomAlertDeliveryError(
                     f"{err.request.url.host} returned HTTP {err.response.status_code} while delivering the alert"
                 ),
@@ -350,15 +383,16 @@ class LoomAlertClient:
         except httpx.RequestError as err:
             raise await self._report_delivery_failure(
                 client,
-                thread,
+                thread_key,
                 LoomAlertDeliveryError(f"could not reach {err.request.url.host} while delivering the alert"),
             ) from err
         except json.JSONDecodeError as err:
             raise await self._report_delivery_failure(
                 client,
-                thread,
+                thread_key,
                 LoomAlertDeliveryError("Loom returned an invalid JSON response"),
             ) from err
+        self._announcer.mark_delivery_succeeded(thread_key)
         await self._link_session(client, thread, thread_key, response)
         return response
 
@@ -395,7 +429,7 @@ class LoomAlertClient:
     async def _report_delivery_failure(
         self,
         client: httpx.AsyncClient,
-        thread: SlackThread | None,
+        thread_key: str,
         error: LoomAlertDeliveryError,
     ) -> LoomAlertDeliveryError:
         """Say in the alert's own thread that no triage session opened.
@@ -404,8 +438,7 @@ class LoomAlertClient:
         incident. Returns the error for the caller to raise, so the webhook still
         fails and Grafana retries.
         """
-        if thread is not None:
-            await self._announcer.post(client, f"No Loom triage session opened for this alert: {error}", thread=thread)
+        await self._announcer.report_delivery_failure(client, thread_key, error)
         return error
 
     async def _link_session(
@@ -499,13 +532,14 @@ def _alert_card(payload: object, alerts: list[Mapping[str, object]]) -> str:
         (label, str(alerts[0].get(field, "")))
         for label, field in (("Dashboard", "dashboardURL"), ("Panel", "panelURL"), ("Silence", "silenceURL"))
     ]
+    links.append((first.get("related_label", "More"), first.get("related_url", "")))
     # `<url|label>` gives the url no escape of its own, so a value carrying Slack's
     # link delimiters would rewrite the rest of the message. Drop those outright
     # rather than rendering a mangled link.
     rendered = [
-        f"<{url}|{label}>"
+        f"<{url}|{_slack_escape(_truncate(label, 80))}>"
         for label, url in links
-        if url.startswith(("http://", "https://")) and not set(url) & set("<>|")
+        if url.startswith(("http://", "https://")) and not set(url) & set("<>|") and "|" not in label
     ]
     if rendered:
         lines.append(" · ".join(rendered))

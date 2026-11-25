@@ -18,13 +18,16 @@ import os
 import tarfile
 import time
 from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.http_service import forward_http_posts
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -69,6 +72,10 @@ SPEC_PATH = "/tests/verifier.toml"
 VERDICT_DIRECTORY = "/logs/verifier"
 VERDICT_PATH = f"{VERDICT_DIRECTORY}/verdict.json"
 JUDGE_SPEC_PATH = "/tests/judge.toml"
+JUDGE_RELAY_PORT = 8790
+JUDGE_RELAY_URL = f"http://127.0.0.1:{JUDGE_RELAY_PORT}/v1"
+JUDGE_RELAY_KEY = "machine-local-judge-relay"
+JUDGE_RELAY_ROUTES = MappingProxyType({"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"})
 STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
@@ -575,6 +582,19 @@ def _grading_env(
     return env
 
 
+def _relay_script_judge(
+    machine: Machine, connection: JudgeConnection, request_timeout: float
+) -> AbstractAsyncContextManager[None]:
+    return forward_http_posts(
+        machine,
+        port=JUDGE_RELAY_PORT,
+        upstream=connection.base_url,
+        routes=JUDGE_RELAY_ROUTES,
+        headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
+        timeout=request_timeout,
+    )
+
+
 async def grade_in_agent_machine(
     task: TaskSpec,
     attempt: GradingAttempt,
@@ -671,6 +691,13 @@ async def _grade_staged(
     assert isinstance(placement, GraderMachine)
     environment = placement.environment
     files = _grading_files(task, attempt, grading, submissions)
+    judge = grading.grader.judge if isinstance(grading.grader, ScriptGrader) else None
+    relay_connection = judge_connection if judge is not None and factory.backend is Backend.DAYTONA else None
+    guest_connection = (
+        replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+        if relay_connection is not None
+        else judge_connection
+    )
     try:
         for command in placement.collect:
             assert task_machine is not None
@@ -712,19 +739,24 @@ async def _grade_staged(
                 # A grader without a workspace starts where its environment does.
                 if environment.working_directory is None and grading.workspace is not None:
                     prepared = replace(prepared, workdir=grading.workspace)
-                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, judge_connection)})
+                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
-            setup_seconds = time.monotonic() - setup_started
             try:
-                result = await _grade_on(
-                    machine,
-                    archive_path,
-                    submission_archive,
-                    environment,
-                    grading,
-                    preparation_timeout=machine_spec.startup_timeout,
-                    user=setup_user(factory.backend),
-                )
+                async with (
+                    _relay_script_judge(machine, relay_connection, judge.request_timeout)
+                    if relay_connection is not None and judge is not None
+                    else nullcontext()
+                ):
+                    setup_seconds = time.monotonic() - setup_started
+                    result = await _grade_on(
+                        machine,
+                        archive_path,
+                        submission_archive,
+                        environment,
+                        grading,
+                        preparation_timeout=machine_spec.startup_timeout,
+                        user=setup_user(factory.backend),
+                    )
                 return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
                 await machine.close()

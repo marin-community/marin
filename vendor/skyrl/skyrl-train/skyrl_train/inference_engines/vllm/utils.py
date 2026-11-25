@@ -97,19 +97,7 @@ def pop_vllm_wrapper_kwargs(engine_kwargs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def ensure_token_ids_in_sse_chunk(sse_chunk: str) -> str:
-    """Copy per-chunk token IDs to harbor's canonical streaming location.
-
-    vLLM 0.20.2 puts delta token IDs flat on the choice at
-    ``choices[0].token_ids`` (sibling to ``delta``, gated by
-    ``return_token_ids=True``).  Harbor's ``_chunk_completion_token_ids``
-    checks ``choices[0].delta.provider_specific_fields.token_ids`` first
-    (canonical streaming path), then falls back to ``choices[0].token_ids``.
-
-    This function copies the flat field into the delta's
-    ``provider_specific_fields`` so harbor finds it on the FIRST path —
-    avoiding edge cases where the fallback misses control-token chunks
-    (empty-delta chunks that still carry token IDs).
-    """
+    """Expose vLLM's choice-level token IDs in the delta, including control-only chunks."""
     if not sse_chunk.startswith("data: "):
         return sse_chunk
     payload = sse_chunk[len("data: ") :]

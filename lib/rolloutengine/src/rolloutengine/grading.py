@@ -27,7 +27,7 @@ from taskcompendium.runtime.grading import grade_in_agent_machine, grade_in_sand
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
+from rolloutengine.machines import _AttemptMachineFactory, _machine_spec, _verifier_view
 from rolloutengine.models import TaskRolloutSpec
 
 
@@ -90,7 +90,7 @@ async def _grade_rollout(
     if isinstance(placement, AgentMachine):
         assert machine is not None
         return await grade_in_agent_machine(
-            task, attempt, machine, timeout=spec.limits.verifier_timeout, judge_connection=judge
+            task, attempt, _verifier_view(machine), timeout=spec.limits.verifier_timeout, judge_connection=judge
         )
     assert isinstance(placement, GraderMachine)
     selection = spec.verifier_machine

@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import R3Transport, reference_model_required
 from skyrl_train.config.placement_geometry import num_rollout_gpus, validate_colocated_engine_geometry
+from skyrl_train.config.utils import generation_context_limit
 
 
 def validate_batch_invariant_config(cfg: DictConfig) -> None:
@@ -41,6 +42,36 @@ def validate_megatron_config(cfg: DictConfig):
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
 
     policy = cfg.trainer.policy
+    projection_chunk = policy.megatron_config.get("output_projection_chunk_size")
+    profile = policy.megatron_config.get("memory_profile", {})
+    if projection_chunk is not None:
+        if policy.megatron_config.tensor_model_parallel_size != 1:
+            raise ValueError("output_projection_chunk_size requires TP1")
+        if cfg.trainer.algorithm.get("policy_loss_type", "regular") in ("ftpo", "dpo"):
+            raise ValueError("output_projection_chunk_size currently supports PPO only")
+        for name in ("transformer_config_kwargs", "model_config_kwargs"):
+            for path, value in _iter_config_kwargs(policy.megatron_config.get(name, {})):
+                if path[-1] in ("sequence_parallel", "defer_embedding_wgrad_compute", "delay_wgrad_compute") and value:
+                    raise ValueError(f"output_projection_chunk_size requires {name}.{'.'.join(path)}=false")
+    if profile.get("enabled", False):
+        for name in ("max_sequence_length", "valid_token_counts", "minimum_headroom_fraction"):
+            if name not in profile:
+                raise ValueError(f"Trainer sizing requires an explicit memory_profile.{name}")
+        if str(policy.optimizer_config.optimizer).lower() not in ("adam", "adamw", "muonh"):
+            raise ValueError("Synthetic trainer sizing requires Adam or MuonH")
+        if cfg.trainer.algorithm.get("policy_loss_type", "regular") != "regular":
+            raise ValueError("Synthetic trainer sizing currently requires regular PPO")
+        if not 0 <= profile.minimum_headroom_fraction < 1:
+            raise ValueError("memory_profile.minimum_headroom_fraction must be in [0,1)")
+        if generation_context_limit(cfg.generator) > profile.max_sequence_length:
+            raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
+        if policy.megatron_config.get("moe_router_replay", False):
+            raise ValueError("Synthetic trainer sizing requires native routing without rollout router replay")
+        maximum = profile.max_sequence_length
+        if maximum is None or maximum <= 0:
+            raise ValueError("Trainer sizing requires an explicit positive memory_profile.max_sequence_length")
+        if any(tokens > maximum for tokens in profile.valid_token_counts):
+            raise ValueError("Trainer sizing token count exceeds memory_profile.max_sequence_length")
     if str(policy.optimizer_config.optimizer).lower() == "muonh":
         megatron = policy.megatron_config
         validate_muonh_geometry(megatron.tensor_model_parallel_size, megatron.expert_tensor_parallel_size)

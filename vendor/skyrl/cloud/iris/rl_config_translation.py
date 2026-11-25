@@ -11,10 +11,9 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.resources import files
-from inspect import Parameter, signature
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Protocol
 
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
@@ -22,7 +21,6 @@ from omegaconf import DictConfig, OmegaConf
 from skyrl_train.evaluation_profiles import record_evaluation_profiles, resolve_evaluation_profiles
 
 from skyrl_train.config.objective_spec import validate_objective
-from skyrl_train.rollouts.harbor_settings import concurrent_trials
 from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
 from skyrlrecipe.documents import set_path
 
@@ -36,7 +34,6 @@ from marinskyrl.speculative_decoding import STANDARD_TRAINING_ENTRYPOINT, parse_
 
 RL_CONFIG_TASK_DIR = "/tmp/marin-rl-configs"
 RL_CONFIG_PAYLOAD_ENV = "MARIN_RL_CONFIG_B64"
-RESOLVED_HARBOR_CONFIG_KEY = "terminal_bench_config"
 # Prompt groups generating at once, in training batches, for a recipe that leaves rollout_buffer.max_in_flight null.
 IN_FLIGHT_BATCHES = 1.5
 TRAINER_NON_PATH_KEYS = frozenset(
@@ -45,8 +42,6 @@ TRAINER_NON_PATH_KEYS = frozenset(
         "callbacks.metric_groups",
         "callbacks.selection_metric",
         "callbacks.additional_evaluations",
-        # Harbor resolves task paths against the pinned dataset repository, not the launcher installation.
-        "callbacks.cohorts.job.tasks.path",
     }
 )
 
@@ -56,8 +51,6 @@ RL_ENTRYPOINTS = MappingProxyType(
         RLEntrypoint.GENERATE: "skyrl_train.entrypoints.main_generate",
         RLEntrypoint.STANDARD: STANDARD_TRAINING_ENTRYPOINT,
         RLEntrypoint.TASKCOMPENDIUM: "skyrl_train.entrypoints.taskcompendium",
-        RLEntrypoint.TERMINAL_BENCH: "skyrl_train.entrypoints.terminal_bench",
-        RLEntrypoint.TERMINAL_BENCH_GENERATE: "skyrl_train.entrypoints.terminal_bench_generate",
     }
 )
 CHECKPOINT_EXPORT_ENTRYPOINT = CHECKPOINT_EXPORT_MODULE
@@ -72,7 +65,7 @@ def training_type_for_entrypoint(module: str, *, max_staleness_steps: int) -> Tr
     Every training entrypoint runs the rollout-buffer loop, which is synchronous at staleness 0.
     """
     entrypoint = _RL_ENTRYPOINTS_BY_MODULE.get(module)
-    if entrypoint is None or entrypoint in (RLEntrypoint.GENERATE, RLEntrypoint.TERMINAL_BENCH_GENERATE):
+    if entrypoint is None or entrypoint is RLEntrypoint.GENERATE:
         return None
     return TrainingType.SYNC if max_staleness_steps == 0 else TrainingType.ASYNC
 
@@ -90,46 +83,11 @@ class HPCGeometry(Protocol):
     gpus_per_node: int
 
 
-def _validate_installed_agent_kwargs(terminal_bench: Mapping[str, Any]) -> None:
-    installed = terminal_bench.get("installed_agent")
-    if installed is None:
-        return
-    from harbor.agents.factory import AgentFactory  # noqa: PLC0415 - only installed-agent recipes need Harbor
-    from harbor.agents.installed.base import BaseInstalledAgent  # noqa: PLC0415 - only installed-agent recipes need Harbor
-
-    agent = installed["agent"]
-    adapter = AgentFactory.get_agent_class(agent["name"])
-    if not issubclass(adapter, BaseInstalledAgent):
-        raise ValueError("The selected agent must be an installed Harbor agent")
-    supported = {descriptor.kwarg for descriptor in (*adapter.CLI_FLAGS, *adapter.ENV_VARS)}
-    for base in adapter.__mro__:
-        if "__init__" in base.__dict__:
-            supported.update(
-                parameter.name
-                for parameter in signature(base.__init__).parameters.values()
-                if parameter.kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
-            )
-    if unknown := sorted(agent.get("kwargs", {}).keys() - supported):
-        raise ValueError(f"Unknown {agent['name']} recipe kwargs: {', '.join(unknown)}")
-
-
 def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
     """Populate launch-owned token limits from the authored request budget."""
     materialized = copy.deepcopy(raw)
-    for path, value in budget.derived_values(materialized.get("terminal_bench")).items():
+    for path, value in budget.derived_values().items():
         set_path(materialized, path, value)
-    serving_window_tokens = budget.effective_serving_window_tokens
-    for callback in materialized.get("trainer", {}).get("callbacks") or ():
-        if callback["type"] != "harbor_evaluation":
-            continue
-        for cohort in callback["cohorts"]:
-            for agent in cohort["job"].get("agents", ()):
-                model_info = agent.setdefault("kwargs", {}).setdefault("model_info", {})
-                max_output_tokens = model_info.get("max_output_tokens")
-                if max_output_tokens is not None and max_output_tokens >= serving_window_tokens:
-                    raise ValueError("Harbor output tokens must leave room for input in the serving window")
-                # Harbor counts both prompt and reply tokens in max_input_tokens.
-                model_info["max_input_tokens"] = serving_window_tokens
     return materialized
 
 
@@ -147,7 +105,6 @@ class ParsedRLConfig:
     data: Dict[str, Any] = field(default_factory=dict)
     environment: Dict[str, Any] = field(default_factory=dict)
     trajectory_runner: Dict[str, Any] = field(default_factory=dict)
-    terminal_bench: Optional[Dict[str, Any]] = None
 
 
 def materialize_launch_config(
@@ -176,16 +133,12 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     raw = OmegaConf.to_container(OmegaConf.create(document), resolve=False) or {}
     if not isinstance(raw, dict):
         raise ValueError("RL config must contain a mapping at the document root")
-    if RESOLVED_HARBOR_CONFIG_KEY in raw:
-        raise ValueError(f"{RESOLVED_HARBOR_CONFIG_KEY} is a resolved-config key; use terminal_bench in source recipes")
-
     config_groups = raw.get("config_groups", {})
     if "algorithm_recipe" in config_groups:
         group = compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
     recipe = SkyRLRecipe.from_document(raw)
-    _validate_installed_agent_kwargs(raw.get("terminal_bench") or {})
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
     materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
@@ -193,7 +146,6 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     generator = materialized_raw["generator"]
     if recipe.trainer.policy.megatron_config.moe_router_replay:
         generator.setdefault("engine_init_kwargs", {}).setdefault("enable_return_routed_experts", True)
-    terminal_bench = materialized_raw.get("terminal_bench")
     data = dict(raw.get("data", {}))
     data.pop("kind", None)
     trainer = resolve_paths_in_dict(trainer, skip_keys=TRAINER_NON_PATH_KEYS)
@@ -221,7 +173,6 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
         data=data,
         environment=materialized_raw.get("environment", {}),
         trajectory_runner=raw.get("trajectory_runner", {}),
-        terminal_bench=terminal_bench,
     )
 
 
@@ -276,7 +227,6 @@ class TaskLocalSkyRLValues:
 
     train_data: tuple[str, ...]
     validation_data: tuple[str, ...]
-    terminal_bench_data: tuple[str, ...]
     policy_model_path: str | None = None
     draft_model_uri: str | None = None
     evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -286,7 +236,6 @@ TASK_LOCAL_SKYRL_PATHS = MappingProxyType(
     {
         "train_data": ("data.train_data",),
         "validation_data": ("data.val_data",),
-        "terminal_bench_data": ("data.terminal_bench_data",),
         "policy_model_path": ("trainer.policy.model.path", "trainer.ref.model.path"),
         "draft_model_uri": ("generator.speculative_decoding.model.source_uri",),
     }
@@ -381,14 +330,6 @@ def _skyrl_config_sections(
         trainer["export_hf_artifact"] = bool(exp_args["export_hf_artifact"])
     if hf_hub_repo_id:
         trainer["hf_hub_repo_id"] = hf_hub_repo_id
-    terminal_bench = copy.deepcopy(parsed.terminal_bench)
-    if terminal_bench is not None and terminal_bench.get("installed_agent") is not None:
-        installed_agent = terminal_bench["installed_agent"]
-        if not installed_agent.get("output_path"):
-            installed_agent["output_path"] = join_resource_path(
-                generator["trajectory_retention"]["output_path"], "installed-agents"
-            )
-
     sections = {
         "trainer": trainer,
         "generator": generator,
@@ -399,8 +340,6 @@ def _skyrl_config_sections(
     for section in ("teachers", "teacher_routing"):
         if parsed.raw.get(section):
             sections[section] = copy.deepcopy(parsed.raw[section])
-    if terminal_bench is not None:
-        sections[RESOLVED_HARBOR_CONFIG_KEY] = terminal_bench
     return sections
 
 
@@ -415,15 +354,11 @@ def compose_config_groups(config_groups: Mapping[str, str], *, config_name: str 
 
 
 def _resolve_max_in_flight(config: DictConfig) -> None:
-    """Default the groups generating at once to IN_FLIGHT_BATCHES batches, within the run's Harbor sandboxes."""
+    """Default the groups generating at once to IN_FLIGHT_BATCHES training batches."""
     rollout_buffer = config.trainer.rollout_buffer
     if rollout_buffer.max_in_flight is not None:
         return
-    groups = math.ceil(IN_FLIGHT_BATCHES * config.trainer.train_batch_size)
-    if RESOLVED_HARBOR_CONFIG_KEY in config:
-        sandboxes = concurrent_trials(config[RESOLVED_HARBOR_CONFIG_KEY].get("harbor", {}))
-        groups = min(groups, max(1, sandboxes // config.generator.n_samples_per_prompt))
-    rollout_buffer.max_in_flight = groups
+    rollout_buffer.max_in_flight = math.ceil(IN_FLIGHT_BATCHES * config.trainer.train_batch_size)
 
 
 def compose_skyrl_config(
