@@ -92,7 +92,7 @@ class GateResult(BaseModel):
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
     control_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
-    control_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GradingLatency(TypedDict):
@@ -137,7 +137,7 @@ class GraderReport(BaseModel):
 
 class ControlReplicate(BaseModel, frozen=True):
     commit: Identity
-    revision: Identity
+    version: Identity
     replicate: Count
 
 
@@ -150,12 +150,13 @@ class AttemptSummary(BaseModel):
     label: Identity
     series: str | None = None
     model: Identity | None = None
-    preset_revision: Identity | None = None
-    base_preset_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    preset_version: Identity | None = None
+    base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     control: ControlReplicate | None = None
     control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    is_control: bool = False
     user: Identity | None = None
     branch: str | None = None
     dirty: bool | None = None

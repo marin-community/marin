@@ -252,7 +252,6 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.22.3",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     default_speculative_decoding=_DSPARK,

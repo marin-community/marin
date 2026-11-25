@@ -68,8 +68,8 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Preset', run.preset], ['Preset revision', run.preset_revision],
-    ['Base version', run.base_preset_revision], ['Evaluation set', run.evaluation_data_identity],
+    ['Model', run.model], ['Preset', run.preset], ['Preset version', run.preset_version],
+    ['Base version', run.base_preset_version], ['Evaluation set', run.evaluation_data_identity],
     ['User', run.user], ['Branch', run.branch], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
     ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],

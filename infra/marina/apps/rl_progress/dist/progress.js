@@ -21,9 +21,9 @@ function controlSets(runs) {
   const sets = new Map();
   for (const run of runs) {
     if (!run.control) continue;
-    const { commit, revision } = run.control;
-    const key = `${revision}/${commit}`;
-    if (!sets.has(key)) sets.set(key, { revision, commit, rows: [] });
+    const { commit, version } = run.control;
+    const key = `${version}/${commit}`;
+    if (!sets.has(key)) sets.set(key, { version, commit, rows: [] });
     sets.get(key).rows.push(run);
   }
   return [...sets.values()].flatMap((set) => {
@@ -66,7 +66,7 @@ function controlPoints(sets, scores, metric, contract) {
     const dataChanged = point.data && previous.data && point.data !== previous.data;
     point.marker = protocolChanged ? 'Protocol changed' : dataChanged ? 'Evaluation set changed' : null;
     const shared = point.report?.invariants.some((fact) => fact.name === `${metric.split('/')[0]}/${contract.shared_tasks}` && fact.holds);
-    if (shared && !protocolChanged && point.report.control_revision === previous.revision
+    if (shared && !protocolChanged && point.report.control_version === previous.version
       && sameCommit(point.report.control_commit, previous.commit)) {
       point.link = comparison(point.report, metric);
     }
@@ -85,9 +85,9 @@ function branchPoints(runs, scores, controls, metric) {
     const global = scores.get(run).get(metric)?.value;
     if (!Number.isFinite(global) || run.control) return [];
     const report = run.gate_result;
-    const matching = controls.filter((control) => control.revision === run.base_preset_revision);
+    const matching = controls.filter((control) => control.version === run.base_preset_version);
     const base = matching.find((control) => sameCommit(report?.control_commit, control.commit)) ?? matching.at(-1);
-    const gateControl = controls.find((control) => report?.control_revision === control.revision
+    const gateControl = controls.find((control) => report?.control_version === control.version
       && sameCommit(report.control_commit, control.commit));
     const group = report?.attempt_ids.length > 1 ? JSON.stringify([...report.attempt_ids].sort()) : null;
     const delta = base && gateControl?.segment === base.segment && !groups.has(group) ? comparison(report, metric) : null;
@@ -139,11 +139,11 @@ function plot(metric, controls, branches, route) {
     if (point.link || controls[index + 1]?.link) markers.push([point.chained, 'chain']);
     for (const [value, style] of markers) {
       const dot = svg('circle', { cx: x(point.time), cy: y(value), r: 3.5, class: `history-${style}` });
-      dot.append(svg('title', {}, `${point.revision} · ${style === 'chain' ? 'Comparable' : 'Global'} ${score(value)}`));
+      dot.append(svg('title', {}, `${point.version} · ${style === 'chain' ? 'Comparable' : 'Global'} ${score(value)}`));
       chart.append(dot);
     }
     if (index === 0 || index === controls.length - 1 || controls.length <= 5) {
-      chart.append(svg('text', { x: x(point.time), y: 181, 'text-anchor': 'middle' }, point.revision));
+      chart.append(svg('text', { x: x(point.time), y: 181, 'text-anchor': 'middle' }, point.version));
     }
   }
   let previousMain;
@@ -160,7 +160,7 @@ function plot(metric, controls, branches, route) {
     const detail = point.replicateCount > 1 ? ` · ${point.replicateCount} replicate mean` : '';
     const link = svg('a', { href: route(point.run), 'aria-label': `${point.run.label} · ${score(value)}${detail}` });
     link.append(svg('circle', { cx: x(point.time), cy: y(value), r: 4.5, class: onMain ? 'history-global' : 'history-branch' }),
-      svg('title', {}, `${point.run.branch ?? point.run.label} · ${score(value)} · ${point.run.base_preset_revision ?? 'Base unavailable'}`));
+      svg('title', {}, `${point.run.branch ?? point.run.label} · ${score(value)} · ${point.run.base_preset_version ?? 'Base unavailable'}`));
     if (point.chained != null && point.chained !== point.global) {
       const dot = svg('circle', { cx: x(point.time), cy: y(point.global), r: 3, class: 'history-global' });
       dot.append(svg('title', {}, `Experiment global ${score(point.global)}`));

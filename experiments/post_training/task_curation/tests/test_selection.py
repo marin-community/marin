@@ -240,9 +240,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         for row in carried
     )
 
-    derived = Path(
-        run(sampled_tasks_step(selection_step, "train", 1, 1, revision="2026.11.17.1", namespace="fixture"))[0].path
-    )
+    derived = Path(run(sampled_tasks_step(selection_step, "train", 1, 1, namespace="fixture"))[0].path)
     sampled = read_tasks(derived / TRAIN_FILENAME)
     assert len(sampled) == 1 and sampled[0] in tasks
     subset = read_selection_manifest(str(derived))

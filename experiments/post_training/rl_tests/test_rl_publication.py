@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Barrier
@@ -15,13 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import (
-    SHARED_TASK_FRACTION_INVARIANT,
-    SHARED_TASKS_INVARIANT,
-    AttemptSummary,
-    Invariant,
-    Verdict,
-)
+from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, AttemptSummary, Invariant, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -245,7 +238,7 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
         effect=None,
         reason="Insufficient overlap",
         run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
-        control=gate.ControlMetadata(commit="abcd1234", revision=preset.revision, replicates=2),
+        control=gate.ControlMetadata(commit="abcd1234", version="1234abcd", replicates=2),
         invariants=(Invariant(name=f"eval_lite/{SHARED_TASKS_INVARIANT}", value=9, limit=18, holds=False),),
         comparisons=(),
         gaps=(),
@@ -316,7 +309,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -343,7 +336,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     report, first_gate = saved_gate()
     interrupted = {"once": True}
     logical_id = "snowball-learning-medium-tester-1234abcd"
-    native_id = f"tests/publication-0-{preset.revision}"
+    native_id = f"tests/publication-0-{recipe.RUN_ARTIFACT_VERSION}"
     automatic_links = ["linked-export", "native-export"]
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
@@ -378,11 +371,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         run_id=logical_id,
                         model=table.model,
                         preset=preset.name,
-                        preset_revision=preset.revision,
+                        preset_version="1234abcd",
                         user="tester",
                         branch="fixture",
                         source_revision="fixture",
-                        base_preset_revision=preset.revision,
+                        base_preset_version="1234abcd",
                         dirty=False,
                     )
                     if index == 0
@@ -450,7 +443,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
         "control_commit": pin.commit,
-        "control_revision": pin.revision,
+        "control_version": pin.version,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
@@ -691,92 +684,18 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"].startswith("pinned-")
     ]
-    assert len(served_controls) == len(pin.members)
-    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(len(pin.members)))
+    assert len(served_controls) == pin.replicates
+    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
     assert all(row["control"]["commit"] == pin.commit for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )
-    old_binding = preset.held_out_tasks
-    assert old_binding is not None
-    new_binding = old_binding.split("@")[0] + "@2026.11.24.1"
-    old_panel = Path(recipe.selection_artifact(old_binding).path())
-    new_panel = Path(recipe.selection_artifact(new_binding).path())
-    shutil.copytree(old_panel, new_panel)
-    summary_path = new_panel / "summary.json"
-    summary = json.loads(summary_path.read_text())
-    summary["selection_strata"]["version"] = "2026.11.24.1"
-    write_json(summary_path, summary)
-    fresh_preset = replace(preset, revision="2026.11.24.1", held_out_tasks=new_binding)
-    fresh_pin = replace(pin, commit="next-main", revision=fresh_preset.revision, members=((0, 2), (1, 0)))
-    fresh_table = preset_table(fresh_preset)
-    fresh_table = replace(fresh_table, control_pins={**fresh_table.control_pins, preset.name: fresh_pin})
-    monkeypatch.setattr(snowball_model, "SNOWBALL", fresh_table)
-    for index in range(2):
-        name = gate.control_name(preset.name, fresh_pin.commit, index, table=fresh_table)
-        recorded_runs(
-            preset.name,
-            name + ("-retry2" if index == 0 else ""),
-            inputs=RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",)),
-            attempt_id=f"fresh-{index}",
-            score=0.5 + index * 0.01,
-            metrics={"policy/entropy": 0.5 + index * 0.01},
-        )
-    prior_pin = controls[0].parent / "previous-pin.json"
-    write_json(prior_pin, asdict(pin))
-    command = CliRunner().invoke(
-        publication.command(fresh_table),
-        ["--preset", preset.name, "--marina-url", "http://localhost", "--link-from", str(prior_pin)],
-    )
-    assert command.exit_code == 0, (command.output, command.exception)
-    attached = json.loads(command.output)
-    assert attached["errors"] == []
-    saved = gate.read_gate_report(str(Path(attached["link_report"]).parent))
-    assert saved is not None
-    assert saved.run.attempt_ids == ("fresh-0", "fresh-1")
-    assert "skyrl.trainer.policy.optimizer_config.lr" in saved.run.config_changes
-    assert any(row.metric == "eval_lite/aai_category/format/mean" for row in saved.comparisons)
-    names = {f"eval_lite/{SHARED_TASKS_INVARIANT}", f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"}
-    coverage = {fact.name: fact.value for fact in saved.invariants if fact.name in names}
-    assert coverage.keys() == names
-    for attempt in ("fresh-0", "fresh-1"):
-        persisted = stored()[attempt]["gate_result"]
-        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"]
-        assert (persisted["control_commit"], persisted["control_revision"]) == (pin.commit, pin.revision)
-        assert {fact["name"]: fact["value"] for fact in persisted["invariants"] if fact["name"] in names} == coverage
-        slices = {row["metric"] for row in persisted["comparisons"] if row["role"] == "slice"}
-        assert slices == {"eval_lite/mean", "eval_lite/family/small/mean", "eval_lite/family/large/mean"}
-    members = ((pin.members[0][0], pin.members[0][1] + 1), *pin.members[1:])
-    write_json(prior_pin, asdict(replace(pin, members=members)))
-    current_root = Path(gate.control_paths(fresh_preset, fresh_pin, table=fresh_table)[1])
-    with edit_receipt(current_root) as receipt:
-        receipt["config"]["skyrl"]["trainer"]["max_steps"] = fresh_preset.updates + 1
-    command = CliRunner().invoke(
-        publication.command(fresh_table),
-        ["--preset", preset.name, "--marina-url", "http://localhost", "--link-from", str(prior_pin)],
-    )
-    assert command.exit_code == 0, (command.output, command.exception)
-    refused = json.loads(command.output)
-    assert refused["errors"] == [] and refused["link_report"] != attached["link_report"]
-    refused_report = gate.read_gate_report(str(Path(refused["link_report"]).parent))
-    assert refused_report is not None and refused_report.run.attempt_ids == ("fresh-0", "fresh-1")
-    for attempt in ("fresh-0", "fresh-1"):
-        persisted = stored()[attempt]["gate_result"]
-        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"]
-        assert persisted["verdict"] == "invalid"
-        assert persisted["reason"] == "recorded control update budget differs from its preset revision"
-
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }
-    stale_table = replace(
-        table,
-        presets=tuple(
-            replace(row, revision="2026.11.12.2") if row.control_preset == preset.name else row for row in table.presets
-        ),
-    )
-    with pytest.raises(click.UsageError, match="control"):
-        publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
+    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
     after_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }

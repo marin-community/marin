@@ -29,7 +29,7 @@ _RETAINED_FIELDS = (
     "evaluation_data_identity",
     "evaluation_protocol_identity",
     "native_run_id",
-    "base_preset_revision",
+    "base_preset_version",
 )
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"

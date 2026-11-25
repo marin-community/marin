@@ -69,7 +69,6 @@ from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
-    with_current_control_revisions,
     write_training_families,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
@@ -83,45 +82,31 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
-def native_compositions():
-    """Cache real native compositions of equivalent fixture documents."""
+def cache_native_compositions(monkeypatch) -> None:
+    """Reuse successful compositions of equivalent launch documents within one test."""
     compose_configs = gate.compose_configs
     cached = {}
+    # Attempt IDs also appear in derived fields such as the Iris job name.
+    attempt_placeholder = "<generated-attempt-id>"
 
-    def substitute(value: str, replacements: Sequence[tuple[str, str]]) -> str:
-        for old, new in replacements:
-            value = value.replace(old, new)
-        return value
-
-    def compose(paths, *, validate_driver=False, substitutions=None):
+    def compose(paths, *, validate_driver=False):
         documents = [Path(path).read_text() for path in paths]
-        if substitutions is None:
-            substitutions = [()] * len(documents)
-        patches = [
-            ((yaml.safe_load(document)["run"]["attempt_id"], "<fixture-attempt>"), *replacements)
-            for document, replacements in zip(documents, substitutions, strict=True)
-        ]
+        attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
         key = validate_driver, tuple(
-            substitute(document, patch) for document, patch in zip(documents, patches, strict=True)
+            document.replace(attempt, attempt_placeholder) for document, attempt in zip(documents, attempts, strict=True)
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
-            cached[key] = [substitute(json.dumps(config), patch) for config, patch in zip(configs, patches, strict=True)]
+            cached[key] = [
+                json.dumps(config).replace(attempt, attempt_placeholder)
+                for config, attempt in zip(configs, attempts, strict=True)
+            ]
         return [
-            json.loads(substitute(config, [(token, original) for original, token in patch]))
-            for config, patch in zip(cached[key], patches, strict=True)
+            json.loads(config.replace(attempt_placeholder, attempt))
+            for config, attempt in zip(cached[key], attempts, strict=True)
         ]
 
-    return compose
-
-
-def cache_native_compositions(monkeypatch, native_compositions):
-    """Enable the native fixture cache for a test's gate calls."""
-
-    def enable():
-        monkeypatch.setattr(gate, "compose_configs", native_compositions)
-
-    return enable
+    monkeypatch.setattr(gate, "compose_configs", compose)
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:
@@ -282,12 +267,12 @@ def controls(write, name, **kwargs):
     return [
         write(
             name,
-            gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL),
+            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
             speed=100 + index,
             score=0.49 + index * 0.01,
             **kwargs,
         )
-        for index in range(len(pin.members))
+        for index in range(pin.replicates)
     ]
 
 
@@ -295,14 +280,7 @@ def preset_table(monkeypatch):
     def select(preset):
         table = replace(
             snowball_model.SNOWBALL,
-            presets=tuple(
-                (
-                    preset
-                    if row.name == preset.name
-                    else replace(row, revision=preset.revision) if row.control_preset == preset.name else row
-                )
-                for row in snowball_model.SNOWBALL.presets
-            ),
+            presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
         )
         monkeypatch.setattr(snowball_model, "SNOWBALL", table)
         return table
@@ -407,8 +385,10 @@ def evaluation_task_rows(
     ]
 
 
-def recorded_runs(selection, tmp_path, monkeypatch, request, native_compositions):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
+def recorded_runs(selection, tmp_path, monkeypatch, request):
+    table = snowball_model.SNOWBALL
+    pins = {name: replace(pin, version=recipe.RUN_ARTIFACT_VERSION) for name, pin in table.control_pins.items()}
+    monkeypatch.setattr(snowball_model, "SNOWBALL", replace(table, control_pins=pins))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -484,19 +464,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_compositions
                 runtime_args=step.runtime_args,
                 deps=step.deps,
             )
-            rendered = step.build_config(context).launch_config_yaml
-            launch = yaml.safe_load(rendered)
-            # Keep the paths and derived identities of each test's local artifacts in its receipt.
-            substitutions = [
-                (str(source_root), "<fixture-output>"),
-                (str(tmp_path), "<fixture-root>"),
-            ]
-            for field in ("train_data", "validation_data"):
-                for index, artifact in enumerate(launch["inputs"][field]):
-                    if artifact["uri"].startswith(f"{tmp_path}/"):
-                        substitutions.append((artifact["identity"], f"<fixture-{field}-{index}>"))
-            document.write_text(rendered)
-            (config,) = native_compositions([str(document)], substitutions=[substitutions])
+            document.write_text(step.build_config(context).launch_config_yaml)
+            config = gate.compose_configs([str(document)])[0]
             templates[key] = (source_root, config)
         return templates[key]
 
@@ -516,13 +485,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_compositions
     ):
         table = table or snowball_model.SNOWBALL
         preset = table.by_name[preset_name]
-        root = tmp_path / name / preset.revision
+        root = tmp_path / name / recipe.RUN_ARTIFACT_VERSION
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or RunInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs, table.model)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
-        run_id = f"{name}-{preset.revision}"
+        run_id = f"{name}-{recipe.RUN_ARTIFACT_VERSION}"
 
         def relocate(value):
             if isinstance(value, dict):
@@ -551,7 +520,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_compositions
         write_receipt(root, native)
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
-            root, name, preset.revision, fingerprint=fingerprint, global_step=0 if generating else max_steps
+            root, name, recipe.RUN_ARTIFACT_VERSION, fingerprint=fingerprint, global_step=0 if generating else max_steps
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}

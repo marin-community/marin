@@ -190,7 +190,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     for index, value in enumerate((0, 0.01)):
         name = f"users/test/requirements-{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
-        candidates.append(ArtifactStep.adopt(name, preset.revision, str(root), kind=SkyRLRun))
+        candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
     report = run(
         gate.gate_step(
             preset,
@@ -219,22 +219,18 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (1, False),
     ]
 
-    table = snowball_model.SNOWBALL
-    pin = table.control_pins[preset.control_preset]
     for root in control_roots:
-        shutil.copytree(root, root.with_name("stale"))
-    stale_table = replace(
-        table, control_pins={**table.control_pins, preset.control_preset: replace(pin, revision="stale")}
-    )
+        with edit_receipt(root) as receipt:
+            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
     stale = run(
         gate.gate_step(
             preset,
             tuple(candidates),
-            table=stale_table,
+            table=snowball_model.SNOWBALL,
             inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
         )
     )[0]
-    assert stale.verdict == "invalid" and "recorded control revision=stale" in stale.reason
+    assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):

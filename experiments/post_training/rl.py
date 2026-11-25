@@ -36,7 +36,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_runner import check_cache
@@ -53,6 +53,7 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     read_skyrl_attempt,
     run_skyrl,
+    skyrl_cpu_environment,
     skyrl_execution,
 )
 from marin.rl.skyrl_records import (
@@ -309,7 +310,7 @@ def build_experiment(
         recorded_inputs = inputs
         if control:
             assert provenance.base_commit is not None
-            member = ControlReplicate(commit=provenance.base_commit, revision=preset.revision, replicate=replicate)
+            member = ControlReplicate(commit=provenance.base_commit, version=run.version, replicate=replicate)
             recorded_inputs = inputs.model_copy(update={"control": member})
         runs.append(replace(run, run=partial(_run_rl, inputs=recorded_inputs, issue=issue, forward_env=forward_env)))
     gate = (
@@ -521,26 +522,35 @@ def _branch_pr_number(provenance: Provenance) -> int | None:
 
 
 def run_index_identity(
-    launch: dict, preset: presets.Preset, table: presets.ModelPresets, provenance: Provenance, *, user: str
+    launch: dict,
+    preset: presets.Preset,
+    table: presets.ModelPresets,
+    provenance: Provenance,
+    *,
+    user: str,
+    control: bool = False,
 ) -> RunIndexIdentity:
     """Name a composed launch by the gate's normalized comparison configuration."""
-    digest = fingerprint_hash(canonical_json(rl_gate.comparison_config(launch)))
+    version = rl_gate.config_version(launch)
     return RunIndexIdentity(
-        run_id=f"{table.model}-{preset.name}-{user}-{digest}",
+        run_id=f"{table.model}-{preset.name}-{user}-{version}",
         model=table.model,
         preset=preset.name,
-        preset_revision=preset.revision,
+        preset_version=version,
         user=user,
         branch=provenance.branch,
         source_revision=provenance.base_commit or "Unknown",
         tree_hash=provenance.tree_hash,
         dirty=provenance.dirty,
         pr_number=_branch_pr_number(provenance),
+        is_control=control,
     )
 
 
-def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
-    """Read the main-base preset revision, or None if it cannot be determined."""
+def _base_preset_version(module: str, index: RunIndexIdentity) -> str | None:
+    """Fingerprint the nominal preset at the source commit's main merge base."""
+    if index.is_control and index.branch == "main":
+        return index.preset_version
     root = recipe.REPO_ROOT
     preset = index.preset
     try:
@@ -549,16 +559,6 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
         logger.debug("Git could not resolve the main merge base for preset %s", preset)
         return None
     try:
-        comparison = subprocess.run(
-            ["git", "diff", "--quiet", base, "--", "experiments/post_training", "lib"],
-            cwd=root,
-            timeout=4,
-        )
-        if comparison.returncode == 0:
-            return index.preset_revision
-        if comparison.returncode != 1:
-            logger.debug("Could not compare preset sources at main commit %s", base)
-            return None
         snapshot = subprocess.run(
             [
                 "git",
@@ -567,14 +567,21 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
                 "experiments/__init__.py",
                 "experiments/post_training",
                 "experiments/evaluation",
+                "config",
                 "pyproject.toml",
+                "infra/buckets/pyproject.toml",
+                "infra/deploy/pyproject.toml",
+                "infra/marina/pyproject.toml",
                 "infra/marina/apps/rl_progress/applet.toml",
+                "infra/pulumi/pyproject.toml",
                 "lib",
+                "vendor/harbor",
+                "vendor/skyrl",
             ],
             cwd=root,
             capture_output=True,
             check=True,
-            timeout=8,
+            timeout=30,
         ).stdout
         with tempfile.TemporaryDirectory(prefix="rl-main-base-") as directory:
             path = Path(directory)
@@ -583,6 +590,9 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
             # The launcher owns the JSON protocol, including for bases that predate it.
             cli = Path(__file__).with_name("rl_preset_cli.py")
             shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
+            native_cli = Path("vendor/skyrl/cloud/iris/config_cli.py")
+            if not (path / native_cli).is_file():
+                shutil.copyfile(root / native_cli, path / native_cli)
             sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
                 [
@@ -599,15 +609,15 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
                 check=True,
                 cwd=path,
                 env={
-                    "PATH": os.defpath,
+                    **skyrl_cpu_environment(),
                     "PYTHONNOUSERSITE": "1",
                     "PYTHONPATH": os.pathsep.join(map(str, sources)),
                 },
-                timeout=30,
+                timeout=180,
             )
-            revision = json.loads(result.stdout)
-            return revision if isinstance(revision, str) else None
-    except (OSError, subprocess.SubprocessError, tarfile.TarError, json.JSONDecodeError) as error:
+            launch = json.loads(result.stdout)
+            return rl_gate.config_version(launch) if isinstance(launch, dict) else None
+    except (OSError, subprocess.SubprocessError, tarfile.TarError, ValueError, InvalidComparison) as error:
         logger.debug("Could not load preset %s from main commit %s (%s)", preset, base, type(error).__name__)
         return None
 
@@ -763,7 +773,7 @@ def _submit_from_launcher(
     submitted_at = datetime.now(UTC).isoformat()
     index: RunIndexIdentity = context.meta["rl_index"]
     index = index.model_copy(
-        update={"submitted_at": submitted_at, "base_preset_revision": _base_preset_revision(module, index)}
+        update={"submitted_at": submitted_at, "base_preset_version": _base_preset_version(module, index)}
     )
     runs = _from_handles(rl_handles).runs
     indexed_runs = {
@@ -790,7 +800,7 @@ def _submit_from_launcher(
         "coordinator_job_id": str(job),
         "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
         "submitted_at": submitted_at,
-        "base_preset_revision": index.base_preset_revision,
+        "base_preset_version": index.base_preset_version,
         "runs": submitted,
     }
     _print_status(result)
@@ -1037,6 +1047,7 @@ def command(
         )
         assert run.inputs is not None
         pin_error = None
+        preset_version = None
         if from_launcher and (do_run or plan):
             try:
                 validated = rl_gate.validate_candidate(preset, run.inputs, table=table, control=control)
@@ -1049,9 +1060,18 @@ def command(
                     if issue is not None:
                         _validate_launch_issue(run, preset, issue)
                     context.meta["rl_training_type"] = validated["runtime"]["training_type"]
-                    context.meta["rl_index"] = run_index_identity(
-                        validated, preset, table, provenance, user=username_segment()
+                    index = run_index_identity(
+                        validated,
+                        preset,
+                        table,
+                        provenance,
+                        user=username_segment(),
+                        control=control,
                     )
+                    context.meta["rl_index"] = index
+                    preset_version = index.preset_version
+                else:
+                    preset_version = rl_gate.config_version(validated)
         model = preset.model
         if (
             table.needs_completed_default_export
@@ -1067,16 +1087,18 @@ def command(
                 f"{sft_hint} --init NAME@VERSION."
             )
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
+        if preset_version is not None:
+            snapshot["preset_version"] = preset_version
         if preset.gated and not control:
             try:
-                pin = rl_gate.control_pin(preset, table=table, check_revision=False)
+                pin = rl_gate.control_pin(preset, table=table)
             except InvalidComparison as error:
                 pin_error = pin_error or str(error)
             else:
                 snapshot["control_pin"] = {
                     "commit": pin.commit,
-                    "revision": pin.revision,
-                    "current": pin_error is None and pin.revision == table.by_name[pin.preset].revision,
+                    "version": pin.version,
+                    "current": pin_error is None,
                 }
             if pin_error is not None:
                 snapshot["control_pin_error"] = pin_error

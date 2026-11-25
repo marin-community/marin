@@ -6,43 +6,25 @@
 from __future__ import annotations
 
 import json
-import logging
 import math
-import os
 import re
-import signal
 import statistics
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from time import monotonic
 
 import click
-import pyarrow as pa
-from finestore.rl.rl_progress import (
-    EVALUATION_PROTOCOL_DIFFERS,
-    SHARED_TASK_FRACTION_INVARIANT,
-    SHARED_TASKS_INVARIANT,
-    Change,
-    Comparison,
-    ComparisonRole,
-    Effect,
-    Invariant,
-    Verdict,
-)
+from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
 from finestore.rl.run_records import AttemptRecord
-from finestore.rl.strata import TaskStrata
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
-    SKYRL_PROJECT,
     ArtifactHfModel,
     ResolvedModelLocator,
     SkyRLPolicyModel,
@@ -59,7 +41,6 @@ from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
-from rigging.redaction import redact_string
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
@@ -72,29 +53,16 @@ from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     RunMeasurements,
-    evaluation_protocol,
-    held_out_identity,
-    project_answers,
     read_measurements,
     read_recorded_launch,
     read_run_inputs,
-    recorded_preset,
-    restrict_evaluation,
 )
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
-from experiments.post_training.rl_scoring import AAII_WEIGHTS, FAMILY_SLICE, SLICE_COLUMNS, score_answers
+from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
 GATE_REVISION = "2026.11.24"
-LINK_REVISION = "2026.11.24.1"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
-MIN_SHARED_TASK_FRACTION = 0.9
-_NATIVE_PREPARATION_TIMEOUT = 300
-_NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
-_NATIVE_PHASE = f"{_NATIVE_CONFIG_MODULE}: "
-_NATIVE_ERROR = "native configuration cannot be composed"
-
-logger = logging.getLogger(__name__)
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -171,22 +139,16 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
     if control or not preset.gated:
         (candidate,) = _compose_plans(preset, (inputs,))
         return candidate
+    defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
-    default_inputs = RunInputs(preset_name=preset.name)
-    plans = (default_inputs,) if inputs == default_inputs else (default_inputs, inputs)
-    defaults, *composed = _compose_plans(preset, plans)
-    control_defaults = _control_defaults(preset, pin, defaults)
-    for path in control_paths(preset, pin, table=table):
+    for index in range(pin.replicates):
+        path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
-        if receipt is None or receipt.native.result.state != "succeeded":
-            raise InvalidComparison(f"expected a successful pinned control receipt at {path}")
+        if receipt is None:
+            raise InvalidComparison(f"control receipt is unavailable: {path}")
         launch = read_recorded_launch(receipt)
-        _check_control_config(receipt.native.config, control_defaults, launch, preset=preset)
-    return composed[0] if composed else defaults
-
-
-class StaleControls(InvalidComparison):
-    """A preset no longer accepts its pinned control configuration."""
+        _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+    return candidate
 
 
 class RunMetadata(RunInputs):
@@ -202,7 +164,7 @@ class RunMetadata(RunInputs):
 
 class ControlMetadata(BaseModel):
     commit: str
-    revision: str
+    version: str | None = None
     replicates: int
     gate_revision: str = GATE_REVISION
     engines: tuple[dict, ...] = ()
@@ -211,13 +173,13 @@ class ControlMetadata(BaseModel):
 
 class GateReport(Artifact):
     preset: str
-    verdict: Verdict = Verdict.INVALID
-    effect: Effect | None = None
-    reason: str | None = None
+    verdict: Verdict
+    effect: Effect | None
+    reason: str | None
     run: RunMetadata
     control: ControlMetadata
-    invariants: tuple[Invariant, ...] = ()
-    comparisons: tuple[Comparison, ...] = ()
+    invariants: tuple[Invariant, ...]
+    comparisons: tuple[Comparison, ...]
     gaps: tuple[str, ...]
 
     def rows(self, *roles: ComparisonRole) -> tuple[Comparison, ...]:
@@ -315,168 +277,11 @@ def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison])
     return verdict, effect
 
 
-def _check_control_provenance(provenance: Mapping | None, path: str, pin: ControlPin) -> None:
-    if not provenance or provenance["base_commit"] != pin.commit or provenance["dirty"]:
-        raise InvalidComparison(f"control does not match its pin: {path}")
-
-
 def _check_control(run: RunMeasurements, pin: ControlPin) -> None:
-    _check_control_provenance(run.provenance, run.path, pin)
+    if run.provenance["base_commit"] != pin.commit or run.provenance["dirty"]:
+        raise InvalidComparison(f"control does not match its pin: {run.path}")
     if any(not row.holds for row in run.invariants):
         raise InvalidComparison(f"control has failed invariants: {run.path}")
-
-
-def _task_labels(table: pa.Table) -> dict[str, TaskStrata]:
-    rows = table.select(["task_digest", *SLICE_COLUMNS]).to_pylist()
-    return {digest: TaskStrata.model_validate(row) for row in rows if (digest := row.pop("task_digest")) is not None}
-
-
-def _cohort_protocol(preset: presets.Preset, launches: Sequence[RecordedLaunch]) -> dict[str, dict]:
-    names = tuple(evaluation.name for evaluation in preset.evaluations)
-    protocols = [{name: evaluation_protocol(launch, name) for name in names} for launch in launches]
-    if any(protocol != protocols[0] for protocol in protocols[1:]):
-        raise InvalidComparison("control cohort contains different evaluation protocols")
-    return protocols[0]
-
-
-class InsufficientOverlap(InvalidComparison):
-    def __init__(self, reason: str, coverage: tuple[Invariant, ...]):
-        super().__init__(reason)
-        self.coverage = coverage
-
-
-def _require_shared_overlap(
-    name: str, shared: set[str], control_labels: Mapping[str, TaskStrata]
-) -> tuple[Invariant, ...]:
-    total = len(control_labels)
-    accepted = len(shared)
-    required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * total))
-    fraction = accepted / total if total else 0.0
-    coverage = (
-        Invariant(
-            name=f"{name}/{SHARED_TASKS_INVARIANT}",
-            value=accepted,
-            limit=required,
-            comparator=">=",
-            holds=accepted >= required,
-        ),
-        Invariant(
-            name=f"{name}/{SHARED_TASK_FRACTION_INVARIANT}",
-            value=fraction,
-            limit=MIN_SHARED_TASK_FRACTION,
-            comparator=">=",
-            holds=accepted >= required,
-        ),
-    )
-    if accepted < required:
-        raise InsufficientOverlap(f"{name}: {accepted} of {total} control tasks shared; minimum {required}", coverage)
-    families: dict[str, set[str]] = {}
-    for digest, strata in control_labels.items():
-        families.setdefault(strata.family, set()).add(digest)
-    for family, members in families.items():
-        accepted = len(shared & members)
-        required = math.ceil(MIN_SHARED_TASK_FRACTION * len(members))
-        if accepted < required:
-            label = f"{name}/{FAMILY_SLICE}/{family}"
-            fact = Invariant(
-                name=f"{label}/{SHARED_TASKS_INVARIANT}",
-                value=accepted,
-                limit=required,
-                comparator=">=",
-                holds=False,
-            )
-            raise InsufficientOverlap(
-                f"{label}: {accepted} of {len(members)} control tasks shared; minimum {required}",
-                (*coverage, fact),
-            )
-    return coverage
-
-
-def _unshared_comparison(
-    name: str,
-    runs: Sequence[RunMeasurements],
-    extra: Sequence[set[str]],
-) -> Comparison | None:
-    if not any(extra):
-        return None
-    key = f"{name}/mean"
-    means = []
-    for candidate, digests in zip(runs, extra, strict=True):
-        table = candidate.held_out_answers[name].final
-        score = score_answers(project_answers(table, digests)).get(key)
-        if score is not None:
-            means.append(score)
-    return Comparison(
-        metric=f"{name}/unshared/mean",
-        role=ComparisonRole.REPORTED,
-        run=statistics.mean(means) if means else None,
-        n_run=len(means),
-        n_control=0,
-        tasks=len(set.union(*extra)),
-    )
-
-
-@dataclass(frozen=True)
-class SharedEvaluation:
-    coverage: tuple[Invariant, ...]
-    tasks: int
-    same_task_count: bool
-    unshared: Comparison | None
-
-
-def _align_evaluation(
-    evaluation: presets.Evaluation,
-    cohort: Sequence[RunMeasurements],
-    n_runs: int,
-) -> tuple[list[RunMeasurements], SharedEvaluation]:
-    name = evaluation.name
-    labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
-    sets = [set(tasks) for tasks in labels]
-    shared = set.intersection(*sets)
-    control_labels = {digest: label for table in reversed(labels[n_runs:]) for digest, label in table.items()}
-    coverage = _require_shared_overlap(name, shared, control_labels)
-    baseline = set.union(*sets[n_runs:])
-    extra = _unshared_comparison(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
-    aligned = [restrict_evaluation(member, name, shared, labels[0]) for member in cohort]
-    return aligned, SharedEvaluation(coverage, len(shared), len({len(tasks) for tasks in sets}) == 1, extra)
-
-
-def _compare_evaluations(
-    preset: presets.Preset,
-    runs: Sequence[RunMeasurements],
-    controls: Sequence[RunMeasurements],
-) -> tuple[list[Invariant], list[Comparison]]:
-    cohort = [*runs, *controls]
-    shared = {}
-    for evaluation in preset.evaluations:
-        if evaluation.held_out:
-            cohort, shared[evaluation.name] = _align_evaluation(evaluation, cohort, len(runs))
-    unavailable = {
-        metric.key
-        for metric in preset.objectives
-        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR
-        and (alignment := shared.get(metric.key.split("/", 1)[0])) is not None
-        and not alignment.same_task_count
-    }
-    cohort = [with_objectives(run, preset) for run in cohort]
-    if unavailable:
-        cohort = [
-            replace(run, values={key: value for key, value in run.values.items() if key not in unavailable})
-            for run in cohort
-        ]
-    selected_runs = cohort[: len(runs)]
-    selected_controls = cohort[len(runs) :]
-    invariants = [fact for alignment in shared.values() for fact in alignment.coverage]
-    invariants.extend(
-        row.model_copy(update={"replicate": index}) for index, run in enumerate(selected_runs) for row in run.invariants
-    )
-    comparisons = _compare(preset, selected_runs, selected_controls)
-    for index, row in enumerate(comparisons):
-        alignment = shared.get(row.metric.split("/", 1)[0])
-        if alignment is not None and row.tasks is None and (row.run is not None or row.control is not None):
-            comparisons[index] = row.model_copy(update={"tasks": alignment.tasks})
-    comparisons.extend(alignment.unshared for alignment in shared.values() if alignment.unshared is not None)
-    return invariants, comparisons
 
 
 def _compare(
@@ -777,11 +582,6 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     return config
 
 
-def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
-    """Compare complete native configuration with declared runtime aliases resolved."""
-    return _config_values(_comparison_document(launch, recorded))
-
-
 def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
     """Normalize a draft mirror when its receipt matches the planned Hub source and revision."""
     path = "skyrl.generator.speculative_decoding.model"
@@ -816,6 +616,17 @@ def _gate_config(
     return _config_values(config)
 
 
+def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
+    """Fingerprint the effective launch configuration used by the gate."""
+    return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
+
+
+def compose_preset(preset: presets.Preset) -> dict:
+    """Compose the preset with its published inputs and defaults."""
+    (config,) = _compose_plans(preset, (RunInputs(preset_name=preset.name),))
+    return config
+
+
 def _compose_plans(
     preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
@@ -844,91 +655,39 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_diagnostic(error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
-    phase = diagnostic = ""
-    if isinstance(error, OSError):
-        cause = error.strerror or str(error)
-    else:
-        stderr = error.stderr or ""
-        for line in reversed(stderr.splitlines()):
-            line = line.strip()
-            if line.startswith(_NATIVE_PHASE):
-                phase = line.removeprefix(_NATIVE_PHASE)
-                break
-            diagnostic = diagnostic or line
-        cause = (
-            f"timed out after {error.timeout:g} s"
-            if isinstance(error, subprocess.TimeoutExpired)
-            else f"exited with status {error.returncode}"
+def _native_json(*command: str, timeout: int = 120):
+    try:
+        result = subprocess.run(
+            skyrl_cpu_command(*command),
+            capture_output=True,
+            env=skyrl_cpu_environment(),
+            text=True,
+            timeout=timeout,
         )
-    context = " ".join(part for part in (phase, cause, diagnostic) if part)
-    return redact_string("".join(char for char in context if char.isprintable()))[:400]
-
-
-def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int) -> str:
-    # File-backed output lets the wrapper exit even when a build child still has its streams open.
-    with (
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stdout,
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stderr,
-        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env, start_new_session=True) as process,
-    ):
-        try:
-            returncode = process.wait(timeout=timeout)
-            if returncode:
-                raise subprocess.CalledProcessError(returncode, command)
-        except BaseException as error:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
-                stderr.seek(0)
-                error.stderr = stderr.read()
-            raise
-        stdout.seek(0)
-        return stdout.read()
-
-
-def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
-    started = monotonic()
-    try:
-        output = _run_native_process(command, env=env, timeout=timeout).strip()
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise InvalidComparison(
-            f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. {_native_diagnostic(error)}"
-        ) from error
-    logger.info("%s took %.2f s", operation, monotonic() - started)
-    return output
-
-
-def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
-    """Run one native step and decode JSON from its last nonempty stdout line."""
-    output = _native_output(operation, command, env=env, timeout=timeout)
-    if not output:
-        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
-    try:
-        return json.loads(output.splitlines()[-1])
-    except ValueError as error:
-        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
-
-
-def _native_json(operation: str, *args: str, timeout: int = 120):
-    env = skyrl_cpu_environment()
-    venv = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv"
-    interpreter = venv / "bin" / "python"
-    # Sync the frozen project and verify its interpreter within the preparation deadline.
-    probe = skyrl_cpu_command(str(interpreter), "-I", "--version")
-    _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
-    return _native_command_json(operation, [str(interpreter), "-I", *args], env=env, timeout=timeout)
-
-
-def _native_config(operation: str, *args: str):
-    checkout = recipe.REPO_ROOT / SKYRL_PROJECT
-    return _native_json(operation, "-m", _NATIVE_CONFIG_MODULE, "--checkout", str(checkout), *args)
+        result.check_returncode()
+        return json.loads(result.stdout.splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
+            cause = error.stderr.strip().splitlines()[-1]
+        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
 
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    options = ["--validate-driver"] if validate_driver else []
-    return _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
+    options = ("--validate-driver",) if validate_driver else ()
+    return _native_json(
+        "python",
+        "-I",
+        "-m",
+        "cloud.iris.config_cli",
+        "--checkout",
+        str(recipe.REPO_ROOT / "vendor/skyrl"),
+        "compose",
+        *options,
+        "--",
+        *paths,
+    )
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -979,8 +738,17 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 
 @lru_cache(maxsize=16)
-def _schema_defaults(source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)))
+def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
+    return _native_json(
+        "python",
+        "-I",
+        "-m",
+        "cloud.iris.config_cli",
+        "--checkout",
+        native_project,
+        "schema-defaults",
+        json.dumps(dict(groups)),
+    )
 
 
 def _check_control_config(
@@ -992,7 +760,9 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(Provenance.capture(recipe.REPO_ROOT).tree_hash, groups)
+        defaults = _schema_defaults(
+            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
+        )
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:
@@ -1006,22 +776,7 @@ def _check_control_config(
             if default_value == current[key]:
                 differences.discard(key)
     if differences:
-        raise StaleControls(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
-
-
-@contextmanager
-def _report_scope(
-    preset: presets.Preset, metadata: RunMetadata, pin: ControlPin, replicates: int, *, revision: str = GATE_REVISION
-) -> Iterator[GateReport]:
-    control = ControlMetadata(commit=pin.commit, revision=pin.revision, replicates=replicates, gate_revision=revision)
-    report = GateReport(preset=preset.name, run=metadata, control=control, gaps=tuple(preset.gaps))
-    try:
-        yield report
-    except InsufficientOverlap as error:
-        report.invariants += error.coverage
-        report.reason = str(error)
-    except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
-        report.reason = str(error)
+        raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
 
 
 def _write_gate(
@@ -1032,12 +787,14 @@ def _write_gate(
     inputs: RunInputs,
     output: str,
 ) -> GateReport:
+    preset_name = preset.name
     metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
-    with _report_scope(preset, metadata, control_pin, len(control_paths)) as report:
-        if control_pin.revision != preset.revision:
-            raise _pin_error(preset, control_pin)
+    control = ControlMetadata(commit=control_pin.commit, version=control_pin.version, replicates=len(control_paths))
+    invariants, comparisons = [], []
+    verdict, effect, reason = Verdict.INVALID, None, None
+    try:
         receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
-        report.run = report.run.model_copy(
+        metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
         )
         runs = [
@@ -1046,7 +803,7 @@ def _write_gate(
         ]
         if runs:
             provenance_fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
-            report.run = report.run.model_copy(
+            metadata = metadata.model_copy(
                 update={
                     "held_out_tasks": runs[0].held_out_tasks,
                     "engines": tuple(run.engine for run in runs),
@@ -1054,15 +811,15 @@ def _write_gate(
                     **{field: runs[0].provenance[key] for field, key in provenance_fields.items()},
                 }
             )
-        report.invariants = tuple(
+        invariants = [
             row.model_copy(update={"replicate": index})
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
-        )
+        ]
         controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
-        report.control = report.control.model_copy(
+        control = control.model_copy(
             update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
         )
         for candidate in controls:
@@ -1079,7 +836,7 @@ def _write_gate(
         current, expected = _gate_config(current_config), _gate_config(expected_config)
         changed = _changed_config_keys(current, expected)
         explicit = _setting_keys(inputs, set(current) | set(expected))
-        report.run = report.run.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
+        metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
             observed = _gate_config(candidate.config, candidate.recorded, expected_launch=expected_config)
             differences = _changed_config_keys(observed, expected)
@@ -1087,15 +844,23 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
-        control_config = _control_defaults(preset, control_pin, current_config)
         for candidate in controls:
-            _check_control_config(candidate.config, control_config, candidate.recorded, preset=preset)
-        report.comparisons = tuple(_compare(preset, runs, controls, inputs.requirements))
-        report.verdict, report.effect = _verdict(report.invariants, report.comparisons)
-    return _store_report(report, output)
-
-
-def _store_report(report: GateReport, output: str) -> GateReport:
+            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
+        comparisons = _compare(preset, runs, controls, inputs.requirements)
+        verdict, effect = _verdict(invariants, comparisons)
+    except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+        reason = str(error)
+    report = GateReport(
+        preset=preset_name,
+        verdict=verdict,
+        effect=effect,
+        reason=reason,
+        run=metadata,
+        control=control,
+        invariants=invariants,
+        comparisons=comparisons,
+        gaps=list(preset.gaps),
+    )
     for name, value in (
         (
             GATE_REPORT_FILENAME,
@@ -1113,167 +878,18 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
     return f"checkpoints/{table.namespace}/control/{preset}-{commit}-r{replicate}"
 
 
-def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> StaleControls:
-    name, replicas = (pin.preset, pin.initial_replicates) if pin else (preset.control_preset, 4)
-    return StaleControls(
-        f"no control pin for {preset.name} with preset revision {preset.revision}; "
-        f"recorded control revision={pin.revision if pin else None}; "
-        f"collect current controls with --preset {name} "
-        f"--version dev --control --replicates {replicas} --run"
-    )
-
-
-def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: bool = True) -> ControlPin:
+def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
     pin = table.control_pins.get(preset.control_preset)
-    if pin is None or (check_revision and pin.revision != preset.revision):
-        raise _pin_error(preset, pin)
+    if pin is None:
+        raise InvalidComparison(
+            f"no control pin for {preset.name}; collect current controls with --preset {preset.control_preset} "
+            "--version dev --control --replicates 4 --run"
+        )
     return pin
 
 
-def _pinned_control_name(pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    replicate, retry = pin.members[index]
-    name = control_name(pin.preset, pin.commit, replicate, table=table)
-    return f"{name}-retry{retry}" if retry else name
-
-
-def _control_placement(preset: presets.Preset, pin: ControlPin) -> presets.Preset:
-    layout = preset.recipe.layout
-    if pin.cluster is None or pin.cluster == layout.cluster:
-        return preset
-    return replace(preset, recipe=replace(preset.recipe, layout=replace(layout, cluster=pin.cluster)))
-
-
-def _control_defaults(preset: presets.Preset, pin: ControlPin, defaults: dict) -> dict:
-    placed = _control_placement(preset, pin)
-    if placed is preset:
-        return defaults
-    (config,) = _compose_plans(placed, (RunInputs(preset_name=placed.name),))
-    return config
-
-
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(_control_placement(preset, pin), _pinned_control_name(pin, index, table=table), pin.revision)
-
-
-def control_paths(preset: presets.Preset, pin: ControlPin, *, table: ModelPresets) -> tuple[str, ...]:
-    """Resolve stored control roots in their pinned order."""
-    return tuple(control_path(preset, pin, index, table=table) for index in range(len(pin.members)))
-
-
-def _read_link_control(
-    preset: presets.Preset, pin: ControlPin, path: str, receipt: AttemptRecord | None, *, current: bool = False
-) -> tuple[AttemptRecord, RecordedLaunch]:
-    if receipt is None:
-        raise FileNotFoundError(f"no terminal attempt record at {path}")
-    launch = read_recorded_launch(receipt)
-    if receipt.native.result.state != "succeeded":
-        raise InvalidComparison(f"expected a successful pinned control receipt at {path}")
-    _check_control_provenance(receipt.native.result.provenance, path, pin)
-    training = isinstance(preset.recipe.layout.workload, presets.Training)
-    if launch.max_steps is None or bool(launch.train_data) != training:
-        raise InvalidComparison("recorded control workload differs from the link preset")
-    if current and launch.max_steps != (preset.updates or 1):
-        raise InvalidComparison("recorded control update budget differs from its preset revision")
-    additional = {evaluation.name for evaluation in preset.evaluations[1:]}
-    if set(launch.evaluation_data) != additional or bool(launch.validation_data) != bool(preset.evaluations):
-        raise InvalidComparison(EVALUATION_PROTOCOL_DIFFERS)
-    return receipt, launch
-
-
-def _check_cohort_held_out_tasks(runs: Sequence[RunMeasurements]) -> None:
-    first = runs[0]
-    if any(
-        run.held_out_tasks != first.held_out_tasks or run.evaluation_identity != first.evaluation_identity
-        for run in runs[1:]
-    ):
-        raise InvalidComparison("control cohort contains different held-out selections or TaskSpec sets")
-
-
-def _write_control_link(
-    preset: presets.Preset,
-    current: ControlPin,
-    previous: ControlPin,
-    run_paths: tuple[str, ...],
-    control_paths: tuple[str, ...],
-    output: str,
-) -> GateReport:
-    metadata = RunMetadata(preset_name=preset.name, base_commit=current.commit, replicates=len(run_paths))
-    with _report_scope(preset, metadata, previous, len(control_paths), revision=LINK_REVISION) as report:
-        receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
-        report.run = report.run.model_copy(
-            update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt is not None)}
-        )
-        candidates = [
-            _read_link_control(preset, current, path, receipt, current=True)
-            for path, receipt in zip(run_paths, receipts, strict=True)
-        ]
-        report.run = report.run.model_copy(update={"held_out_tasks": held_out_identity(preset, candidates[0][1])})
-        baseline = [
-            _read_link_control(preset, previous, path, read_stored_skyrl_attempt(path)) for path in control_paths
-        ]
-        report.control = report.control.model_copy(update={"held_out_tasks": held_out_identity(preset, baseline[0][1])})
-        if _cohort_protocol(preset, [launch for _, launch in candidates]) != _cohort_protocol(
-            preset, [launch for _, launch in baseline]
-        ):
-            raise InvalidComparison(EVALUATION_PROTOCOL_DIFFERS)
-        runs = [
-            read_measurements(path, preset, attempt=receipt)
-            for path, (receipt, _) in zip(run_paths, candidates, strict=True)
-        ]
-        controls = [
-            read_measurements(path, recorded_preset(preset, launch), attempt=receipt)
-            for path, (receipt, launch) in zip(control_paths, baseline, strict=True)
-        ]
-        _check_cohort_held_out_tasks(runs)
-        _check_cohort_held_out_tasks(controls)
-        report.run = report.run.model_copy(update={"engines": tuple(run.engine for run in runs)})
-        report.control = report.control.model_copy(update={"engines": tuple(run.engine for run in controls)})
-        for candidate in runs:
-            _check_control(candidate, current)
-        for candidate in controls:
-            if any(
-                not fact.holds
-                for fact in candidate.invariants
-                if fact.name.endswith(("/answers_complete", "/task_coverage"))
-            ):
-                raise InvalidComparison(f"previous control has incomplete evaluation coverage: {candidate.path}")
-        changes = _changed_config_keys(
-            _gate_config(controls[0].config, controls[0].recorded),
-            _gate_config(runs[0].config, runs[0].recorded),
-        )
-        report.run = report.run.model_copy(update={"config_changes": tuple(sorted(changes))})
-        invariants, comparisons = _compare_evaluations(preset, runs, controls)
-        report.invariants, report.comparisons = tuple(invariants), tuple(comparisons)
-        report.verdict, report.effect = _verdict(report.invariants, report.comparisons)
-    return _store_report(report, output)
-
-
-def control_link_step(
-    preset: presets.Preset, current: ControlPin, previous: ControlPin, *, table: ModelPresets
-) -> ArtifactStep[GateReport]:
-    """Compare consecutive control cohorts for the publication history."""
-    if any(pin.preset != preset.name or len(pin.members) < 2 for pin in (current, previous)):
-        raise ValueError(f"expected two complete control pins for {preset.name}")
-    if current.revision != preset.revision:
-        raise ValueError(f"current control pin must match the {preset.name} revision")
-    if (current.commit, current.revision) == (previous.commit, previous.revision):
-        raise ValueError("control link requires distinct cohorts")
-    current_paths = control_paths(preset, current, table=table)
-    previous_paths = control_paths(preset, previous, table=table)
-    identity = fingerprint_hash(canonical_json((current, previous, current_paths, previous_paths)))
-    name = f"checkpoints/{table.namespace}/control-links/{preset.name}-{previous.commit}-{current.commit}-{identity}"
-    return apply(
-        user_owned_name(name),
-        _write_control_link,
-        version=LINK_REVISION,
-        artifact_type=GateReport,
-        preset=preset,
-        current=current,
-        previous=previous,
-        run_paths=current_paths,
-        control_paths=previous_paths,
-        output=OUT,
-    )
+    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.version)
 
 
 def _gate_artifact(
@@ -1293,10 +909,10 @@ def _gate_artifact(
     )
     controls = tuple(
         (
-            f"{_pinned_control_name(pin, index, table=table)}@{pin.revision}",
-            path,
+            f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.version}",
+            control_path(preset, pin, index, table=table),
         )
-        for index, path in enumerate(control_paths(preset, pin, table=table))
+        for index in range(pin.replicates)
         if index != leave_out
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
@@ -1386,7 +1002,7 @@ def _gate_attempt_digest(
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: RunInputs
 ) -> ArtifactStep[GateReport]:
-    pin = control_pin(preset, table=table, check_revision=False)
+    pin = control_pin(preset, table=table)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
@@ -1406,8 +1022,8 @@ def command(table: ModelPresets) -> click.Command:
         "--candidate",
         "candidate_name",
         metavar="NAME[@VERSION]",
-        help="Saved run to compare, by the name and version the status block prints for it; VERSION defaults "
-        "to the preset's revision. Give this or --leave-out.",
+        help="Saved run to compare, by the name and artifact version the status block prints for it. "
+        "Give this or --leave-out.",
     )
     @click.option(
         "--leave-out",
@@ -1435,13 +1051,14 @@ def command(table: ModelPresets) -> click.Command:
         pin = control_pin(preset, table=table)
         index = None
         if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= len(pin.members):
-                raise click.BadParameter(f"choose r0 through r{len(pin.members) - 1}", param_hint="--leave-out")
+            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
+                raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
-            candidate_name = _pinned_control_name(pin, index, table=table)
-            preset = _control_placement(preset, pin)
+            candidate_name = control_name(pin.preset, pin.commit, index, table=table)
         name, separator, version = candidate_name.partition("@")
-        source = recipe.run_path(preset, name, version if separator else preset.revision)
+        if not separator:
+            version = pin.version if index is not None else recipe.RUN_ARTIFACT_VERSION
+        source = recipe.run_path(preset, name, version)
         namespace = user_owned_name(
             f"checkpoints/{table.namespace}/compare/"
             f"{preset_name}-{fingerprint_hash(canonical_json((source, pin, index)))}"
@@ -1457,7 +1074,7 @@ def command(table: ModelPresets) -> click.Command:
         step = _gate_artifact(
             f"{namespace}/gate-n1-{pin.commit}",
             preset,
-            (f"{name}@{version if separator else preset.revision}",),
+            (f"{name}@{version}",),
             inputs,
             index,
             run_paths=(source,),

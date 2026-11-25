@@ -154,21 +154,22 @@ Plans and host-side submissions run the native driver checks on CPU before Iris 
 The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
 Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
 no inference rollout pool.
-A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
-and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
-the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
-after merge; `--control` and `train-long` need no pin.
+A plan without `--require` uses the declared control pin. With `--require`, planning also checks that
+control r0 recorded the requested metric. Gated execution and comparison validate the stored controls
+against the current preset defaults. A mismatch returns exit 4 before submission or INVALID during
+gate execution. Controls are collected after merge. `--control` and `train-long` need no pin.
 
 The command invokes the shared runner through the Snowball model entry. Track or stage source files
 under `experiments/`, `lib/` and `vendor/`. The full tracked working-tree hash forms part of the run
 name, so even a documentation edit can change it. `--version dev` satisfies the standard launcher
-interface. Each preset's steps use its own `revision`.
+interface. The preset version fingerprints the composed launch configuration used by the gate.
+The run's artifact version identifies its storage format.
 
 - **Plan and status.** The default mode and `--plan` run the SkyRL driver's configuration checks on CPU
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
   For gated presets, `--plan` compares the current defaults with stored control receipts before opening an issue.
-  A gated candidate's status names the control pin and whether its revision matches the preset.
+  A gated candidate's status names the control pin and whether the stored configuration matches the preset.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` to keep
   the terminal report in the current shell. A detached launch prints the path to its publication log.
@@ -222,8 +223,9 @@ The report also records success and coverage by task ID. Success rates use
 verified responses and are null when no verdict is available.
 Open **Grader stats** from the published attempt's details to see coverage,
 failure counts and grading latency. Expand **Individual tasks** for task results.
-Exported evaluation responses include `task_id` and `subset_id`. The trainer logs reporting errors
-and continues, so an attempt may have a partial or missing report.
+Exported evaluation responses include `task_id` and `subset_id`.
+The trainer logs reporting errors and continues, so an attempt may have a partial
+or missing report.
 
 The launcher publishes every prepared attempt and its terminal result using the caller's Marina
 login. The index groups attempts by `<model>-<preset>-<user>-<config hash>` from the gate's composed
@@ -243,8 +245,8 @@ Publish learning-medium or data-medium controls from their stored paths:
 uv run python -m experiments.post_training.snowball_rl publish --preset learning-medium --marina-url "$MARINA_ORIGIN"
 ```
 
-The pins in `snowball_rl.SNOWBALL.control_pins` must match the preset's current revision; unavailable pins
-produce a usage error. Speed presets and data-short publish nothing. See the
+The pins in `snowball_rl.SNOWBALL.control_pins` identify the exact stored runs. Unavailable receipts
+are reported as unserved. Speed presets and data-short publish nothing. See the
 [dashboard and record contract](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_progress/README.md) for native identity,
 recorded measurements and stored gate facts.
 
@@ -312,21 +314,10 @@ JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `sl
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
 explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
 
-Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit,
-revision, ordered replicate and retry pairs, and optional cluster. Data-medium shares learning-medium's pin.
-Before submission, the command composes the candidate on CPU and checks every control against current defaults.
-During comparison, candidate configuration
+Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, artifact version and
+replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
+candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
-
-The gate compares candidates and controls with the same preset revision, evaluation request and
-held-out task set. The preset revision includes the evaluation selection.
-
-A link report compares consecutive control cohorts on task digests present in every run.
-Evaluation requests must match, and the shared set must cover at least 90% of each previous
-control run's tasks overall and in each family. The report names both selections, counts the shared
-tasks and shows scores on tasks unique to the new cohort. It uses the newest run's strata labels
-and calibrates the control spread on the shared set. Gain per GPU-hour is available when evaluation
-task counts match and the shared set includes the initial scores.
 
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
 guards and `sd` is the controls' sample standard deviation. A worse change beyond tolerance fails the guard.
@@ -351,44 +342,23 @@ Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares
 replicate against the remaining controls with fixed default inputs.
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
-### Plan the nightly control refresh
-
-The workflow checks main at 04:43 UTC and lists the cohorts that the gate would refuse today.
-It checks both model tables on CPU. A manual dispatch accepts a model and an optional gated
-preset. A missing pin, a changed revision, or a difference between the current and recorded
-configuration schedules a refresh for the preset that owns the controls. An unavailable receipt
-or a composition error fails the check.
-
-To compare the current pinned controls with a previous cohort and attach the report to the
-current runs in Marina, run:
-
-```bash
-uv run python -m experiments.post_training.snowball_rl publish \
-  --preset learning-medium --link-from previous-pin.json
-```
-
-The JSON file holds the previous pin's `preset`, `commit`, `revision`, and ordered `members`.
-Each member is `[replicate, retry]`. Set `cluster` if the previous cohort ran in a different
-cluster from the preset default. The publisher reports the saved `link_report` path. When the
-recorded evaluation protocols differ, the history shows a protocol change at that link.
-
 ## Change a preset's default
 
 1. Edit that preset's `tasks`, `model`, `held_out_tasks` or `recipe` in `snowball_rl.py`.
    A preset's `Recipe.config` is its typed override point; merge a `RecipePatch` there for a
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
-2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
-3. From the repository root, run the native launcher checks for Snowball presets.
+2. From the repository root, run the native launcher checks for Snowball presets.
 
    ```bash
    uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
 
-4. The nightly workflow identifies changed defaults on main. Use the manual `--control` command
-   for an explicitly authorized calibration.
-   Source, revision and ordered members live in `snowball_rl.SNOWBALL.control_pins`.
-5. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
+3. Controls are collected by CI after the default change merges, once per changed default.
+   That CI workflow is planned separately; control collection is not a merge gate.
+   The manual `--control` command remains available for an explicitly authorized calibration.
+   Source, artifact version and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
+4. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
@@ -408,6 +378,39 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
+To score earlier EvalLite versions, choose the run output, native attempt, evaluation name and
+checkpoint step. Set `version_roots` to the paths of the published selections you want to compare.
+The stored launch supplies the export root, evaluation prefix and expected answers per task.
+
+```python
+from finestore.rl.run_records import read_evaluations
+from finestore.rl.strata import read_selection_manifest
+from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
+from experiments.post_training.rl_measurements import evaluation_protocol, native_prefix
+from experiments.post_training.rl_scoring import score_eval_lite_version
+
+_, attempts = read_stored_skyrl_attempts(run_output)
+launch = recorded_launch(attempts[attempt_id])
+answers = evaluation_protocol(launch, evaluation_name)["n_samples_per_prompt"]
+rows = read_evaluations(
+    launch.export_root,
+    attempt_id=attempt_id,
+    evaluation=native_prefix(launch, evaluation_name),
+    step=step,
+)
+for root in version_roots:
+    selection = read_selection_manifest(root)
+    if selection is None:
+        raise ValueError(f"Missing selection manifest: {root}")
+    print(selection.definition.version, score_eval_lite_version(rows, selection, expected_answers=answers))
+```
+
+Use a preset's evaluation name, such as `eval_lite_100` for train-long. The primary evaluation is
+stored under `eval/`, and additional evaluations use `eval/<name>/`. The result reports scored tasks,
+missing verified answers and digest mismatches. A version has a score only when all of its active
+tasks have matching content and complete verified answers. Evaluate the full EvalLite pool to
+include tasks that were active in earlier versions.
+
 ## Telemetry and provenance
 
 Keep the native run ID and attempt ID together. The run identifies the experiment. The attempt
@@ -422,7 +425,7 @@ step-zero and final evaluations when enabled.
 
 | Sink | Where to find the run |
 |---|---|
-| W&B | Open `wandb_url` from status for the attempt's exact project and team. The `marin-rl` project tags runs with model, preset, revision, branch and user. |
+| W&B | Open `wandb_url` from status for the attempt's exact project and team. The `marin-rl` project tags runs with model, preset, version, branch and user. |
 | Finelog and Grafana | Use the status's Grafana link for the run-index ID and UTC execution window. Finelog uses service `marinskyrl`. Filter by model, cluster and run ID, and use the Iris job ID and attempt timestamps to inspect a retry. |
 | Marina RL progress | Open `rl_progress_url` from terminal status. The run-index ID and native attempt identify the row. |
 | EvalDash | An offline benchmark run has its own evaluation run ID. Publish the IDs returned in `EvaluationResult.run_ids` on the selected RL attempt to link them from the Marina row. |
@@ -451,9 +454,6 @@ or a Daytona sandbox setup, command transport or cleanup error. The retry list i
 `TmuxExecTimeoutError`, `DaytonaOutputUnavailable` and `MachineTerminated`. A failed trial
 with unconfirmed teardown can retry even after verification. The selected attempt must
 have confirmed teardown for the archive to seal.
-
-This retry policy uses revision `2026.11.20.6` with fingerprint `76baa3fb`. The earlier
-revision `2026.11.20.5` has fingerprint `e1f1635a`.
 
 Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
 command to resume from the latest retained checkpoint. The separate

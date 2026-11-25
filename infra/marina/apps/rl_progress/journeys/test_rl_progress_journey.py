@@ -150,7 +150,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             "attempt_id": name,
             "label": name,
             "model": "snowball",
-            "preset_revision": revision,
+            "preset_version": revision,
             "started_at": f"2026-11-0{day}T00:00:00Z",
             "completed_at": f"2026-11-0{day}T01:00:00Z",
             "gate_result": None,
@@ -166,7 +166,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
         return progress_record()["gate_result"] | {
             "attempt_ids": [run],
             "control_commit": commits[base],
-            "control_revision": revisions[base],
+            "control_version": revisions[base],
             "invariants": [
                 {
                     "name": f"eval_lite/{SHARED_TASKS_INVARIANT}",
@@ -188,7 +188,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
         name = f"control-{i}"
         record = attempt(name, revision, i + 1, raw) | {
             "artifact_uri": f"s3://example/arbitrary/{name}",
-            "control": {"commit": commits[i], "revision": revision, "replicate": 0},
+            "control": {"commit": commits[i], "version": revision, "replicate": 0},
             "evaluation_data_identity": f"panel@{revisions[min(i, 2)]}",
             "evaluation_protocol_identity": "protocol-a" if i < 2 else "protocol-b",
             "gate_result": link(name, i - 1, 0.1, overlap=i != 3) if i else None,
@@ -198,7 +198,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
 
     retry = attempt("control-0-retry", revisions[0], 1, 0.7) | {
         "artifact_uri": "s3://example/arbitrary/control-retry",
-        "control": {"commit": commits[0], "revision": revisions[0], "replicate": 1},
+        "control": {"commit": commits[0], "version": revisions[0], "replicate": 1},
         "branch": "control-proof",
         "dirty": False,
         "source_revision": commits[0],
@@ -216,7 +216,7 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
 
     branch = attempt("branch-at-first-preset", "dev", 4, 0.55) | {
         "branch": "experiment",
-        "base_preset_revision": revisions[0],
+        "base_preset_version": revisions[0],
         "gate_result": link("branch-at-first-preset", 1, -0.15),
     }
     response = journey.page.request.post(api, data=branch)

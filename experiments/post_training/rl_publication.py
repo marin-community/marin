@@ -11,7 +11,6 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
 from urllib.parse import urlencode
 
 import click
@@ -35,7 +34,6 @@ from finestore.rl.run_records import (
 )
 from marin.execution.artifact import read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
-from marin.execution.lazy import run
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
@@ -43,7 +41,7 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempts,
     recorded_launch,
 )
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -58,7 +56,6 @@ from experiments.post_training.rl_measurements import (
     evaluation_status,
     lineage_windows,
     read_run_inputs,
-    recorded_preset,
     training_invariants,
 )
 
@@ -91,7 +88,6 @@ class PublicationOutcome(BaseModel):
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
     retry: str | None = None
-    link_report: str | None = None
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
@@ -196,7 +192,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
         control_commit=report.control.commit,
-        control_revision=report.control.revision,
+        control_version=report.control.version,
     )
 
 
@@ -237,7 +233,7 @@ def build_record(
     preset = table.by_name[inputs.preset_name]
     if launch.max_steps is None:
         raise ValueError("Stored native max_steps is unavailable")
-    preset = recorded_preset(preset, launch)
+    preset = preset.with_updates(launch.max_steps)
     attempt_id = launch.attempt_id
     provenance = result.provenance or {}
     tracking = attempt_tracking(attempt, launch)
@@ -255,7 +251,7 @@ def build_record(
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
-    if index is not None and index.base_preset_revision is None:
+    if index is not None and index.base_preset_version is None:
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
@@ -266,8 +262,9 @@ def build_record(
         label=run_label(inputs),
         series=preset.name,
         model=index.model if index is not None else launch.model_name or table.model,
-        preset_revision=index.preset_revision if index is not None else None,
-        base_preset_revision=index.base_preset_revision if index is not None else None,
+        preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
+        is_control=bool(control or inputs.control or (index and index.is_control)),
+        base_preset_version=index.base_preset_version if index is not None else None,
         control=control or inputs.control,
         control_preset=preset.control_preset if preset.gated else None,
         evaluation_data_identity=evaluation_data,
@@ -541,11 +538,7 @@ def publish_runs(
 
 
 def publish_controls(
-    table: presets.ModelPresets,
-    preset_name: str,
-    *,
-    service_url: str | None = None,
-    previous: presets.ControlPin | None = None,
+    table: presets.ModelPresets, preset_name: str, *, service_url: str | None = None
 ) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
     preset = table.by_name.get(preset_name)
@@ -556,28 +549,19 @@ def publish_controls(
     except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
-    owner = table.by_name[pin.preset]
-    report = None
-    if previous is not None:
-        try:
-            step = gate.control_link_step(owner, pin, previous, table=table)
-        except ValueError as error:
-            raise click.BadParameter(str(error), param_hint="--link-from") from error
-        (report,) = run(step)
     controls = {
-        path: ControlReplicate(commit=pin.commit, revision=pin.revision, replicate=index)
-        for index, path in enumerate(gate.control_paths(owner, pin, table=table))
+        gate.control_path(preset, pin, index, table=table): ControlReplicate(
+            commit=pin.commit, version=pin.version, replicate=index
+        )
+        for index in range(pin.replicates)
     }
     result = publish_runs(
         tuple(controls),
-        owner,
+        table.by_name[pin.preset],
         table=table,
         service_url=service_url,
         controls=controls,
-        gate_path=report.path if report is not None else None,
     )
-    if report is not None:
-        result.link_report = str(StoragePath(report.path) / gate.GATE_REPORT_FILENAME)
     if result.unserved_records:
         result.retry = "Repeat the control publication command."
     return result
@@ -591,7 +575,6 @@ def command(table: presets.ModelPresets) -> click.Command:
     @click.option("--marina-url", "url", help="Marina origin (defaults to the Marina service).")
     @click.option("--run-output", "run_output", help="Stored native run output; requires --attempt.")
     @click.option("--attempt", help="Publish this stored attempt from --run-output, without native execution.")
-    @click.option("--link-from", type=click.File("r"), help="Previous control pin JSON for a cohort link.")
     @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
     @click.option("--issue", type=click.IntRange(min=1), help="Associate an existing native attempt with an issue.")
     def command(
@@ -599,7 +582,6 @@ def command(table: presets.ModelPresets) -> click.Command:
         url: str | None,
         run_output: str | None,
         attempt: str | None,
-        link_from: IO[str] | None,
         evaldash_run_id: tuple[str, ...],
         issue: int | None,
     ) -> None:
@@ -610,8 +592,6 @@ def command(table: presets.ModelPresets) -> click.Command:
             raise click.UsageError("--evaldash-run-id requires --run-output and --attempt")
         if issue is not None and attempt is None:
             raise click.UsageError("--issue requires --run-output and --attempt")
-        if link_from is not None and attempt is not None:
-            raise click.UsageError("--link-from publishes the pinned cohort; omit --run-output and --attempt")
         if run_output is not None:
             configure_coreweave_s3()
             result = publish_runs(
@@ -626,13 +606,7 @@ def command(table: presets.ModelPresets) -> click.Command:
             if result.unserved_records:
                 result.retry = "Repeat this publication command with --run-output and --attempt."
         else:
-            previous = None
-            if link_from is not None:
-                try:
-                    previous = TypeAdapter(presets.ControlPin).validate_json(link_from.read())
-                except ValidationError as error:
-                    raise click.BadParameter(str(error), param_hint="--link-from") from error
-            result = publish_controls(table, preset_name, service_url=url, previous=previous)
+            result = publish_controls(table, preset_name, service_url=url)
         click.echo(json.dumps(result.to_dict()))
         if result.unserved_records:
             raise click.exceptions.Exit(1)
