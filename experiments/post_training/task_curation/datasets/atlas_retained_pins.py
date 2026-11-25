@@ -3,41 +3,20 @@
 
 """Bind Atlas-retained release pins onto main's configured declarations.
 
-The Atlas seals every retained release with a receipt in its pinned private
-registry (``open-athena/marin-rl-data-atlas-registry``); the receipt records the
-retained pin, the release bytes it read back, and the censuses that measured the
-original and retained populations. The pin-level content of those receipts
-(never dataset bytes) lives in the public dataset ``open-athena/atlas-source-pins``;
-this module commits only the immutable reference and binds each entry onto main's
-raw declaration at ``all_sources()`` time, so main's durable reference is the
-Atlas admitted version and selection runs the retained reader.
-
-The binding checks the declaration's id, dataset pin and pipeline reference
-against the seal, and qualifies the private open-athena TaskCompendium release.
-Converter-version drift is recorded in the bound source's notes. Other lineage
-drift keeps the raw pin with a note, which the pin-parity test then flags.
-A fetched table that fails its digest check fails closed.
-
-Refresh ``retained_pins.json`` from an audit checkout that carries the
-receipt models (maintainer-run, reads the private registry)::
-
-    uv run --isolated --frozen python -m \\
-        experiments.post_training.task_curation.datasets.atlas_retained_pins \\
-        --refresh --audit-root /tmp/atlas-cut
+The Atlas seals every retained release with a receipt recording the retained pin,
+the release bytes it read back, and the censuses over the original and retained
+populations. The receipts' pin-level content (never dataset bytes) lives in the
+public dataset ``open-athena/atlas-source-pins`` at the pinned revision below;
+this module reads it and binds each entry onto main's raw declaration at
+``all_sources()`` time, so main's durable reference is the Atlas admitted version
+and selection runs the retained reader. The table is published by the Atlas
+release step on ``atlas-env-audit``.
 """
 
-import argparse
-import hashlib
 import json
-import re
-import subprocess
-import sys
-import tempfile
 from dataclasses import replace
 from functools import cache
-from pathlib import Path
 
-import huggingface_hub.errors
 from finestore.rl.curation import (
     DatasetRelease,
     LexicalContaminationEvidence,
@@ -48,7 +27,7 @@ from finestore.rl.curation import (
     require_lexical_qualification,
 )
 from finestore.rl.licenses import LicenseReceipt
-from huggingface_hub import HfApi, hf_hub_download
+from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -66,124 +45,12 @@ PINS_SHA256 = "baabdcd8ef3904f6fb910f120920ba50e4f5a76f147f71de5456ddfe755ee013"
 PINS_BYTES = 1539862
 PINS_FILENAME = "retained_pins.json"
 
+
 # Runs inside the audit checkout, where the sealed receipt models live: every
 # retained-release shard reference is downloaded, digest-verified and validated,
 # then reduced to the pin-level content the reader binds. The lexical evidence is
 # the publication's own release proof when it admits the retained pin, else the
 # frozen lexical measurement measured at that pin.
-RESOLVE_SCRIPT = """
-import json
-from pathlib import Path
-
-from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
-from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
-from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
-from experiments.post_training.task_curation.remediation_binding import (
-    RetainedReleaseReceipt,
-    release_lexical_evidence,
-)
-from finestore.rl.curation import DeconReceiptStatus, LexicalUse
-
-LICENSES = read_license_receipts(LICENSE_RECEIPT_INDEX)
-LEXICAL = lexical_measurements()
-
-
-def license_receipt_for(source_id, repo, revision):
-    receipt = LICENSES.get(source_id)
-    if receipt is None or (receipt.dataset_id, receipt.revision) != (repo, revision):
-        # A retained release whose license receipt does not certify its exact pin
-        # cannot pass the stage-0 gate on main; the resolution skips it and the
-        # declaration stays at its raw pin.
-        return None
-    return receipt
-
-
-def admits(evidence, repo, revision, use):
-    if use is LexicalUse.TRAIN:
-        return evidence.admission_blocker(repo, revision) is None
-    receipt = evidence.receipt
-    return (
-        receipt is not None
-        and receipt.use in {LexicalUse.EVAL, LexicalUse.BENCHMARK}
-        and receipt.status is DeconReceiptStatus.BENCHMARK_MEASURED
-        and (evidence.input_dataset_id, evidence.input_dataset_revision) == (repo, revision)
-    )
-
-
-def lexical_evidence_for_release(source_id, publication, revision, use):
-    release = publication.release
-    evidence = release_lexical_evidence(publication)
-    if admits(evidence, release.repo, revision, use):
-        return evidence
-    receipt = LEXICAL.get(source_id)
-    if receipt is None:
-        raise ValueError(f"no lexical measurement admits the retained pin: {source_id}")
-    if (receipt.input.dataset_id, receipt.input.dataset_revision) != (release.repo, revision):
-        raise ValueError(f"lexical measurement covers another pin: {source_id}")
-    if not admits(receipt.measurement, release.repo, revision, use):
-        raise ValueError(f"lexical measurement does not admit the retained pin: {source_id}")
-    return receipt.measurement
-
-rows = {}
-skipped = []
-receipts_dir = Path("experiments/post_training/task_curation/datasets/retained_release_receipts")
-for part in sorted(receipts_dir.glob("part-*.json")):
-    reference = RegistryReference.model_validate_json(part.read_bytes())
-    document = read_registry_document(reference)
-    for source_id, payload in document.items():
-        receipt = RetainedReleaseReceipt.model_validate(payload)
-        publication = receipt.publication
-        plan = publication.plan
-        measurement = receipt.actor.measurement
-        dedup = receipt.retained_dedup
-        rows[source_id] = {
-            "source_id": source_id,
-            "original_repo": plan.source_dataset_id,
-            "original_revision": plan.source_revision,
-            "converter_version": plan.converter_version,
-            "original_pipeline": receipt.original_pipeline.model_dump(mode="json"),
-            "original_census": {
-                "dataset_id": plan.source_dataset_id,
-                "dataset_revision": plan.source_revision,
-                "converter_version": plan.converter_version,
-                "measured_tasks": plan.raw_count,
-                "task_specs_sha256": plan.task_specs_sha256,
-            },
-            "retained_census": {
-                "dataset_id": receipt.actor.input.dataset_id,
-                "dataset_revision": receipt.actor.input.dataset_revision,
-                "converter_version": receipt.actor.input.converter_version,
-                "measured_tasks": receipt.actor.input.measured_tasks,
-                "snapshot_count": measurement.daytona_snapshot_count,
-                "count_basis": measurement.daytona_count_basis,
-                "execution_failures": measurement.daytona_execution_failures,
-            },
-            "release_repo": publication.repo,
-            "release_revision": publication.revision,
-            "retained_count": plan.retained_count,
-            "retained_dedup_unique_count": dedup.unique_count,
-            "retained_dedup_duplicates": dedup.within_source_duplicates,
-            "tasks_parquet_sha256": publication.tasks_parquet_sha256,
-            "lexical_use": plan.lexical_use.value,
-            "lexical": lexical_evidence_for_release(
-                source_id, publication, publication.revision, plan.lexical_use
-            ).model_dump(mode="json"),
-            "evidence_url": publication.evidence_url,
-            "registry_revision": reference.revision,
-            "registry_path": reference.path,
-            "registry_sha256": reference.sha256,
-            "notes": "",
-        }
-        license_receipt = license_receipt_for(source_id, publication.repo, publication.revision)
-        if license_receipt is None:
-            skipped.append(source_id)
-            del rows[source_id]
-            continue
-        rows[source_id]["license"] = license_receipt.model_dump(mode="json")
-print(json.dumps({"pins": rows, "skipped_no_license": skipped}, indent=1, sort_keys=True))
-"""
-
-
 class RetainedCensus(BaseModel):
     """The population a census measured, pinned to its conversion."""
 
@@ -283,27 +150,20 @@ class RetainedPin(BaseModel):
         )
 
 
-def _fetch_pin_table() -> bytes | None:
-    """Fetch the pinned table and verify its digest."""
-    try:
-        local = Path(
-            hf_hub_download(repo_id=PINS_REPO, repo_type="dataset", revision=PINS_REVISION, filename=PINS_FILENAME)
-        )
-    except huggingface_hub.errors.HuggingFaceHubException:
-        return None
-    raw = local.read_bytes()
-    if len(raw) != PINS_BYTES or hashlib.sha256(raw).hexdigest() != PINS_SHA256:
-        raise ValueError("Retained-pin table differs from its pinned reference")
-    return raw
+def _pin_table_reference() -> PinnedHfFile:
+    return PinnedHfFile(
+        repo=PINS_REPO,
+        revision=PINS_REVISION,
+        filename=PINS_FILENAME,
+        sha256=PINS_SHA256,
+        byte_size=PINS_BYTES,
+    )
 
 
 @cache
-def atlas_retained_pins() -> dict[str, RetainedPin] | None:
+def atlas_retained_pins() -> dict[str, RetainedPin]:
     """The pinned pin table, validated entry by entry at first read."""
-    raw = _fetch_pin_table()
-    if raw is None:
-        return None
-    document = json.loads(raw)
+    document = json.loads(read_pinned_hf_file(_pin_table_reference()))
     pins = {source_id: RetainedPin.model_validate(entry) for source_id, entry in document["pins"].items()}
     if len(pins) != len(document["pins"]):
         raise ValueError("Retained-pin table repeats a source id")
@@ -410,61 +270,3 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
 
 def source_with_note(source: RlDataSource, note: str) -> RlDataSource:
     return replace(source, info=replace(source.info, notes=f"{source.info.notes} {note}".strip()))
-
-
-def refresh(audit_root: Path) -> None:
-    """Resolve every sealed receipt into a freshly published pin table (maintainer-run)."""
-    with tempfile.TemporaryDirectory() as scratch_name:
-        result = subprocess.run(
-            ["uv", "run", "--isolated", "--frozen", "python", "-c", RESOLVE_SCRIPT],
-            cwd=audit_root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        scratch = Path(scratch_name) / "resolved.json"
-        if result.returncode != 0:
-            raise ValueError(f"receipt resolution failed: {result.stderr[-2000:]}")
-        scratch.write_text(result.stdout)
-        resolved = json.loads(scratch.read_text())
-    document = {
-        "receipts_repo": RECEIPTS_REPO,
-        "resolved": "2026-11-25",
-        "pins": resolved["pins"],
-        "skipped_no_license": resolved["skipped_no_license"],
-    }
-    raw = (json.dumps(document, indent=1, sort_keys=True) + "\n").encode()
-    api = HfApi()
-    info = api.upload_file(
-        path_or_fileobj=raw,
-        path_in_repo=PINS_FILENAME,
-        repo_id=PINS_REPO,
-        repo_type="dataset",
-        commit_message="Refresh the resolved retained-release pin table",
-    )
-    match = re.search(r"/commit/([0-9a-f]{40})", info.commit_url)
-    revision = match.group(1) if match else info.commit_url
-    skipped = len(document["skipped_no_license"])
-    print(
-        f"published {len(document['pins'])} retained pins ({skipped} skipped without a certifying "
-        "license receipt); paste into atlas_retained_pins.py:"
-    )
-    print(f'PINS_REVISION = "{revision}"')
-    print(f'PINS_SHA256 = "{hashlib.sha256(raw).hexdigest()}"')
-    print(f"PINS_BYTES = {len(raw)}")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--refresh", action="store_true", help="resolve the sealed receipts and rewrite the table")
-    parser.add_argument("--audit-root", type=Path, required=True, help="read-only atlas-env-audit checkout")
-    args = parser.parse_args()
-    if not args.refresh:
-        parser.print_help()
-        return 1
-    refresh(args.audit_root)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

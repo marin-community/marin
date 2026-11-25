@@ -44,16 +44,13 @@ RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
 
-
-def _empty_evidence_table() -> pa.Table:
-    """Return the empty review and verify schema."""
-    return pa.table(
-        {
-            "task_id": pa.array([], pa.string()),
-            "admission": pa.array([], pa.string()),
-            "filter_reasons": pa.array([], pa.list_(pa.string())),
-        }
-    )
+EMPTY_EVIDENCE_TABLE = pa.table(
+    {
+        "task_id": pa.array([], pa.string()),
+        "admission": pa.array([], pa.string()),
+        "filter_reasons": pa.array([], pa.list_(pa.string())),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -149,7 +146,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
         view_dir = output / view
         view_dir.mkdirs(exist_ok=True)
         with (view_dir / "part-000000.parquet").open("wb") as stream:
-            pq.write_table(_empty_evidence_table(), stream)
+            pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
         empty_views[view] = str(view_dir)
     manifest = {
         "mode": invocation.mode.value,
