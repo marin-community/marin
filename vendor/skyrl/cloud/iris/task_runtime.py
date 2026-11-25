@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from dataclasses import asdict, dataclass, fields
+import errno
 import json
 import math
 import os
@@ -72,6 +73,7 @@ from cloud.iris.hf_model_cache import (
 )
 from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME, ELAPSED_EXCLUDING_EVAL
 from marinskyrl.environment_contract import (
+    DEBUG_ARTIFACT_DIR_ENV,
     DebugMode,
     EnvVarManager,
     EnvVarScope,
@@ -896,19 +898,28 @@ def ensure_fr_dump_dir() -> None:
         )
 
 
-def configure_task_debug_artifacts(trainer: DictConfig) -> None:
+def configure_task_debug_artifacts(trainer: DictConfig) -> Path | None:
     """Put process diagnostics and NCCL dumps in Iris's attempt archive."""
     mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
     if mode is DebugMode.OFF:
-        return
+        return None
     artifact_root = Path(os.environ[IRIS_OUTPUT_DIR_ENV]) / "skyrl-debug"
-    EnvVarManager.for_debug_launch(
-        mode=mode,
-        job_name=os.environ.get(RUN_ID_ENV, "run"),
-        artifact_root=str(artifact_root),
-        collective_phase_diagnostics=trainer.get("collective_phase_diagnostics") is not False,
-    ).apply_to_process(EnvVarScope.TASK_RUNTIME)
+    environment = {**os.environ, DEBUG_ARTIFACT_DIR_ENV: str(artifact_root)}
+    EnvVarManager.from_config({"trainer": trainer}, environ=environment).apply_to_process(EnvVarScope.TASK_RUNTIME)
     initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
+    return artifact_root
+
+
+def prune_empty_debug_directories(artifact_root: Path) -> None:
+    """Avoid an Iris archive when SkyRL produced only empty diagnostic directories."""
+    for directory, _, files in os.walk(artifact_root, topdown=False):
+        if files:
+            continue
+        try:
+            Path(directory).rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                _log(f"Could not remove empty diagnostic directory {directory}: {error}")
 
 
 def _rendezvous_uri(rendezvous_dir: str) -> str:
@@ -1819,7 +1830,7 @@ def main() -> None:
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
     export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
     trainer = launch_config.skyrl.get("trainer", {})
-    configure_task_debug_artifacts(trainer)
+    debug_artifact_root = configure_task_debug_artifacts(trainer)
     ensure_fr_dump_dir()
     # Stage datasets on every node before Ray bootstrap because pods have separate filesystems.
     if args.data_sources_json:
@@ -1868,6 +1879,8 @@ def main() -> None:
         )
     else:
         exit_code = run_worker(args)
+    if debug_artifact_root is not None:
+        prune_empty_debug_directories(debug_artifact_root)
     if exit_code != 0:
         sys.exit(exit_code)
 

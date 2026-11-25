@@ -93,8 +93,10 @@ def write_process_outcome(
     environment: Mapping[str, str] | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> tuple[ProcessOutcome, Path | None]:
-    """Write an atomic, secret-free outcome receipt when diagnostics are active."""
+    """Preserve raw signal exits that the enclosing runtime will normalize."""
     outcome = ProcessOutcome.from_returncode(returncode)
+    if outcome.kind is not ProcessOutcomeKind.SIGNAL:
+        return outcome, None
     # Read the manager-projected process contract; this module never defines environment values.
     values = os.environ if environment is None else environment
     process_id = os.getpid() if pid is None else pid
@@ -178,9 +180,12 @@ def initialize_process_diagnostics(
     role: str,
     *,
     environment: Mapping[str, str] | None = None,
-) -> tuple[Path, Path | None]:
-    """Enable the manager-projected diagnostics and write this process's manifest."""
-    enable_fatal_stack_capture(environment=environment)
-    manifest = write_process_manifest(role, environment=environment)
-    stack_path = install_live_stack_capture(role, environment=environment)
+) -> tuple[Path | None, Path | None]:
+    """Log fatal stacks by default and enable extra files in distributed debug mode."""
+    values = os.environ if environment is None else environment
+    enable_fatal_stack_capture(environment=values)
+    if values.get(DEBUG_MODE_ENV) != DebugMode.DISTRIBUTED:
+        return None, None
+    manifest = write_process_manifest(role, environment=values)
+    stack_path = install_live_stack_capture(role, environment=values)
     return manifest, stack_path

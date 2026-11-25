@@ -350,10 +350,12 @@ requests, and optimizer steps. Set `ray.driver_progress_timeout` to the
 maximum allowed time between milestones, in seconds. The default is 9000 and
 `0` disables the watchdog.
 
-SkyRL writes thread stacks, crash receipts, and NCCL flight recorder dumps
-under `skyrl-debug/` in the [Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
-Termination diagnostics also go to the task log for cases where Iris cannot
-finalize the archive.
+SkyRL writes crash receipts and NCCL flight recorder dumps under `skyrl-debug/`
+in the [Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
+Fatal stacks and termination summaries go to the task log. Distributed debug
+mode adds process manifests, on-demand stacks, and collective phase traces.
+Set `trainer.collective_phase_diagnostics: true` to collect the phase traces
+with light debug mode.
 
 Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
 Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`

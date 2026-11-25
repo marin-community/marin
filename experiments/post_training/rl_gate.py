@@ -626,6 +626,9 @@ def _gate_config(
     if expected_launch is not None:
         _normalize_draft_mirror(config, expected_launch)
     config["iris"].pop("priority", None)
+    # Diagnostic uploads and stall deadlines do not define a completed workload.
+    for field in ("log_dir", "driver_liveness_timeout", "driver_progress_timeout"):
+        config["ray"].pop(field, None)
     return _config_values(config)
 
 

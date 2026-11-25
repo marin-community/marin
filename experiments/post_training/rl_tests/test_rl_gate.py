@@ -621,6 +621,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "unbound-data",
         "allocation",
         "cached-default",
+        "old-ray-diagnostics",
         "zero-spread",
         "missing-guard",
         "omitted-default",
@@ -642,6 +643,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         in (
             "stale-default",
             "cached-default",
+            "old-ray-diagnostics",
             "zero-spread",
             "omitted-default",
             "omitted-current-nondefault",
@@ -677,6 +679,12 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
     control_roots = controls(recorded_runs, preset.name)
+    if case == "old-ray-diagnostics":
+        for root in control_roots:
+            with edit_receipt(root) as receipt:
+                ray = receipt["config"]["ray"]
+                ray.pop("driver_progress_timeout")
+                ray.update(log_dir="s3://fixture/ray-logs", driver_liveness_timeout=9000)
     if case == "zero-spread":
         pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
         control_roots = [

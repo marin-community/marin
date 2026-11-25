@@ -22,7 +22,6 @@ from skyrl_train.debug_mode import apply_debug_mode
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV
 from skyrl_train.env_vars import (
     DEBUG_ARTIFACT_DIR_ENV,
-    DEBUG_MODE_ENV,
     VLLM_BATCH_INVARIANT_ENV,
 )
 from marinskyrl.runtime_options import reference_model_required
@@ -573,7 +572,8 @@ def initialize_ray(cfg: DictConfig):
     debug_environment = apply_debug_mode(cfg)
     if debug_environment.get(DEBUG_ARTIFACT_DIR_ENV):
         manifest, stack_path = initialize_process_diagnostics("driver", environment=debug_environment)
-        logger.info(f"Debug mode {debug_environment[DEBUG_MODE_ENV]} active; driver manifest: {manifest}")
+        if manifest is not None:
+            logger.info(f"Driver debug manifest: {manifest}")
         if stack_path is not None:
             logger.info(f"On-demand all-thread stack capture active (SIGUSR2): {stack_path}")
 

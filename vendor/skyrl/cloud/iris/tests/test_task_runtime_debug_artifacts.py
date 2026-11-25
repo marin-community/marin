@@ -26,9 +26,9 @@ def test_worker_debug_artifacts_use_iris_attempt_outputs(tmp_path, monkeypatch, 
     monkeypatch.delenv(COLLECTIVE_PHASE_DIAGNOSTICS_ENV, raising=False)
     # Restore the process environment after applying the diagnostic config.
     monkeypatch.setattr(task_runtime.os, "environ", dict(os.environ))
-    config = OmegaConf.create({"trainer": {"debug_mode": mode.value, "collective_phase_diagnostics": False}})
+    config = OmegaConf.create({"trainer": {"debug_mode": mode.value}})
 
-    task_runtime.configure_task_debug_artifacts(config.trainer)
+    artifact_root = task_runtime.configure_task_debug_artifacts(config.trainer)
 
     if mode is DebugMode.OFF:
         assert not list(tmp_path.iterdir())
@@ -36,10 +36,17 @@ def test_worker_debug_artifacts_use_iris_attempt_outputs(tmp_path, monkeypatch, 
 
     worker_environment = dict(os.environ)
     EnvVarManager.from_config(config).apply_to_process(EnvVarScope.RAY_WORKER, environ=worker_environment)
-    artifact_root = tmp_path / "skyrl-debug"
-    manifest = write_process_manifest("worker", environment=worker_environment)
-    assert manifest.is_relative_to(artifact_root)
+    assert artifact_root == tmp_path / "skyrl-debug"
     assert Path(worker_environment[FR_DUMP_TEMP_FILE_ENV]).parent == artifact_root / "flight_recorder"
+    if mode is DebugMode.LIGHT:
+        assert COLLECTIVE_PHASE_DIAGNOSTICS_ENV not in worker_environment
+        task_runtime.prune_empty_debug_directories(artifact_root)
+        assert not list(tmp_path.iterdir())
+        return
+
+    manifest = write_process_manifest("worker", environment=worker_environment)
     receipt = json.loads(manifest.read_text())
     assert receipt["role"] == "worker"
-    assert COLLECTIVE_PHASE_DIAGNOSTICS_ENV not in receipt["environment"]
+    assert receipt["environment"][COLLECTIVE_PHASE_DIAGNOSTICS_ENV] == "1"
+    task_runtime.prune_empty_debug_directories(artifact_root)
+    assert manifest.is_file()

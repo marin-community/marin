@@ -551,30 +551,12 @@ class EnvVarManager:
             cls._debug_values(
                 mode,
                 artifact_root,
-                collective_phase_diagnostics=phase_diagnostics is not False,
+                collective_phase_diagnostics=(
+                    phase_diagnostics is True or (phase_diagnostics is None and mode is DebugMode.DISTRIBUTED)
+                ),
             )
         )
         return cls(values)
-
-    @classmethod
-    def for_debug_launch(
-        cls,
-        *,
-        mode: DebugMode = DebugMode.LIGHT,
-        job_name: str,
-        artifact_root: str | None = None,
-        collective_phase_diagnostics: bool = True,
-    ) -> "EnvVarManager":
-        root = artifact_root or f"/tmp/skyrl-debug/{safe_artifact_component(job_name)}"
-        if mode is DebugMode.OFF:
-            return cls({})
-        return cls(
-            cls._debug_values(
-                mode,
-                root,
-                collective_phase_diagnostics=collective_phase_diagnostics,
-            )
-        )
 
     @classmethod
     def for_frozen_cuda_runtime(
