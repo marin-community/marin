@@ -96,7 +96,9 @@ class Micro210ServingProfile:
 class ServingProfileName(StrEnum):
     POLICY = "policy"
     SNOWBALL_H100_EAST02A = "snowball-h100-cw-us-east-02a"
+    SNOWBALL_H100_EAST02A_8GPU = "snowball-h100-8gpu-cw-us-east-02a"
     MOCHI_GB200 = "mochi-gb200-cw-us-east-08a"
+    MOCHI_GB200_V2 = "mochi-gb200-cw-us-east-08a-v2"
 
 
 def registered_serving_profile(name: ServingProfileName) -> Micro210ServingProfile | None:

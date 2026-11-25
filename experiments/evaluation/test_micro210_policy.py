@@ -31,6 +31,7 @@ from experiments.evaluation.micro210 import (
     PREPARED_INPUTS_VERSION,
     ServingProfileName,
     micro210_step,
+    registered_serving_profile,
     route_override,
     run_micro210,
     validate_judge_availability,
@@ -150,7 +151,9 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
     "profile,target_cluster",
     [
         (ServingProfileName.SNOWBALL_H100_EAST02A, "cw-us-east-02a"),
+        (ServingProfileName.SNOWBALL_H100_EAST02A_8GPU, "cw-us-east-02a"),
         (ServingProfileName.MOCHI_GB200, "cw-us-east-08a"),
+        (ServingProfileName.MOCHI_GB200_V2, "cw-us-east-08a"),
     ],
 )
 def test_serving_profile_delivers_hf_secret_to_the_actual_coordinator(
@@ -187,6 +190,38 @@ def test_serving_profile_delivers_hf_secret_to_the_actual_coordinator(
     assert request.environment.secrets["HF_TOKEN"] == "fixture-hf-token"
     assert "HF_TOKEN" not in request.environment.env_vars
     assert request.environment.secrets["JUDGE_API_KEY"] == "fixture-judge-key"
+
+
+def test_snowball_8gpu_serving_profile_differs_only_in_engine_geometry():
+    """One DP8/EP8 engine on one node holds the frozen 128-task concurrency.
+
+    Engine generation capacity is num_inference_engines * data_parallel_size *
+    max_num_seqs (one vLLM engine per DP rank, each capped at max_num_seqs), so
+    the 8-GPU profile needs 1 * 8 * 16 = 128 in-flight sequences to keep the
+    frozen trajectory_runner.max_concurrent_tasks of 128.
+    """
+    wide = registered_serving_profile(ServingProfileName.SNOWBALL_H100_EAST02A)
+    narrow = registered_serving_profile(ServingProfileName.SNOWBALL_H100_EAST02A_8GPU)
+    assert narrow.role_plan == replace(wide.role_plan, policy_num_nodes=1, num_inference_engines=1)
+    assert narrow.generator == {**wide.generator, "max_num_seqs": 16}
+    for field in (
+        "gpu_variant",
+        "execution",
+        "engine_init_kwargs",
+        "cuda_allocator_config",
+        "nccl_env",
+        "nccl_buffer_size_bytes",
+        "model_manifest_filename",
+    ):
+        assert getattr(narrow, field) == getattr(wide, field)
+
+
+def test_mochi_v2_serving_profile_differs_from_v1_only_in_memory():
+    """The v2 profile only shrinks the memory request; sealed rows still use v1."""
+    v1 = registered_serving_profile(ServingProfileName.MOCHI_GB200)
+    v2 = registered_serving_profile(ServingProfileName.MOCHI_GB200_V2)
+    assert v2.execution.memory == "128GiB"
+    assert v2 == replace(v1, execution=replace(v1.execution, memory=v2.execution.memory))
 
 
 @pytest.mark.parametrize("identity,revision", [("main", "a" * 40), ("sha256:" + "a" * 64, "main")])
@@ -258,7 +293,9 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     model_dir.mkdir()
     manifest = b'{"files": []}'
     manifest_filename = manifest_override or (
-        "export-manifest.json" if profile is ServingProfileName.MOCHI_GB200 else ".marinskyrl-model-manifest.json"
+        "export-manifest.json"
+        if profile in (ServingProfileName.MOCHI_GB200, ServingProfileName.MOCHI_GB200_V2)
+        else ".marinskyrl-model-manifest.json"
     )
     (model_dir / manifest_filename).write_bytes(manifest)
     (model_dir / "config.json").write_text("{}")

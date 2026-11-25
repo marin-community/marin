@@ -109,3 +109,133 @@ snowball-h100-cw-us-east-02a:
   nccl_env: {}
   nccl_buffer_size_bytes: 4194304
   model_manifest_filename: .marinskyrl-model-manifest.json
+  # One 8-GPU node instead of the 16-engine, 16-node policy geometry above: the
+  # engine's in-flight generation capacity is
+  #   num_inference_engines * inference_engine_data_parallel_size * max_num_seqs
+  # because each DP rank is a separate AsyncVLLMRayActor whose scheduler admits at
+  # most max_num_seqs sequences (ray_wrapped_inference_engine passes max_num_seqs
+  # per DP rank), and the trajectory runner bounds task concurrency by exactly that
+  # product (mismatch_probe.collect: min(max_concurrent_tasks, engines * DP *
+  # max_num_seqs, ...)). The frozen protocol keeps trajectory_runner.
+  # max_concurrent_tasks at 128, so one engine needs 1 * 8 * max_num_seqs >= 128,
+  # i.e. max_num_seqs: 16 - the smallest value that holds the frozen concurrency.
+  # Every protocol field (n_samples, max_concurrent_tasks, Harbor n_concurrent_trials,
+  # timeouts, sampling) is unchanged; only the engine count, node count, and
+  # max_num_seqs differ from snowball-h100-cw-us-east-02a.
+snowball-h100-8gpu-cw-us-east-02a:
+  gpu_variant: H100
+  role_plan:
+    colocate_all: true
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_tensor_parallel_size: 1
+    micro_train_batch_size_per_gpu: 1
+    n_samples_per_prompt: 1
+    num_inference_engines: 1
+    policy_mini_batch_size: 1
+    policy_num_gpus_per_node: 8
+    policy_num_nodes: 1
+    reference_num_nodes: null
+    train_batch_size: 1
+  execution:
+    cluster: cw-us-east-02a
+    cluster_config: lib/iris/config/cw-us-east-02a.yaml
+    container_profile: 4
+    cpu: 32
+    disk: 256GB
+    job_timeout_seconds: 259200
+    max_retries: 0
+    memory: 512GB
+    parent_cluster_config: lib/iris/config/marin.yaml
+    priority: production
+    required_env_vars:
+    - DAYTONA_EVAL_API_KEY
+    - DAYTONA_TARGET
+    - MARIN_PREFIX
+    - MARIN_TEMP_PREFIX
+    target_cluster: cw-us-east-02a
+    wandb_entity: marin-community
+    coordinator_timeout_hours: 73
+    coordinator_name: null
+  generator:
+    gpu_memory_utilization: 0.85
+    max_num_seqs: 16
+  engine_init_kwargs:
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+      - vllm::unified_attention_with_output
+      - vllm::unified_kv_cache_update
+      - vllm::grug_moe_short_conv
+  cuda_allocator_config: expandable_segments:True
+  nccl_env: {}
+  nccl_buffer_size_bytes: 4194304
+  model_manifest_filename: .marinskyrl-model-manifest.json
+  # Same serving resources as mochi-gb200-cw-us-east-08a except execution.memory:
+  # finelog iris.task memory_peak_mb over every task of both complete sealed rows
+  # measured a 72.2 GiB peak (base 2026.11.24.22 tasks 67.0-72.2 GiB, sft
+  # 2026.11.24.21 tasks 67.3-71.7 GiB), so 128GiB is about 1.8x the measured peak.
+  # The original profile's 900GB request predates the measurement; sealed rows
+  # still reference it, so only this v2 profile shrinks the request.
+mochi-gb200-cw-us-east-08a-v2:
+  gpu_variant: GB200
+  role_plan:
+    num_inference_engines: 1
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 16
+    inference_engine_expert_parallel_size: 16
+    n_samples_per_prompt: 1
+    gpus_per_node: 4
+  execution:
+    cluster: cw-us-east-08a
+    excluded_nvlink_domains:
+    - dh1-r136-us-east-08a
+    cluster_config: lib/iris/config/cw-us-east-08a.yaml
+    cpu: 120
+    memory: 128GiB
+    disk: 2TB
+    priority: production
+    max_retries: 0
+    target_cluster: cw-us-east-08a
+    parent_cluster_config: lib/iris/config/marin.yaml
+    coordinator_timeout_hours: 96
+    job_timeout_seconds: 259200
+    wandb_entity: marin-community
+    required_env_vars:
+    - DAYTONA_RL_API_KEY
+    - DAYTONA_EVAL_API_KEY
+    - DAYTONA_TARGET
+    - MARIN_PREFIX
+    - MARIN_TEMP_PREFIX
+    container_profile: 4
+  generator:
+    vllm_attention_backend: FLASHINFER
+    max_num_seqs: 128
+    max_num_batched_tokens: 2048
+    gpu_memory_utilization: 0.9
+    enable_prefix_caching: false
+    vllm_v1_disable_multiproc: false
+  engine_init_kwargs:
+    load_format: runai_streamer
+    moe_backend: triton
+    model_loader_extra_config:
+      distributed: false
+      concurrency: 4
+      memory_limit: 8589934592
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+      - vllm::unified_attention_with_output
+      - vllm::unified_kv_cache_update
+      - vllm::grug_moe_short_conv
+  cuda_allocator_config: expandable_segments:True
+  nccl_env:
+    NCCL_NET: IB
+    NCCL_IB_DISABLE: '0'
+    NCCL_IB_HCA: ibp
+  nccl_buffer_size_bytes: 4194304
+  model_manifest_filename: export-manifest.json
