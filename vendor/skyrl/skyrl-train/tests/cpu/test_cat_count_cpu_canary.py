@@ -29,7 +29,7 @@ from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
-from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
+from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, GROSS_ROLLOUT_TOKENS_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
@@ -488,6 +488,47 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                 assert row[f"{prefix}timing/setup/max"] == 0
         if not resume:
             preserved = records[1]
+
+
+@pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
+def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
+    root = tmp_path / "budget"
+    cfg = cat_count_config(root, cat_count_policy, steps=6)
+    cfg.trainer.rollout_token_budget = 450
+    cfg.trainer.eval_interval = -1
+    cfg.data.sampling.kind = "adaptive-source"
+    cfg.trainer.algorithm.dynamic_sampling.type = "filter"
+    cfg.trainer.callbacks = [
+        {"type": "evaluation", "eval_steps": 7, "eval_before_train": False, "eval_on_train_end": True}
+    ]
+    records = run_process(forkserver_context, root, cfg)
+    training = [row for row in records if "policy/raw_grad_norm" in row]
+    stop = len(training)
+    assert 1 < stop < cfg.trainer.max_steps
+    assert [row["step"] for row in training] == list(range(1, stop + 1))
+    assert sum(row["async/dynamic_sampling/discarded_count"] for row in training) > 0
+    assigned = [row["body"] for row in cat_count_session if row["name"] == "sampling_group_assigned"]
+    results = [row["body"] for row in cat_count_session if row["name"] == "sampling_group_result"]
+    assert Counter(row["lease_id"] for row in assigned) == Counter(row["lease_id"] for row in results)
+    assert len({row["lease_id"] for row in results}) == len(results) > cfg.trainer.train_batch_size * stop
+    assert {row["policy_step"] for row in assigned} == set(range(1, stop + 1))
+    gross = sum(row["generated_tokens"] for row in results)
+    for row in training:
+        step_gross = sum(result["generated_tokens"] for result in results if result["dispatch_step"] == row["step"])
+        assert row[GROSS_ROLLOUT_TOKENS_METRIC] == step_gross
+    assert sum(row[GROSS_ROLLOUT_TOKENS_METRIC] for row in training) == gross
+    assert training[-1]["rollout/gross_response_tokens_total"] == gross
+    assert training[-2]["rollout/gross_response_tokens_total"] < cfg.trainer.rollout_token_budget <= gross
+    consumed = sum(row["body"]["response_tokens"] for row in cat_count_session if row["name"] == "consumed_staleness")
+    assert gross > consumed
+    measured = [
+        row
+        for row in cat_count_session
+        if row["name"] == "training_metric_value" and row["attributes"].get("metric") == "eval/all/num_attempted"
+    ]
+    assert [(row["attributes"]["step"], row["value"]) for row in measured] == [
+        (str(stop), sum(len(Path(path).read_text().splitlines()) for path in cfg.data.val_data))
+    ]
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)

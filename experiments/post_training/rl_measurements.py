@@ -12,7 +12,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import pyarrow as pa
@@ -374,9 +374,46 @@ def evaluation_status(
         )
 
 
-def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
-    """Check planned update completion and finite training loss and gradient evidence."""
-    return preset.recipe.layout.workload.invariants(preset.updates, metrics)
+def measured_training(
+    preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]], rollout_token_budget: int | None
+) -> tuple[presets.Preset, tuple[Invariant, ...]]:
+    """Resolve a token-stopped run's final evaluation step from its recorded optimizer and spending history."""
+    workload = preset.recipe.layout.workload
+    if rollout_token_budget is None:
+        return preset, workload.invariants(preset.updates, metrics)
+    spent = 0
+    completed = 0
+    valid = True
+    for step, row in sorted(metrics.items()):
+        if step == 0 or "trainer/global_step" not in row:
+            continue
+        gross = row.get("rollout/gross_response_tokens", -1)
+        if (
+            step != completed + 1
+            or row["trainer/global_step"] != step
+            or step > preset.updates
+            or spent >= rollout_token_budget
+            or not math.isfinite(gross)
+            or gross < 0
+            or gross != int(gross)
+        ):
+            valid = False
+            break
+        spent += int(gross)
+        completed = step
+        if row.get("rollout/gross_response_tokens_total") != spent:
+            valid = False
+            break
+    reached = valid and spent >= rollout_token_budget
+    if reached:
+        window = preset.measured
+        preset = replace(
+            preset, updates=completed, measured=range(window.start, min(completed + 1, window.stop), window.step)
+        )
+    fact = Invariant(
+        name="gross_rollout_budget_reached", value=spent, limit=rollout_token_budget, comparator=">=", holds=reached
+    )
+    return preset, (*workload.invariants(preset.updates, metrics), fact)
 
 
 def read_measurements(
@@ -395,11 +432,12 @@ def read_measurements(
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
+    launch = read_recorded_launch(terminal)
+    preset, training_facts = measured_training(preset, metrics, launch.rollout_token_budget)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
-    invariants = list(training_invariants(preset, metrics))
-    launch = read_recorded_launch(terminal)
+    invariants = list(training_facts)
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {

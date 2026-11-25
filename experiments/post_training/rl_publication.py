@@ -35,8 +35,8 @@ from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     evaluation_status,
+    measured_training,
     read_run_inputs,
-    training_invariants,
 )
 
 APPLET_ID = tomllib.loads(
@@ -120,7 +120,9 @@ def build_record(
         and history[-1].record.resumed_step in (None, 0)
     )
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
-    invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
+    measured_preset, invariants = measured_training(preset, metrics, launch.rollout_token_budget)
+    if attempt.metrics_started_at is None:
+        invariants = ()
     failed = [fact.name for fact in invariants if not fact.holds]
     status = evaluation_status(run_output, preset, attempt, launch)
     evaluations = list(status.evaluations)
@@ -192,7 +194,7 @@ def build_record(
         failed_facts=failed,
         optimizer_steps=optimizer_steps,
         planned_updates=preset.recipe.layout.workload.update_count(preset.updates),
-        measured_updates=list(preset.measured),
+        measured_updates=list(measured_preset.measured),
         iris_job_id=result.iris_job_id,
         wandb_url=tracking.get("wandb_url"),
         grafana_url=attempt_grafana_url(attempt, launch),

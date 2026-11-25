@@ -280,6 +280,9 @@ trainer:
   # Optional OPD stage boundary. Stops after the first optimizer batch whose
   # cumulative teacher-scored tokens reach the budget.
   distillation_token_budget: null
+  # A fresh synchronous run stops and evaluates the primary panel after the first
+  # full optimizer update to reach this many training response tokens across all groups.
+  rollout_token_budget: null
   reset_distillation_token_count_on_resume: false
   reset_global_step_on_resume: false
   ckpt_path: "${oc.env:HOME}/ckpts/"

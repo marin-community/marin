@@ -444,6 +444,19 @@ loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
 
+### Stop at a rollout token budget
+
+Set `trainer.rollout_token_budget` on a fresh run with `trainer.resume_mode=none`
+and `trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts every training
+group's generated response tokens, including groups the admission policy discards.
+After the first optimizer update that reaches the budget, SkyRL evaluates
+`data.val_data` with the updated policy and closes training. Put the full held-out
+panel in `data.val_data`. The evaluation's output tokens are outside the training
+budget. The final total can exceed the budget by up to one update's generation.
+Use `rollout/gross_response_tokens` and `rollout/gross_response_tokens_total` to
+check the stopping update and compare actual spend. A run ending below budget
+fails.
+
 ## Author typed recipes
 
 Experiments can import `SkyRLRecipe` and generated section classes from `skyrlrecipe`, the

@@ -57,6 +57,7 @@ from skyrl_train.dynamic_sampling import (
     resolve_dynamic_sampling_criteria,
 )
 from skyrl_train.grader_reporting import write_grader_report
+from skyrl_train.metric_names import GROSS_ROLLOUT_TOKENS_METRIC
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
@@ -503,6 +504,7 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
+        gross_tokens = 0
         sampling_dispositions: list[GroupDisposition] = []
         sampling_receipts_enabled = self._assign_sampling_source is not None
         tracks_prompt_feedback = self._observe_after_optimizer is not None
@@ -511,6 +513,8 @@ class TrainingContext:
             timeout = max(deadline - loop.time(), 0.0)
             admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
+            # Every commit appears once in generated, before rejection or admission.
+            gross_tokens += sum(work.generated_token_count for _, work in admission.generated)
             _record_admission(admission, self._rollout_spans, self._policy_step, self.config.max_untrained_groups)
             if tracks_prompt_feedback:
                 sampling_dispositions.extend(admission.dispositions)
@@ -532,7 +536,7 @@ class TrainingContext:
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **sampling_metrics},
+                    {**admission.selection.metrics, **sampling_metrics, GROSS_ROLLOUT_TOKENS_METRIC: gross_tokens},
                     sampling_receipts_enabled=sampling_receipts_enabled,
                     sampling_dispositions=tuple(sampling_dispositions),
                 )

@@ -68,7 +68,7 @@ def sampler_preset(
     *,
     layout: Layout,
     revision: str,
-    evaluation_interval: int,
+    evaluation_interval: int | None,
     additional_evaluations: tuple[Evaluation, ...] = (),
 ) -> Preset:
     verifier = TASK_MACHINES[CommandSemantics.SHELL_SIMULATOR]
@@ -153,6 +153,21 @@ RNO_PAIR_PILOT_ARMS = (
 FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
 
 
+def token_budget_smoke(arm: str, kind: str, epsilon: float) -> Preset:
+    preset = sampler_preset(
+        f"rno-pair-budget-smoke-{arm}",
+        16,
+        kind,
+        epsilon,
+        41,
+        layout=RNO_PAIR_LAYOUT,
+        revision="2026.11.25.8",
+        evaluation_interval=None,
+    )
+    config = preset.recipe.config.merge(RecipePatch(trainer=sections.Trainer(rollout_token_budget=200_000)))
+    return replace(preset, recipe=replace(preset.recipe, config=config), evaluations=(replace(EVAL, at_start=False),))
+
+
 def layout_presets(
     prefix: str,
     layout: Layout,
@@ -197,6 +212,11 @@ QWEN_SAMPLER = ModelPresets(
             confirmation=(FULL_VALIDATION,),
         ),
         *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
+        *(
+            token_budget_smoke(arm, kind, epsilon)
+            for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
+            if arm in {"fixed", "cost-aware-eps05"}
+        ),
         # Dense control checkpoints allow comparison at the contextual arms' actual generation cost.
         *(
             sampler_preset(

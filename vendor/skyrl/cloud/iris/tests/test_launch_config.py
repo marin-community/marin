@@ -35,7 +35,7 @@ from cloud.iris.rl_config_translation import (
 )
 from skyrl_train import trainer as trainer_module
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
+from skyrl_train.callbacks.builtin import HFModelSaveCallback, RolloutTokenBudgetCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
 from skyrl_train.evaluate import _EvaluationRollouts, _persist_evaluation
@@ -215,6 +215,33 @@ def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> N
     config.generator.inference_engine_data_parallel_size = 2
     with pytest.raises(ValueError, match="colocation requires"):
         validate_expert_block_transport(config)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("trainer.rollout_buffer.max_staleness_steps", 1, "synchronous"),
+        ("trainer.resume_mode", "latest", "fresh run"),
+        ("data.val_data", [], "primary evaluation panel"),
+    ],
+)
+def test_rollout_budget_rejects_incompatible_launch(key, value, message):
+    cfg = get_default_config()
+    cfg.trainer.rollout_token_budget = 450
+    cfg.trainer.rollout_buffer.max_staleness_steps = 0
+    cfg.trainer.resume_mode = "none"
+    OmegaConf.update(cfg, key, value)
+    with pytest.raises(ValueError, match=message):
+        validate_rollout_launch(cfg)
+
+
+def test_rollout_budget_fails_an_underfunded_horizon():
+    callback = RolloutTokenBudgetCallback(10)
+    control = TrainerControl()
+    state = TrainerState(1, 0, 1, 1, metrics={"rollout/gross_response_tokens": 9})
+    callback.on_step_end(state, control, trainer=SimpleNamespace(all_metrics={}))
+    with pytest.raises(ValueError, match="9 gross rollout tokens before reaching the configured budget of 10"):
+        callback.on_train_end(state, control)
 
 
 def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:

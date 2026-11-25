@@ -418,7 +418,10 @@ class BasePPOExp:
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
         needs_additional_evaluation = bool(self.evaluation_profiles)
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_additional_evaluation) and data_files:
+        needs_primary_evaluation = (
+            self.cfg.trainer.eval_interval > 0 or self.cfg.trainer.rollout_token_budget is not None
+        )
+        if (needs_primary_evaluation or needs_probe_prompts or needs_additional_evaluation) and data_files:
             return self._build_eval_dataset(data_files)
         return None
 

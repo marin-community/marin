@@ -49,6 +49,7 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    append_metrics,
     cache_native_compositions,
     controls,
     edit_receipt,
@@ -257,6 +258,33 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
         values = measurements.read_measurements(str(root), preset).values
         assert values["speed/update_seconds"] == 9
         assert (KL not in values) if expected is None else values[KL] == pytest.approx(expected)
+
+
+def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_table):
+    preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
+    preset_table(preset)
+    root = recorded_runs(preset.name, "users/test/early-budget-stop")
+    append_metrics(
+        root,
+        {
+            step: {
+                "attempt_id": "recorded-attempt",
+                "rollout/gross_response_tokens": gross,
+                "rollout/gross_response_tokens_total": total,
+            }
+            for step, gross, total in ((1, 100, 100), (2, 200, 300))
+        },
+    )
+    with edit_receipt(root) as receipt:
+        trainer = receipt["config"]["skyrl"]["trainer"]
+        trainer.update(max_steps=12, rollout_token_budget=250)
+    data = measurements.read_measurements(str(root), preset.with_updates(12))
+    facts = {fact.name: fact for fact in data.invariants}
+    assert facts["gross_rollout_budget_reached"].holds and facts["planned_updates"].value == 2
+    assert any(metric.metric.startswith("eval_lite@2/") for metric in data.evaluations)
+    metrics = measurements.read_skyrl_metrics(str(root), attempt_id="recorded-attempt")
+    _, invalid = measurements.measured_training(preset.with_updates(12), metrics, 100)
+    assert not next(fact for fact in invalid if fact.name == "gross_rollout_budget_reached").holds
 
 
 def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
