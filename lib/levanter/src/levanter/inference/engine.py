@@ -410,7 +410,7 @@ def _prefill_kernel(
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
-    binfo: PageBatchInfo,
+    batch_info: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
@@ -432,7 +432,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
     logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -540,11 +540,11 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
 
     gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(
+    decode_state, batch_info = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state), binfo
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state), batch_info
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -555,8 +555,8 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state, binfo = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill)
+    gen_state, batch_info = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill)
 
 
 def _handle_clones(
