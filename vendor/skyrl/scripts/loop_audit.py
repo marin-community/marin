@@ -63,6 +63,7 @@ INTERRUPT = "interrupt"
 TAIL = "tail"
 AGENT_RULES = (STALL, RUN8, FREQUENT, TERMINUS8)
 """An agent loop is any of the four action-loop rules; ``interrupt`` and ``tail`` report separately."""
+GRADED_AGENT_EXCEPTIONS = frozenset({"ContextLengthExceededError", "AgentTimeoutError", "AgentTimeout"})
 
 
 @dataclass(frozen=True)
@@ -246,11 +247,19 @@ def audit_trial(row: Mapping[str, Any]) -> TrialAudit:
     turns = trial_turns(row.get("messages") or ())
     runs = find_loop_runs(turns)
     rules = {run.rule for run in runs}
-    repeat_turns = sum(run.length - 1 for run in runs if run.rule in AGENT_RULES)
+    repeat_turns = {
+        index
+        for run in runs
+        if run.rule in AGENT_RULES
+        for index in range(run.start + 1, run.start + run.length)
+    }
+    if row.get("stop_reason") == REPEAT_STALL_STOP_REASON:
+        rules.add(STALL)
+        repeat_turns.update(range(max(0, len(turns) - 2), len(turns)))
     interrupt_repeat = sum(run.length - 1 for run in runs if run.rule == INTERRUPT)
     messages = row.get("messages") or ()
     calls = duplicate_tool_call_fraction(messages)
-    return TrialAudit(frozenset(rules), repeat_turns, interrupt_repeat, len(turns), calls)
+    return TrialAudit(frozenset(rules), len(repeat_turns), interrupt_repeat, len(turns), calls)
 
 
 @dataclass(frozen=True)
@@ -326,17 +335,22 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
     Damaged trials also stay out of the agent-loop confirmed count and of every share
     denominator except the upper bound, which keeps them as unassessed.
     """
-    expected = {row["task_id"]: row.get("prompt_hash") for row in cohort["rows"]}
-    if len(expected) != len(cohort["rows"]):
+    tasks = {row["task_id"]: row.get("prompt_hash") for row in cohort["rows"]}
+    if len(tasks) != len(cohort["rows"]):
         raise ValueError("cohort contains duplicate task IDs")
-    indexed: dict[str, dict[str, Any]] = {}
+    trials = cohort.get("trials_per_task", 1)
+    expected = {(task_id, trial): digest for task_id, digest in tasks.items() for trial in range(trials)}
+    indexed: dict[tuple[str, int], dict[str, Any]] = {}
+    counts: dict[str, int] = {}
     for row in rows:
         task_id = row.get("task_id")
-        if task_id not in expected:
+        if task_id not in tasks:
             continue
-        if task_id in indexed:
+        trial = counts.get(task_id, 0)
+        if trial >= trials:
             raise ValueError(f"multiple generations for cohort task {task_id}; select one evaluation session")
-        indexed[task_id] = row
+        indexed[task_id, trial] = row
+        counts[task_id] = trial + 1
     config = LoopCreditConfig(
         max_period_tokens=cohort["max_period_tokens"],
         tail_tokens=cohort["budget"],
@@ -367,12 +381,18 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
         valid_prompt = expected_hash is None or (
             isinstance(prompt, list) and bool(prompt) and prompt_hash(prompt) == expected_hash
         )
+        verification = row.get("verification") or {}
+        status = verification.get("status")
+        graded_agent_error = row.get("exception_type") in GRADED_AGENT_EXCEPTIONS and status == "verified"
+        infrastructure_error = (
+            bool(row.get("server_error"))
+            or (bool(row.get("exception_type")) and not graded_agent_error)
+            or (row.get("error_treatment") not in (None, "none") and not graded_agent_error)
+        )
         damaged = (
             not valid_tokens
             or not valid_prompt
-            or bool(row.get("server_error"))
-            or row.get("error_treatment") not in (None, "none")
-            or bool(row.get("exception_type"))
+            or infrastructure_error
             or row.get("is_last_step", True) is not True
         )
         trial = audit_trial(row)
@@ -383,15 +403,11 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
             stop_reasons[reason] = stop_reasons.get(reason, 0) + 1
             rules = set(trial.rules)
             repeat_turns_trial = trial.repeat_turns
-            if reason == REPEAT_STALL_STOP_REASON:
-                # The recorder verified three identical (action, observation) pairs with the
-                # real observations, but a retained conversation drops the final pair's
-                # observation: no turn follows it. Confirm the stall from the stop reason,
-                # and count its two repeats: the stop fires exactly at the third copy, so
-                # the trace's own runs never include this one.
-                rules.add(STALL)
-                repeat_turns_trial += 2
-            tail_hit = valid_tokens and tail_loop(tokens, [1] * len(tokens), config) is not None
+            turn_tokens = row.get("assistant_turn_token_ids")
+            tail_sequences = turn_tokens if turn_tokens is not None else [tokens] if valid_tokens else []
+            tail_hit = any(
+                tail_loop(sequence, [1] * len(sequence), config) is not None for sequence in tail_sequences if sequence
+            )
             # ``confirmed`` keeps Doom's tail semantics; agent loops count separately below.
             if tail_hit:
                 confirmed += 1
@@ -411,20 +427,20 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
             turn_counts.append(trial.assistant_turns)
             if trial.duplicate_fraction is not None:
                 duplicate_fractions.append(trial.duplicate_fraction)
-            score = _outcome_reward(row.get("score"))
+            score = _outcome_reward(verification.get("score", row.get("score")))
             if score is not None:
                 rewards.append(score)
             if valid_tokens:
-                lengths.append(len(tokens))
+                lengths.append(sum(len(sequence) for sequence in turn_tokens) if turn_tokens is not None else len(tokens))
             wall = _wall_seconds(row)
             if wall is not None:
                 wall_times.append(wall)
-        verification = row.get("verification") or {}
-        status = verification.get("status")
-        row_error = status == "error" or bool(row.get("exception_type")) or bool(row.get("server_error"))
+        row_error = status == "error" or infrastructure_error
+        score = _outcome_reward(verification.get("score"))
+        passed = score == 1.0 if score is not None else verification.get("passed")
         errors += int(row_error)
-        unavailable += int(not row_error and (status != "verified" or type(verification.get("passed")) is not bool))
-        passes += int(not damaged and not row_error and status == "verified" and verification.get("passed") is True)
+        unavailable += int(not row_error and (status != "verified" or type(passed) is not bool))
+        passes += int((not damaged or graded_agent_error) and not row_error and status == "verified" and passed is True)
         at_cap = row.get("stop_reason") in ("length", "max_tokens", "max_length") or (
             valid_tokens and len(tokens) >= cohort["budget"]
         )
@@ -476,6 +492,7 @@ def _cohort_digest(cohort: Mapping[str, Any]) -> str:
     return cohort_hash(
         row["prompt_hash"] if row.get("prompt_hash") is not None else prompt_hash([row["task_id"]])
         for row in cohort["rows"]
+        for _ in range(cohort.get("trials_per_task", 1))
     )
 
 

@@ -29,6 +29,7 @@ from experiments.post_training.rl_presets import (
 )
 
 VERSION = "2026.11.25.1"
+RUN_VERSION = "2026.11.25.2"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
@@ -141,13 +142,14 @@ PANEL_ENVIRONMENT = RecipePatch(
     environment=sections.Environment(
         task_sessions={
             "daytona": {"api_key_env": "DAYTONA_EVAL_API_KEY", "eval_api_key_env": "DAYTONA_EVAL_API_KEY"},
-            "task_spec": {
-                "session": {
-                    "model_turn_timeout": PANEL_MODEL_TURN_TIMEOUT,
-                    "total_turn_timeout": PANEL_AGENT_TIMEOUT,
-                    "attempt_timeout": PANEL_ATTEMPT_TIMEOUT,
-                    "verifier_timeout": PANEL_VERIFIER_TIMEOUT,
+            "agent_harnesses": {
+                "pi": {
+                    "version": "0.87.0",
+                    "thinking": "high",
+                    "thinking_format": "chat-template",
+                    "setup_timeout": 360,
                 },
+                "terminus-2": {"max_main_turns": 1024, "setup_timeout": 360},
             },
         }
     ),
@@ -197,6 +199,7 @@ def panel_preset(
     name: str,
     *,
     model: ArtifactHfModel = MODEL,
+    layout: Layout = GUARDS_LAYOUT,
     repeat_stall_batches: int | None = None,
     repetition_penalty: float = 1.0,
 ) -> Preset:
@@ -213,11 +216,14 @@ def panel_preset(
             )
         )
     sampling = PANEL_SAMPLING.replace(repetition_penalty=repetition_penalty)
-    evaluations = tuple(evaluation(name, file, trials, sampling=sampling) for name, file, trials in PANEL_COHORTS)
+    evaluations = tuple(
+        evaluation(name, f"{file}_stop" if repeat_stall_batches is not None else file, trials, sampling=sampling)
+        for name, file, trials in PANEL_COHORTS
+    )
     return Preset(
         name=name,
-        revision=VERSION,
-        recipe=Recipe(layout=GUARDS_LAYOUT, fixed_reply_tokens=None, config=environment),
+        revision=RUN_VERSION,
+        recipe=Recipe(layout=layout, fixed_reply_tokens=None, config=environment),
         updates=0,
         measured=range(1),
         tasks=PANEL_SELECTION,
@@ -230,7 +236,7 @@ def panel_preset(
         wandb_entity="marin-community",
         checkpoints="none",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=4, temporary_storage_ttl_days=3),
-        temporary_output=False,
+        temporary_output=True,
         budget="128 GB200, one panel pass (about 4 h of trials)",
     )
 
@@ -260,7 +266,7 @@ def rl_arm(name: str, *, antithrash: bool, updates: int) -> Preset:
     base = replace(
         mochi_rl._TRAIN_LONG_AGENTIC,
         name=name,
-        revision=VERSION,
+        revision=RUN_VERSION,
         recipe=replace(
             mochi_rl._TRAIN_LONG_AGENTIC.recipe,
             layout=RL_LAYOUT,
@@ -273,8 +279,9 @@ def rl_arm(name: str, *, antithrash: bool, updates: int) -> Preset:
         evaluations=(),
         checkpoint_evaluation=(),
         seed=20261125,
+        model=MODEL,
         sample_namespace="datasets/mochi-loop-guards",
-        checkpoints="none",
+        checkpoints="latest",
         temporary_output=True,
         budget="60 GB200 per arm; N updates fixed at submit from S0's measured trial times",
     )
@@ -282,8 +289,13 @@ def rl_arm(name: str, *, antithrash: bool, updates: int) -> Preset:
 
 
 S0 = panel_preset("s0-baseline")
-S1_STOP = panel_preset("s1-stop", repeat_stall_batches=3)
-S1_RP = panel_preset("s1-rp", repetition_penalty=1.1)
+GUARD_ARM_LAYOUT = replace(
+    GUARDS_LAYOUT,
+    name="mochi-guards-generate-64",
+    workload=Generation(replace(GUARDS_LAYOUT.workload.plan, num_inference_engines=4)),
+)
+S1_STOP = panel_preset("s1-stop", repeat_stall_batches=3, layout=GUARD_ARM_LAYOUT)
+S1_RP = panel_preset("s1-rp", repetition_penalty=1.1, layout=GUARD_ARM_LAYOUT)
 S2_CONTROL = rl_arm("s2-antithrash-control", antithrash=False, updates=8)
 S2_TREATMENT = rl_arm("s2-antithrash-treatment", antithrash=True, updates=8)
 
@@ -294,7 +306,7 @@ def s3_panel(name: str, export: ArtifactHfModel) -> Preset:
     The export binds at T+34 from the S2x export artifact; the plan preflight validates the
     stage with the declared start checkpoint standing in for the export.
     """
-    return panel_preset(name, model=export)
+    return panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT)
 
 
 def export_command(ckpt_path: str, step: int, launch_config: str, *, export_path: str | None = None) -> str:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 from marin.execution.lazy import materialized_config
-from rolloutengine.models import TASK_ROLLOUT_COLUMN
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training import rl
@@ -85,8 +85,16 @@ def fixture_selection(root: Path) -> Path:
     for cohort, tasks in FIXTURE_TASKS.items():
         rows = [{TASK_ROLLOUT_COLUMN: fixture_rollout(f"{cohort}/{index}").model_dump_json()} for index in range(tasks)]
         write_parquet_file(rows, str(selection / f"{cohort}.parquet"))
+        stop_rows = []
+        for row in rows:
+            spec = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+            spec = spec.model_copy(update={"limits": spec.limits.model_copy(update={"repeat_stall_batches": 3})})
+            stop_rows.append({TASK_ROLLOUT_COLUMN: spec.model_dump_json()})
+        write_parquet_file(stop_rows, str(selection / f"{cohort}_stop.parquet"))
         summary[f"{cohort}_rows"] = tasks
+        summary[f"{cohort}_stop_rows"] = tasks
         summary["grader_kind_counts"][cohort] = {}
+        summary["grader_kind_counts"][f"{cohort}_stop"] = {}
     (selection / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selection
 

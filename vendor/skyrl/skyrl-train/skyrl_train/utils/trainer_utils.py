@@ -314,6 +314,9 @@ def dump_per_dataset_eval_results(
                     "output_response": output_responses[i],
                     # The parsed conversation the grader read: tool calls, observations and the final answer.
                     "messages": (trajectory_batch.get("evidence_messages") or [None] * len(input_prompts))[i],
+                    "assistant_turn_token_ids": (
+                        trajectory_batch.get("assistant_turn_token_ids") or [None] * len(input_prompts)
+                    )[i],
                     "score": trajectory_batch["rewards"][i],
                     "stop_reason": stop_reasons[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],

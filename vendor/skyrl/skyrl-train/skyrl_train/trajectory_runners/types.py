@@ -129,6 +129,7 @@ class TrajectoryBatch(TypedDict):
     reward_shaping_versions: Optional[List[int]]
     verification_results: List[Optional[VerificationResult]]
     evidence_messages: List[Optional[list[dict[str, Any]]]]
+    assistant_turn_token_ids: NotRequired[List[List[List[int]]]]
     verifier_tests: Optional[List[Optional[VerifierTestCollection]]]
     loss_masks: List[List[int]]
     stop_reasons: Optional[List[str]]

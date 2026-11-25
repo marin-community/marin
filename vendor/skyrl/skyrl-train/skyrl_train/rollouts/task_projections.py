@@ -269,6 +269,8 @@ class WholeTaskProjection:
             classes,
             metrics,
         )
+        batch["evidence_messages"] = [_attempt_messages(rollout) for rollout in rollouts]
+        batch["assistant_turn_token_ids"] = [_attempt_token_ids(rollout) for rollout in rollouts]
         _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
         return batch
@@ -292,6 +294,8 @@ class StepTaskProjection:
         projected_ids = []
         final_steps = []
         classes = []
+        evidence = []
+        turn_tokens = []
         for rollout, trajectory_id, row in zip(rollouts, trajectory_ids, request.rows, strict=True):
             turns = _step_rollouts(rollout)
             for index, sample in enumerate(turns):
@@ -313,15 +317,38 @@ class StepTaskProjection:
                 projected_ids.append(projected_id)
                 final_steps.append(last)
                 classes.append(row.metadata.metric_class)
+                evidence.append(_attempt_messages(rollout) if last else list(sample.messages))
+                turn_tokens.append(_attempt_token_ids(rollout) if last else [list(sample.response_token_ids)])
         metrics = [
             {key: value for key, value in sample.metrics.items() if key in TASK_TIMING_KEYS} for sample in samples
         ]
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, classes, metrics)
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
+        batch["evidence_messages"] = evidence
+        batch["assistant_turn_token_ids"] = turn_tokens
         _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)
         _merge_task_metrics(batch, rollouts, request)
         return batch
+
+
+def _attempt_messages(rollout: TrainingRollout) -> list[dict[str, Any]]:
+    """Keep generated actions across context recovery, without copying replayed histories."""
+    steps = [step for conversation in rollout.conversations for step in conversation.steps]
+    if not steps:
+        return list(rollout.messages)
+    messages = list(steps[0].messages[:-1])
+    for step in steps:
+        messages.append(step.turn.message)
+        messages.extend(step.transition.observations)
+    return messages
+
+
+def _attempt_token_ids(rollout: TrainingRollout) -> list[list[int]]:
+    steps = [step for conversation in rollout.conversations for step in conversation.steps]
+    if not steps:
+        return [list(rollout.response_token_ids)] if rollout.response_token_ids else []
+    return [list(step.turn.response_token_ids) for step in steps]
 
 
 def logprobs_requested(request: TaskRequestBatch, runner_config: DictConfig) -> bool:

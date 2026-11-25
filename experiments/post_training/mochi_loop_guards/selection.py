@@ -22,8 +22,10 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import OUT, ArtifactStep, apply, run
+from marin.execution.lazy import OUT, ArtifactStep, apply, resolve
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import Backend, NetworkPolicy
@@ -38,6 +40,11 @@ from experiments.post_training.mochi_loop_guards.panel import SWESMITH_SOURCE_UR
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.harbor_packages import ARCHIVE_SUFFIX, extract_package
 from experiments.post_training.task_curation.pipeline import download_step
+from experiments.post_training.task_curation.swesmith_training import (
+    SWESMITH_DATASET,
+    SWESMITH_MACHINE,
+    lower_swesmith_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +103,13 @@ def _harbor_rows(
     dataset = HARBOR_COHORTS[cohort]
     protocol = manifest["cohorts"][MANIFEST_COHORTS[cohort]]["protocol"]
     root = StoragePath(downloaded)
+    packages = sorted((root / "tasks").ls(), key=lambda path: path.name)
+    if len(packages) != len(manifest["cohorts"][MANIFEST_COHORTS[cohort]]["rows"]):
+        raise ValueError(f"{cohort}: pinned package census differs from frozen source-order panel")
     rows = []
     for index, entry in enumerate(manifest["cohorts"][MANIFEST_COHORTS[cohort]]["rows"]):
-        package = entry["task_id"].rpartition(":")[2]
+        archive = packages[int(entry["task_id"].rpartition(":")[2])]
+        package = archive.name.removesuffix(ARCHIVE_SUFFIX)
         provenance = Source(
             dataset=dataset.source.name,
             revision=dataset.source.revision,
@@ -107,7 +118,7 @@ def _harbor_rows(
         )
         with tempfile.TemporaryDirectory(prefix=f"panel-{cohort}-") as temp:
             directory = Path(temp)
-            extract_package((root / f"tasks/{package}{ARCHIVE_SUFFIX}").read_bytes(), directory)
+            extract_package(archive.read_bytes(), directory)
             config = read_task_config(directory)
             lowered = lower_package(
                 directory,
@@ -146,16 +157,13 @@ def _swesmith_rows(manifest: dict[str, Any]) -> list[dict[str, str]]:
     """Bind the 128 held-out swesmith-ho TaskSpecs to the RL harness and the RL protocol."""
     cohort = manifest["cohorts"]["swesmith-ho"]
     protocol = cohort["protocol"]
-    machine = MachineRuntimeSpec.model_validate(
-        {
-            **protocol["task_machine"],
-            "cpus": None,
-            "storage_mb": None,
-            "startup_timeout": protocol["task_machine"]["startup_timeout_seconds"],
-            "cleanup_timeout": protocol["task_machine"]["cleanup_timeout_seconds"],
-        }
-    )
-    harness = f"pi:{protocol['pi_version']}"
+    machine = SWESMITH_MACHINE.model_copy(update={"memory_mb": protocol["memory_mb"]})
+    limits = {
+        **protocol,
+        "model_turn_timeout_seconds": protocol["agent_timeout_seconds"],
+        "attempt_timeout_seconds": protocol["trial_timeout_seconds"],
+    }
+    digests = image_lock(SWESMITH_DATASET)
     table = pq.read_table(io.BytesIO(StoragePath(SWESMITH_SOURCE_URI).read_bytes())).to_pylist()
     selected = {row["index"]: row for row in cohort["rows"]}
     rows = []
@@ -166,14 +174,15 @@ def _swesmith_rows(manifest: dict[str, Any]) -> list[dict[str, str]]:
         if _row_hash(row) != entry["row_hash"]:
             raise ValueError(f"swesmith row {index} hash differs from the frozen manifest")
         task = TaskSpec.model_validate_json(row["task_spec"])
-        if task.id != entry["task_id"].split(":", 1)[1]:
+        if task.id != entry["task_id"]:
             raise ValueError(f"swesmith row {index} task id differs from the frozen manifest")
+        task = lower_swesmith_task(task, SWESMITH_MACHINE, digests)
         rollout = _rollout(
             task,
-            harness=harness,
+            harness=PI_HARNESS,
             task_machine=machine,
             verifier_machine=None,
-            protocol=protocol,
+            protocol=limits,
         )
         rows.append({TASK_ROLLOUT_COLUMN: rollout.model_dump_json()})
     return rows
@@ -184,21 +193,30 @@ def publish_panel(manifest_path: str, output: str) -> dict[str, Any]:
     manifest_bytes = StoragePath(manifest_path).read_bytes()
     manifest = json.loads(manifest_bytes)
     root = StoragePath(output)
-    summary: dict[str, Any] = {"grader_kind_counts": {}, "selection_version": SELECTION_VERSION}
+    root.mkdirs()
+    summary: dict[str, Any] = {"grader_kind_counts": {"train": {}}, "selection_version": SELECTION_VERSION}
     for cohort in ("tb2", "tblite", "swe100", "swesmith_ho"):
         if cohort == "swesmith_ho":
             rows = _swesmith_rows(manifest)
         else:
             dataset = HARBOR_COHORTS[cohort]
             digests = image_lock(dataset.image_lock_name)
-            downloaded = str(run(download_step(dataset.source, CampaignRuntime())))
+            downloaded = resolve(download_step(dataset.source, CampaignRuntime())).path
             rows = _harbor_rows(cohort, manifest, downloaded, digests)
         expected = manifest["cohorts"][MANIFEST_COHORTS[cohort]]["trials"] // TRIALS[cohort]
         if len(rows) != expected:
             raise ValueError(f"{cohort}: lowered {len(rows)} tasks, the manifest freezes {expected}")
         write_parquet_file(rows, str(root / f"{COHORT_FILES[cohort]}.parquet"))
+        stop_rows = []
+        for row in rows:
+            spec = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+            spec = spec.model_copy(update={"limits": spec.limits.model_copy(update={"repeat_stall_batches": 3})})
+            stop_rows.append({TASK_ROLLOUT_COLUMN: spec.model_dump_json()})
+        write_parquet_file(stop_rows, str(root / f"{COHORT_FILES[cohort]}_stop.parquet"))
         summary[f"{cohort}_rows"] = len(rows)
+        summary[f"{cohort}_stop_rows"] = len(rows)
         summary["grader_kind_counts"][COHORT_FILES[cohort]] = {}
+        summary["grader_kind_counts"][f"{COHORT_FILES[cohort]}_stop"] = {}
         logger.info("published %s: %d tasks x %d trials", cohort, len(rows), TRIALS[cohort])
     (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary
@@ -220,6 +238,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_coreweave_s3()
     print(json.dumps(publish_panel(args.manifest, args.output), indent=2))
 
 

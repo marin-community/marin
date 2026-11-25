@@ -87,13 +87,46 @@ def test_audit_missing_generation_is_unassessed():
     assert (incidence.N, incidence.unassessed, incidence.unavailable, incidence.UB) == (1, 1, 1, 1)
 
 
-def test_missing_native_pass_flag_is_unavailable_despite_positive_score():
+def test_full_credit_verifier_score_defines_pass_when_native_flag_is_missing():
     cohort, row = cohort_and_row([1, 2, 3])
     row["verification"] = {"status": "verified", "score": 1.0, "passed": None}
     incidence, _ = audit_cohort(cohort, [row])
     assert (incidence.confirmed, incidence.unassessed, incidence.passes, incidence.unavailable, incidence.errors) == (
-        0, 0, 0, 1, 0,
+        0, 0, 1, 0, 0,
     )
+
+
+def test_overlapping_loop_rules_count_each_repeat_turn_once():
+    trial = audit_trial(message_row(stall_conversation(copies=10)))
+    assert {STALL, RUN8, FREQUENT, TERMINUS8} <= trial.rules
+    assert (trial.repeat_turns, trial.assistant_turns) == (9, 10)
+
+
+def test_tail_and_generated_cost_include_turns_before_context_recovery():
+    cohort, row = cohort_and_row([1, 2, 3])
+    row["assistant_turn_token_ids"] = [[7] * 8, [1, 2, 3]]
+    incidence, agent = audit_cohort(cohort, [row])
+    assert incidence.confirmed == 1
+    assert agent.cost.tokens_p50 == 11
+
+
+def test_trial_multiplicity_preserves_missing_attempts_in_upper_bound():
+    cohort, loop = cohort_and_row([7] * 8)
+    cohort["trials_per_task"] = 3
+    passed = {**loop, "response_token_ids": [1, 2, 3], "verification": {"status": "verified", "passed": True}}
+    incidence, agent = audit_cohort(cohort, [loop, passed])
+    assert (incidence.N, incidence.unassessed, incidence.passes) == (3, 1, 1)
+    assert agent.trial_share_ub == 1 / 3
+
+
+@pytest.mark.parametrize("exception", ["ContextLengthExceededError", "AgentTimeoutError"])
+def test_graded_agent_limit_keeps_verifier_result(exception):
+    cohort, row = cohort_and_row([1, 2, 3])
+    row.update(exception_type=exception, error_treatment="zero")
+    row["verification"] = {"status": "verified", "score": 1.0, "passed": True}
+    incidence, agent = audit_cohort(cohort, [row])
+    assert (incidence.passes, incidence.errors, incidence.unassessed) == (1, 0, 0)
+    assert agent.mean_reward == 1.0
 
 
 @pytest.mark.parametrize("response,expected", [("still reasoning", 1), ("<|end_think|>answer", 0)])

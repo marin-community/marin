@@ -32,6 +32,7 @@ REWARD_SHAPING_ROW_KEYS = (
     "verifier_tests",
     "verification_results",
     "evidence_messages",
+    "assistant_turn_token_ids",
     "exception_types",
     "error_treatments",
     "server_errors",

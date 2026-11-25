@@ -167,6 +167,11 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
     assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert np.sum(batch["rewards"]) == 1.0
+    messages = batch["evidence_messages"][0]
+    assert [message["content"] for message in messages if message["role"] == "assistant"] == (
+        ["Working", "12"] if sample_first else ["12"]
+    )
+    assert batch["assistant_turn_token_ids"] == ([[[3], [3]]] if sample_first else [[[3]]])
 
 
 @pytest.mark.asyncio
