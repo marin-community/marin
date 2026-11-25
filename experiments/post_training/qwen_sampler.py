@@ -60,7 +60,15 @@ EVAL = Evaluation(
 
 
 def sampler_preset(
-    name: str, updates: int, kind: str, epsilon: float, seed: int, *, layout: Layout, revision: str
+    name: str,
+    updates: int,
+    kind: str,
+    epsilon: float,
+    seed: int,
+    *,
+    layout: Layout,
+    revision: str,
+    additional_evaluations: tuple[Evaluation, ...] = (),
 ) -> Preset:
     verifier = TASK_MACHINES[CommandSemantics.SHELL_SIMULATOR]
     config = RecipePatch(
@@ -117,7 +125,7 @@ def sampler_preset(
         updates=updates,
         measured=range(1, updates + 1),
         seed=seed,
-        evaluations=(replace(EVAL, every=8 if updates == 32 else updates),),
+        evaluations=(replace(EVAL, every=8 if updates == 32 else updates), *additional_evaluations),
         held_out_tasks=TASKS,
         checkpoints="none",
         sample_namespace="datasets/qwen-sampler",
@@ -127,27 +135,70 @@ def sampler_preset(
     )
 
 
+PROMPT_ARMS = (
+    ("source-only", "prompt-thompson-source"),
+    ("contextual", "prompt-thompson-contextual"),
+    ("cost-aware", "prompt-thompson-cost-aware"),
+)
+ARMS = (
+    ("fixed", "adaptive-source", 1.0),
+    ("thompson", "adaptive-source-thompson", 0.05),
+    *((arm, kind, PROMPT_EXPLORATION) for arm, kind in PROMPT_ARMS),
+)
+RNO_PAIR_PILOT_ARMS = (
+    *ARMS,
+    *((f"{arm}-eps05", kind, 0.05) for arm, kind in PROMPT_ARMS),
+)
+FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
+
+
+def layout_presets(
+    prefix: str,
+    layout: Layout,
+    *,
+    smoke_revision: str,
+    pilot_revision: str,
+    pilot_arms: tuple[tuple[str, str, float], ...] = ARMS,
+    confirmation: tuple[Evaluation, ...] = (),
+) -> tuple[Preset, ...]:
+    return tuple(
+        sampler_preset(
+            f"{prefix}{stage}-{arm}{suffix}",
+            updates,
+            kind,
+            epsilon,
+            seed,
+            layout=layout,
+            revision=revision,
+            additional_evaluations=additional,
+        )
+        for stage, updates, seed, suffix, revision, arms, additional in (
+            ("smoke", 4, 17, "", smoke_revision, ARMS, ()),
+            ("pilot", 32, 17, "", pilot_revision, pilot_arms, ()),
+            ("pilot", 32, 29, "-seed29", pilot_revision, pilot_arms, confirmation),
+        )
+        for arm, kind, epsilon in arms
+    )
+
+
 QWEN_SAMPLER = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-sampler",
-    presets=tuple(
-        sampler_preset(f"{prefix}{stage}-{arm}{suffix}", updates, kind, epsilon, seed, layout=layout, revision=revision)
-        for prefix, layout, revision in (
-            ("", LAYOUT, "2026.11.25.4"),
-            ("rno-pair-", RNO_PAIR_LAYOUT, "2026.11.25.4"),
-            ("rno-", RNO_LAYOUT, "2026.11.25.3"),
-        )
-        for stage, updates, seed, suffix in (("smoke", 4, 17, ""), ("pilot", 32, 17, ""), ("pilot", 32, 29, "-seed29"))
-        for arm, kind, epsilon in (
-            ("fixed", "adaptive-source", 1.0),
-            ("thompson", "adaptive-source-thompson", 0.05),
-            ("source-only", "prompt-thompson-source", PROMPT_EXPLORATION),
-            ("contextual", "prompt-thompson-contextual", PROMPT_EXPLORATION),
-            ("cost-aware", "prompt-thompson-cost-aware", PROMPT_EXPLORATION),
-        )
+    presets=(
+        *layout_presets("", LAYOUT, smoke_revision="2026.11.25.4", pilot_revision="2026.11.25.4"),
+        *layout_presets(
+            "rno-pair-",
+            RNO_PAIR_LAYOUT,
+            smoke_revision="2026.11.25.4",
+            pilot_revision="2026.11.25.5",
+            pilot_arms=RNO_PAIR_PILOT_ARMS,
+            confirmation=(FULL_VALIDATION,),
+        ),
+        *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
     ),
     control_pins={},
 )
+
 
 if __name__ == "__main__":
     raise SystemExit(rl.main(QWEN_SAMPLER))
