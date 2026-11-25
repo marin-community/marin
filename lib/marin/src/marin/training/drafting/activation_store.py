@@ -31,7 +31,7 @@ def activation_path(root: StoragePath, row_index: int) -> StoragePath:
 def get_or_build_activation_cache(
     root: StoragePath, *, reusable_for: Duration, populate: Callable[[StoragePath], None]
 ) -> StoragePath:
-    """Return a completed generation, building it under a shared lease on a miss."""
+    """Reuse a complete generation for `reusable_for` from the start of its build."""
     marker = conditional_object(str(root / "complete.json"))
 
     def reusable_generation(entry: VersionedBytes | None) -> StoragePath | None:
@@ -58,8 +58,7 @@ def get_or_build_activation_cache(
             previous = marker.read()
             if path := reusable_generation(previous):
                 return path
-            # The oldest file determines the usable window. A new generation
-            # lets retries finish without extending the lifetime of old rows.
+            # Start the reuse window before any row can age in object storage.
             record = _ActivationGeneration(uuid4().hex, time())
             path = root / record.generation
             path.mkdirs()

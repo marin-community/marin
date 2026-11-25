@@ -37,7 +37,7 @@ _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
 
 class _GangState(StrEnum):
     WAITING = "waiting"
-    STARTED = "started"
+    START_REQUESTED = "start_requested"
     STOPPING = "stopping"
 
 
@@ -53,14 +53,10 @@ class VllmCoordinatorActor:
     def vllm_primary_address(self) -> str:
         return self._vllm_primary_address
 
-    def shutdown_requested(self) -> bool:
-        with self._lock:
-            return self._state is _GangState.STOPPING
-
     def request_start(self) -> None:
         with self._lock:
             if self._state is _GangState.WAITING:
-                self._state = _GangState.STARTED
+                self._state = _GangState.START_REQUESTED
 
     def state(self) -> _GangState:
         with self._lock:
@@ -185,20 +181,33 @@ def wait_for_iris_vllm_start(launch: IrisGangIdentity) -> bool:
     """Return whether to launch vLLM once the leader starts or skips the server."""
     if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not wait for follower startup")
+    state = _wait_for_coordinator_state(launch, (_GangState.START_REQUESTED, _GangState.STOPPING))
+    return state is _GangState.START_REQUESTED
+
+
+def _wait_for_coordinator_state(
+    launch: IrisGangIdentity,
+    states: tuple[_GangState, ...],
+    *,
+    check_alive: Callable[[], None] | None = None,
+    maximum_poll_seconds: float = _MAX_POLL_SECONDS,
+) -> _GangState:
     client = _coordinator_client(launch.coordinator_name)
     state = _GangState.WAITING
 
     def refresh_state() -> bool:
         nonlocal state
+        if check_alive is not None:
+            check_alive()
         state = client.state()
         return True
 
-    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=_MAX_POLL_SECONDS)
-    while state is _GangState.WAITING:
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=maximum_poll_seconds)
+    while True:
         _wait_until(refresh_state, error_message="Timed out contacting the vLLM leader")
-        if state is _GangState.WAITING:
-            time.sleep(polling.next_interval())
-    return state is _GangState.STARTED
+        if state in states:
+            return state
+        time.sleep(polling.next_interval())
 
 
 def wait_for_iris_vllm_shutdown(
@@ -210,21 +219,9 @@ def wait_for_iris_vllm_shutdown(
     """Keep a follower alive until the leader requests final shutdown."""
     if launch.task_index == 0:
         raise RuntimeError("The vLLM leader does not wait for follower shutdown")
-    client = _coordinator_client(launch.coordinator_name)
-
-    stopped = False
-
-    def coordinator_available() -> bool:
-        nonlocal stopped
-        check_alive()
-        stopped = client.shutdown_requested()
-        return True
-
-    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=maximum_poll_seconds)
-    while not stopped:
-        _wait_until(coordinator_available, error_message="Timed out contacting the vLLM leader")
-        if not stopped:
-            time.sleep(polling.next_interval())
+    _wait_for_coordinator_state(
+        launch, (_GangState.STOPPING,), check_alive=check_alive, maximum_poll_seconds=maximum_poll_seconds
+    )
     logger.info("vLLM follower %d received shutdown", launch.task_index)
 
 

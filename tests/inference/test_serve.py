@@ -841,7 +841,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
 
     rpc = SimpleNamespace(
         vllm_primary_address=coordinator.vllm_primary_address,
-        shutdown_requested=coordinator.shutdown_requested,
+        state=coordinator.state,
         request_shutdown=coordinator.request_shutdown,
         followers_stopped=coordinator.followers_stopped,
         follower_stopped=acknowledge,
@@ -933,14 +933,14 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     assert options.headless == (task_index == 1)
     if fail:
         assert events == ["started", "stopped"]
-        assert not coordinator.shutdown_requested()
+        assert coordinator.state() is iris_vllm._GangState.WAITING
         assert endpoints == []
     elif task_index == 0:
         assert events == ["started", "ready", "registered", "stopped"]
         assert len(endpoints) == 1
         assert endpoints[0]["pipeline_parallel_size"] == "2"
         assert endpoints[0]["tensor_parallel_size"] == str(tensor_parallel_size)
-        assert coordinator.shutdown_requested()
+        assert coordinator.state() is iris_vllm._GangState.STOPPING
     else:
         assert events == ["started", "stopped", "acknowledged"]
         assert endpoints == []

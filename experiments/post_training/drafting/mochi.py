@@ -22,6 +22,7 @@ from datasets import Dataset, load_from_disk
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, lower
 from marin.execution.step_runner import StepRunner, step_is_built
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig, ServingGeometry
 from marin.inference.iris_vllm import (
     IrisVllmLaunch,
@@ -44,7 +45,6 @@ from marin.training.drafting.dspark_data import (
 )
 from marin.training.drafting.dspark_distillation import (
     HIDDEN_STATES_DIR,
-    VLLM_SOURCE_COMMIT,
     DraftRecipe,
     DSparkExport,
     extraction_config,
@@ -126,7 +126,7 @@ class MochiPrefillInputs:
     sequence_length: int
     extraction_taps: tuple[int, ...]
     teacher_replicas: int
-    vllm_source: str = VLLM_SOURCE_COMMIT
+    vllm_source: str = VLLM_GPU_RELEASE.source_commit
     format_version: int = _ACTIVATION_FORMAT_VERSION
 
 
@@ -286,11 +286,13 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
                 )
 
 
-def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, hidden: Path) -> VllmEnvironment:
+def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, scratch: Path) -> VllmEnvironment:
+    hidden = scratch / HIDDEN_STATES_DIR
+    hidden.mkdir()
     speculative, transfer = extraction_config(recipe, hidden)
     length = recipe.data.max_sequence_length + 1
     launcher = VllmLauncherWithEnvironment(
-        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=VLLM_GPU_RELEASE),
         {**launch.subprocess_env, "MAX_JOBS": "2", "PYTHONPATH": ""},
     )
     return VllmEnvironment(
@@ -333,10 +335,8 @@ def _cache_activations(
 
         def populate(cache: StoragePath) -> None:
             logger.info("Caching Mochi teacher activations in %s", cache)
-            hidden = scratch / HIDDEN_STATES_DIR
-            hidden.mkdir()
             start_iris_vllm_followers(launch)
-            server = teacher_runtime.enter_context(_teacher_environment(teacher, recipe, launch, hidden))
+            server = teacher_runtime.enter_context(_teacher_environment(teacher, recipe, launch, scratch))
             _cache_rows(server.server_url, dataset, cache, recipe)
 
         return get_or_build_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW, populate=populate)
@@ -366,9 +366,7 @@ def train_mochi(
         scratch = Path(directory)
         if not launch.is_leader:
             if wait_for_iris_vllm_start(launch):
-                hidden = scratch / HIDDEN_STATES_DIR
-                hidden.mkdir()
-                with _teacher_environment(teacher, recipe, launch, hidden) as server:
+                with _teacher_environment(teacher, recipe, launch, scratch) as server:
                     wait_for_iris_vllm_shutdown(launch, server.check_alive)
             notify_iris_vllm_stopped(launch)
             return False

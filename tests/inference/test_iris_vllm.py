@@ -47,19 +47,19 @@ def test_healthy_follower_outlives_rendezvous_deadline(monkeypatch):
 
     with iris_vllm.iris_vllm_followers(replace(launch, task_index=0)):
         coordinator.follower_stopped(1)
-    assert coordinator.shutdown_requested()
+    assert coordinator.state() is iris_vllm._GangState.STOPPING
 
 
 def test_coordinator_latches_shutdown_and_tracks_stopped_followers():
     coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
 
     assert coordinator.vllm_primary_address() == "10.0.0.1"
-    assert not coordinator.shutdown_requested()
+    assert coordinator.state() is iris_vllm._GangState.WAITING
     assert not coordinator.followers_stopped((1, 2))
 
     coordinator.request_shutdown()
     coordinator.request_shutdown()
-    assert coordinator.shutdown_requested()
+    assert coordinator.state() is iris_vllm._GangState.STOPPING
 
     coordinator.follower_stopped(1)
     assert not coordinator.followers_stopped((1, 2))
@@ -103,7 +103,7 @@ def test_leader_failure_leaves_follower_running_for_iris_retry(monkeypatch):
         with iris_vllm.iris_vllm_followers(launch):
             raise RuntimeError("leader failed")
 
-    assert not coordinator.shutdown_requested()
+    assert coordinator.state() is iris_vllm._GangState.WAITING
 
 
 @pytest.mark.parametrize(
