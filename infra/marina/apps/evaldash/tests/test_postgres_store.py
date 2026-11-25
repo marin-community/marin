@@ -436,13 +436,56 @@ def test_stale_failure_cannot_overwrite_a_later_success():
     prefix = "file:///records"
     results_db.configure_prefixes(engine, (prefix,))
     probe_at = datetime(2026, 8, 16, tzinfo=UTC)
-    results_db.reconcile_prefix(engine, prefix, [], [], probe_at + timedelta(seconds=1), 600)
+    results_db.finish_prefix_listing(engine, prefix, [], set(), probe_at + timedelta(seconds=1), 600)
 
     results_db.mark_prefix_failed(engine, prefix, probe_at, "stale failure")
 
     status = results_db.prefix_statuses(engine)[0]
     assert status.last_probe_at.replace(tzinfo=UTC) == probe_at + timedelta(seconds=1)
     assert status.error is None
+
+
+def test_a_pass_that_stops_early_keeps_its_finished_batches(tmp_path, monkeypatch):
+    engine = _engine()
+    migrate_schema(engine)
+    prefix = tmp_path / "records"
+    record = _record(tmp_path)
+    write_record(record, str(prefix))
+    store = _store(engine)
+    clock = Clock()
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
+    assert asyncio.run(ingestor.run_once()) == ()
+    added = {f"{record.run_id}-{index}" for index in range(2)}
+    for run_id in added:
+        write_record(record.model_copy(update={"run_id": run_id}), str(prefix))
+    monkeypatch.setattr(evaldash_app, "OBSERVATION_BATCH_SIZE", 1)
+    real_inspect = evaldash_app.inspect_record_paths
+    inspected: list[str] = []
+
+    def inspect_until_killed(paths, states, schedule):
+        inspected.extend(paths)
+        if len(inspected) > 1:
+            raise MemoryError("ingest killed")
+        return real_inspect(paths, states, schedule)
+
+    monkeypatch.setattr(evaldash_app, "inspect_record_paths", inspect_until_killed)
+    clock.now += timedelta(seconds=1)
+    assert asyncio.run(ingestor.run_once()) == (str(prefix),)
+
+    finished, stopped = inspected
+    finished_run = next(run_id for run_id in added if f"/{run_id}/" in finished)
+    assert _stored(store, finished_run)
+    assert store.get_record(next(iter(added - {finished_run}))) is None
+
+    inspected.clear()
+    monkeypatch.setattr(
+        evaldash_app, "inspect_record_paths", lambda *args: inspected.extend(args[0]) or real_inspect(*args)
+    )
+    clock.now += timedelta(seconds=1)
+    assert asyncio.run(ingestor.run_once()) == ()
+    assert inspected == [stopped]
+    for run_id in added:
+        assert _stored(store, run_id)
 
 
 def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails(tmp_path, monkeypatch):

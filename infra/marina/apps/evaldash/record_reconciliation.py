@@ -188,20 +188,22 @@ def _inspect_record(
     return _read_changed_record(path, schedule, initial=False)
 
 
+def due_record_paths(paths: list[str], states: dict[str, SourceState], checked_at: datetime) -> list[str]:
+    """Listed paths whose check is due, version checks of known records before records that need a full read."""
+    due = [path for path in paths if (state := states.get(path)) is None or _utc(state.next_verify_at) <= checked_at]
+    # New and errored records are read and scored in full, the expensive part of a pass.
+    return sorted(due, key=lambda path: (state := states.get(path)) is None or state.error is not None)
+
+
 def inspect_record_paths(
     paths: list[str],
     states: dict[str, SourceState],
     schedule: VerificationSchedule,
 ) -> list[RecordObservation]:
-    """Read new objects and version-check catalog entries whose persisted deadline is due."""
-    due = [
-        path
-        for path in paths
-        if (state := states.get(path)) is None or _utc(state.next_verify_at) <= schedule.checked_at
-    ]
+    """Read new objects and version-check catalog entries."""
 
     def inspect(path: str) -> RecordObservation:
         return _inspect_record(path, states.get(path), schedule)
 
-    with ThreadPoolExecutor(max_workers=min(_MAX_RECORD_READERS, max(1, len(due)))) as executor:
-        return list(executor.map(inspect, due))
+    with ThreadPoolExecutor(max_workers=min(_MAX_RECORD_READERS, max(1, len(paths)))) as executor:
+        return list(executor.map(inspect, paths))

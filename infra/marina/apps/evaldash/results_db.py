@@ -612,56 +612,30 @@ def _materialize_run_batch(conn: Connection, run_ids: set[str]) -> bool:
     return True
 
 
-def reconcile_prefix(
+def record_observations(
     engine: Engine,
     prefix: str,
-    paths: list[str],
     observations: list[RecordObservation],
     probe_at: datetime,
-    confirm_missing_after: float,
 ) -> None:
-    """Atomically apply one complete successful prefix listing to source and serving state."""
-    missing_observations = {
-        observation.path for observation in observations if observation.kind is ObservationKind.MISSING
-    }
-    path_set = set(paths) - set(missing_observations)
+    """Commit one batch of a pass's object checks, so a pass that stops early keeps the batches it finished."""
+    if not observations:
+        return
     with engine.begin() as conn:
         _lock_catalog(conn)
-        inventory_was_complete = _inventory_complete(conn)
         previous_success = conn.execute(
             sqlalchemy.select(record_prefixes.c.last_success_at).where(record_prefixes.c.prefix == prefix)
         ).scalar_one_or_none()
         if previous_success is not None and _utc(previous_success) >= probe_at:
             return
         existing = {
-            row.path: _CatalogSource(
-                run_id=row.run_id,
-                missing_since=row.missing_since,
-            )
+            row.path: row.run_id
             for row in conn.execute(
-                sqlalchemy.select(
-                    record_sources.c.path,
-                    record_sources.c.run_id,
-                    record_sources.c.missing_since,
-                ).where(record_sources.c.prefix == prefix)
+                sqlalchemy.select(record_sources.c.path, record_sources.c.run_id).where(
+                    record_sources.c.path.in_([observation.path for observation in observations])
+                )
             )
         }
-        absent = set(existing) - path_set
-        deleted = {
-            path
-            for path in absent
-            if existing[path].missing_since is not None
-            and probe_at >= _utc(existing[path].missing_since) + timedelta(seconds=confirm_missing_after)
-        }
-        first_missing = absent - deleted
-        affected = {run_id for path in deleted if (run_id := existing[path].run_id) is not None}
-        if deleted:
-            conn.execute(record_sources.delete().where(record_sources.c.path.in_(deleted)))
-        newly_missing = {path for path in first_missing if existing[path].missing_since is None}
-        if newly_missing:
-            conn.execute(
-                record_sources.update().where(record_sources.c.path.in_(newly_missing)).values(missing_since=probe_at)
-            )
         _update_sources(
             conn,
             [
@@ -672,37 +646,33 @@ def reconcile_prefix(
                     "error": observation.error,
                 }
                 for observation in observations
-                if observation.kind is ObservationKind.MISSING
-                and observation.path in existing
-                and observation.path not in deleted
+                if observation.kind is ObservationKind.MISSING and observation.path in existing
             ],
         )
-        unchanged = [observation for observation in observations if observation.kind is ObservationKind.UNCHANGED]
-        if unchanged:
-            _update_sources(
-                conn,
-                [
-                    {
-                        "path": observation.path,
-                        "object_version": observation.object_version,
-                        "last_verified_at": observation.verified_at,
-                        "next_verify_at": observation.next_verify_at,
-                        "missing_since": None,
-                        "error": observation.error,
-                    }
-                    for observation in unchanged
-                ],
-            )
+        _update_sources(
+            conn,
+            [
+                {
+                    "path": observation.path,
+                    "object_version": observation.object_version,
+                    "last_verified_at": observation.verified_at,
+                    "next_verify_at": observation.next_verify_at,
+                    "missing_since": None,
+                    "error": observation.error,
+                }
+                for observation in observations
+                if observation.kind is ObservationKind.UNCHANGED
+            ],
+        )
 
+        affected: set[str] = set()
         valid = [
             observation
             for observation in observations
             if observation.kind is ObservationKind.CHANGED and observation.record is not None
         ]
         for observation in valid:
-            old = existing.get(observation.path)
-            old_run_id = old.run_id if old is not None else None
-            if old_run_id is not None:
+            if (old_run_id := existing.get(observation.path)) is not None:
                 affected.add(old_run_id)
             affected.add(observation.record.run_id)
         _upsert(
@@ -757,6 +727,61 @@ def reconcile_prefix(
         for batch in batched(invalid_inserts, _CATALOG_BATCH_SIZE):
             conn.execute(record_sources.insert().values(list(batch)))
 
+        # Until every prefix has listed once, finish_prefix_listing publishes runs instead.
+        if _inventory_complete(conn):
+            _materialize_runs(conn, affected)
+
+
+def finish_prefix_listing(
+    engine: Engine,
+    prefix: str,
+    paths: list[str],
+    missing_paths: set[str],
+    probe_at: datetime,
+    confirm_missing_after: float,
+) -> None:
+    """Apply one complete listing after its checks are committed: age out absent records and mark the prefix listed.
+
+    ``missing_paths`` are listed paths whose record object was gone when checked; they count as absent.
+    """
+    path_set = set(paths) - missing_paths
+    with engine.begin() as conn:
+        _lock_catalog(conn)
+        inventory_was_complete = _inventory_complete(conn)
+        previous_success = conn.execute(
+            sqlalchemy.select(record_prefixes.c.last_success_at).where(record_prefixes.c.prefix == prefix)
+        ).scalar_one_or_none()
+        if previous_success is not None and _utc(previous_success) >= probe_at:
+            return
+        existing = {
+            row.path: _CatalogSource(
+                run_id=row.run_id,
+                missing_since=row.missing_since,
+            )
+            for row in conn.execute(
+                sqlalchemy.select(
+                    record_sources.c.path,
+                    record_sources.c.run_id,
+                    record_sources.c.missing_since,
+                ).where(record_sources.c.prefix == prefix)
+            )
+        }
+        absent = set(existing) - path_set
+        deleted = {
+            path
+            for path in absent
+            if existing[path].missing_since is not None
+            and probe_at >= _utc(existing[path].missing_since) + timedelta(seconds=confirm_missing_after)
+        }
+        affected = {run_id for path in deleted if (run_id := existing[path].run_id) is not None}
+        if deleted:
+            conn.execute(record_sources.delete().where(record_sources.c.path.in_(deleted)))
+        newly_missing = {path for path in absent - deleted if existing[path].missing_since is None}
+        if newly_missing:
+            conn.execute(
+                record_sources.update().where(record_sources.c.path.in_(newly_missing)).values(missing_since=probe_at)
+            )
+
         conn.execute(
             record_prefixes.update()
             .where(record_prefixes.c.prefix == prefix)
@@ -770,6 +795,13 @@ def reconcile_prefix(
                 ).scalars()
             )
         elif not inventory_is_complete:
+            affected.update(
+                conn.execute(
+                    sqlalchemy.select(record_sources.c.run_id).where(
+                        record_sources.c.prefix == prefix, record_sources.c.run_id.is_not(None)
+                    )
+                ).scalars()
+            )
             affected -= _catalog_run_ids(conn, affected)
         _materialize_runs(conn, affected)
 
