@@ -12,7 +12,7 @@ import httpx
 import pyarrow as pa
 import pytest
 import server
-from config import CLUSTERS, ClusterTarget
+from config import CLUSTERS, LOCAL_FINELOG_MAX_QUERIES_ENV, LOCAL_FINELOG_URL_ENV, ClusterTarget
 from conftest import bridge_config
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -118,17 +118,18 @@ class _GatedLogClient:
 
     def __init__(self) -> None:
         self.release = threading.Event()
-        self._lock = threading.Lock()
-        self._in_flight = 0
+        self.changed = threading.Condition()
+        self.in_flight = 0
         self.max_in_flight = 0
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        with self._lock:
-            self._in_flight += 1
-            self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        with self.changed:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            self.changed.notify_all()
         self.release.wait(timeout=5)
-        with self._lock:
-            self._in_flight -= 1
+        with self.changed:
+            self.in_flight -= 1
         return pa.table({"1": [1]})
 
 
@@ -152,7 +153,8 @@ def test_a_local_source_holds_at_most_its_bound_of_queries_in_flight(monkeypatch
     threads = [threading.Thread(target=source.query, args=(HEALTH_QUERY,), kwargs={"max_rows": 1}) for _ in range(5)]
     for thread in threads:
         thread.start()
-    threading.Event().wait(0.2)  # let every thread reach the source
+    with client.changed:
+        assert client.changed.wait_for(lambda: client.in_flight == bound, timeout=5)
     client.release.set()
     for thread in threads:
         thread.join(timeout=5)
@@ -926,8 +928,8 @@ def _served_finelog_sources(monkeypatch) -> dict:
 
 
 def test_the_deployed_bridge_serves_every_cluster_over_vpc(monkeypatch):
-    monkeypatch.delenv("GRAFANA_BRIDGE_LOCAL_FINELOG_URL", raising=False)
-    monkeypatch.delenv("GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES", raising=False)
+    monkeypatch.delenv(LOCAL_FINELOG_URL_ENV, raising=False)
+    monkeypatch.delenv(LOCAL_FINELOG_MAX_QUERIES_ENV, raising=False)
 
     served = _served_finelog_sources(monkeypatch)
 
@@ -936,8 +938,8 @@ def test_the_deployed_bridge_serves_every_cluster_over_vpc(monkeypatch):
 
 
 def test_a_local_bridge_serves_only_the_hub_through_iap(monkeypatch):
-    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_URL", "iap+https://iris.example.com/proxy/system.log-server")
-    monkeypatch.setenv("GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES", "1")
+    monkeypatch.setenv(LOCAL_FINELOG_URL_ENV, "iap+https://iris.example.com/proxy/system.log-server")
+    monkeypatch.setenv(LOCAL_FINELOG_MAX_QUERIES_ENV, "1")
     monkeypatch.setattr(finelog_source, "iap_provider_for", lambda name: object())
     monkeypatch.setattr(finelog_source, "connect", lambda url, factory, auth: _FakeLogClient())
 

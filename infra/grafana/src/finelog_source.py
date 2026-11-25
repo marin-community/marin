@@ -49,6 +49,19 @@ class MetricSource(Protocol):
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
 
 
+def _classified_query(client: LogClient, sql: str, max_rows: int) -> pa.Table:
+    """Run SQL on ``client``, raising transport and retryable RPC failures as FinelogUnavailableError."""
+    try:
+        return client.query(sql, max_rows=max_rows)
+    except StatsError as err:
+        cause = err.__cause__
+        if isinstance(cause, Exception) and is_retryable_error(cause):
+            raise FinelogUnavailableError(str(err)) from err
+        raise
+    except OSError as err:
+        raise FinelogUnavailableError(str(err)) from err
+
+
 def probe_health(source: MetricSource) -> FinelogHealth:
     """Run a one-row query on ``source`` and return a dashboard-safe health row."""
     name = source.target.name
@@ -114,17 +127,12 @@ class FinelogSource:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run SQL, classifying discovery and transport failures as retryable."""
         try:
-            return self._client.query(sql, max_rows=max_rows)
-        except StatsError as err:
-            cause = err.__cause__
-            if isinstance(cause, Exception) and is_retryable_error(cause):
-                raise FinelogUnavailableError(str(err)) from err
-            raise
+            return _classified_query(self._client, sql, max_rows)
         except GoogleAPIError as err:
             if if_transient_error(err):
                 raise FinelogUnavailableError(str(err)) from err
             raise
-        except (InstanceResolutionError, OSError) as err:
+        except InstanceResolutionError as err:
             raise FinelogUnavailableError(str(err)) from err
 
     def namespaces(self) -> frozenset[str]:
@@ -156,14 +164,11 @@ class FinelogSource:
 
 
 class IapFinelogSource:
-    """A query handle for a finelog reached through the Iris IAP proxy, for a local bridge.
+    """A query handle for one finelog reached at an ``iap+https://`` URL, for a workstation bridge.
 
-    The deployed bridge reaches finelog by internal IP over Direct VPC egress, which a
-    workstation cannot. This source takes the route ``uv run finelog query`` uses: an
-    ``iap+https://`` URL, with the IAP token minted per request from the login that
-    ``iris --cluster <name> login`` cached. The provider reads that login and never
-    writes it. ``max_concurrent_queries`` bounds the queries in flight to finelog, since
-    a dashboard load fires every panel at once.
+    Each request carries an IAP token for ``target``'s cluster login, which is read
+    and never written. At most ``max_concurrent_queries`` queries are in flight at
+    once; further callers wait for a slot.
     """
 
     def __init__(self, target: ClusterTarget, url: str, *, timeout_ms: int, max_concurrent_queries: int) -> None:
@@ -184,15 +189,7 @@ class IapFinelogSource:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run SQL once a slot is free, classifying transport failures as retryable."""
         with self._slots:
-            try:
-                return self._client.query(sql, max_rows=max_rows)
-            except StatsError as err:
-                cause = err.__cause__
-                if isinstance(cause, Exception) and is_retryable_error(cause):
-                    raise FinelogUnavailableError(str(err)) from err
-                raise
-            except OSError as err:
-                raise FinelogUnavailableError(str(err)) from err
+            return _classified_query(self._client, sql, max_rows)
 
     def namespaces(self) -> frozenset[str]:
         """Return the namespaces this deployment holds."""
