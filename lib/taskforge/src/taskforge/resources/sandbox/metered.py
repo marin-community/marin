@@ -6,7 +6,7 @@
 ``MeteredFactory`` wraps a ``MachineFactory`` and records a ``MachineStarted`` for every ``create``, so the
 author's, adversaries', solvers', graders' and verifiers' machines are all counted at one point. It returns the
 wrapped factory's machine unchanged, because callers check machine types such as ``IrisMachine``. A machine's
-lifetime and measured CPU and memory come from Iris, joined on ``MachineStarted.machine``.
+lifetime and measured CPU and memory come from Iris, joined on ``MachineStarted.job``.
 """
 
 import inspect
@@ -37,7 +37,7 @@ class MachineStarted(Event[None]):
     """One sandbox ``create``, successful or not.
 
     Attributes:
-        machine: The Iris job id of the sandbox; empty for a backend without jobs, such as ShellSim.
+        job: The Iris job id of the sandbox; empty for a backend without jobs, such as ShellSim.
         backend: The factory's backend.
         image: The registry or Docker image reference, or empty for another machine source.
         cpus, memory_mb: The machine limits requested; ``None`` leaves them to the factory.
@@ -45,7 +45,7 @@ class MachineStarted(Event[None]):
         error: Why ``create`` failed, or ``None`` when the machine started.
     """
 
-    machine: str
+    job: str
     backend: str
     image: str
     cpus: int | None
@@ -96,9 +96,9 @@ class MeteredFactory(MachineFactory):
         await self.meter.record(self._event(spec, job, started, None))
         return machine
 
-    def _event(self, spec: MachineSpec, machine: str, started: float, error: str | None) -> MachineStarted:
+    def _event(self, spec: MachineSpec, job: str, started: float, error: str | None) -> MachineStarted:
         return MachineStarted(
-            machine,
+            job,
             self.backend.value,
             image_reference(spec),
             spec.cpus,

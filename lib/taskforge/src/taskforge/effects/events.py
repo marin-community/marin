@@ -21,6 +21,7 @@ from taskforge.model.content_hash import (
 )
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
+from taskforge.policy import Setting
 
 
 class ReplayPolicy(StrEnum):
@@ -127,11 +128,11 @@ class WorkpieceStarted(Event[None]):
         arm: The experiment arm.
         settings: The policy's settings, after overlays; prompts are left out.
         prompts_digest: The sha256 of the policy's prompt templates.
-        job: The Iris task running the driver, or empty outside Iris.
+        task: The Iris task running the driver, or empty outside Iris.
     """
 
     input: str
     arm: str
-    settings: Mapping[str, bool | int | float | str | tuple[str, ...]]
+    settings: Mapping[str, Setting]
     prompts_digest: str
-    job: str
+    task: str

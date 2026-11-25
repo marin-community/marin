@@ -43,7 +43,7 @@ async def test_started_machine_is_returned_unchanged_and_recorded_with_its_reque
     assert await MeteredFactory(ScriptedFactory(None), meter).create(SPEC) is MACHINE
     (event,) = events
     assert isinstance(event, MachineStarted)
-    assert (event.machine, event.backend, event.image) == ("", "gvisor", "docker.io/library/python:3.12")
+    assert (event.job, event.backend, event.image) == ("", "gvisor", "docker.io/library/python:3.12")
     assert (event.cpus, event.memory_mb, event.error) == (1, 8192, None)
 
 
