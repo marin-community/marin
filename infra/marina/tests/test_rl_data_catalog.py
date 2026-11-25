@@ -589,6 +589,39 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
         assert client.get("/backends").json()["generated_at"] == second.generated_at
 
 
+def test_load_serves_catalog_grading_evidence_over_a_stale_survey_copy(catalog_database, catalog_query, tmp_path):
+    """A survey row carries the grading evidence measured at survey time; the load serves the catalog's.
+
+    Regression: R40's carried backend survey held pre-re-measure grading evidence for
+    31 sources and the load refused instead of serving the current declaration's.
+    """
+    evidence = GradingEnvironmentEvidence(
+        assessed_tasks=3,
+        required_counts={"shared": 3},
+        declared_counts={"shared": 3},
+        status_counts={"matched": 3},
+        reason_counts={"submitted answer": 3},
+        evidence_url="s3://fixture/grading/current.json",
+    )
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", grading_environment=evidence)
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    stale = evidence.model_copy(update={"evidence_url": "s3://fixture/grading/at-survey.json"})
+    survey = survey.model_copy(
+        update={
+            "sources": [
+                row.model_copy(update={"grading_environment": stale.model_dump(mode="json")}) for row in survey.sources
+            ]
+        }
+    )
+    result = load_surveyed_catalog(catalog, catalog_query, survey, catalog_identity_map(catalog))
+    assert result["grading_evidence_rebound"] == [row.source_id for row in survey.sources]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["backend_capabilities"]["grading_environment"] == evidence.model_dump(mode="json")
+
+
 def test_grading_census_survives_catalog_loader_and_backend_projection(catalog_database, catalog_query, tmp_path):
     evidence = GradingEnvironmentEvidence(
         assessed_tasks=3,

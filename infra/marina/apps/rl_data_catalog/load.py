@@ -644,11 +644,18 @@ def load_catalog(
         require_typed_status_fields(downgraded_declaration)
         sources[index] = source.model_copy(update={"declaration": downgraded_declaration})
         source_declarations[source.id] = downgraded_declaration
+    # The survey row's grading evidence is a copy of the declaration's taken at survey
+    # time; it is metadata that no fit verdict reads. The catalog declaration is
+    # current, so the load serves its evidence and records every row it rebound.
+    grading_evidence_rebound = []
+    rebound_sources = []
     for source in backend_map.sources:
         evidence = source_declarations[source.source_id].grading_environment
         expected = evidence.model_dump(mode="json") if evidence is not None else None
         if source.grading_environment != expected:
-            raise ValueError(f"Backend map grading evidence differs from the catalog: {source.source_id}")
+            grading_evidence_rebound.append(source.source_id)
+        rebound_sources.append(source.model_copy(update={"grading_environment": expected}))
+    backend_map = backend_map.model_copy(update={"sources": rebound_sources})
     groups = {member.source_id: group.model_dump(mode="json") for group in identities.groups for member in group.members}
     metadata: dict[str, list[dict[str, Any]]] = {
         "sources": [
@@ -828,6 +835,7 @@ def load_catalog(
         "snapshot_id": snapshot.snapshot_id,
         "counts": counts,
         "full_reviews": full_counts,
+        "grading_evidence_rebound": sorted(grading_evidence_rebound),
         **packet_sizes,
         "sql_requests": requests,
         "seconds": time.monotonic() - started,
