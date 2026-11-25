@@ -16,6 +16,7 @@ from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 from skyrl_train.io import io
@@ -39,6 +40,7 @@ from skyrl_train.utils.trainer_utils import (
     calculate_per_dataset_metrics,
     dump_per_dataset_eval_results,
     evaluation_response_metrics,
+    sanitize_data_source,
 )
 from skyrl_train.trajectory_runners.trajectory_processing import validate_trajectory_batch
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
@@ -253,6 +255,16 @@ def _calculate_eval_metrics(
     )
     if loop_config is not None:
         metrics.update(ftpo_evaluation_metrics(batch, loop_config))
+        source_indices: dict[str | None, list[int]] = defaultdict(list)
+        for index, source in enumerate(data_sources):
+            source_indices[source].append(index)
+        for source, indices in source_indices.items():
+            subset = filter_trajectory_batch(batch, indices, row_ownership=RowOwnership.BORROWED)
+            prefix = f"eval/{sanitize_data_source(source or 'unknown')}/"
+            metrics.update({
+                prefix + key.removeprefix("eval/all/"): value
+                for key, value in ftpo_evaluation_metrics(subset, loop_config).items()
+            })
     return metrics
 
 

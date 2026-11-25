@@ -5,6 +5,7 @@ import pytest
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.config.reward_shaping import LoopCreditConfig
 from skyrl_train.ftpo import ftpo_evaluation_metrics
+from skyrl_train.evaluate import _calculate_eval_metrics
 from vendor.skyrl.scripts.loop_audit import audit_candidate, audit_cohort, audit_domain, prompt_hash
 
 
@@ -101,3 +102,20 @@ def test_native_pilot_ranks_fewer_loops_above_correctness_and_counts_errors():
         "verification_results": [correct] * 4,
     }, detector)
     assert fewer_loops["eval/all/ftpo_selection_score"] > more_correct["eval/all/ftpo_selection_score"]
+
+
+def test_native_pilot_separates_math_learning_signal_from_other_sources():
+    correct = VerificationResult.verified(1.0, passed=True)
+    wrong = VerificationResult.verified(0.0, passed=False)
+    metrics = _calculate_eval_metrics({
+        "response_ids": [[7] * 8, list(range(10)), [], [9] * 8],
+        "rewards": [1.0, 0.0, 1.0, 1.0],
+        "verification_results": [correct, wrong, correct, correct],
+        "server_errors": [None, None, None, {"error": "timeout"}],
+    }, ["a", "b", "c", "d"], ["math/source", "other", "math/source", "other"], 1,
+        LoopCreditConfig(max_period_tokens=2048, tail_tokens=16384, minimum_occurrences=8))
+    assert metrics["eval/math_source/loop_upper_bound"] == 2
+    assert metrics["eval/other/loop_upper_bound"] == 1
+    assert metrics["eval/math_source/fail_closed_pass_rate"] == 0.5
+    assert metrics["eval/other/fail_closed_pass_rate"] == 0
+    assert metrics["eval/all/loop_upper_bound"] == 3

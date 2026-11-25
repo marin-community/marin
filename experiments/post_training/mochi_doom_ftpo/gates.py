@@ -9,6 +9,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+NON_TARGET_LOOP_ALLOWANCE = 3
+MINIMUM_PASS_LOSS_ALLOWANCE = 3
+DOMAIN_PASS_LOSS_PERCENT = 5
+PANEL_PASS_LOSS_PERCENT = 2
+FINAL_REPEAT_LOOP_MARGIN = 2
+
 
 def campaign_result(manifest: dict[str, Any], baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     """Require every measured domain and the pooled 32K panel to meet the design."""
@@ -29,8 +35,8 @@ def campaign_result(manifest: dict[str, Any], baseline: dict[str, Any], candidat
         if before["N"] != after["N"]:
             raise ValueError(f"Candidate cohort size differs for {name}")
         target = baseline["target_status"][name] == "target"
-        loop_max = before["confirmed"] // 2 if target else before["confirmed"] + 3
-        passes_min = before["passes"] - max(3, before["N"] // 20)
+        loop_max = before["confirmed"] // 2 if target else before["confirmed"] + NON_TARGET_LOOP_ALLOWANCE
+        passes_min = before["passes"] - max(MINIMUM_PASS_LOSS_ALLOWANCE, before["N"] * DOMAIN_PASS_LOSS_PERCENT // 100)
         domains[name] = {
             "N": before["N"],
             "target": target,
@@ -47,7 +53,7 @@ def campaign_result(manifest: dict[str, Any], baseline: dict[str, Any], candidat
     panel_n = sum(row["N"] for row in panel.values())
     panel_before = sum(row["baseline_passes"] for row in panel.values())
     panel_after = sum(row["candidate_passes"] for row in panel.values())
-    panel_min = panel_before - panel_n // 50
+    panel_min = panel_before - panel_n * PANEL_PASS_LOSS_PERCENT // 100
     return {
         "domains": domains,
         "panel": {
@@ -60,7 +66,9 @@ def campaign_result(manifest: dict[str, Any], baseline: dict[str, Any], candidat
         "meets_success": (
             all(row["loops_ok"] and row["correctness_ok"] for row in domains.values()) and panel_after >= panel_min
         ),
-        "repeat_final_greedy": any(abs(row["candidate_UB"] - row["loop_max"]) <= 2 for row in domains.values()),
+        "repeat_final_greedy": any(
+            abs(row["candidate_UB"] - row["loop_max"]) <= FINAL_REPEAT_LOOP_MARGIN for row in domains.values()
+        ),
     }
 
 
