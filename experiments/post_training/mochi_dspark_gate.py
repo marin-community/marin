@@ -55,7 +55,9 @@ def checked_json(uri: str, sha256: str) -> dict:
     return json.loads(payload)
 
 
-def engine_config(spec: dict, draft: Path | None, *, prefix_caching: bool) -> VllmEngineConfig:
+def engine_config(
+    spec: dict, draft: Path | None, *, prefix_caching: bool, flash_attn_version: int | None
+) -> VllmEngineConfig:
     arguments = (
         "--enable-expert-parallel",
         "--attention-backend",
@@ -75,6 +77,8 @@ def engine_config(spec: dict, draft: Path | None, *, prefix_caching: bool) -> Vl
         "--compilation-config",
         json.dumps(spec["compilation_config"]),
     )
+    if flash_attn_version is not None:
+        arguments += ("--attention-config", json.dumps({"flash_attn_version": flash_attn_version}))
     if draft is not None:
         arguments += (
             "--speculative-config",
@@ -236,6 +240,7 @@ async def investigate_plain_batching(environment: VllmEnvironment, spec: dict, c
             "comparisons": comparisons,
             "engine_options_unchanged": True,
             "prefix_caching_enabled": spec["plain_prefix_caching"],
+            "flash_attn_version": spec["plain_flash_attn_version"],
             "cache_state": (
                 "Later sweeps share a cache touched by the inventory; eviction is not controlled"
                 if spec["plain_prefix_caching"]
@@ -306,6 +311,9 @@ def run(spec: dict, purpose: GatePurpose) -> None:
                     spec,
                     draft if speculative else None,
                     prefix_caching=spec["plain_prefix_caching"] if purpose == GatePurpose.PLAIN_BATCHING else True,
+                    flash_attn_version=(
+                        spec["plain_flash_attn_version"] if purpose == GatePurpose.PLAIN_BATCHING else None
+                    ),
                 )
                 with VllmBackend(config).start(
                     ModelSpec(**spec["model"]),

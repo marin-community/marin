@@ -122,6 +122,7 @@ def test_plain_investigation_retains_failed_controls_and_pins_requested_rank(tmp
         "calibration_sha256": "frozen",
         "model": {"weights": "s3://local/V5"},
         "plain_prefix_caching": True,
+        "plain_flash_attn_version": None,
     }
     asyncio.run(gate.investigate_plain_batching(SimpleNamespace(server_url="http://plain/v1"), spec, calibration))
     summary = json.loads((tmp_path / "plain-batching/investigation-complete.json").read_text())
@@ -135,3 +136,17 @@ def test_plain_investigation_retains_failed_controls_and_pins_requested_rank(tmp
     assert summary["comparisons"]["rank0-c1-vs-rank1-c1"]["max_absolute_logprob_error"] == 1.0
     assert not summary["qualification_passed"]
     assert not (tmp_path / "correctness-passed.json").exists()
+
+
+def test_plain_attention_control_translates_only_the_explicit_vllm_version():
+    spec = {"gpu_memory_utilization": 0.775, "compilation_config": {"cudagraph_mode": "PIECEWISE"}}
+    automatic = gate.engine_config(spec, None, prefix_caching=False, flash_attn_version=None)
+    fa2 = gate.engine_config(spec, None, prefix_caching=False, flash_attn_version=2)
+    arguments = list(fa2.extra_args)
+    option = arguments.index("--attention-config")
+    attention = json.loads(arguments[option + 1])
+    assert attention == {"flash_attn_version": 2}
+    del arguments[option : option + 2]
+    assert tuple(arguments) == automatic.extra_args
+    assert "--no-enable-prefix-caching" in arguments
+    assert "--speculative-config" not in arguments
