@@ -18,12 +18,12 @@ from functools import cache
 
 from finestore.rl.curation import OracleValidation, SourceOrigin, source_identifier
 from finestore.rl.status_taxonomy import DataRestriction
-
 from taskcompendium.pipeline.models import IntendedUse
 
 import experiments.post_training.task_curation.datasets.atlas_retained_pins as atlas_retained_pins
 from experiments.post_training.task_curation.retained_release import import_retained
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+
 
 @dataclass(frozen=True)
 class AtlasAdmission:
@@ -518,6 +518,7 @@ RECORDS = (
         task_format=TaskFormat.TASKCOMPENDIUM,
     ),
 )
+
 
 @cache
 def _records_with_pins() -> list[RlDataSource] | None:
