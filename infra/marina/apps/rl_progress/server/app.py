@@ -97,7 +97,7 @@ def create_api(services):
                             "record": summary.model_dump_json(),
                         },
                     )
-                if "preset_version" not in record:
+                if "evaldash_run_ids" in record and "preset_version" not in record:
                     return {key: normalized[key] for key in record}
                 return normalized
         except ProgrammingError as error:
