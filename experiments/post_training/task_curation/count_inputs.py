@@ -7,7 +7,8 @@ import argparse
 import json
 from pathlib import Path
 
-import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.counts import count_parquet_rows
 
 
 def parquet_counts(snapshot: Path, revision: str, pattern: str) -> dict[str, int]:
@@ -27,7 +28,7 @@ def parquet_counts(snapshot: Path, revision: str, pattern: str) -> dict[str, int
         downloaded_revision = metadata.read_text().splitlines()[0]
         if downloaded_revision != revision:
             raise ValueError(f"{relative}: expected revision {revision}, found {downloaded_revision}")
-        counts[relative.as_posix()] = pq.read_metadata(path).num_rows
+        counts[relative.as_posix()] = count_parquet_rows(StoragePath(str(path)))
     return counts
 
 
