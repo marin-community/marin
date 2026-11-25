@@ -319,7 +319,7 @@ def test_derive_release_plan_from_fixture_state(tmp_path, frozen_layer, deployme
     assert plan.previously_available == (RETAINED_ID,)
     assert plan.qc_exclusions == ()
     assert plan.artifact_version == FREEZE_ARTIFACT_VERSION
-    assert plan.release_root == f"{deployment.region_prefix}preview-release/testrelease"
+    assert plan.release_root == f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
     assert plan.catalog_target_load_id != plan.curriculum_target_load_id
     assert len(plan.catalog_target_load_id) == 32
     assert plan.catalog_target_load_id == _rederived_catalog_load_id(plan)

@@ -173,8 +173,19 @@ def mode_preflight(args) -> int:
     return _run_preflight(plan, source=args.source, max_files=args.max_files, stages=args.stage)
 
 
-def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, stages: list[str] | None) -> int:
-    """The preflight sweep over one plan; shared by the preflight and release modes."""
+def _run_preflight(
+    plan: ReleasePlan,
+    *,
+    source: str | None,
+    max_files: int,
+    stages: list[str] | None,
+    output_root: str | None = None,
+) -> int:
+    """The preflight sweep over one plan; shared by the preflight and release modes.
+
+    ``output_root`` relocates the receipt seal (the dry run sweeps into a
+    throwaway root so the real release prefix stays virgin).
+    """
     graph = release_graph(plan)
     selection = SliceSelection(source=source, max_files=max_files)
     nodes = _selected_nodes(graph, stages)
@@ -185,7 +196,7 @@ def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, sta
         if node not in preflight_slices.RUNNABLE_NODES:
             if node in preflight_slices.WITNESS_NODES:
                 try:
-                    receipt = preflight_slices.run_prior_witness(node, plan, selection)
+                    receipt = preflight_slices.run_prior_witness(node, plan, selection, output_root=output_root)
                 except Exception as error:
                     failed.append(node)
                     print(f"FAIL {node}: {str(error)[:400]}")
@@ -198,7 +209,7 @@ def _run_preflight(plan: ReleasePlan, *, source: str | None, max_files: int, sta
             print(f"BLOCKED {node}: {_block_reason(node)}")
             continue
         try:
-            receipt = ensure_node_preflight(node, plan, selection=selection)
+            receipt = ensure_node_preflight(node, plan, selection=selection, output_root=output_root)
         except ValueError as error:
             if str(error).startswith("blocked: "):
                 # The slice's real inputs are upstream write-mode receipts: the
@@ -273,7 +284,17 @@ def mode_release(args) -> int:
         deps = ", ".join(dep.split("atlas-release-", 1)[-1] for dep in node["deps"]) or "-"
         print(f"NODE {node['name']} deps={deps} fp={node['fingerprint'][:12]}")
     print(f"RELEASE {plan.release_id}: plan derived from state; {len(plan.populations)} populations pinned")
-    return _run_preflight(plan, source=args.source, max_files=args.max_files, stages=None)
+    # The dry-run sweep seals into a throwaway root: the real release prefix stays
+    # virgin so the run's own preflight receipts seal write-once there.
+    with tempfile.TemporaryDirectory(prefix="atlas-release-dryrun-") as scratch:
+        dry_plan = plan.model_copy(update={"slice_output_root": scratch})
+        return _run_preflight(
+            dry_plan,
+            source=args.source,
+            max_files=args.max_files,
+            stages=None,
+            output_root=scratch,
+        )
 
 
 def mode_run(args) -> int:

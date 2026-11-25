@@ -499,7 +499,10 @@ def derive_release_plan(
         kind=PLAN_KIND,
         release_id=config.release_id,
         source_revision=config.freeze_source_revision,
-        release_root=f"{deployment.region_prefix}preview-release/{config.release_id}",
+        # One release prefix per freeze: the artifact version (the freeze commit's
+        # own date) keeps re-derivations at the same freeze idempotent under the
+        # same prefix while a moved freeze gets a fresh one.
+        release_root=f"{deployment.region_prefix}preview-release/{config.release_id}-{artifact_version}",
         catalog_root=deployment.catalog_root,
         artifact_version=artifact_version,
         prior={

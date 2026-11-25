@@ -2,7 +2,7 @@
   "kind": "atlas-release-config",
   "release_id": "r41",
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "01e945c0b785834ba204cc6579f5dbc10c65f98d",
+  "freeze_source_revision": "9a85416bb9d03d6a317dc5009925d98e66a4ff87",
   "prior_release": {
     "release_id": "r39-admissions-refresh",
     "declarations": {
@@ -35,40 +35,136 @@
     }
   },
   "removed_sources": [
-    {"source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean", "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"},
-    {"source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit", "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean", "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean", "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit", "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"},
-    {"source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2", "reason": "removed from the catalog by the prior release's admission ruling"},
-    {"source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2", "reason": "removed from the catalog by the prior release's admission ruling"},
-    {"source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2", "reason": "removed from the catalog by the prior release's admission ruling"},
-    {"source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2", "reason": "removed from the catalog by the prior release's admission ruling"},
-    {"source_id": "TaskTrove:laion__wizardlm-orca-v4", "reason": "removed from the catalog by the prior release's admission ruling"},
-    {"source_id": "TaskTrove:tasktrove-code-contests-built-image", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1", "reason": "frozen out of the prior release: one-task delta against its panel; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-taco-built-image", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"},
-    {"source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1", "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"}
+    {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "reason": "frozen out of the prior release: its fresh SAMPLE panels await judge review; re-enters when its intake lands"
+    },
+    {
+      "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+      "reason": "removed from the catalog by the prior release's admission ruling"
+    },
+    {
+      "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+      "reason": "removed from the catalog by the prior release's admission ruling"
+    },
+    {
+      "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+      "reason": "removed from the catalog by the prior release's admission ruling"
+    },
+    {
+      "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+      "reason": "removed from the catalog by the prior release's admission ruling"
+    },
+    {
+      "source_id": "TaskTrove:laion__wizardlm-orca-v4",
+      "reason": "removed from the catalog by the prior release's admission ruling"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-code-contests-built-image",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+      "reason": "frozen out of the prior release: one-task delta against its panel; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-taco-built-image",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+      "reason": "frozen out of the prior release: campaign-release rebuild with a count delta; re-enters after its reconciliation lands"
+    }
   ],
   "qc_exclusions": [
-    {"source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean", "reason": "removed source: no panel copy"},
-    {"source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit", "reason": "removed source: no panel copy"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean", "reason": "removed source: no panel copy"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean", "reason": "removed source: no panel copy"},
-    {"source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-code-contests-built-image", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1", "reason": "frozen rebuild: its prior panel is stale"},
-    {"source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-taco-built-image", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1", "reason": "removed source: no panel copy"},
-    {"source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1", "reason": "removed source: no panel copy"},
-    {"source_id": "di-zhang-fdu:aime_1983_2024", "reason": "prior panel excluded by the prior release's QC ruling"}
+    {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-code-contests-built-image",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+      "reason": "frozen rebuild: its prior panel is stale"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-taco-built-image",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+      "reason": "removed source: no panel copy"
+    },
+    {
+      "source_id": "di-zhang-fdu:aime_1983_2024",
+      "reason": "prior panel excluded by the prior release's QC ruling"
+    }
   ],
   "production_version": 76,
   "preview_base_version": 32
