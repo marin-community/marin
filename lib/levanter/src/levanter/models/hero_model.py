@@ -5,7 +5,6 @@
 
 import dataclasses
 import math
-from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -86,7 +85,6 @@ def _token_spec() -> P:
 
 
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
-    """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return partition_spec_of(x) or _batch_spec()
 
 
@@ -590,13 +588,6 @@ class HeroTransformer(eqx.Module):
         return self.final_gated_norm(self.final_norm(hidden))
 
 
-class _HeroPageArrays(NamedTuple):
-    kv: jax.Array
-    k_history: jax.Array | None
-    attn_history: jax.Array | None
-    mlp_history: jax.Array | None
-
-
 class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig]):
     """Named-tensor boundary around the schema-v2 Hero inference snapshot."""
 
@@ -706,64 +697,21 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
                 blocks.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
             )
             blocks = eqx.tree_at(lambda block: block.mlp.expert_mlp, blocks, experts)
-        template = kv_cache[0]
-        stacked_kv = jnp.stack([cache.kv.kv_pages.array for cache in kv_cache])
-
-        def stack_history(site):
-            histories = [getattr(cache, site) for cache in kv_cache]
-            return None if histories[0] is None else jnp.stack([cache.history.array for cache in histories])
-
-        arrays = _HeroPageArrays(
-            stacked_kv, stack_history("k_history"), stack_history("attn_history"), stack_history("mlp_history")
-        )
-
-        def history_from_array(history, array):
-            return (
-                None
-                if history is None
-                else dataclasses.replace(history, history=hax.named(array, history.history.axes))
-            )
+        stacked_cache = jax.tree.map(lambda *arrays: jnp.stack(arrays), *kv_cache.caches)
 
         def layer_step(x, layer_inputs):
-            block, pages, use_long = layer_inputs
-            cache = HeroLayerCache(
-                KvPageCache(hax.named(pages.kv, template.kv.kv_pages.axes)),
-                history_from_array(template.k_history, pages.k_history),
-                history_from_array(template.attn_history, pages.attn_history),
-                history_from_array(template.mlp_history, pages.mlp_history),
-            )
-            x, cache = block.decode(x, cache, batch_info, pos_ids, valid, use_long)
-            return x, _HeroPageArrays(
-                cache.kv.kv_pages.array,
-                None if cache.k_history is None else cache.k_history.history.array,
-                None if cache.attn_history is None else cache.attn_history.history.array,
-                None if cache.mlp_history is None else cache.mlp_history.history.array,
-            )
+            block, cache, use_long = layer_inputs
+            return block.decode(x, cache, batch_info, pos_ids, valid, use_long)
 
         hidden, updated = jax.lax.scan(
-            layer_step, hidden, (blocks, arrays, _long_layer_schedule(cfg.num_layers, cfg.global_every))
+            layer_step, hidden, (blocks, stacked_cache, _long_layer_schedule(cfg.num_layers, cfg.global_every))
         )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=P(_BATCH_AXES, None, "model")
         )[:, 0]
-        caches = []
-        for i in range(cfg.num_layers):
-            caches.append(
-                HeroLayerCache(
-                    KvPageCache(hax.named(updated.kv[i], template.kv.kv_pages.axes)),
-                    history_from_array(
-                        template.k_history, None if updated.k_history is None else updated.k_history[i]
-                    ),
-                    history_from_array(
-                        template.attn_history, None if updated.attn_history is None else updated.attn_history[i]
-                    ),
-                    history_from_array(
-                        template.mlp_history, None if updated.mlp_history is None else updated.mlp_history[i]
-                    ),
-                )
-            )
-        return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(tuple(caches))
+        caches = tuple(jax.tree.map(lambda array: array[i], updated) for i in range(cfg.num_layers))
+        return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(caches)
 
     def to_state_dict(self, prefix: str | None = None) -> StateDict:
         # Serialization imports the concrete transformer type.
@@ -815,8 +763,6 @@ def _decode_convolution(
     if conv.kernel_size == 1:
         return x * unshard(conv.weight)[0], history
     assert history is not None
-    # The first implementation gathers packed token rows for a causal scan. Channel-sharded
-    # fused convolution can replace this without changing the request-history contract.
     named_x = hax.named(reshard(x[:, 0], P(None, None)), (positions.axes[0], Axis("channel", x.shape[-1])))
     output, history = paged_short_conv(unshard(conv.weight), named_x, history, info, positions)
     return reshard(output.array[:, None], _activation_spec(x)), history

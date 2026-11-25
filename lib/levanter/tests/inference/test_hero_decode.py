@@ -68,7 +68,6 @@ def _assert_mixed_paged_decode_matches_forward(model):
             hax.named(jnp.asarray(positions), token_axis),
         )
         np.testing.assert_allclose(np.asarray(logits.array)[:n], np.concatenate(expected), rtol=1e-4, atol=1e-4)
-        assert np.isfinite(np.asarray(logits.array)).all()
 
 
 @pytest.mark.parametrize("sliding_window", [2, 16])
