@@ -208,6 +208,49 @@ def test_a_selection_recipe_resolves_historical_source_ids(tmp_path: Path):
     assert {task.id for task in tasks} <= {"first-0", "first-1", "second-only"}
 
 
+def test_selection_preserves_published_task_identity_across_schema_upgrades(tmp_path):
+    def historical_document(task):
+        document = task.model_dump(mode="json")
+        document["schema_version"] = "0.30"
+        document["grader"]["environment"] = document["grader"].pop("placement")["environment"]
+        return json.dumps(document)
+
+    training = source_task("training")
+    skipped = source_task("excluded")
+    validation = source_task("heldout", dataset="structure-closure")
+    training_raw, skipped_raw, validation_raw = map(historical_document, (training, skipped, validation))
+    curated = admitted_source(tmp_path / "curated", [training, skipped])
+    pq.write_table(pa.table({"task_json": [training_raw, skipped_raw]}), tmp_path / "curated/final/part-00000.parquet")
+    heldout = task_file(tmp_path / "heldout.parquet", [validation])
+    exclusion = task_file(tmp_path / "excluded.parquet", [skipped]).model_copy(
+        update={"format": PanelFormat.TASK_DIGEST}
+    )
+    for panel, raw in ((heldout, validation_raw), (exclusion, skipped_raw)):
+        pq.write_table(pa.table({"task_spec": [raw]}), panel.uri)
+    settings = SelectionRecipe(
+        name="historical",
+        version="2026.10.23.1",
+        sources={"fixture:curated": "calendar"},
+        family_limits={"calendar": 1},
+        heldout=(heldout,),
+        exclusions=(exclusion,),
+        validation_per_family=1,
+        seed=20261023,
+    )
+    root = Path(run(task_selection_step({"fixture:curated": curated}, settings))[0].path)
+    manifest = read_selection_manifest(str(root))
+    assert manifest is not None
+    for filename, raw in (
+        (TRAIN_FILENAME, training_raw),
+        (FULL_VALIDATION_FILENAME, validation_raw),
+        (VALIDATION_FILENAME, validation_raw),
+    ):
+        assert pq.read_table(root / filename)["task_spec"].to_pylist() == [raw]
+        doc = json.loads(raw)
+        assert manifest.identity(doc["id"]).task_digest == canonical_sha256(doc)
+    assert json.loads((root / "summary.json").read_text())["source_counts"]["fixture:curated"]["excluded"] == 1
+
+
 @pytest.mark.parametrize("mode", ["sample", "full"])
 def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path, mode):
     settings = recipe(tmp_path)

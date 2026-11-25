@@ -374,28 +374,37 @@ def select_heldout(full: tuple[TaskSpec, ...], recipe: SelectionRecipe) -> Heldo
     )
 
 
-def _panel_source_tasks(
+def _panel_source_records(
     source: HeldoutSource, grader_environments: Mapping[str, EnvironmentRequirements]
-) -> Iterator[TaskSpec]:
+) -> Iterator[tuple[TaskSpec, str]]:
+    """Keep the published JSON for identity since parsing can upgrade a TaskSpec."""
     root, count = StoragePath(source.uri), 0
-    tasks: Iterator[TaskSpec]
     if source.format == PanelFormat.EVALUATION:
         tasks = map(_chat_panel_task, evaluation_cases(source.uri))
+        records = ((task, task.model_dump_json()) for task in tasks)
+    elif source.format == PanelFormat.HISTORICAL:
+        tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, LOWERED_TASK_SPEC_COLUMN))
+        records = ((task, task.model_dump_json()) for task in tasks)
     elif source.format == PanelFormat.NORMALIZED:
         if json.loads((root / MANIFEST_FILENAME).read_text())["intended_use"] != IntendedUse.EVAL:
             raise ValueError(f"Panel source is not reserved for evaluation: {source.uri}")
         paths = sorted((root / "normalize/*.parquet").glob(), key=str)
         raw = (row[TASK_JSON_COLUMN] for path in paths for row in _parquet_rows(path, TASK_JSON_COLUMN))
-        tasks = (TaskSpec.model_validate_json(value) for value in raw if value is not None)
-    elif source.format == PanelFormat.HISTORICAL:
-        tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, LOWERED_TASK_SPEC_COLUMN))
+        records = ((TaskSpec.model_validate_json(value), value) for value in raw if value is not None)
     else:
-        tasks = (TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for row in _parquet_rows(root, TASK_SPEC_COLUMN))
-    for task in tasks:
+        raw = (row[TASK_SPEC_COLUMN] for row in _parquet_rows(root, TASK_SPEC_COLUMN))
+        records = ((TaskSpec.model_validate_json(value), value) for value in raw)
+    for record in records:
         count += 1
-        yield task
+        yield record
     if count != source.rows:
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
+
+
+def _panel_source_tasks(
+    source: HeldoutSource, grader_environments: Mapping[str, EnvironmentRequirements]
+) -> Iterator[TaskSpec]:
+    return (task for task, _ in _panel_source_records(source, grader_environments))
 
 
 def _parquet_rows(path: StoragePath, column: str) -> Iterator[dict[str, Any]]:
@@ -422,16 +431,14 @@ def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
     return task
 
 
-def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) -> Iterator[dict[str, Any]]:
-    for task in tasks:
-        tags = strata[task.id]
-        yield {TASK_SPEC_COLUMN: task.model_dump_json(), **tags.model_dump()}
+def task_record(task_json: str, strata: TaskStrata) -> dict[str, Any]:
+    return {TASK_SPEC_COLUMN: task_json, **strata.model_dump()}
 
 
-def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState) -> SelectionTaskRow:
+def _selection_row(task: TaskSpec, task_json: str, strata: TaskStrata, *, state: MembershipState) -> SelectionTaskRow:
     return SelectionTaskRow(
         task_id=task.id,
-        task_digest=canonical_sha256(task.model_dump(mode="json")),
+        task_digest=canonical_sha256(json.loads(task_json)),
         **strata.model_copy(update={"agentic": "agentic" in task.tags}).model_dump(),
         grader_kind=_grader_kind(task),
         raw_source=task.source.model_dump_json(),
@@ -562,11 +569,14 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
     )
 
 
-def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator[dict[str, Any]]:
+def _manifest_records(
+    tasks: tuple[TaskSpec, ...], active: set[str], documents: Mapping[str, str]
+) -> Iterator[dict[str, Any]]:
     for task in tasks:
         family = validation_family(task)
         row = _selection_row(
             task,
+            documents[task.id],
             TaskStrata(family=family, aai_category=AAII_CATEGORIES[family], source=task.source.dataset),
             state=MembershipState.ACTIVE if task.id in active else MembershipState.CANDIDATE,
         )
@@ -685,7 +695,9 @@ def write_training(
 def prepare(config: SelectionConfig) -> None:
     """Publish selected training TaskSpecs and the fixed and complete heldout panels."""
     environments = _grader_environments(config.sources)
-    heldout = tuple(task for source in config.heldout for task in _panel_source_tasks(source, environments))
+    records = [record for source in config.heldout for record in _panel_source_records(source, environments)]
+    heldout = tuple(task for task, _ in records)
+    documents = {task.id: raw for task, raw in records}
     if any(_grader_kind(task) not in LOCAL_GRADERS for task in heldout):
         raise ValueError("Development panel requires local graders")
     selection = select_heldout(heldout, config.recipe)
@@ -694,25 +706,22 @@ def prepare(config: SelectionConfig) -> None:
         excluded = []
         digests = set()
         for source in config.exclusions:
-            tasks = _panel_source_tasks(source, environments)
+            panel = _panel_source_records(source, environments)
             if source.format == PanelFormat.TASK_DIGEST:
-                digests.update(canonical_sha256(task.model_dump(mode="json")) for task in tasks)
+                digests.update(canonical_sha256(json.loads(raw)) for _, raw in panel)
             else:
-                excluded.extend(tasks)
+                excluded.extend(task for task, _ in panel)
         counts = write_training(
             config, selection.full, tuple(excluded), directory / TRAIN_FILENAME, excluded_digests=frozenset(digests)
         )
-        annotations = tuple(_manifest_records(selection.full, {task.id for task in selection.sample}))
+        annotations = tuple(_manifest_records(selection.full, {task.id for task in selection.sample}, documents))
         strata = {
             row["task_id"]: TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
             for row in annotations
         }
-        write_parquet_file(
-            task_records(iter(selection.sample), strata), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
-        )
-        write_parquet_file(
-            task_records(iter(selection.full), strata), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
-        )
+        for filename, tasks in ((VALIDATION_FILENAME, selection.sample), (FULL_VALIDATION_FILENAME, selection.full)):
+            rows = (task_record(documents[task.id], strata[task.id]) for task in tasks)
+            write_parquet_file(rows, str(directory / filename), schema=TASK_SCHEMA)
 
         harness_datasets: set[str] = set()
 
@@ -722,7 +731,7 @@ def prepare(config: SelectionConfig) -> None:
                 for value in batch.to_pylist():
                     task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
                     tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    row = _selection_row(task, value[TASK_SPEC_COLUMN], tags, state=MembershipState.ACTIVE)
                     if row.grader_kind == GraderKind.HARNESS:
                         harness_datasets.add(task.source.dataset)
                     yield row.model_dump(mode="json")
@@ -1003,8 +1012,10 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
         else EvalLiteSelection((), {})
     )
     for task, part in selection.tasks:
+        raw = task.model_dump_json()
         row = _selection_row(
             task,
+            raw,
             TaskStrata(
                 family=part.family, aai_category=part.aaii_category, source=task.source.dataset, topic=part.topic
             ),
@@ -1014,7 +1025,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
             if rows[task.id].task_digest != row.task_digest:
                 raise ValueError(f"EvalLite task content changed across versions: {task.id}")
             continue
-        raw_tasks[task.id], rows[task.id] = task.model_dump_json(), row
+        raw_tasks[task.id], rows[task.id] = raw, row
     if recipe.pass_rates is not None:
         reference_revisions.add(recipe.pass_rates.model_revision)
     for task_id, row in rows.items():

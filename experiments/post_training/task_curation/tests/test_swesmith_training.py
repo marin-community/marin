@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     GraderKind,
     _selection_row,
-    task_records,
+    task_record,
 )
 from experiments.post_training.task_curation.swesmith_training import (
     SWESMITH_DATASET,
@@ -94,9 +94,11 @@ def test_native_selection_keeps_membership_and_binds_the_package_verifier(task, 
     parent = tmp_path / "parent"
     parent.mkdir()
     strata = TaskStrata(family="agentic", source=SWESMITH_DATASET, agentic=True)
-    row = _selection_row(task, strata, state=MembershipState.ACTIVE)
+    raw = task.model_dump_json()
+    row = _selection_row(task, raw, strata, state=MembershipState.ACTIVE)
     pq.write_table(
-        pa.Table.from_pylist(list(task_records(iter([task]), {task.id: strata})), TASK_SCHEMA), parent / TRAIN_FILENAME
+        pa.Table.from_pylist([task_record(raw, strata)], TASK_SCHEMA),
+        parent / TRAIN_FILENAME,
     )
     pq.write_table(
         pa.Table.from_pylist([row.model_dump(mode="json")], TASK_MANIFEST_SCHEMA), parent / TASK_MANIFEST_FILENAME
