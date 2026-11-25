@@ -47,19 +47,33 @@ def test_readopt_same_source_is_idempotent(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("read_only_first", [False, True])
-@pytest.mark.parametrize("trailing_slash", [False, True])
-def test_read_only_input_cannot_share_a_scheduled_output(tmp_path, monkeypatch, read_only_first, trailing_slash):
+@pytest.mark.parametrize("alias", ["same", "trailing-slash", "file-uri", "dot"])
+def test_read_only_input_cannot_share_a_scheduled_output(tmp_path, monkeypatch, read_only_first, alias):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     (tmp_path / "external").mkdir()
     output = ArtifactStep.adopt("datasets/x", "2026.06.28", source="external")
-    shared = str(tmp_path / "datasets/x/2026.06.28")
-    read_only = ArtifactStep.adopt(
-        "datasets/alias", "2026.06.28", source=shared + ("/" if trailing_slash else ""), read_only=True
-    )
+    shared = tmp_path / "datasets/x/2026.06.28"
+    locations = {
+        "same": str(shared),
+        "trailing-slash": f"{shared}/",
+        "file-uri": shared.as_uri(),
+        "dot": f"{shared.parent}/./{shared.name}",
+    }
+    read_only = ArtifactStep.adopt("datasets/alias", "2026.06.28", source=locations[alias], read_only=True)
     ordered = (read_only, output) if read_only_first else (output, read_only)
     with pytest.raises(ValueError, match="both a read-only input and a step output"):
         run(*ordered)
     assert not (tmp_path / "datasets/x/2026.06.28").exists()
+
+
+def test_read_only_gcs_alias_cannot_share_a_scheduled_output(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://outputs")
+    output = ArtifactStep.adopt("datasets/x", "2026.06.28", source="external")
+    read_only = ArtifactStep.adopt(
+        "datasets/alias", "2026.06.28", source="gcs://outputs/datasets/x/2026.06.28", read_only=True
+    )
+    with pytest.raises(ValueError, match="both a read-only input and a step output"):
+        run(output, read_only)
 
 
 def test_readopt_different_source_warns(tmp_path, monkeypatch, caplog):

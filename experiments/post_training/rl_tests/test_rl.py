@@ -6,7 +6,7 @@ import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import replace
-from importlib.machinery import ModuleSpec
+from importlib.util import find_spec
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -409,7 +409,6 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     results = native_json()(
         """
 import asyncio, json, sys
-from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
@@ -1125,11 +1124,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "trainer.max_steps=3",
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
-    mode, coordinator_module = "valid", "first_model_entry"
+    first_entry = "experiments.post_training.snowball_rl"
+    second_entry = "experiments.post_training.mochi_rl"
+    mode, coordinator_module = "valid", first_entry
     entries = {}
 
     def invoke_entry(name, patch):
-        patch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(name, loader=None))
+        module_spec = find_spec(name)
+        assert module_spec is not None and module_spec.loader is not None
+        patch.setattr(sys.modules["__main__"], "__spec__", module_spec)
         return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
@@ -1182,7 +1185,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     @click.command()
     def entry():
         with monkeypatch.context() as driver:
-            raise click.exceptions.Exit(invoke_entry("first_model_entry", driver))
+            raise click.exceptions.Exit(invoke_entry(first_entry, driver))
 
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
@@ -1193,9 +1196,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             )
             return CliRunner().invoke(command, args)
 
-    for override in (None, "second_model_entry"):
-        coordinator_module = override or "first_model_entry"
-        module("first_model_entry", entry_module=override)
+    for override in (None, second_entry):
+        coordinator_module = override or first_entry
+        module(first_entry, entry_module=override)
         if override is not None:
             module(override)
         result = invoke_with_preflight_stub(entry)
@@ -1213,9 +1216,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "overlapping-environment-mismatch",
         "dependency-environment-mismatch",
     ):
-        coordinator_module = "second_model_entry"
+        coordinator_module = second_entry
         module(
-            "first_model_entry",
+            first_entry,
             entry_module=coordinator_module,
             forward_env=("WANDB_API_KEY",) if mode == "overlapping-environment-mismatch" else ("HF_TEST_KEY",),
             policy_forward=("WANDB_API_KEY",) if mode == "dependency-environment-mismatch" else None,
@@ -1233,7 +1236,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         )
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
-    mode, coordinator_module = "failed-following", "first_model_entry"
+    mode, coordinator_module = "failed-following", first_entry
     module(coordinator_module, following=True)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
@@ -1269,7 +1272,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
-    mode, coordinator_module = "valid", "first_model_entry"
+    mode, coordinator_module = "valid", first_entry
     module(coordinator_module)
     resumed = invoke_with_preflight_stub(entry)
     assert resumed.exit_code == 1 and len(native_calls) == 1, (resumed.output, resumed.exception)
@@ -1295,8 +1298,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     }
     assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
 
-    mode, coordinator_module = "failed-native", "first_model_entry"
-    module("first_model_entry")
+    mode, coordinator_module = "failed-native", first_entry
+    module(first_entry)
     with edit_receipt(source) as receipt:
         receipt["result"]["state"] = "failed"
     result = invoke_with_preflight_stub(entry)

@@ -470,8 +470,9 @@ def run_launcher(args: argparse.Namespace) -> None:
     else:
         endpoint_name = job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
         coordinator = task_index == 0
+    variants = build_variants(extra_env=args.env_pairs)
     if coordinator:
-        base_port = allocate_port_block(len(build_variants()) + 1)
+        base_port = allocate_port_block(len(variants) + 1)
         master_host = job_info.advertise_host
         access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
@@ -489,7 +490,7 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
-    for offset, variant in enumerate(build_variants(extra_env=args.env_pairs)):
+    for offset, variant in enumerate(variants):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)

@@ -250,11 +250,9 @@ _SPEED_GUARDS = (
     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
 )
 
-_REPORTING_REVISION = "2026.11.24.1"
-
 _snowball = partial(
     Preset,
-    revision=_REPORTING_REVISION,
+    revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     default_speculative_decoding=_DSPARK,
@@ -410,8 +408,8 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
         recipe=replace(
-            _REPORTING_P40,
-            config=_REPORTING_P40.config.merge(
+            _TRAIN_LONG.recipe,
+            config=_TRAIN_LONG.recipe.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(
                         policy=sections.Policy(

@@ -130,9 +130,27 @@ def step_is_built(step: StepSpec) -> bool:
 
 
 def _record_output_mode(seen: dict[str, bool], step: StepSpec) -> None:
-    path = StoragePath.normalize(step.output_path)
+    location = StoragePath(step.output_path)
+    path = str(location)
+    if location.is_local:
+        _, local_path = url_to_fs(path)
+        path = os.path.realpath(local_path)
+    elif location.scheme == "gcs":
+        path = "gs://" + path.removeprefix("gcs://")
     if seen.setdefault(path, step.read_only) != step.read_only:
         raise ValueError(f"{path} is both a read-only input and a step output")
+
+
+def _check_output_modes(root: StepSpec, modes: dict[str, bool]) -> None:
+    pending = [root]
+    visited: set[int] = set()
+    while pending:
+        step = pending.pop()
+        if id(step) in visited:
+            continue
+        visited.add(id(step))
+        _record_output_mode(modes, step)
+        pending.extend(step.deps)
 
 
 def _expand_unseen(
@@ -140,8 +158,6 @@ def _expand_unseen(
     seen: set[str],
     is_built: Callable[[StepSpec], bool] = lambda _s: False,
     pruned: set[str] | None = None,
-    *,
-    output_modes: dict[str, bool] | None = None,
 ) -> list[StepSpec]:
     """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
@@ -161,8 +177,6 @@ def _expand_unseen(
 
     def visit(s: StepSpec) -> None:
         path = s.output_path
-        if output_modes is not None:
-            _record_output_mode(output_modes, s)
         if path in seen:
             return
         if path in in_stack:
@@ -222,10 +236,10 @@ class StepRunner:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
         output_modes: dict[str, bool] = {}
-        if isinstance(steps, Sequence):
-            seen: set[str] = set()
+        preflight = isinstance(steps, Sequence)
+        if preflight:
             for root in steps:
-                _expand_unseen(root, seen, output_modes=output_modes)
+                _check_output_modes(root, output_modes)
 
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly. More robust than contextvars.copy_context()
@@ -335,7 +349,9 @@ class StepRunner:
 
         scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled, is_built, pruned, output_modes=output_modes):
+            if not preflight:
+                _check_output_modes(raw_step, output_modes)
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()
