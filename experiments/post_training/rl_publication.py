@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import cast
 
@@ -36,6 +37,7 @@ from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
     attempt_tracking,
+    read_stored_skyrl_attempt,
     read_stored_skyrl_attempts,
     recorded_launch,
 )
@@ -45,6 +47,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url
@@ -69,6 +72,7 @@ class PublicationOutcome(BaseModel):
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
     attempts: dict[str, AttemptRecord] = Field(default_factory=dict, exclude=True)
+    gate_report: gate.GateReport | None = Field(default=None, exclude=True)
     retry: str | None = None
 
     def to_dict(self) -> dict:
@@ -365,9 +369,13 @@ def reserve_issue(export_root: str, requested: int | None) -> int | None:
 
 def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecord]:
     export_root = str(StoragePath(path) / EXPORTS_SUBDIRECTORY)
+    attempts = read_attempts(export_root)
+    current = read_stored_skyrl_attempt(path)
+    if current is not None:
+        attempts[current.attempt_id] = current
     return {
         key: attempt
-        for key, attempt in read_attempts(export_root).items()
+        for key, attempt in attempts.items()
         if attempt.config is not None and attempt.config["run"].get("coordinator_iris_job_id") == coordinator
     }
 
@@ -503,6 +511,7 @@ def publish_runs(
     try:
         current_ids = tuple(snapshot.current for snapshot in snapshots.values() if snapshot.current in snapshot.records)
         report = _read_publication_gate(gate_path, current_ids, len(outputs))
+        result.gate_report = report
     except Exception as error:
         report = None
         report_error = str(error)
@@ -568,6 +577,42 @@ def publish_runs(
     if result.unserved_records:
         result.retry = "Repeat the original command with --wait."
     return result
+
+
+def _control_submissions(preset: presets.Preset, model: str) -> StoragePath:
+    return StoragePath(recipe.run_prefix(preset)) / "rl-control-submissions" / model / preset.name
+
+
+def record_control_outputs(preset: presets.Preset, model: str, batch: str, outputs: tuple[str, ...]) -> None:
+    """Persist output addresses before Iris submission so queued jobs can outlive the runner."""
+    day = _control_submissions(preset, model) / datetime.now(UTC).date().isoformat()
+    day.mkdirs()
+    (day / f"{sha256(batch.encode()).hexdigest()}.json").write_text(json.dumps(outputs))
+
+
+def recover_control_outputs(preset: presets.Preset, table: presets.ModelPresets) -> bool:
+    """Publish terminal attempts from recent workflows and retain pending output addresses."""
+    root = _control_submissions(preset, table.model)
+    today = datetime.now(UTC).date()
+    days = (preset.recipe.layout.coordinator_timeout_hours + 23) // 24 + 2
+    recovered = False
+    for offset in range(days):
+        day = today - timedelta(days=offset)
+        for manifest in (root / day.isoformat() / "*.json").glob():
+            outputs = json.loads(manifest.read_text())
+            pending = []
+            for output in outputs:
+                attempt = read_stored_skyrl_attempt(output)
+                if attempt is None or not attempt.native.result.state.is_terminal:
+                    pending.append(output)
+                    continue
+                result = publish_runs([output], preset, table=table, attempt_id=attempt.attempt_id)
+                if result.unserved_records:
+                    raise RuntimeError(f"Could not recover control {output}: {', '.join(result.errors)}")
+                recovered = True
+            if pending != outputs:
+                manifest.write_text(json.dumps(pending))
+    return recovered
 
 
 def command(table: presets.ModelPresets) -> click.Command:

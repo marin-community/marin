@@ -19,13 +19,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, EvaluationScore, Invariant
-from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
+from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_attempt_metrics, read_evaluations
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     RecordedSource,
     attempt_tracking,
-    read_skyrl_metrics,
     read_stored_skyrl_attempt,
     recorded_launch,
 )
@@ -502,12 +501,12 @@ def read_measurements(
         raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
-    metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
+    launch = read_recorded_launch(terminal)
+    metrics = read_attempt_metrics(launch.export_root, terminal.attempt_id)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    launch = read_recorded_launch(terminal)
     profiles = _recorded_evaluations(preset, launch, inputs)
     tracking = attempt_tracking(terminal, launch)
     try:

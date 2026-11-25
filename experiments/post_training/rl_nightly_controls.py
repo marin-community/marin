@@ -11,7 +11,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from finestore.rl.rl_progress import AttemptSummary, completed_controls
-from marin.rl.skyrl_records import read_stored_skyrl_attempts
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import Provenance
 
@@ -29,29 +28,9 @@ _MODELS = {
 def _read_control_index(jobs: list[tuple[str, ModelPresets, Preset]]) -> list[AttemptSummary]:
     """Recover terminal receipts left by a previous workflow before counting controls."""
     records = rl_index.list_attempts()
-    presets = {(table.model, preset.name): (table, preset) for _, table, preset in jobs}
     recovered = False
-    for row in records:
-        selection = presets.get((row.model, row.series))
-        if (
-            selection is None
-            or not row.is_control
-            or row.branch != "main"
-            or row.dirty is not False
-            or row.status != "running"
-        ):
-            continue
-        if not row.artifact_uri:
-            continue
-        _, attempts = read_stored_skyrl_attempts(row.artifact_uri)
-        attempt = attempts.get(row.attempt_id)
-        if attempt is None or not attempt.native.result.state.is_terminal:
-            continue
-        table, preset = selection
-        result = rl_publication.publish_runs([row.artifact_uri], preset, table=table, attempt_id=row.attempt_id)
-        if result.unserved_records:
-            raise RuntimeError(f"Could not recover control {row.run_id}/{row.attempt_id}: {', '.join(result.errors)}")
-        recovered = True
+    for _, table, preset in jobs:
+        recovered |= rl_publication.recover_control_outputs(preset, table)
     return rl_index.list_attempts() if recovered else records
 
 

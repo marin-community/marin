@@ -131,6 +131,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     def attempt(name, day, raw, *, comparable="tasks-a/grader-a", final=True):
         return progress_record() | {
             "run_id": name,
+            "native_run_id": name,
             "attempt_id": name,
             "label": name,
             "model": "snowball",
@@ -185,6 +186,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         "gate_result": progress_record()["gate_result"],
     }
     superseded = attempt("superseded", 1, 0.15) | {
+        "native_run_id": controls[0]["native_run_id"],
         "artifact_uri": controls[0]["artifact_uri"],
         "completed_at": "2026-11-01T00:30:00Z",
     }

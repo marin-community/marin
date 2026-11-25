@@ -993,6 +993,7 @@ def _gate_artifact(
     *,
     run_paths: tuple[str, ...],
     cohort: ControlCohort,
+    run_attempts: tuple[AttemptRecord | None, ...] | None = None,
 ) -> ArtifactStep[GateReport]:
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
     name += "-defaults-" + fingerprint_hash(
@@ -1027,7 +1028,8 @@ def _gate_artifact(
                 "name": name,
                 "paths": {"run_paths": run_paths},
             },
-        )
+        ),
+        run_attempts,
     )
 
 
@@ -1068,7 +1070,7 @@ class GateTarget(BaseModel):
         self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
     ) -> str:
         evidence = [
-            (identity, receipt.native.model_dump(mode="json") if receipt is not None else None)
+            (identity, receipt.model_dump(mode="json") if receipt is not None else None)
             for identities, receipts in (
                 (self.candidates, candidates),
                 (tuple(member.attempt_id for member in self.controls), controls),
@@ -1109,6 +1111,8 @@ def compare_attempt(
     source: str,
     cohort: ControlCohort,
     requirements: tuple[str, ...] = (),
+    *,
+    attempt: AttemptRecord | None = None,
 ) -> GateReport:
     """Run a comparison for a saved candidate using the supplied control cohort."""
     recorded = read_run_inputs(source)
@@ -1120,7 +1124,15 @@ def compare_attempt(
     name = user_owned_name(
         f"checkpoints/{cohort.model}-rl/compare/{preset.name}-{fingerprint_hash(canonical_json(source))}"
     )
-    step = _gate_artifact(name, preset, (source,), inputs, run_paths=(source,), cohort=cohort)
+    step = _gate_artifact(
+        name,
+        preset,
+        (source,),
+        inputs,
+        run_paths=(source,),
+        cohort=cohort,
+        run_attempts=(attempt,) if attempt is not None else None,
+    )
     return run(replace(step, output_path_prefix=recipe.run_prefix(preset)))[0]
 
 
@@ -1156,7 +1168,7 @@ def command(table: ModelPresets) -> click.Command:
         if index is None or index.preset != preset_name or index.model != table.model or index.is_control:
             raise InvalidComparison("candidate requires a matching non-control run index identity")
         cohort = select_controls(index, service_url=marina_url)
-        report = compare_attempt(preset, source, cohort, requirements)
+        report = compare_attempt(preset, source, cohort, requirements, attempt=attempt)
         click.echo(
             json.dumps(
                 {

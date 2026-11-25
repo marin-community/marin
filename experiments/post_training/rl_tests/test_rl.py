@@ -1128,7 +1128,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         if not running_observed:
             running_observed = True
             return JobState.RUNNING
-        write_receipt(source, receipt)
+        _json(source / "terminal.json", receipt)
+        _json(source / "resolved-launch.yaml", {"config": launch})
         metrics = read_skyrl_metrics(str(source), attempt_id="native-old")
         for row in metrics.values():
             row["attempt_id"] = "native-indexed"

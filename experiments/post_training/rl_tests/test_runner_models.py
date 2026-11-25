@@ -92,7 +92,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
     run = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
-    config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
+    config = rl_gate.compose_candidate(preset, run.inputs)["skyrl"]
     buffer = config["trainer"]["rollout_buffer"]
     assert (buffer["max_in_flight"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
     (step,) = run.runs

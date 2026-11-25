@@ -125,9 +125,18 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
             "completed_at": "2026-11-06T20:00:00+00:00",
         }
     )
-    monkeypatch.setattr(rl_index, "list_attempts", lambda _service=None: [*indexed, different])
+
+    def list_index_with_retry(_service=None):
+        if read_stored_skyrl_attempts(str(candidate))[0] == "recorded-attempt":
+            with edit_receipt(candidate) as receipt:
+                receipt["config"]["run"]["attempt_id"] = "newer-retry"
+                receipt["result"]["state"] = "failed"
+        return [*indexed, different]
+
+    monkeypatch.setattr(rl_index, "list_attempts", list_index_with_retry)
     report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert report["control"]["version"] == index.base_preset_version
     assert [attempt["attempt_id"] for attempt in report["control"]["attempts"]] == [
         "control-r4",
@@ -140,6 +149,11 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
+    (candidate / "resolved-launch.yaml").unlink()
+    selected = measurements.read_measurements(
+        str(candidate), snowball_model.SNOWBALL.by_name[preset], attempt=records["recorded-attempt"]
+    )
+    assert selected.attempt_id == "recorded-attempt" and selected.values["speed/update_seconds"] == 102
     for name, speed, kl, verdict, effect in (
         ("improvement", 90, 0.1, "pass", "improves"),
         ("regression", 150, 0.1, "fail", "regression"),
@@ -821,8 +835,8 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     pq.write_table(pa.Table.from_pylist([*pool, {"task_spec": json.dumps(inactive)}]), panel_root / pool_filename)
     summary["selection_strata"]["task_files"] = [pool_filename]
     summary_path.write_text(json.dumps(summary))
-    measured = measurements.read_measurements(str(source), snowball_model.SNOWBALL.by_name[preset])
-    answers = measured.held_out_answers["eval_lite"].final
+    evaluation = snowball_model.SNOWBALL.by_name[preset].evaluations[0]
+    answers = measurements.read_answers(evaluation, str(source))
     task_ids = set(answers["task_id"].to_pylist())
     assert task_ids == {json.loads(row["task_spec"])["id"] for row in rows}
     assert inactive["id"] not in task_ids

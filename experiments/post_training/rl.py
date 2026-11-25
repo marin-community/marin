@@ -362,6 +362,7 @@ def _status(
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
     scoped_attempts: Mapping[str, AttemptRecord] | None = None,
+    gate_report: rl_gate.GateReport | None = None,
 ) -> dict:
     prefix = recipe.run_prefix(preset)
     ttl = preset.output_ttl_days
@@ -462,7 +463,7 @@ def _status(
     report = None
     if run.gate is not None:
         path = run.gate.path(prefix=recipe.run_prefix(preset))
-        report = rl_gate.read_gate_report(path)
+        report = gate_report if scoped_attempts is not None else rl_gate.read_gate_report(path)
         if report is not None:
             verdict = {
                 "report": str(StoragePath(path) / rl_gate.GATE_REPORT_FILENAME),
@@ -717,7 +718,7 @@ def _watch_publication(
             errors=[str(error)],
             retry="Repeat the original command with --wait.",
         )
-    return state, publication, gate_path
+    return state, publication, gate_path if publication.gate_report is not None else None
 
 
 def _follow_command(table: presets.ModelPresets) -> click.Command:
@@ -759,6 +760,7 @@ def _wait_for_run(
         stored_only=True,
         publication_urls=publication.urls,
         scoped_attempts=publication.attempts,
+        gate_report=publication.gate_report,
     )
     snapshot["publication"] = publication.to_dict()
     rows = snapshot.get("runs", ())
@@ -769,8 +771,14 @@ def _wait_for_run(
         and all(row["state"] == JobState.SUCCEEDED for row in rows)
     ):
         snapshot["post_run_error"] = f"Coordinator {job} ended in state {parent_state}. RL has a committed result."
-    elif "verdict" not in snapshot and (coordinator_error is not None or gate_required):
-        snapshot["reason"] = coordinator_error or "required verdict unavailable"
+    successful_runs = len(publication.attempts) == len(watch.outputs) and all(
+        row["state"] == JobState.SUCCEEDED for row in rows
+    )
+    if "verdict" not in snapshot and "post_run_error" not in snapshot:
+        if coordinator_error is not None or gate_required:
+            snapshot["reason"] = coordinator_error or "required verdict unavailable"
+        elif not successful_runs:
+            snapshot["reason"] = "a successful native receipt is unavailable for one or more outputs"
     _print_status(snapshot)
     if click.get_current_context().params.get("control"):
         if publication.unserved_records:
@@ -780,7 +788,7 @@ def _wait_for_run(
     if _evaluation_failed(snapshot, preset):
         raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")
-    if verdict is None and not gate_required and coordinator_error is None:
+    if verdict is None and not gate_required and coordinator_error is None and successful_runs:
         verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
@@ -819,6 +827,11 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+    if index.is_control and index.branch == "main" and not index.dirty and environment.get("GITHUB_ACTIONS") == "true":
+        prefix = recipe.run_prefix(preset)
+        rl_publication.record_control_outputs(
+            preset, index.model, context.params["control"], tuple(step.path(prefix) for step in runs)
+        )
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {

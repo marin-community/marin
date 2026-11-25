@@ -22,9 +22,16 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
     entry = import_module(entry_module)
     if not entry.__file__ or not Path(entry.__file__).resolve().is_relative_to(Path.cwd()):
         raise ValueError(f"{entry_module} did not load from the archive")
-    table = getattr(entry, model.upper(), None)
-    if not isinstance(table, ModelPresets) or table.model != model or preset_name not in table.by_name:
+    tables = {
+        id(table): table
+        for table in vars(entry).values()
+        if isinstance(table, ModelPresets) and table.model == model and preset_name in table.by_name
+    }
+    if not tables:
         return None
+    if len(tables) != 1:
+        raise ValueError(f"{entry_module} defines multiple preset tables for {model}/{preset_name}")
+    (table,) = tables.values()
     configure_coreweave_s3()
     preset = table.by_name[preset_name]
     with tempfile.TemporaryDirectory(prefix="rl-main-config-") as directory:
