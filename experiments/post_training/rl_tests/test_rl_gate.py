@@ -46,7 +46,7 @@ from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunOptions, read_run_inputs, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     cache_native_compositions,
@@ -186,9 +186,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         return gate.gate_step(
             preset,
             tuple(candidates),
-            inputs=RunInputs(
-                preset_name=preset.name,
+            inputs=run_inputs(
+                preset.name,
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
+                preset=preset,
             ),
             table=snowball_model.SNOWBALL,
         )
@@ -275,7 +276,9 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
         expected = (
             "planned_updates"
             if fault == "updates"
-            else "finite_losses_and_gradients" if fault in ("loss", "policy-loss") else "grader_error_fraction"
+            else "finite_losses_and_gradients"
+            if fault in ("loss", "policy-loss")
+            else "grader_error_fraction"
         )
         assert not facts[expected].holds
 
@@ -638,7 +641,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         )
         else (setting,)
     )
-    inputs = RunInputs(preset_name=preset.name, settings=settings)
+    inputs = run_inputs(preset.name, settings=settings, preset=preset)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version

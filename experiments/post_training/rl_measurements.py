@@ -489,7 +489,11 @@ def read_measurements(
     *,
     attempt: AttemptRecord | None = None,
 ) -> RunMeasurements:
-    inputs = inputs or RunInputs(preset_name=preset.name)
+    if inputs is None:
+        try:
+            inputs = read_run_inputs(path)
+        except FileNotFoundError:
+            inputs = RunInputs(preset_name=preset.name)
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")

@@ -7,7 +7,6 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import click
@@ -42,7 +41,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     copy_evaluations,
@@ -330,7 +329,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             **kwargs,
         )
 
-    controls = write_controls(write_control, preset.name)
+    write_controls(write_control, preset.name)
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"
@@ -360,7 +359,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 preset,
                 handles,
                 table=table,
-                inputs=RunInputs(preset_name=preset.name, requirements=requirements),
+                inputs=run_inputs(preset.name, requirements=requirements, preset=preset),
             )
         )[0]
         return report, str(report.path)
