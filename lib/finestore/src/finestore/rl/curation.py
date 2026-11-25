@@ -1307,6 +1307,10 @@ class CurationCatalog:
         return json.loads(data)
 
 
+PRIVATE_RELEASE_NAMESPACE = "open-athena/"
+"""The private publisher whose TaskCompendium releases the Atlas admits."""
+
+
 def require_private_release(
     evidence: LexicalContaminationEvidence | None, dataset_id: str | None, dataset_revision: str | None
 ) -> None:
@@ -1316,11 +1320,15 @@ def require_private_release(
     receipt = evidence.receipt
     release = receipt.release
     assert release is not None
-    if not release.private or release.format != "taskcompendium" or not release.dataset_id.startswith("open-athena/"):
+    if (
+        not release.private
+        or release.format != "taskcompendium"
+        or not release.dataset_id.startswith(PRIVATE_RELEASE_NAMESPACE)
+    ):
         raise ValueError("Atlas admission requires a private open-athena TaskCompendium release")
     if receipt.status is DeconReceiptStatus.REMEDIATED:
         assert release.original_private_dataset_id is not None
-        if not release.original_private_dataset_id.startswith("open-athena/"):
+        if not release.original_private_dataset_id.startswith(PRIVATE_RELEASE_NAMESPACE):
             raise ValueError("Atlas remediation requires the original private open-athena snapshot")
 
 

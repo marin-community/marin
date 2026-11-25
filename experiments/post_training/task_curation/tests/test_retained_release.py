@@ -34,7 +34,6 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 import experiments.post_training.task_curation.retained_release as retained_release
-from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     RetainedImport,
@@ -153,7 +152,7 @@ def test_full_retained_import_prepares_an_admitted_assessment(
     assert task["id"] == "retained-task"
     assert task["execution_requirements"]["memory_mb"] == 2048
     assert task["integrity_contract"]["verifier_files"][0]["mode"] == 0o755
-    quick = run_retained_import(
+    run_retained_import(
         RetainedImport(
             _cohort(published_tasks, expected_rows=1),
             str(tmp_path / "imported-quick"),
@@ -167,7 +166,6 @@ def test_full_retained_import_prepares_an_admitted_assessment(
     assert quick_manifest["source"] == "fixture-retained"
     assert quick_manifest["admitted_rows"] == 0
     assert pq.read_table(Path(quick_manifest["datasets"]["final"]) / "part-000000.parquet").num_rows == 0
-    assert isinstance(quick, CampaignArtifact)
 
 
 def test_row_count_drift_fails_closed(tmp_path: Path, published_tasks: Path) -> None:

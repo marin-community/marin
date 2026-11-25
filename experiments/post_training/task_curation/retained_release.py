@@ -44,6 +44,8 @@ RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""
 RETAINED_PART_FILE = "part-000000.parquet"
 """The single-shard output basename shared by the retained views."""
+RETAINED_MANIFEST_FILE = "manifest.json"
+"""The import manifest the writer publishes and the evidence pointer names."""
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
@@ -88,7 +90,7 @@ class RetainedImport:
 
 
 def _write_evidence_views(
-    output: StoragePath, *, normalized: StoragePath, admitted: bool
+    output: StoragePath, *, normalized: StoragePath, mode: SourceProcessingMode
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Write the final, review and verify views; return the outputs and datasets entries.
 
@@ -99,6 +101,7 @@ def _write_evidence_views(
     final_view = output / "final"
     final_view.mkdirs(exist_ok=True)
     outputs: dict[str, str] = {}
+    admitted = mode is not SourceProcessingMode.QUICK
     if admitted:
         final = final_view / RETAINED_PART_FILE
         with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
@@ -117,9 +120,7 @@ def _write_evidence_views(
     return outputs, {"normalize": str(normalized.parent), **views, "final": str(final_view)}
 
 
-def _retained_manifest(
-    invocation: RetainedImport, *, seen: int, views: dict[str, str], outputs: dict[str, str]
-) -> dict[str, object]:
+def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str, str]) -> dict[str, object]:
     """The import manifest: the assessment contract plus the retention provenance."""
     cohort = invocation.cohort
     return {
@@ -168,17 +169,12 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             SourceUse(cohort.intended_use.value),
         )
     local = Path(
-        hf_hub_download(
-            cohort.release.repo,
-            cohort.files[0] if cohort.files else RETAINED_TASKS_FILE,
-            repo_type="dataset",
-            revision=cohort.release.revision,
-        )
+        hf_hub_download(cohort.release.repo, cohort.files[0], repo_type="dataset", revision=cohort.release.revision)
     )
     if file_sha256(StoragePath(str(local))) != cohort.tasks_parquet_sha256:
         raise ValueError("Retained release differs from its publication readback receipt")
     output = StoragePath(invocation.output_path)
-    normalized = output / "normalize/part-000000.parquet"
+    normalized = output / "normalize" / RETAINED_PART_FILE
     seen = set()
     with normalized.open("wb", auto_mkdir=True) as stream, pq.ParquetWriter(stream, RETAINED_SCHEMA) as writer:
         for batch in pq.ParquetFile(local).iter_batches(batch_size=16):
@@ -201,19 +197,18 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             writer.write_table(pa.Table.from_pylist(records, schema=RETAINED_SCHEMA))
     if len(seen) != cohort.expected_rows:
         raise ValueError("Retained release count differs from its frozen plan")
-    with local.open("rb") as source, (output / RETAINED_TASKS_FILE).open("wb") as destination:
-        shutil.copyfileobj(source, destination)
+    (output / RETAINED_TASKS_FILE).upload_from(str(local))
     outputs = {"tasks": str(output / RETAINED_TASKS_FILE), "normalize": str(normalized.parent)}
-    view_outputs, views = _write_evidence_views(output, normalized=normalized, admitted=admitted)
+    view_outputs, views = _write_evidence_views(output, normalized=normalized, mode=invocation.mode)
     outputs.update(view_outputs)
-    manifest = _retained_manifest(invocation, seen=len(seen), views=views, outputs=outputs)
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest = _retained_manifest(invocation, seen=len(seen), views=views)
+    (output / RETAINED_MANIFEST_FILE).write_text(json.dumps(manifest, indent=2) + "\n")
     return CampaignArtifact(
         status="completed",
         result=PipelineResult(
             status=SourceStatus.COMPLETED,
             outputs=outputs,
-            evidence={"manifest": str(output / "manifest.json")},
+            evidence={"manifest": str(output / RETAINED_MANIFEST_FILE)},
             stages=("download", "validate", "normalize"),
         ),
     )
