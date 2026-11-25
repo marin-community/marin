@@ -108,7 +108,8 @@ pub struct NamespaceStats {
     pub min_seq: i64,
     pub max_seq: i64,
     pub segment_count: i32,
-    /// Segments at each compaction level; index 0 is L0. Sums to `segment_count`.
+    /// Segments at each compaction level; index 0 is L0. Sums to `segment_count`,
+    /// except that a segment with a negative level is left out.
     pub segment_count_by_level: Vec<i32>,
 }
 

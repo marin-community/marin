@@ -466,8 +466,9 @@ message NamespaceInfo {
   int64 max_seq = 6;          // 0 if empty
   int32 segment_count = 7;    // sealed (logs_*) + in-flight (tmp_*) parquet files
   StoragePolicy storage_policy = 8;  // retention overrides; empty if all defaults
-  // Segments at each compaction level; index 0 is L0. Sums to segment_count.
-  // Empty from a server that predates the field.
+  // Segments at each compaction level; index 0 is L0. Sums to segment_count,
+  // except that a segment with a negative level is left out. Empty from a
+  // server that predates the field.
   repeated int32 segment_count_by_level = 9;
 }
 
