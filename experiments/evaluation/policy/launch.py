@@ -1,82 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Turn one candidate's resolved policy evaluations into launcher specs, one per server."""
+"""Turn one candidate's resolved policy evaluations into launcher specs, normally one server per candidate."""
 
 from collections.abc import Collection
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.serving_config import resolved_serve_config
 
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
-from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, resolve
+from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve, serving_window
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 
-
-@dataclass(frozen=True, kw_only=True)
-class ServerGroup:
-    """Evaluations that share one server, whose ``max_model_len`` is ``window``.
-
-    Agent and single-turn evaluations never share a server: agent runs serve the model's resolved
-    serving config, which is part of every run's identity. Evaluations whose judges need different keys
-    never share one either, since a launch hands its judges one key.
-    """
-
-    window: int
-    agentic: bool
-    evaluations: tuple[ResolvedPolicyEvaluation, ...]
-
-
-def _server_window(item: ResolvedPolicyEvaluation, served: int | None) -> int:
-    """Choose a server window for a resolved evaluation.
-
-    A run at the window its benchmark declares, a protocol window or an agent's full input limit, requests
-    ``served``, the candidate's window after the checkpoint clamps it. Any other run requests a server at its
-    context, which an agent's input then fills.
-    """
-    variant = catalog_variant(item.evaluation, item.candidate)
-    declared = variant.protocol.context_window
-    if declared is None and variant.agent is not None:
-        declared = variant.agent.max_input_tokens
-    if declared is None:
-        return item.context
-    # resolve checked the catalog's window; ``served`` is what the checkpoint actually allows, which can be less.
-    needed = min(item.context, declared)
-    if served is None or served < needed:
-        raise ValueError(f"{item.candidate.name} on {item.evaluation.name}: the served window cannot hold {needed}")
-    return item.context if item.context < declared else served
+# Evaluations each server runs at once; requests within each evaluation are concurrent already.
+EVALUATIONS_PER_SERVER = 4
 
 
 def _judge_key(item: ResolvedPolicyEvaluation) -> tuple[str, ...] | None:
     return item.selection.run.judge_api_key or None
 
 
-def _by_judge_key(members: list[ResolvedPolicyEvaluation]) -> list[list[ResolvedPolicyEvaluation]]:
-    """Split evaluations so each part's judges share one key; evaluations without a judge join the first part."""
+def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[tuple[ResolvedPolicyEvaluation, ...], ...]:
+    """Split a candidate's evaluations across servers only where their judges need different keys.
+
+    A launch hands its judges one key; evaluations without a judge join the first server.
+    """
     keyed: dict[tuple[str, ...], list[ResolvedPolicyEvaluation]] = {}
-    for item in members:
+    for item in items:
         if (key := _judge_key(item)) is not None:
             keyed.setdefault(key, []).append(item)
     parts = list(keyed.values()) or [[]]
-    parts[0] = [item for item in members if _judge_key(item) is None or item in parts[0]]
-    return parts
-
-
-def server_groups(items: Collection[ResolvedPolicyEvaluation], served: int | None) -> tuple[ServerGroup, ...]:
-    """Group evaluations by the server window they need, keeping agent and single-turn runs apart.
-
-    ``served`` is the candidate's served window as the launcher resolves it.
-    """
-    groups: dict[tuple[int, bool], list[ResolvedPolicyEvaluation]] = {}
-    for item in items:
-        agentic = catalog_variant(item.evaluation, item.candidate).agent is not None
-        groups.setdefault((_server_window(item, served), agentic), []).append(item)
-    return tuple(
-        ServerGroup(window=window, agentic=agentic, evaluations=tuple(part))
-        for (window, agentic), members in groups.items()
-        for part in _by_judge_key(members)
-    )
+    parts[0] = [item for item in items if _judge_key(item) is None or item in parts[0]]
+    return tuple(tuple(part) for part in parts if part)
 
 
 def launch_specs(
@@ -89,12 +45,13 @@ def launch_specs(
     federated_cluster: str | None = None,
     release_commit: str | None = None,
 ) -> tuple[LaunchSpec, ...]:
-    """One launch per server group, labelled with the policy version.
+    """One launch per server, labelled with the policy version, normally one per candidate.
 
+    Every server runs the candidate's serving config with its checkpoint-derived settings resolved, at the
+    candidate's serving window, so a run's identity does not depend on which evaluations share its server.
     ``evaluations`` narrows the launch to those names; ``limit`` caps items per task for a smoke run;
-    ``federated_cluster`` overrides the fleet's GPU cluster.
-    Unset seeds stay unset so each protocol decides them. Run IDs derive from the policy version, the
-    release's commit for a released policy, and each run's identity.
+    ``federated_cluster`` overrides the fleet's GPU cluster. Unset seeds stay unset so each protocol decides them.
+    Run IDs derive from the policy version, the release's commit for a released policy, and each run's identity.
     """
     resolved = resolve(policy, candidate)
     if evaluations is not None:
@@ -104,27 +61,28 @@ def launch_specs(
         if unknown:
             raise ValueError(f"{candidate.name} does not run {sorted(unknown)} under {policy.version}")
         resolved = tuple(item for item in resolved if item.evaluation.name in evaluations)
-    specs = []
-    served = resolved_serve_config(candidate.model).max_model_len
-    for group in server_groups(resolved, served):
-        model = candidate.model
-        if model.serve.max_model_len != group.window:
-            model = replace(model, serve=replace(model.serve, max_model_len=group.window))
-        specs.append(
-            LaunchSpec(
-                model=model,
-                evals=tuple(item.selection for item in group.evaluations),
-                platform=default_platform(model),
-                accelerator=None,
-                limit=limit,
-                records_prefix=None,
-                submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
-                federated_cluster=federated_cluster,
-                priority_band=priority_band,
-                default_seed=None,
-                version=policy.version,
-                cache_key=policy.version if release_commit is None else f"{policy.version}@{release_commit}",
-                description=f"{policy.version} {'smoke' if limit is not None else 'full'} run of {candidate.name}",
-            )
+    serve = resolved_serve_config(candidate.model)
+    # resolve used the catalog's window; the checkpoint itself can allow less.
+    window = min(serving_window(policy, candidate), serve.max_model_len or serving_window(policy, candidate))
+    if too_long := [item.evaluation.name for item in resolved if item.context > window]:
+        raise ValueError(f"{candidate.name}: the checkpoint serves at most {window} tokens, too few for {too_long}")
+    model = replace(candidate.model, serve=replace(serve, max_model_len=window))
+    return tuple(
+        LaunchSpec(
+            model=model,
+            evals=tuple(item.selection for item in group),
+            platform=default_platform(model),
+            accelerator=None,
+            limit=limit,
+            records_prefix=None,
+            submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
+            federated_cluster=federated_cluster,
+            priority_band=priority_band,
+            default_seed=None,
+            max_concurrent=EVALUATIONS_PER_SERVER,
+            version=policy.version,
+            cache_key=policy.version if release_commit is None else f"{policy.version}@{release_commit}",
+            description=f"{policy.version} {'smoke' if limit is not None else 'full'} run of {candidate.name}",
         )
-    return tuple(specs)
+        for group in server_groups(resolved)
+    )
