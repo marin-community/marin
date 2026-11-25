@@ -15,12 +15,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The eval-dump row shape: one trial's flat record. `messages` may be null. */
-export function isSkyrlEvalDumpRow(value: unknown): boolean {
+export function isSkyrlEvalDumpRow(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value.uid === 'string' && typeof value.output_response === 'string'
 }
 
 /** The SkyRL schema_v7 turn record shape (`schema_version: 7`, nested response/verification). */
-export function isSkyrlTurnRecord(value: unknown): boolean {
+export function isSkyrlTurnRecord(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && value.schema_version === 7 && isRecord(value.response)
 }
 
@@ -125,13 +125,13 @@ interface NormalizedTurn {
 
 function normalizeEvalDumpRow(record: Record<string, unknown>): NormalizedTurn {
   return {
-    uid: record.uid,
+    uid: typeof record.uid === 'string' ? record.uid : '',
     step: typeof record.ordinal === 'number' ? record.ordinal : typeof record.step === 'number' ? record.step : 0,
     kind: 'skyrl-eval-dump',
     sessionId: typeof record.attempt_id === 'string' ? record.attempt_id : '',
     envClass: typeof record.env_class === 'string' ? record.env_class : '',
     promptText: typeof record.input_prompt === 'string' ? record.input_prompt : '',
-    responseText: record.output_response,
+    responseText: typeof record.output_response === 'string' ? record.output_response : '',
     messages: Array.isArray(record.messages) ? record.messages : null,
     verification: isRecord(record.verification) ? record.verification : null,
     stopReason: typeof record.stop_reason === 'string' ? record.stop_reason : null,

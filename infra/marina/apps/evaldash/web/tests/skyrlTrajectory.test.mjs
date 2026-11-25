@@ -58,7 +58,7 @@ const EVAL_DUMP_ROW = {
           "type": "function",
           "function": {
             "name": "bash",
-            "arguments": "{\"command\": \"echo '[{\\\"population_genetics.calculate_ne\\\": {\\\"species\\\": \\\"tiger\\\", \\\"generations\\\": 100, \\\"probability\\\": 0.95}}]' > /app/r"
+            "arguments": "{\"command\": \"echo '[{\\\"population_genetics.calculate_ne\\\": {\\\"species\\\": \\\"tiger\\\"}}]' > /app/result.json\"}"
           }
         }
       ],
