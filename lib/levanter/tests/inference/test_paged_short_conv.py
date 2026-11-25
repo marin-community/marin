@@ -39,9 +39,9 @@ def _packed_batch(chunks, page_rows, starts, page_size, slot_ids) -> PackedBatch
     # Nonzero padded activations must neither leak into output nor update history.
     values = jnp.concatenate([*chunks, jnp.full((_PADDING_TOKENS, chunks[0].shape[1]), 42, dtype=chunks[0].dtype)])
     info = PageBatchInfo(
-        slot_ids=hax.named(jnp.asarray(slot_ids), "seq"),
-        page_indices=hax.named(jnp.asarray(page_rows), ("seq", "page")),
-        seq_lens=hax.named(jnp.asarray(starts) + jnp.asarray(lengths), "seq"),
+        slot_ids=hax.named(jnp.asarray([*slot_ids, INVALID]), "seq"),
+        page_indices=hax.named(jnp.asarray([*page_rows, [INVALID] * len(page_rows[0])]), ("seq", "page")),
+        seq_lens=hax.named(jnp.asarray([*(np.asarray(starts) + lengths), INVALID]), "seq"),
         cu_q_lens=hax.named(jnp.asarray([0, *np.cumsum(lengths), INVALID], dtype=jnp.int32), "seq"),
         num_seqs=jnp.asarray(len(chunks), dtype=jnp.int32),
         new_token_dests=hax.named(
@@ -111,3 +111,28 @@ def test_paged_short_conv_clone_diverges_without_corrupting_parent(prefix_length
     inputs, info, positions = _packed_batch([child_tail], [[0, 2]], [prefix_length], 4, [0])
     reset_output, _ = jax.jit(paged_short_conv)(weight, inputs, cache.reset(), info, positions)
     np.testing.assert_allclose(reset_output.array[:2], fresh_expected)
+
+
+@pytest.mark.tpu
+def test_paged_short_conv_mixed_prefill_clears_only_reused_slot():
+    channels = hax.Axis("channel", 128)
+    weight = jnp.broadcast_to(jnp.array([1, 2, 3, 4], dtype=jnp.bfloat16)[:, None], (4, channels.size))
+    cache = ShortConvSequenceCache.init(PageTableSpec(4, 4, max_seqs=2), channels, 4, jnp.bfloat16)
+    previous = jnp.full((4, channels.size), 19, dtype=jnp.bfloat16)
+    live = jnp.broadcast_to(jnp.arange(1, 7, dtype=jnp.bfloat16)[:, None], (6, channels.size))
+    fresh = jnp.broadcast_to(jnp.arange(7, 10, dtype=jnp.bfloat16)[:, None], (3, channels.size))
+    pages = [[0, 1], [2, 3]]
+    conv = jax.jit(paged_short_conv)
+
+    inputs, info, pos = _packed_batch([previous, live[:4]], pages, [0, 0], 4, [0, 1])
+    _, cache = conv(weight, inputs, cache, info, pos)
+    # Slot 0 gets a new one-token prompt while slot 1 decodes from its old prefix.
+    inputs, info, pos = _packed_batch([live[4:5], fresh[:1]], pages[::-1], [4, 0], 4, [1, 0])
+    output, cache = conv(weight, inputs, cache, info, pos)
+    live_expected = short_conv_reference(weight, live[None])[0]
+    fresh_expected = short_conv_reference(weight, fresh[None])[0]
+    np.testing.assert_array_equal(output.array[:2], jnp.stack([live_expected[4], fresh_expected[0]]))
+
+    inputs, info, pos = _packed_batch([fresh[1:], live[5:]], pages, [1, 5], 4, [0, 1])
+    output, _ = conv(weight, inputs, cache, info, pos)
+    np.testing.assert_array_equal(output.array[:3], jnp.concatenate([fresh_expected[1:], live_expected[5:]]))

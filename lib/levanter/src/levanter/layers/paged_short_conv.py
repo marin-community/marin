@@ -16,7 +16,7 @@ from levanter.layers.kv_cache import PageCache
 class ShortConvSequenceCache(PageCache):
     """Keep the last kernel_size - 1 inputs in each persistent request slot.
 
-    Updates require increasing positions per sequence. New requests start at zero,
+    Updates require contiguous positions per sequence. New requests start at zero,
     clearing recycled slots; sequence cloning copies the current processed prefix.
     Earlier-prefix replay must recompute history rather than reuse a KV page alone.
     """
@@ -50,37 +50,54 @@ def paged_short_conv(
     batch_info: PageBatchInfo,
     positions: hax.NamedArray,
 ) -> tuple[hax.NamedArray, ShortConvSequenceCache]:
-    """Apply depthwise convolution to packed tokens using persistent request slots."""
-    assert inputs.ndim == 2 and weight.shape[1] == inputs.array.shape[1]
-    assert cache.history.array.shape[1] == weight.shape[0] - 1
-    token_index = jnp.arange(inputs.array.shape[0])
-    starts = batch_info.cu_q_lens.array[:-1]
-    active = jnp.arange(starts.shape[0]) < batch_info.num_seqs
-    sequence = jnp.sum((token_index[:, None] >= starts[None, :]) & active[None, :], axis=-1) - 1
-    slots = batch_info.slot_ids.array[jnp.maximum(sequence, 0)]
-    lags = jnp.arange(1, weight.shape[0])
-    ring_size = cache.history.array.shape[1]
-    num_slots = cache.history.array.shape[0]
+    """Convolve contiguous chunks packed by request and advance their slot histories."""
+    x = inputs.array
+    history = cache.history.array
+    assert x.ndim == 2 and weight.shape[1] == x.shape[1]
+    num_tokens, channels = x.shape
+    num_slots, ring_size, _ = history.shape
+    assert ring_size == weight.shape[0] - 1
+    if num_tokens == 0:
+        return inputs, cache
 
-    def step(history, token):
-        x, position, slot, valid = token
-        row = history[jnp.clip(slot, 0, num_slots - 1)]
-        row = jnp.where(position == 0, jnp.zeros_like(row), row)
-        previous = position - lags
-        prior_values = row[previous % ring_size]
-        prior_values = jnp.where((previous >= 0)[:, None], prior_values, 0)
-        output = x * weight[0]
-        # Preserve the reference convolution's lag-ordered, dtype-rounded accumulation.
-        for lag in range(1, weight.shape[0]):
-            output = output + weight[lag] * prior_values[lag - 1]
-        row = row.at[position % ring_size].set(x)
-        # Padding cannot clear or update an active request's history.
-        history = history.at[jnp.where(valid, slot, num_slots)].set(row, mode="drop")
-        return history, jnp.where(valid, output, 0)
+    slot_ids = batch_info.slot_ids.array
+    starts = batch_info.cu_q_lens.array[: slot_ids.size]
+    ends = batch_info.cu_q_lens.array[1 : slot_ids.size + 1]
+    active = (jnp.arange(slot_ids.size) < batch_info.num_seqs) & (starts < ends)
+    slots = jnp.where(active, slot_ids, 0)
+    token_index = jnp.arange(num_tokens)
+    cached_x = x.astype(history.dtype)
+    input_offset = num_slots * ring_size
+    zero_index = input_offset + num_tokens
+    source = jnp.concatenate((history.reshape(input_offset, channels), cached_x, jnp.zeros_like(cached_x[:1])))
+    first_pos = positions.array[jnp.clip(starts, 0, num_tokens - 1)]
+    ring_index = jnp.arange(ring_size)
 
-    history, output = jax.lax.scan(
-        step,
-        cache.history.array,
-        (inputs.array, positions.array, slots, token_index < batch_info.num_new_tokens),
-    )
+    output = x * weight[0]
+    # Only the first `lag` tokens of each chunk need a source from the slot history.
+    # Scatter their indices, so the channel data can be gathered in parallel for every tap.
+    for lag in range(1, weight.shape[0]):
+        offsets = ring_index[:lag]
+        boundary = starts[:, None] + offsets
+        previous = first_pos[:, None] + offsets - lag
+        history_index = slots[:, None] * ring_size + previous % ring_size
+        boundary_index = jnp.where(active[:, None] & (boundary < ends[:, None]), boundary, num_tokens)
+        source_index = (
+            (input_offset + token_index - lag)
+            .at[boundary_index]
+            .set(jnp.where(previous >= 0, history_index, zero_index), mode="drop")
+        )
+        output = output + weight[lag] * source[source_index]
+    output = jnp.where((token_index < batch_info.num_new_tokens)[:, None], output, 0)
+
+    # Each ring entry gets the latest token at that position modulo the ring size.
+    # Entries preceding the chunk retain their old value unless the slot is fresh.
+    last_token = jnp.clip(ends - 1, 0, num_tokens - 1)
+    last_pos = positions.array[last_token]
+    distance = (last_pos[:, None] - ring_index) % ring_size
+    tail_index = last_token[:, None] - distance
+    previous_index = slots[:, None] * ring_size + ring_index
+    tail_source = jnp.where(tail_index >= starts[:, None], input_offset + tail_index, previous_index)
+    tail_source = jnp.where(last_pos[:, None] >= distance, tail_source, zero_index)
+    history = history.at[jnp.where(active, slots, num_slots)].set(source[tail_source], mode="drop")
     return hax.named(output, inputs.axes), dataclasses.replace(cache, history=hax.named(history, cache.history.axes))

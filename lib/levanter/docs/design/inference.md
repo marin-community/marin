@@ -94,7 +94,9 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### Short-convolution state
 
 Each request slot keeps the last `kernel_size - 1` convolution inputs.
-Packed prefill and decode use persistent slot IDs to find that history.
+Packed prefill and decode convolve each contiguous chunk in parallel. A tap
+that reaches before the start of a chunk reads from the request's slot. The
+end of each chunk supplies the history for the next step.
 Position-zero inputs clear history on slot reuse. Cloning copies history into
 the new slot, so the two continuations can update it independently. Resetting
 the cache clears every slot.
