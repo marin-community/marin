@@ -14,6 +14,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from finestore.rl.status_taxonomy import DataRestriction
 from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, PiAgent
 from taskcompendium.importers.harbor.package import (
@@ -59,7 +60,7 @@ from experiments.evaluation.benchmarks.harbor import (
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.harbor_packages import extract_package, package_rows
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborRepoSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
@@ -184,9 +185,11 @@ def benchmarks() -> list[EvaluationBenchmark]:
     )
     source = RlDataSource(
         info=SourceInfo(
-            id=f"Harbor:{name}",
-            title="SWE-bench Science",
-            origin="Harbor",
+            upstream_dataset=name,
+            upstream_name="SWE-bench Science",
+            origin=SourceOrigin.HARBOR,
+            build_path="Harbor",
+            data_restriction=DataRestriction.OPEN,
             family="agentic",
             tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
             count=TASK_COUNT,
