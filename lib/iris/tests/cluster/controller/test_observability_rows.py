@@ -570,7 +570,7 @@ _COLUMNS: dict[str, _Classified] = {
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
             # The stated exception to "no user-written text": kept for reporting,
-            # each value token-redacted like `error`.
+            # copied as written.
             "tags_json": "jobs.tags",
         },
         {
