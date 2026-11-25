@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Barrier
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -220,35 +218,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["grader_report"] == report
     else:
         assert row["grader_report"] is None
-
-
-def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
-    export_root = str(tmp_path / "exports")
-    conditional_object = publication.conditional_object
-    rendezvous = Barrier(2, timeout=10)
-
-    def concurrent_object(path):
-        object_store = conditional_object(path)
-
-        def write(data, *, expected_version):
-            rendezvous.wait()
-            return object_store.write(data, expected_version=expected_version)
-
-        return SimpleNamespace(read=object_store.read, write=write)
-
-    monkeypatch.setattr(publication, "conditional_object", concurrent_object)
-
-    def claim(issue):
-        try:
-            return publication.reserve_issue(export_root, issue)
-        except publication.IssueConflict:
-            return None
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        assigned = [issue for issue in executor.map(claim, (73, 74)) if issue is not None]
-
-    [winner] = assigned
-    assert publication.lineage_issue(export_root, None) == winner
 
 
 @pytest.mark.integration

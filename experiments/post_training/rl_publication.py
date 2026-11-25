@@ -41,7 +41,6 @@ from marin.rl.skyrl_records import (
     recorded_launch,
 )
 from pydantic import BaseModel, Field, ValidationError
-from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
@@ -61,7 +60,6 @@ from experiments.post_training.rl_measurements import (
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
 )["applet_id"]
-ISSUE_FILENAME = "issue.json"
 logger = logging.getLogger(__name__)
 
 
@@ -286,12 +284,9 @@ class IssueConflict(ValueError):
     """The native output already has a different assigned issue."""
 
 
-def _check_issue(export_root: str, requested: int | None, reservation: VersionedBytes | None) -> int | None:
-    issues = (
-        {int(reservation.data)}
-        if reservation is not None
-        else {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
-    )
+def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
+    """Read the run's issue and verify a proposed value against stored assignments."""
+    issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
     if requested is not None:
         issues.add(requested)
     if len(issues) > 1:
@@ -299,23 +294,11 @@ def _check_issue(export_root: str, requested: int | None, reservation: Versioned
     return next(iter(issues), None)
 
 
-def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
-    """Read the run's issue and verify a proposed value against stored assignments."""
-    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
-    return _check_issue(export_root, requested, assignment.read())
-
-
-def reserve_issue(export_root: str, requested: int | None) -> int | None:
-    """Reserve the lineage issue once for all writers to the native output."""
-    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
-    reservation = assignment.read()
-    assigned = _check_issue(export_root, requested, reservation)
-    if assigned is not None and reservation is None:
-        try:
-            assignment.write(str(assigned).encode(), expected_version=None)
-        except ConditionalWriteError:
-            return _check_issue(export_root, assigned, assignment.read())
-    return assigned
+def assign_issue(export_root: str, run_id: str, attempt_id: str, requested: int | None) -> int | None:
+    issue = lineage_issue(export_root, requested)
+    if issue is not None:
+        write_attempt(export_root, AttemptRecord(run_id=run_id, attempt_id=attempt_id, issue=issue))
+    return issue
 
 
 def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecord]:
@@ -504,9 +487,8 @@ def publish_runs(
                     gate_failure=missing_gate,
                 )
                 if issue is not None:
-                    record = record.model_copy(
-                        update={"issue": reserve_issue(recorded_launch(receipt).export_root, issue)}
-                    )
+                    assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
+                    record = record.model_copy(update={"issue": assigned})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:

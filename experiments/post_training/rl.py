@@ -138,7 +138,7 @@ def _run_rl(
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
-        rl_publication.reserve_issue(config.output.export_root, issue)
+        rl_publication.assign_issue(config.output.export_root, config.run_id, config.attempt_id, issue)
     if index is not None:
         launch = yaml.safe_load(config.launch_config_yaml)
         if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
