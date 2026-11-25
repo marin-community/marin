@@ -4,7 +4,9 @@
 """The 2026-11-20 trial policy shows what each candidate runs with."""
 
 from experiments.evaluation.policy.cli import policy_rows
-from experiments.evaluation.policy.versions.marin_2026_11_20_trial.policy import POLICY
+from experiments.evaluation.policy.versions import POLICIES
+
+POLICY = POLICIES["marin-2026-11-20-trial"]
 
 
 def test_show_prints_the_thinking_arguments_each_candidate_is_sent():
