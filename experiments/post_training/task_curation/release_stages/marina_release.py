@@ -79,7 +79,17 @@ class MarinaReleaseInputs:
 
 
 def verify_checkout(repo_root: Path, source_revision: str) -> str:
-    """The releasing checkout must be clean and contain the plan's pinned revision."""
+    """The releasing checkout must be clean and contain the plan's pinned revision.
+
+    In the in-region bundle mode the submitter attests the workspace (the guard's
+    landing-log check carries the landed attestation) and the git checks cannot run.
+    """
+    from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — avoids the guard/marina cycle at module load
+        attested_revision,
+    )
+
+    if attested_revision() is not None:
+        return attested_revision()
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -132,8 +142,7 @@ def verify_package_receipt(package: ArtifactRef, inputs: MarinaReleaseInputs) ->
     packaged = document.get("packaged") or {}
     if packaged.get("source_revision") != inputs.source_revision:
         raise ValueError(
-            f"packaged provenance pins revision {packaged.get('source_revision')!r},"
-            f" expected {inputs.source_revision!r}"
+            f"packaged provenance pins revision {packaged.get('source_revision')!r}, expected {inputs.source_revision!r}"
         )
     root = (document.get("package") or {}).get("uri")
     if not isinstance(root, str) or not root:

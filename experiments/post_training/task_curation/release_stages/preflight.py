@@ -43,6 +43,14 @@ class PreflightReceipt(BaseModel):
 
 
 def repo_head(repo_root: Path) -> str:
+    """The checkout's HEAD sha, or the submitter-attested revision (the bundle mode)."""
+    from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — avoids the guard/preflight cycle at module load
+        attested_revision,
+    )
+
+    attested = attested_revision()
+    if attested is not None:
+        return attested
     result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
