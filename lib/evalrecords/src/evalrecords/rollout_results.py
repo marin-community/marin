@@ -8,11 +8,12 @@ import math
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 from finestore.eval import ARCHIVE_SAMPLES_TABLE
 from finestore.reader import ReadView
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
-from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
+from taskcompendium.evaluation.spec import EVALUATION_SCHEMA_VERSION, EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
 from evalrecords.records import (
@@ -29,6 +30,23 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
 SUMMARY_REVISION = "2026.11.08.1"
+
+
+def upgraded_protocol(payload: Any) -> Any:
+    """Upgrade a stored schema-3 protocol descriptor to schema 4 before validation.
+
+    Curated runs recorded before the measured population wrote a hand-written
+    ``expected_population`` into their protocol descriptors. It is not a
+    measurement, and schema 4 has no such field, so the upgrade drops it and
+    rebases the version. Published corpora do not go through this upgrade;
+    they are re-published under schema 4.
+    """
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        if payload.get("schema_version") == 3:
+            payload.pop("expected_population", None)
+            payload["schema_version"] = EVALUATION_SCHEMA_VERSION
+    return payload
 
 
 def terminal_attempts(reader: ReadView) -> dict[tuple[str, str, int], dict]:
@@ -67,7 +85,7 @@ def evaluation_coverage(reader: ReadView) -> dict[str, TaskCoverage]:
             selected[row["dataset"]].add(row["source_row"])
     groups = defaultdict(list)
     for entry in run["datasets"]:
-        protocol = EvaluationProtocol.model_validate(entry["protocol"])
+        protocol = EvaluationProtocol.model_validate(upgraded_protocol(entry["protocol"]))
         groups[protocol.benchmark].append((entry, protocol))
     coverage = {}
     for name, entries in groups.items():
@@ -272,7 +290,7 @@ def benchmark_scores(reader: ReadView) -> dict[str, BenchmarkScores]:
     payload = reader.read_blob(RUN_OBJECT)
     assert payload is not None
     protocols = {
-        entry["dataset"]: EvaluationProtocol.model_validate(entry["protocol"])
+        entry["dataset"]: EvaluationProtocol.model_validate(upgraded_protocol(entry["protocol"]))
         for entry in json.loads(payload)["datasets"]
     }
     attempts = terminal_attempts(reader)

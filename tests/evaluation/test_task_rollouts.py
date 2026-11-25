@@ -15,9 +15,21 @@ from pathlib import Path
 import httpx
 import openai
 import pytest
-from evalrecords.records import JudgeIdentity, TaskEvidence
+from evalrecords.records import (
+    CuratedRef,
+    CuratedSettings,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HardwareRef,
+    JudgeIdentity,
+    ModelRef,
+    Provenance,
+    RunStatus,
+    TaskEvidence,
+)
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
-from evalrecords.rollout_results import terminal_attempts
+from evalrecords.rollout_results import score_curated_record, terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from finestore.store import DataStore
@@ -1175,6 +1187,47 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+@pytest.mark.asyncio
+async def test_scoring_upgrades_a_schema_3_run_descriptor(tmp_path, published_corpora, run_config):
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "schema-3")
+    await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+
+    # Rewind the run descriptor to its pre-measured shape: schema 3 with a hand-written population.
+    descriptor = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    for entry in descriptor["datasets"]:
+        entry["protocol"] = {**entry["protocol"], "schema_version": 3, "expected_population": 3}
+    with DataStore.open(output) as store:
+        store.write_object(RUN_OBJECT, json.dumps(descriptor, allow_nan=False).encode())
+
+    record = EvalRunRecord(
+        run_id="20261125-schema3-rollout",
+        group_id="20261125-schema3-rollout",
+        created_at="2026-11-25T18:00:00+00:00",
+        user="fixture",
+        model=ModelRef(name="fixture", location="memory://fixture-model", backend="fixture"),
+        evaluation=EvalRef(
+            name="colors",
+            mechanism="curated",
+            tasks=(EvalTaskRef(name="colors", num_fewshot=0),),
+            curated=CuratedRef(datasets=("colors", "paints"), settings=CuratedSettings()),
+        ),
+        hardware=HardwareRef(platform="cpu", accelerator="cpu", region_or_cluster="local"),
+        status=RunStatus.SUCCEEDED,
+        error=None,
+        results_path=output,
+        metrics={},
+        jobs={},
+        log_tails={},
+        provenance=Provenance(git_sha="abc123", launch_host="dev-box"),
+    )
+    scored = score_curated_record(record)
+    assert set(scored.metrics) == {"colors", "paints"}
+    assert scored.evaluation.curated.datasets == ("colors", "paints")
 
 
 @pytest.mark.asyncio
