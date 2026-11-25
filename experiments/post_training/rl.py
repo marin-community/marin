@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import click
 import yaml
@@ -309,8 +309,7 @@ def build_experiment(
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
         recorded_inputs = inputs
         if control:
-            assert provenance.base_commit is not None
-            member = ControlReplicate(commit=provenance.base_commit, version=run.version, replicate=replicate)
+            member = ControlReplicate(commit=cast(str, provenance.base_commit), version=run.version, replicate=replicate)
             recorded_inputs = inputs.model_copy(update={"control": member})
         runs.append(replace(run, run=partial(_run_rl, inputs=recorded_inputs, issue=issue, forward_env=forward_env)))
     gate = (

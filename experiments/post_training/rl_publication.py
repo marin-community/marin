@@ -11,6 +11,7 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlencode
 
 import click
@@ -275,8 +276,6 @@ def build_record(
         evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
-    config = redact_value(attempt.native.config)
-    assert isinstance(config, dict)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         native_run_id=attempt.run_id,
@@ -296,7 +295,7 @@ def build_record(
         branch=index.branch if index is not None else provenance.get("branch"),
         commit=index.source_revision if index is not None else provenance.get("base_commit"),
         settings=list(map(_visible_setting, inputs.settings)),
-        launch_config=config,
+        launch_config=cast(dict, redact_value(attempt.native.config)),
         dirty=index.dirty if index is not None else provenance.get("dirty"),
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
